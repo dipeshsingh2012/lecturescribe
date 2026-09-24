@@ -61,10 +61,22 @@ cp .env.example .env
 
 Edit `.env` to configure your API keys (Algolia, Pinecone, HuggingFace/Llama, PostgreSQL). If PostgreSQL credentials are omitted, LectureScribe automatically defaults to local SQLite (`lecturescribe.db`).
 
-### 2. Backend Setup (FastAPI)
+### 2. Backend Setup (Python venv & FastAPI)
+
+Create and activate an isolated Python virtual environment:
 
 ```bash
-# Install Python dependencies
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows (Command Prompt / PowerShell):
+# .venv\Scripts\activate
+
+# Upgrade pip and install Python dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
 
 # Start the API server on port 8000

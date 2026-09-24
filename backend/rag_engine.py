@@ -11,7 +11,16 @@ import re
 import math
 from typing import List, Dict, Any, Tuple, Optional
 from dotenv import load_dotenv
-from pinecone import Pinecone
+try:
+    from pinecone import Pinecone, ServerlessSpec
+    HAS_SERVERLESS = True
+except ImportError:
+    try:
+        from pinecone import Pinecone
+        HAS_SERVERLESS = False
+    except ImportError:
+        Pinecone = None
+        HAS_SERVERLESS = False
 
 load_dotenv()
 
@@ -33,7 +42,7 @@ class Llama3PineconeRAGStore:
 
     def __init__(self):
         self.api_key = os.getenv("PINECONE_API_KEY", "")
-        self.index_name = os.getenv("PINECONE_INDEX", "rfq-knowledge-base")
+        self.index_name = os.getenv("PINECONE_INDEX", "lecturescribe-rag-index")
         self.namespace = os.getenv("PINECONE_NAMESPACE", "lecturescribe_v1")
         self.model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
         self.pc: Optional[Pinecone] = None
@@ -46,8 +55,29 @@ class Llama3PineconeRAGStore:
 
     def _init_pinecone(self):
         try:
+            if not Pinecone:
+                print("[Llama-3.2 RAG Warning] Pinecone package not installed. Using local chunk store.")
+                return
+
             if self.api_key:
                 self.pc = Pinecone(api_key=self.api_key)
+
+                # Check if index exists, auto-create if missing
+                try:
+                    existing_indexes = [idx.name for idx in self.pc.list_indexes()]
+                    if self.index_name not in existing_indexes:
+                        print(f"[Llama-3.2 RAG] Index '{self.index_name}' not found. Creating serverless index (dim=768, metric=cosine)...")
+                        if HAS_SERVERLESS:
+                            self.pc.create_index(
+                                name=self.index_name,
+                                dimension=768,
+                                metric="cosine",
+                                spec=ServerlessSpec(cloud="aws", region="us-east-1")
+                            )
+                            print(f"[Llama-3.2 RAG] Created new Pinecone index '{self.index_name}'.")
+                except Exception as create_err:
+                    print(f"[Llama-3.2 RAG Notice] Index check: {create_err}")
+
                 self.index = self.pc.Index(self.index_name)
                 print(f"[Llama-3.2 RAG] Connected to Pinecone Index '{self.index_name}' (Namespace: '{self.namespace}').")
             else:

@@ -1,0 +1,22 @@
+# LectureScribe Python Dependencies
+# ---------------------------------
+# Install via: pip install -r requirements.txt
+
+# FastAPI & Server
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.6.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Relational Database (Cloud PostgreSQL / Neon DB)
+# Note: Local SQLite uses the Python standard library (no install required)
+psycopg2-binary>=2.9.9
+
+# Search & Vector RAG Triad Services
+algoliasearch>=4.0.0,<5.0.0
+pinecone>=3.0.0
+
+# Optional Inference Clients for Llama-3.2
+huggingface_hub>=0.20.0
+openai>=1.12.0

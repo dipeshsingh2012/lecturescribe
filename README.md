@@ -64,8 +64,8 @@ Edit `.env` to configure your API keys (Algolia, Pinecone, HuggingFace/Llama, Po
 ### 2. Backend Setup (FastAPI)
 
 ```bash
-# Install Python requirements
-pip install fastapi uvicorn pydantic python-dotenv algoliasearch pinecone requests
+# Install Python dependencies
+pip install -r requirements.txt
 
 # Start the API server on port 8000
 uvicorn backend.main:app --reload --port 8000
@@ -130,6 +130,7 @@ lecturescribe/
 ├── summary.md               # Pre-generated executive summary
 ├── .env.example             # Environment variables template
 ├── .gitignore               # Ignored dependencies, caches, and secrets
+├── requirements.txt         # Python dependencies
 └── README.md                # Project documentation
 ```
 

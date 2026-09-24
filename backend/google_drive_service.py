@@ -74,6 +74,21 @@ class GoogleDriveService:
                 pass
 
         client_id = os.getenv("GOOGLE_CLIENT_ID") or os.getenv("VITE_GOOGLE_CLIENT_ID") or ""
+        if not client_id:
+            env_file = Path(__file__).parent.parent / ".env"
+            if env_file.exists():
+                try:
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#") and "=" in line:
+                                k, v = line.split("=", 1)
+                                if k.strip() in ("GOOGLE_CLIENT_ID", "VITE_GOOGLE_CLIENT_ID"):
+                                    client_id = v.strip().strip("'\"")
+                                    os.environ[k.strip()] = client_id
+                                    break
+                except Exception:
+                    pass
         return {
             "configured": configured,
             "has_libraries": HAS_GOOGLE_DRIVE_LIBS,

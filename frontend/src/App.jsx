@@ -1833,6 +1833,7 @@ export default function App() {
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
                       Exports the complete lecture bundle into Google Drive:
                       <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                        <li><strong style={{ color: 'var(--vimeo-blue)' }}><code>{(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim()}.mp4</code></strong> — Full lecture video recording</li>
                         <li><code>summary.md</code> — Executive dynamic AI summary & key questions</li>
                         <li><code>transcript.md</code> — Chronological verbatim lecture transcript</li>
                         <li><code>captions.vtt</code> — Complete WebVTT subtitle track</li>

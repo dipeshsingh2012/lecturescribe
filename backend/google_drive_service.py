@@ -19,6 +19,10 @@ import os
 import io
 import json
 import uuid
+import re
+import shutil
+import tempfile
+import requests
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -27,7 +31,7 @@ from typing import Dict, Any, Optional, List
 try:
     from google.oauth2 import service_account, credentials as oauth_credentials
     from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
+    from googleapiclient.http import MediaIoBaseUpload, MediaFileUpload
     HAS_GOOGLE_DRIVE_LIBS = True
 except ImportError:
     HAS_GOOGLE_DRIVE_LIBS = False
@@ -150,6 +154,94 @@ class GoogleDriveService:
             return build("drive", "v3", credentials=creds, cache_discovery=False)
 
         raise RuntimeError("No Google credentials found (neither service account nor user token provided).")
+
+    def _download_lecture_video(
+        self,
+        video_id: str,
+        title: str,
+        streams_info: Optional[Dict[str, Any]] = None,
+        job: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Path]:
+        """Downloads the lecture video (progressive MP4 or HLS) to a temporary file on disk."""
+        safe_title = re.sub(r"[^a-zA-Z0-9_\- ]", "_", title).strip().replace(" ", "_")
+        if not safe_title:
+            safe_title = f"lecture_{video_id}"
+
+        temp_dir = Path(tempfile.gettempdir()) / f"lecturescribe_v_{video_id}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        target_mp4 = temp_dir / f"{safe_title}.mp4"
+
+        # 1. Progressive MP4 streams (direct download)
+        progressive_streams = (streams_info or {}).get("progressive_streams", [])
+        if progressive_streams and isinstance(progressive_streams, list):
+            best = progressive_streams[0]
+            url = best.get("url")
+            if url:
+                try:
+                    if job:
+                        job["current_step"] = f"Downloading video MP4 stream ({best.get('quality', 'high')})..."
+                    with requests.get(url, stream=True, timeout=180) as r:
+                        r.raise_for_status()
+                        total_size = int(r.headers.get("content-length", 0))
+                        downloaded = 0
+                        with open(target_mp4, "wb") as f:
+                            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                                if chunk:
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                                    if total_size and job:
+                                        pct = int((downloaded / total_size) * 100)
+                                        job["progress"] = 55 + int(pct * 0.20)
+                                        job["current_step"] = f"Downloading video file: {pct}%..."
+                    if target_mp4.exists() and target_mp4.stat().st_size > 1000:
+                        return target_mp4
+                except Exception as pe:
+                    print(f"[Google Drive Export] Progressive MP4 download notice: {pe}")
+
+        # 2. HLS Stream via yt-dlp
+        try:
+            import yt_dlp
+            try:
+                import static_ffmpeg
+                static_ffmpeg.add_paths()
+            except Exception:
+                pass
+
+            if job:
+                job["current_step"] = "Downloading HLS lecture video stream..."
+                job["progress"] = 60
+
+            vimeo_url = f"https://player.vimeo.com/video/{video_id}"
+            ydl_opts = {
+                "outtmpl": str(temp_dir / f"{safe_title}.%(ext)s"),
+                "format": "bestvideo+bestaudio/best",
+                "merge_output_format": "mp4",
+                "nocheckcertificate": True,
+                "quiet": True,
+                "no_warnings": True,
+            }
+
+            def yt_progress_hook(d):
+                if d.get("status") == "downloading" and job:
+                    total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                    downloaded = d.get("downloaded_bytes", 0)
+                    if total:
+                        pct = int((downloaded / total) * 100)
+                        job["progress"] = 55 + int(pct * 0.20)
+                        job["current_step"] = f"Downloading lecture stream: {pct}%..."
+
+            ydl_opts["progress_hooks"] = [yt_progress_hook]
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([vimeo_url])
+
+            candidates = list(temp_dir.glob(f"{safe_title}*.mp4"))
+            if candidates and candidates[0].exists() and candidates[0].stat().st_size > 1000:
+                return candidates[0]
+        except Exception as ye:
+            print(f"[Google Drive Export] yt-dlp video stream download notice: {ye}")
+
+        return None
 
     def execute_bundle_upload(
         self,
@@ -285,11 +377,12 @@ class GoogleDriveService:
             job["folder_url"] = folder_url
 
             # Upload each file into folder
+            # 1. Upload text and markdown documents
             total_files = len(files_to_upload)
             uploaded_files = []
 
             for idx, item in enumerate(files_to_upload):
-                job["progress"] = 45 + int((idx / total_files) * 50)
+                job["progress"] = 35 + int((idx / total_files) * 20)
                 job["current_step"] = f"Uploading '{item['name']}' to Google Drive ({idx + 1}/{total_files})..."
 
                 file_metadata = {
@@ -313,9 +406,66 @@ class GoogleDriveService:
                     "url": uploaded.get("webViewLink"),
                 })
 
+            # 2. Download and Upload the actual Lecture Video (.mp4)
+            job["progress"] = 55
+            job["current_step"] = f"Downloading lecture video ({title})..."
+            video_file = None
+            try:
+                video_file = self._download_lecture_video(
+                    video_id=video_id,
+                    title=title,
+                    streams_info=streams_info,
+                    job=job
+                )
+                if video_file and video_file.exists():
+                    v_size_mb = round(video_file.stat().st_size / (1024 * 1024), 1)
+                    job["current_step"] = f"Uploading '{video_file.name}' ({v_size_mb} MB) to Google Drive..."
+                    job["progress"] = 75
+
+                    v_meta = {
+                        "name": video_file.name,
+                        "parents": [folder_id]
+                    }
+                    v_media = MediaFileUpload(
+                        str(video_file),
+                        mimetype="video/mp4",
+                        resumable=True
+                    )
+                    v_req = service.files().create(
+                        body=v_meta,
+                        media_body=v_media,
+                        fields="id, name, webViewLink, size"
+                    )
+                    v_resp = None
+                    while v_resp is None:
+                        status, v_resp = v_req.next_chunk()
+                        if status:
+                            pct = int(status.progress() * 100)
+                            job["progress"] = 75 + int(pct * 0.23)
+                            job["current_step"] = f"Uploading video: {pct}% ({v_size_mb} MB)..."
+
+                    uploaded_files.insert(0, {
+                        "id": v_resp.get("id"),
+                        "name": v_resp.get("name"),
+                        "url": v_resp.get("webViewLink"),
+                        "size": v_resp.get("size")
+                    })
+                    print(f"[Google Drive Export] Video '{video_file.name}' ({v_size_mb} MB) uploaded to Google Drive.")
+                else:
+                    print(f"[Google Drive Export Notice] Video stream was not captured; documents uploaded.")
+            except Exception as ve:
+                print(f"[Google Drive Export Notice] Video stream capture error: {ve}")
+                job["video_warning"] = str(ve)
+            finally:
+                if video_file and video_file.exists():
+                    try:
+                        video_file.unlink()
+                    except Exception:
+                        pass
+
             job["files"] = uploaded_files
             job["progress"] = 100
-            job["current_step"] = "Bundle upload successfully completed!"
+            job["current_step"] = "Full bundle (including video) successfully uploaded to Google Drive!"
             job["status"] = "COMPLETED"
             job["completed_at"] = datetime.utcnow().isoformat()
             print(f"[Google Drive Export] Successfully uploaded lecture bundle for '{video_id}' to {folder_url}")

@@ -334,7 +334,7 @@ export default function App() {
       }))
     : (activeData?.cues || []);
 
-  const handleCopyMarkdown = () => {
+  const handleCopyTranscript = () => {
     if (!activeData) return;
     let md = `# ${activeData.title}\nSource: ${activeData.sourceUrl}\n\n`;
     activeData.cues.forEach(c => {
@@ -344,6 +344,7 @@ export default function App() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+  const handleCopyMarkdown = handleCopyTranscript;
 
   // Helper to trigger browser download of text/markdown/vtt files
   const downloadTextFile = (filename, content, mime = 'text/plain') => {
@@ -1029,7 +1030,7 @@ export default function App() {
 
             <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
               <button
-                onClick={handleCopyMarkdown}
+                onClick={handleCopyTranscript}
                 style={{
                   flex: 1,
                   display: 'flex',
@@ -1047,7 +1048,7 @@ export default function App() {
                 }}
               >
                 {copied ? <Check size={16} color="var(--vimeo-blue)" /> : <Copy size={16} />}
-                {copied ? 'Copied Markdown!' : 'Copy Markdown'}
+                {copied ? 'Copied Transcript!' : 'Copy Transcript'}
               </button>
             </div>
           </div>

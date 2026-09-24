@@ -2114,53 +2114,30 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Upload Trigger Button */}
-                  {(!gdriveJob || gdriveJob.status === 'FAILED') && (
-                    (gdriveAccessToken || gdriveStatus?.configured) ? (
-                      <button
-                        onClick={handleStartGdriveUpload}
-                        disabled={gdriveUploading}
-                        style={{
-                          padding: '12px 20px',
-                          background: 'var(--vimeo-blue)',
-                          color: '#ffffff',
-                          border: 'none',
-                          borderRadius: '8px',
-                          fontSize: '0.9rem',
-                          fontWeight: 700,
-                          cursor: gdriveUploading ? 'not-allowed' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '8px',
-                          opacity: gdriveUploading ? 0.6 : 1
-                        }}
-                      >
-                        {gdriveUploading ? <RefreshCw className="spinner" size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <Cloud size={18} />}
-                        {gdriveUploading ? 'Uploading Bundle to Google Drive...' : 'Upload Full Bundle to Google Drive'}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={handleGoogleSignIn}
-                        style={{
-                          padding: '12px 20px',
-                          background: 'rgba(0, 173, 239, 0.15)',
-                          color: 'var(--vimeo-blue)',
-                          border: '1px solid rgba(0, 173, 239, 0.4)',
-                          borderRadius: '8px',
-                          fontSize: '0.9rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '8px'
-                        }}
-                      >
-                        <GoogleIcon />
-                        Sign in with Google to Upload
-                      </button>
-                    )
+                  {/* Upload Trigger Button - Appears once user is signed in */}
+                  {(!gdriveJob || gdriveJob.status === 'FAILED') && (gdriveAccessToken || gdriveStatus?.configured) && (
+                    <button
+                      onClick={handleStartGdriveUpload}
+                      disabled={gdriveUploading}
+                      style={{
+                        padding: '12px 20px',
+                        background: 'var(--vimeo-blue)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '0.9rem',
+                        fontWeight: 700,
+                        cursor: gdriveUploading ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        opacity: gdriveUploading ? 0.6 : 1
+                      }}
+                    >
+                      {gdriveUploading ? <RefreshCw className="spinner" size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <Cloud size={18} />}
+                      {gdriveUploading ? 'Uploading Bundle to Google Drive...' : 'Upload Full Bundle to Google Drive'}
+                    </button>
                   )}
                 </>
               )}

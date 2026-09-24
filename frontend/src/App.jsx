@@ -1049,28 +1049,6 @@ export default function App() {
                 {copied ? <Check size={16} color="var(--vimeo-blue)" /> : <Copy size={16} />}
                 {copied ? 'Copied Markdown!' : 'Copy Markdown'}
               </button>
-
-              <button
-                onClick={() => openDownloadModal('device')}
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  background: 'linear-gradient(135deg, rgba(0, 173, 239, 0.18), rgba(16, 185, 129, 0.18))',
-                  color: 'var(--vimeo-blue)',
-                  border: '1px solid rgba(0, 173, 239, 0.35)',
-                  padding: '10px',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontSize: '0.85rem',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <Download size={16} /> Download & Cloud
-              </button>
             </div>
           </div>
 
@@ -1681,7 +1659,7 @@ export default function App() {
                         Transcript (transcript.md)
                       </button>
                       <button
-                        onClick={handleDownloadVTT}
+                        onClick={handleDownloadVtt}
                         style={{
                           display: 'flex',
                           alignItems: 'center',

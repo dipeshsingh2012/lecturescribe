@@ -3,8 +3,29 @@ import Player from '@vimeo/player';
 import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
-  Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2
+  Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut
 } from 'lucide-react';
+
+const GoogleIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
+    <path
+      fill="#4285F4"
+      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+    />
+  </svg>
+);
 
 export default function App() {
   const [urlInput, setUrlInput] = useState('');
@@ -33,7 +54,28 @@ export default function App() {
   const [gdriveJobId, setGdriveJobId] = useState(null);
   const [gdriveJob, setGdriveJob] = useState(null);
   const [gdriveUploading, setGdriveUploading] = useState(false);
-  const [gdriveAccessToken, setGdriveAccessToken] = useState('');
+  const [gdriveAccessToken, setGdriveAccessToken] = useState(() => {
+    try {
+      return sessionStorage.getItem('lecturescribe_gdrive_token') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [googleUser, setGoogleUser] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('lecturescribe_google_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [googleClientIdInput, setGoogleClientIdInput] = useState(() => {
+    try {
+      return localStorage.getItem('lecturescribe_google_client_id') || '';
+    } catch {
+      return '';
+    }
+  });
   const [gdriveError, setGdriveError] = useState(null);
   const pollIntervalRef = useRef(null);
 
@@ -465,6 +507,79 @@ export default function App() {
     navigator.clipboard.writeText(text);
     setCopiedCmd(key);
     setTimeout(() => setCopiedCmd(null), 2000);
+  };
+
+  const handleGoogleSignIn = () => {
+    const activeClientId = (
+      gdriveStatus?.client_id ||
+      googleClientIdInput ||
+      (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) ||
+      ''
+    ).trim();
+
+    if (!activeClientId) {
+      setGdriveError("Please enter your Google OAuth Client ID to enable 1-click Sign In.");
+      return;
+    }
+
+    if (!window.google?.accounts?.oauth2) {
+      setGdriveError("Google Identity Services is still loading. Please check your internet connection or try again in a few seconds.");
+      return;
+    }
+
+    try {
+      const tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: activeClientId,
+        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email',
+        callback: async (tokenResponse) => {
+          if (tokenResponse.error) {
+            console.error("Google Sign-in error:", tokenResponse);
+            setGdriveError(`Sign-in was cancelled or failed: ${tokenResponse.error_description || tokenResponse.error}`);
+            return;
+          }
+          if (tokenResponse.access_token) {
+            const token = tokenResponse.access_token;
+            setGdriveAccessToken(token);
+            try { sessionStorage.setItem('lecturescribe_gdrive_token', token); } catch {}
+            setGdriveError(null);
+
+            // Fetch user profile info to show friendly user email/name
+            try {
+              const uRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              if (uRes.ok) {
+                const uData = await uRes.json();
+                setGoogleUser(uData);
+                try { sessionStorage.setItem('lecturescribe_google_user', JSON.stringify(uData)); } catch {}
+              } else {
+                setGoogleUser({ email: 'Google User' });
+              }
+            } catch {
+              setGoogleUser({ email: 'Google User' });
+            }
+          }
+        },
+      });
+      tokenClient.requestAccessToken();
+    } catch (err) {
+      console.error("Google OAuth Exception:", err);
+      setGdriveError(`Failed to initialize Google Sign-in: ${err.message}`);
+    }
+  };
+
+  const handleGoogleSignOut = () => {
+    if (gdriveAccessToken && window.google?.accounts?.oauth2?.revoke) {
+      try {
+        window.google.accounts.oauth2.revoke(gdriveAccessToken, () => {});
+      } catch {}
+    }
+    setGdriveAccessToken('');
+    setGoogleUser(null);
+    try {
+      sessionStorage.removeItem('lecturescribe_gdrive_token');
+      sessionStorage.removeItem('lecturescribe_google_user');
+    } catch {}
   };
 
   const handleStartGdriveUpload = async () => {
@@ -933,6 +1048,28 @@ export default function App() {
               >
                 {copied ? <Check size={16} color="var(--vimeo-blue)" /> : <Copy size={16} />}
                 {copied ? 'Copied Markdown!' : 'Copy Markdown'}
+              </button>
+
+              <button
+                onClick={() => openDownloadModal('device')}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  background: 'linear-gradient(135deg, rgba(0, 173, 239, 0.18), rgba(16, 185, 129, 0.18))',
+                  color: 'var(--vimeo-blue)',
+                  border: '1px solid rgba(0, 173, 239, 0.35)',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <Download size={16} /> Download & Cloud
               </button>
             </div>
           </div>
@@ -1544,7 +1681,7 @@ export default function App() {
                         Transcript (transcript.md)
                       </button>
                       <button
-                        onClick={handleDownloadVtt}
+                        onClick={handleDownloadVTT}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -1726,66 +1863,206 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Auth Configuration Status */}
-                  <div style={{
-                    padding: '12px 16px',
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
-                  }}>
-                    <div>
-                      <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                        Google Drive Integration Status:
+                  {/* Error Notification Banner if any */}
+                  {gdriveError && (
+                    <div style={{
+                      padding: '10px 14px',
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      borderRadius: '8px',
+                      color: '#f87171',
+                      fontSize: '0.82rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <AlertCircle size={16} />
+                        <span>{gdriveError}</span>
                       </div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                        {gdriveStatus?.configured ? (
-                          <span style={{ color: '#10b981', fontWeight: 600 }}>● Service Account active & verified</span>
-                        ) : (
-                          <span>OAuth2 Bearer Token or service account configuration</span>
-                        )}
-                      </div>
+                      <button
+                        onClick={() => setGdriveError(null)}
+                        style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', display: 'flex' }}
+                      >
+                        <X size={14} />
+                      </button>
                     </div>
-                    {gdriveStatus?.configured && (
-                      <span style={{
-                        background: 'rgba(16, 185, 129, 0.15)',
-                        color: '#10b981',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
-                        padding: '4px 10px',
-                        borderRadius: '12px',
-                        fontSize: '0.75rem',
-                        fontWeight: 700
-                      }}>
+                  )}
+
+                  {/* Google Authentication Status / Sign In Card */}
+                  {gdriveAccessToken ? (
+                    /* CASE 1: Signed In with Google */
+                    <div style={{
+                      padding: '14px 18px',
+                      background: 'rgba(16, 185, 129, 0.08)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <GoogleIcon />
+                        <div>
+                          <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            Signed in with Google
+                            <span style={{ fontSize: '0.72rem', background: 'rgba(16, 185, 129, 0.2)', color: '#10b981', padding: '1px 6px', borderRadius: '10px', fontWeight: 600 }}>Active</span>
+                          </div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            {googleUser?.email || 'Connected Google Account'}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleGoogleSignOut}
+                        title="Sign out of Google"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'transparent',
+                          border: '1px solid var(--border-color)',
+                          color: 'var(--text-secondary)',
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          fontSize: '0.78rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <LogOut size={14} />
+                        Sign Out
+                      </button>
+                    </div>
+                  ) : gdriveStatus?.configured ? (
+                    /* CASE 2: Server Service Account Active */
+                    <div style={{
+                      padding: '14px 18px',
+                      background: 'rgba(16, 185, 129, 0.08)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <Cloud size={20} color="#10b981" />
+                        <div>
+                          <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Server Service Account Active
+                          </div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            {gdriveStatus.service_account_email || 'Verified Cloud Credentials'}
+                          </div>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: '0.75rem', background: '#10b981', color: '#fff', padding: '3px 8px', borderRadius: '10px', fontWeight: 700 }}>
                         Ready
                       </span>
-                    )}
-                  </div>
-
-                  {/* Token Input if not configured */}
-                  {!gdriveStatus?.configured && (
-                    <div>
-                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                        Google OAuth2 Access Token (Optional if service account configured in .env):
-                      </label>
-                      <input
-                        type="password"
-                        placeholder="ya29.a0AfH6SMB..."
-                        value={gdriveAccessToken}
-                        onChange={(e) => setGdriveAccessToken(e.target.value)}
+                    </div>
+                  ) : (gdriveStatus?.client_id || googleClientIdInput || (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID)) ? (
+                    /* CASE 3: Client ID is known -> Prominent 1-Click Sign In */
+                    <div style={{
+                      padding: '20px 18px',
+                      background: 'var(--card-bg)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px',
+                      alignItems: 'center',
+                      textAlign: 'center'
+                    }}>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Sign in to save this lecture bundle to your personal Google Drive
+                      </div>
+                      <button
+                        onClick={handleGoogleSignIn}
                         style={{
-                          width: '100%',
-                          background: 'var(--card-bg)',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: '8px',
-                          padding: '10px 14px',
-                          color: 'var(--text-primary)',
-                          fontSize: '0.85rem',
-                          outline: 'none',
-                          boxSizing: 'border-box'
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '10px',
+                          background: '#ffffff',
+                          color: '#3c4043',
+                          border: '1px solid #dadce0',
+                          padding: '10px 24px',
+                          borderRadius: '24px',
+                          fontSize: '0.92rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          boxShadow: '0 2px 6px rgba(0,0,0,0.12)',
+                          transition: 'background 0.2s ease'
                         }}
-                      />
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = '#ffffff'}
+                      >
+                        <GoogleIcon />
+                        Sign in with Google
+                      </button>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: '420px', lineHeight: 1.3 }}>
+                        Opens Google's official authorization popup. Only grants LectureScribe permission to create and manage the lecture files it uploads.
+                      </div>
+                    </div>
+                  ) : (
+                    /* CASE 4: Client ID not configured yet -> Simple 1-Step Setup */
+                    <div style={{
+                      padding: '16px 18px',
+                      background: 'var(--card-bg)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        <GoogleIcon />
+                        Set Up 1-Click Google Sign-In
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                        To enable 1-click Google Sign-In, enter your Google OAuth <strong>Client ID</strong> below (or add <code style={{ color: 'var(--vimeo-blue)' }}>GOOGLE_CLIENT_ID</code> to your project's <code style={{ color: 'var(--vimeo-blue)' }}>.env</code> file):
+                      </p>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <input
+                          type="text"
+                          placeholder="e.g. 123456789-abcdef.apps.googleusercontent.com"
+                          value={googleClientIdInput}
+                          onChange={(e) => {
+                            setGoogleClientIdInput(e.target.value);
+                            try { localStorage.setItem('lecturescribe_google_client_id', e.target.value); } catch {}
+                          }}
+                          style={{
+                            flex: 1,
+                            background: 'var(--panel-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '6px',
+                            padding: '8px 12px',
+                            color: 'var(--text-primary)',
+                            fontSize: '0.82rem',
+                            outline: 'none'
+                          }}
+                        />
+                        <button
+                          onClick={handleGoogleSignIn}
+                          disabled={!googleClientIdInput.trim()}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            background: googleClientIdInput.trim() ? '#ffffff' : 'rgba(255,255,255,0.2)',
+                            color: '#3c4043',
+                            border: '1px solid #dadce0',
+                            borderRadius: '6px',
+                            padding: '8px 14px',
+                            fontSize: '0.82rem',
+                            fontWeight: 600,
+                            cursor: googleClientIdInput.trim() ? 'pointer' : 'not-allowed'
+                          }}
+                        >
+                          <GoogleIcon />
+                          Sign In
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -1860,28 +2137,51 @@ export default function App() {
 
                   {/* Upload Trigger Button */}
                   {(!gdriveJob || gdriveJob.status === 'FAILED') && (
-                    <button
-                      onClick={handleStartGdriveUpload}
-                      disabled={gdriveUploading}
-                      style={{
-                        padding: '12px 20px',
-                        background: 'var(--vimeo-blue)',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: '8px',
-                        fontSize: '0.9rem',
-                        fontWeight: 700,
-                        cursor: gdriveUploading ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        opacity: gdriveUploading ? 0.6 : 1
-                      }}
-                    >
-                      {gdriveUploading ? <RefreshCw className="spinner" size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <Cloud size={18} />}
-                      {gdriveUploading ? 'Starting Upload...' : 'Upload Full Bundle to Google Drive'}
-                    </button>
+                    (gdriveAccessToken || gdriveStatus?.configured) ? (
+                      <button
+                        onClick={handleStartGdriveUpload}
+                        disabled={gdriveUploading}
+                        style={{
+                          padding: '12px 20px',
+                          background: 'var(--vimeo-blue)',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '8px',
+                          fontSize: '0.9rem',
+                          fontWeight: 700,
+                          cursor: gdriveUploading ? 'not-allowed' : 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px',
+                          opacity: gdriveUploading ? 0.6 : 1
+                        }}
+                      >
+                        {gdriveUploading ? <RefreshCw className="spinner" size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <Cloud size={18} />}
+                        {gdriveUploading ? 'Uploading Bundle to Google Drive...' : 'Upload Full Bundle to Google Drive'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleGoogleSignIn}
+                        style={{
+                          padding: '12px 20px',
+                          background: 'rgba(0, 173, 239, 0.15)',
+                          color: 'var(--vimeo-blue)',
+                          border: '1px solid rgba(0, 173, 239, 0.4)',
+                          borderRadius: '8px',
+                          fontSize: '0.9rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px'
+                        }}
+                      >
+                        <GoogleIcon />
+                        Sign in with Google to Upload
+                      </button>
+                    )
                   )}
                 </>
               )}

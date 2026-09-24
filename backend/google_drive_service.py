@@ -73,15 +73,17 @@ class GoogleDriveService:
             except Exception:
                 pass
 
+        client_id = os.getenv("GOOGLE_CLIENT_ID") or os.getenv("VITE_GOOGLE_CLIENT_ID") or ""
         return {
             "configured": configured,
             "has_libraries": HAS_GOOGLE_DRIVE_LIBS,
-            "auth_type": "service_account" if configured else "user_bearer_token",
+            "auth_type": "service_account" if configured else "google_sign_in",
             "service_account_email": sa_email,
+            "client_id": client_id,
             "message": (
                 "Google Drive Service Account active and ready."
                 if configured
-                else "Provide an OAuth2 Access Token or configure GOOGLE_SERVICE_ACCOUNT_FILE in .env."
+                else "Sign in with Google to export to your personal Google Drive."
             )
         }
 

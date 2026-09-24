@@ -326,8 +326,7 @@ def upload_lecture_bundle_to_gdrive(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Google Drive credentials not configured. Please set GOOGLE_SERVICE_ACCOUNT_FILE or "
-                "GOOGLE_SERVICE_ACCOUNT_JSON in .env, or supply an access token."
+                "Please sign in with Google in the export modal to authorize uploading this lecture to your Google Drive."
             )
         )
 

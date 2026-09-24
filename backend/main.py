@@ -15,6 +15,8 @@ from pydantic import BaseModel
 
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from contextlib import asynccontextmanager
 
@@ -100,11 +102,13 @@ class ChatRequest(BaseModel):
     video_id: Optional[str] = "1229247139"
     video_title: Optional[str] = "Introduction to Research"
     cues: List[Dict[str, str]] = []
+    user_email: Optional[str] = None
 
 class RAGQueryRequest(BaseModel):
     query: str
     video_id: Optional[str] = ""
     top_k: Optional[int] = 4
+    user_email: Optional[str] = None
 
 class AlgoliaSearchRequest(BaseModel):
     query: str
@@ -127,8 +131,20 @@ def health_check():
         "pinecone_namespace": pinecone_rag_engine.namespace
     }
 
+@app.get("/api/lecture/{video_id}")
+def get_lecture_by_id(
+    video_id: str,
+    email: Optional[str] = Query(None, description="Signed-in user email for LMS library")
+):
+    """Dedicated API endpoint for fetching a lecture workspace by Vimeo video ID."""
+    return get_transcript(url=video_id, email=email)
+
+
 @app.get("/api/transcript")
-def get_transcript(url: str = Query(..., description="Vimeo URL or Video ID")):
+def get_transcript(
+    url: str = Query(..., description="Vimeo URL or Video ID"),
+    email: Optional[str] = Query(None, description="Signed-in user email for LMS library")
+):
     try:
         video_id = extract_video_id(url)
         
@@ -140,6 +156,14 @@ def get_transcript(url: str = Query(..., description="Vimeo URL or Video ID")):
             # Ingest into Algolia & Pinecone (safe/idempotent, skips if already active)
             algolia_service.ingest_cues(video_id, saved["title"], saved["cues"])
             pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved["cues"])
+            if email and email.strip():
+                db_manager.record_user_lecture(
+                    user_email=email,
+                    video_id=video_id,
+                    title=saved["title"],
+                    duration=saved.get("duration", "Unknown"),
+                    source_url=saved.get("sourceUrl", f"https://vimeo.com/{video_id}")
+                )
             return saved
 
         # 2. Extract fresh video config from Vimeo
@@ -175,13 +199,23 @@ def get_transcript(url: str = Query(..., description="Vimeo URL or Video ID")):
         caption_label = track.get("label", "English")
 
         # 3. Save to Relational DB (Postgres/SQLite)
-        db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections)
+        db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email)
 
         # 4. Ingest into Algolia Search Engine
         algolia_service.ingest_cues(video_id, title, cues)
 
         # 5. Ingest into Pinecone Vector Store
         pinecone_chunks = pinecone_rag_engine.ingest_transcript(video_id, title, cues)
+
+        # 6. Record into user LMS library if authenticated
+        if email and email.strip():
+            db_manager.record_user_lecture(
+                user_email=email,
+                video_id=video_id,
+                title=title,
+                duration=duration,
+                source_url=source_url
+            )
 
         return {
             "videoId": video_id,
@@ -213,6 +247,17 @@ def rag_query(req: RAGQueryRequest):
         raise HTTPException(status_code=400, detail="Query string cannot be empty")
     
     result = pinecone_rag_engine.query_rag(req.query, top_k=req.top_k or 4)
+    if req.video_id:
+        try:
+            db_manager.save_chat_log(
+                video_id=req.video_id,
+                user_prompt=req.query,
+                ai_reply=result.get("answer", ""),
+                citations=result.get("citations", []),
+                user_email=req.user_email
+            )
+        except Exception as e:
+            print(f"[Chat Log Notice]: {e}")
     return result
 
 @app.post("/api/chat")
@@ -232,7 +277,7 @@ def chat_with_transcript(req: ChatRequest):
     citations = rag_res.get("citations", [])
 
     # Save to Chat History DB
-    db_manager.save_chat_log(video_id, user_prompt, reply, citations)
+    db_manager.save_chat_log(video_id, user_prompt, reply, citations, user_email=req.user_email)
 
     return {
         "reply": reply,
@@ -267,6 +312,53 @@ def regenerate_summary(req: RegenerateSummaryRequest):
 
 
 # ==============================================================================
+# LMS User Library Endpoints
+# ==============================================================================
+
+class UserLibraryRecordRequest(BaseModel):
+    user_email: str
+    video_id: str
+    title: str
+    duration: Optional[str] = ""
+    source_url: Optional[str] = ""
+    drive_folder_url: Optional[str] = None
+
+
+@app.get("/api/user/library")
+def get_user_library(email: str = Query(..., description="User Google email")):
+    """Fetch user's saved LMS library of lectures."""
+    if not email.strip():
+        raise HTTPException(status_code=400, detail="User email is required.")
+    lectures = db_manager.get_user_library(email)
+    return {"status": "success", "lectures": lectures, "library": lectures, "count": len(lectures)}
+
+
+@app.post("/api/user/library/record")
+def record_user_lecture(req: UserLibraryRecordRequest):
+    """Add or update a lecture in the user's LMS library."""
+    if not req.user_email.strip() or not req.video_id.strip():
+        raise HTTPException(status_code=400, detail="user_email and video_id are required.")
+    success = db_manager.record_user_lecture(
+        user_email=req.user_email,
+        video_id=req.video_id,
+        title=req.title,
+        duration=req.duration or "",
+        source_url=req.source_url or "",
+        drive_folder_url=req.drive_folder_url
+    )
+    return {"status": "success" if success else "failed"}
+
+
+@app.delete("/api/user/library/{video_id}")
+def delete_user_lecture(video_id: str, email: str = Query(..., description="User Google email")):
+    """Remove a lecture from the user's LMS library."""
+    if not email.strip() or not video_id.strip():
+        raise HTTPException(status_code=400, detail="email and video_id are required.")
+    success = db_manager.remove_user_lecture(email, video_id)
+    return {"status": "success" if success else "failed"}
+
+
+# ==============================================================================
 # Video Download & Cloud Export Endpoints
 # ==============================================================================
 
@@ -277,6 +369,7 @@ class CloudUploadRequest(BaseModel):
     summary_content: Optional[str] = None
     parent_folder_id: Optional[str] = None
     access_token: Optional[str] = None
+    user_email: Optional[str] = None
 
 
 @app.get("/api/video/download-options")
@@ -322,12 +415,10 @@ def upload_lecture_bundle_to_gdrive(
         raise HTTPException(status_code=400, detail="A valid video_id or Vimeo URL is required.")
 
     # Check configuration
-    if not req.access_token and not google_drive_service.is_configured():
+    if not req.access_token:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Please sign in with Google in the export modal to authorize uploading this lecture to your Google Drive."
-            )
+            detail="Please sign in with Google in the export modal to authorize uploading this lecture to your Google Drive."
         )
 
     # 1. Fetch or load video cues, VTT, and title
@@ -394,6 +485,7 @@ def upload_lecture_bundle_to_gdrive(
         streams_info=streams_info,
         parent_folder_id=req.parent_folder_id,
         access_token=req.access_token,
+        user_email=req.user_email,
     )
 
     return {
@@ -412,4 +504,28 @@ def get_cloud_job_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+# -------------------------------------------------------------
+# SPA Static File Serving & HTML5 History Catch-All Fallback
+# -------------------------------------------------------------
+frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
+if os.path.exists(frontend_dist):
+    assets_dir = os.path.join(frontend_dist, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        # Do not catch unhandled API routes
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+        file_path = os.path.join(frontend_dist, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        index_file = os.path.join(frontend_dist, "index.html")
+        if os.path.isfile(index_file):
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Frontend build index not found")
+
 

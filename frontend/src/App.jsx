@@ -3,8 +3,73 @@ import Player from '@vimeo/player';
 import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
-  Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut
+  Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut,
+  Trash2, Clock, BookOpen
 } from 'lucide-react';
+
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+import CssBaseline from '@mui/material/CssBaseline';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Avatar from '@mui/material/Avatar';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import Typography from '@mui/material/Typography';
+import Chip from '@mui/material/Chip';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import CardActions from '@mui/material/CardActions';
+import Grid from '@mui/material/Grid';
+import TextField from '@mui/material/TextField';
+import InputAdornment from '@mui/material/InputAdornment';
+import IconButton from '@mui/material/IconButton';
+import Tooltip from '@mui/material/Tooltip';
+import Divider from '@mui/material/Divider';
+import Paper from '@mui/material/Paper';
+import InputBase from '@mui/material/InputBase';
+
+const darkTheme = createTheme({
+  palette: {
+    mode: 'dark',
+    primary: { main: '#00adef' },
+    secondary: { main: '#8b5cf6' },
+    background: {
+      default: '#0b1120',
+      paper: '#1e293b',
+    },
+    text: {
+      primary: '#f8fafc',
+      secondary: '#94a3b8',
+    },
+  },
+  typography: {
+    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  },
+  shape: {
+    borderRadius: 10,
+  },
+});
+
+const formatRelativeTime = (dateStr) => {
+  if (!dateStr) return 'Recently';
+  try {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 30) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  } catch {
+    return 'Recently';
+  }
+};
 
 const GoogleIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" style={{ display: 'inline-block', verticalAlign: 'middle' }}>
@@ -39,6 +104,43 @@ export default function App() {
   const [activeCueIdx, setActiveCueIdx] = useState(0);
   const [copied, setCopied] = useState(false);
   const [regeneratingSummary, setRegeneratingSummary] = useState(false);
+
+  // Dedicated Lecture Routing & History State
+  const [currentPath, setCurrentPath] = useState(() => {
+    try {
+      return typeof window !== 'undefined' ? window.location.pathname || '/' : '/';
+    } catch {
+      return '/';
+    }
+  });
+
+  const getLectureIdFromPath = (path = (typeof window !== 'undefined' ? window.location.pathname : '/')) => {
+    if (!path) return null;
+    const match = path.match(/^\/(?:lecture|lectures|video|watch)\/([a-zA-Z0-9_\-]+)/i);
+    return match ? match[1] : null;
+  };
+
+  const navigateTo = (path, replace = false) => {
+    try {
+      if (typeof window !== 'undefined' && window.location.pathname !== path) {
+        if (replace) {
+          window.history.replaceState({}, '', path);
+        } else {
+          window.history.pushState({}, '', path);
+        }
+      }
+    } catch (e) {
+      console.warn("Navigation history warning:", e);
+    }
+    setCurrentPath(path);
+  };
+
+  const handleBackToHub = () => {
+    navigateTo('/');
+    setActiveData(null);
+    setError(null);
+    setCacheNotice(null);
+  };
 
   // Download & Cloud Export Modal State
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
@@ -79,6 +181,62 @@ export default function App() {
   const [gdriveError, setGdriveError] = useState(null);
   const pollIntervalRef = useRef(null);
 
+  // LMS User Library State
+  const [userLibrary, setUserLibrary] = useState([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [librarySearch, setLibrarySearch] = useState('');
+  const [userMenuAnchor, setUserMenuAnchor] = useState(null);
+
+  const fetchUserLibrary = async (email) => {
+    if (!email) return;
+    setLibraryLoading(true);
+    try {
+      const res = await fetch(`/api/user/library?email=${encodeURIComponent(email)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const list = data.library || data.lectures || [];
+        setUserLibrary(list);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch user library:", err);
+    } finally {
+      setLibraryLoading(false);
+    }
+  };
+
+  const handleDeleteFromLibrary = async (videoId) => {
+    if (!googleUser?.email || !videoId) return;
+    try {
+      const res = await fetch(`/api/user/library/${videoId}?email=${encodeURIComponent(googleUser.email)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setUserLibrary(prev => prev.filter(item => item.video_id !== videoId));
+      }
+    } catch (err) {
+      console.warn("Failed to delete from user library:", err);
+    }
+  };
+
+  // Automatically fetch library when signed in
+  useEffect(() => {
+    if (googleUser?.email) {
+      fetchUserLibrary(googleUser.email);
+    } else {
+      setUserLibrary([]);
+    }
+  }, [googleUser?.email]);
+
+  // Load Google Drive Status on initial mount to get Client ID early for top-right sign-in
+  useEffect(() => {
+    fetch('/api/cloud/gdrive/status')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) setGdriveStatus(data);
+      })
+      .catch(() => {});
+  }, []);
+
   // Client-side cache: In-memory & LocalStorage (Auto-purges stale hardcoded summaries)
   const [cachedVideos, setCachedVideos] = useState(() => {
     try {
@@ -88,7 +246,14 @@ export default function App() {
         let modified = false;
         Object.keys(parsed).forEach(k => {
           const str = JSON.stringify(parsed[k].summarySections || []);
-          if (str.includes("Course Structure & Evaluation Framework") || str.includes("34 credits")) {
+          if (
+            str.includes("Course Structure & Evaluation Framework") ||
+            str.includes("34 credits") ||
+            str.includes("Session Introduction & Core Scope") ||
+            str.includes("Theoretical Foundations & Key Themes") ||
+            str.includes(": Seen [") ||
+            str.includes(": Question [")
+          ) {
             delete parsed[k];
             modified = true;
           }
@@ -203,10 +368,14 @@ export default function App() {
     }
   };
 
-  const handleTranscribe = async (targetUrl = urlInput) => {
+  const handleTranscribe = async (targetUrl = urlInput, pushRoute = true) => {
     const rawUrl = targetUrl || urlInput;
     if (!rawUrl.trim()) return;
     const vidId = extractVideoId(rawUrl);
+
+    if (pushRoute && vidId) {
+      navigateTo(`/lecture/${vidId}`);
+    }
 
     // 1. If currently active video is already this video, do NOT re-generate
     if (activeData && (activeData.videoId === vidId || extractVideoId(activeData.sourceUrl) === vidId)) {
@@ -218,8 +387,22 @@ export default function App() {
     if (cachedVideos[vidId]) {
       const cached = cachedVideos[vidId];
       setActiveData({ ...cached, cached: true });
+      setUrlInput(cached.sourceUrl || `https://vimeo.com/${vidId}`);
       initChatMessages(cached.title);
       setCacheNotice("⚡ Loaded instantly from browser cache — Transcripts and summary were reused!");
+      if (googleUser?.email) {
+        fetch('/api/user/library/record', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: googleUser.email,
+            video_id: vidId,
+            video_title: cached.title,
+            video_url: cached.sourceUrl || rawUrl,
+            duration_seconds: cached.duration || null
+          })
+        }).then(() => fetchUserLibrary(googleUser.email)).catch(() => {});
+      }
       return;
     }
 
@@ -228,10 +411,12 @@ export default function App() {
     setCacheNotice(null);
 
     try {
-      const res = await fetch(`/api/transcript?url=${encodeURIComponent(rawUrl)}`);
+      const userParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
+      const res = await fetch(`/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}`);
       if (res.ok) {
         const data = await res.json();
         setActiveData(data);
+        setUrlInput(data.sourceUrl || `https://vimeo.com/${data.videoId}`);
         initChatMessages(data.title);
 
         // Store into client cache for instant repeated loads
@@ -244,6 +429,10 @@ export default function App() {
           }
           return updated;
         });
+
+        if (googleUser?.email) {
+          fetchUserLibrary(googleUser.email);
+        }
 
         if (data.cached) {
           setCacheNotice("⚡ Retrieved from Database Cache! Transcripts and summary were not regenerated.");
@@ -259,6 +448,50 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  // Keep a ref of activeData so popstate callback always accesses the latest video state
+  const activeDataRef = useRef(activeData);
+  useEffect(() => {
+    activeDataRef.current = activeData;
+  }, [activeData]);
+
+  // Dedicated Route & History Handler (Mount URL load & Browser Back/Forward)
+  useEffect(() => {
+    // 1. Initial page load check
+    const initialPath = window.location.pathname || '/';
+    const initialVidId = getLectureIdFromPath(initialPath);
+    if (initialVidId) {
+      handleTranscribe(initialVidId, false);
+    }
+
+    // 2. Browser Back / Forward navigation listener
+    const onPopState = () => {
+      const current = window.location.pathname || '/';
+      setCurrentPath(current);
+      const vidId = getLectureIdFromPath(current);
+      if (vidId) {
+        if (!activeDataRef.current || activeDataRef.current.videoId !== vidId) {
+          handleTranscribe(vidId, false);
+        }
+      } else {
+        setActiveData(null);
+        setError(null);
+        setCacheNotice(null);
+      }
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  // Synchronize document title with currently active lecture route
+  useEffect(() => {
+    if (activeData?.title) {
+      document.title = `${activeData.title} | LectureScribe`;
+    } else {
+      document.title = 'LectureScribe - LMS & Vimeo AI Workspace';
+    }
+  }, [activeData]);
 
   const handlePasteUrl = (e) => {
     const pasted = e.clipboardData?.getData('text') || '';
@@ -299,7 +532,8 @@ export default function App() {
         body: JSON.stringify({
           query: textToSend,
           video_id: activeData.videoId,
-          top_k: 4
+          top_k: 4,
+          user_email: googleUser?.email || null
         })
       });
 
@@ -510,7 +744,7 @@ export default function App() {
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  const handleGoogleSignIn = () => {
+  const handleGoogleSignIn = (autoStartUpload = false) => {
     const activeClientId = (
       gdriveStatus?.client_id ||
       googleClientIdInput ||
@@ -541,7 +775,12 @@ export default function App() {
           if (tokenResponse.access_token) {
             const token = tokenResponse.access_token;
             setGdriveAccessToken(token);
-            try { sessionStorage.setItem('lecturescribe_gdrive_token', token); } catch {}
+            const expiresIn = tokenResponse.expires_in ? Number(tokenResponse.expires_in) : 3599;
+            const expiresAt = Date.now() + (expiresIn * 1000);
+            try {
+              sessionStorage.setItem('lecturescribe_gdrive_token', token);
+              sessionStorage.setItem('lecturescribe_gdrive_token_expires', expiresAt.toString());
+            } catch {}
             setGdriveError(null);
 
             // Fetch user profile info to show friendly user email/name
@@ -553,11 +792,18 @@ export default function App() {
                 const uData = await uRes.json();
                 setGoogleUser(uData);
                 try { sessionStorage.setItem('lecturescribe_google_user', JSON.stringify(uData)); } catch {}
+                if (uData.email) fetchUserLibrary(uData.email);
               } else {
                 setGoogleUser({ email: 'Google User' });
+                fetchUserLibrary('Google User');
               }
             } catch {
               setGoogleUser({ email: 'Google User' });
+              fetchUserLibrary('Google User');
+            }
+
+            if (autoStartUpload) {
+              startUploadWithToken(token);
             }
           }
         },
@@ -579,11 +825,12 @@ export default function App() {
     setGoogleUser(null);
     try {
       sessionStorage.removeItem('lecturescribe_gdrive_token');
+      sessionStorage.removeItem('lecturescribe_gdrive_token_expires');
       sessionStorage.removeItem('lecturescribe_google_user');
     } catch {}
   };
 
-  const handleStartGdriveUpload = async () => {
+  const startUploadWithToken = async (activeToken) => {
     if (!activeData) return;
     setGdriveUploading(true);
     setGdriveError(null);
@@ -606,7 +853,8 @@ export default function App() {
           video_id: activeData.videoId,
           title: activeData.title,
           summary_content: summaryMd,
-          access_token: gdriveAccessToken.trim() || null
+          access_token: (activeToken || '').trim() || null,
+          user_email: googleUser?.email || null
         })
       });
 
@@ -618,7 +866,7 @@ export default function App() {
       const jobData = await res.json();
       const jobId = jobData.job_id;
       setGdriveJobId(jobId);
-      setGdriveJob({ status: 'PROCESSING', progress: 10, current_step: 'Job queued on server...' });
+      setGdriveJob({ status: 'PROCESSING', progress: 5, current_step: 'Downloading video stream...' });
 
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
@@ -633,6 +881,9 @@ export default function App() {
               clearInterval(pollIntervalRef.current);
               pollIntervalRef.current = null;
               setGdriveUploading(false);
+              if (currentJob.status === 'COMPLETED' && googleUser?.email) {
+                fetchUserLibrary(googleUser.email);
+              }
               if (currentJob.status === 'FAILED') {
                 setGdriveError(currentJob.error || currentJob.current_step || "Upload failed");
               }
@@ -650,6 +901,23 @@ export default function App() {
     }
   };
 
+  const handleStartGdriveUpload = async () => {
+    if (!activeData) return;
+
+    // Check if token is expired or expires in less than 2 minutes
+    const tokenExpiresAt = Number(sessionStorage.getItem('lecturescribe_gdrive_token_expires') || '0');
+    const isTokenExpired = tokenExpiresAt > 0 && Date.now() > (tokenExpiresAt - 120000);
+
+    if (gdriveAccessToken && isTokenExpired) {
+      // Auto re-authenticate with Google popup and then auto-start upload
+      setGdriveError("Google session expired (tokens are valid for 1h). Re-authenticating with Google...");
+      handleGoogleSignIn(true);
+      return;
+    }
+
+    startUploadWithToken(gdriveAccessToken);
+  };
+
   useEffect(() => {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
@@ -657,313 +925,928 @@ export default function App() {
   }, []);
 
 
+  const filteredLibrary = userLibrary.filter(item => {
+    if (!librarySearch.trim()) return true;
+    const q = librarySearch.toLowerCase();
+    return (
+      (item.video_title && item.video_title.toLowerCase().includes(q)) ||
+      (item.video_id && String(item.video_id).toLowerCase().includes(q))
+    );
+  });
+
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg-dark)', color: 'var(--text-primary)' }}>
-      
-      {/* Header */}
-      <header style={{
-        backgroundColor: 'var(--panel-bg)',
-        borderBottom: '1px solid var(--border-color)',
-        padding: '12px 24px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        height: '60px'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontWeight: 700, fontSize: '1.1rem' }}>
-          <span style={{ color: 'var(--vimeo-blue)', fontWeight: 900, fontSize: '1.3rem', letterSpacing: '-0.5px' }}>vimeo</span>
-          <span>Transcript Triad Engine</span>
-          <span style={{
-            background: 'rgba(0, 173, 239, 0.2)',
-            color: 'var(--vimeo-blue)',
-            fontSize: '0.75rem',
-            padding: '2px 8px',
-            borderRadius: '12px',
-            textTransform: 'uppercase',
-            letterSpacing: '0.5px'
-          }}>PG + Algolia + Pinecone</span>
-        </div>
-
-        {activeData && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{
-              display: 'flex',
-              gap: '4px',
-              background: 'var(--bg-dark)',
-              padding: '4px',
-              borderRadius: '8px',
-              border: '1px solid var(--border-color)'
-            }}>
-              <button
-                onClick={() => setActiveTab('transcript')}
-                style={{
-                  background: activeTab === 'transcript' ? 'var(--vimeo-blue)' : 'transparent',
-                  color: activeTab === 'transcript' ? '#ffffff' : 'var(--text-secondary)',
-                  border: 'none',
-                  padding: '6px 14px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 600,
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                🔍 Algolia Search
-              </button>
-              <button
-                onClick={() => setActiveTab('summary')}
-                style={{
-                  background: activeTab === 'summary' ? 'var(--vimeo-blue)' : 'transparent',
-                  color: activeTab === 'summary' ? '#ffffff' : 'var(--text-secondary)',
-                  border: 'none',
-                  padding: '6px 14px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <FileText size={16} /> AI Summary
-              </button>
-              <button
-                onClick={() => setActiveTab('chat')}
-                style={{
-                  background: activeTab === 'chat' ? 'var(--vimeo-blue)' : 'transparent',
-                  color: activeTab === 'chat' ? '#ffffff' : 'var(--text-secondary)',
-                  border: 'none',
-                  padding: '6px 14px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <Bot size={16} /> Pinecone Tutor
-              </button>
-            </div>
-
-            <button
-              onClick={() => openDownloadModal('device')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'linear-gradient(135deg, rgba(0, 173, 239, 0.15), rgba(16, 185, 129, 0.15))',
-                color: 'var(--vimeo-blue)',
-                border: '1px solid rgba(0, 173, 239, 0.35)',
-                padding: '6px 14px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-                transition: 'all 0.2s ease'
-              }}
-            >
-              <Download size={15} /> Download & Cloud
-            </button>
-
-            <button
-              onClick={() => { setActiveData(null); setError(null); }}
-
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'var(--card-bg)',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border-color)',
-                padding: '6px 14px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.85rem'
-              }}
-            >
-              <ArrowLeft size={16} /> New Video
-            </button>
-          </div>
-        )}
-      </header>
-
-      {/* Main Content Area */}
-      {!activeData ? (
-        /* LANDING PAGE / INPUT SCREEN */
-        <div className="fade-in" style={{
-          maxWidth: '800px',
-          margin: '80px auto',
+    <ThemeProvider theme={darkTheme}>
+      <CssBaseline />
+      <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg-dark)', color: 'var(--text-primary)' }}>
+        
+        {/* Header */}
+        <header style={{
+          backgroundColor: 'var(--panel-bg)',
+          borderBottom: '1px solid var(--border-color)',
           padding: '0 24px',
-          textAlign: 'center'
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          height: '60px'
         }}>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: 'rgba(0, 173, 239, 0.1)',
-            border: '1px solid rgba(0, 173, 239, 0.3)',
-            padding: '6px 16px',
-            borderRadius: '20px',
-            color: 'var(--vimeo-blue)',
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            marginBottom: '24px'
-          }}>
-            <Zap size={16} /> Triad Engine: Postgres + Algolia Instant Search + Pinecone RAG
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontWeight: 700, fontSize: '1.1rem' }}>
+            <span style={{ color: 'var(--vimeo-blue)', fontWeight: 900, fontSize: '1.3rem', letterSpacing: '-0.5px', cursor: 'pointer' }} onClick={handleBackToHub}>vimeo</span>
+            <span style={{ cursor: 'pointer' }} onClick={handleBackToHub}>Transcript Triad Engine</span>
+            <span style={{
+              background: 'rgba(0, 173, 239, 0.2)',
+              color: 'var(--vimeo-blue)',
+              fontSize: '0.75rem',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px'
+            }}>PG + Algolia + Pinecone</span>
           </div>
 
-          <h1 style={{
-            fontSize: '2.8rem',
-            fontWeight: 800,
-            lineHeight: 1.2,
-            letterSpacing: '-1px',
-            marginBottom: '16px'
-          }}>
-            Vimeo Transcripts & Video AI <br />
-            <span style={{ color: 'var(--vimeo-blue)' }}>Algolia Search + Pinecone RAG</span>
-          </h1>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            {activeData && (
+              <>
+                <div style={{
+                  display: 'flex',
+                  gap: '4px',
+                  background: 'var(--bg-dark)',
+                  padding: '4px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color)'
+                }}>
+                  <button
+                    onClick={() => setActiveTab('transcript')}
+                    style={{
+                      background: activeTab === 'transcript' ? 'var(--vimeo-blue)' : 'transparent',
+                      color: activeTab === 'transcript' ? '#ffffff' : 'var(--text-secondary)',
+                      border: 'none',
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    🔍 Algolia Search
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('summary')}
+                    style={{
+                      background: activeTab === 'summary' ? 'var(--vimeo-blue)' : 'transparent',
+                      color: activeTab === 'summary' ? '#ffffff' : 'var(--text-secondary)',
+                      border: 'none',
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <FileText size={16} /> AI Summary
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('chat')}
+                    style={{
+                      background: activeTab === 'chat' ? 'var(--vimeo-blue)' : 'transparent',
+                      color: activeTab === 'chat' ? '#ffffff' : 'var(--text-secondary)',
+                      border: 'none',
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <Bot size={16} /> Pinecone Tutor
+                  </button>
+                </div>
 
-          <p style={{
-            color: 'var(--text-secondary)',
-            fontSize: '1.1rem',
-            maxWidth: '600px',
-            margin: '0 auto 40px',
-            lineHeight: 1.6
-          }}>
-            Paste any Vimeo video link. Algolia provides sub-10ms instant typo-tolerant search while Pinecone vector search powers grounded AI Chatbot answers.
-          </p>
+                <button
+                  onClick={() => openDownloadModal('device')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: 'linear-gradient(135deg, rgba(0, 173, 239, 0.15), rgba(16, 185, 129, 0.15))',
+                    color: 'var(--vimeo-blue)',
+                    border: '1px solid rgba(0, 173, 239, 0.35)',
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <Download size={15} /> Download & Cloud
+                </button>
 
-          {/* Error Banner */}
-          {error && (
-            <div style={{
-              background: 'rgba(239, 68, 68, 0.15)',
-              border: '1px solid #ef4444',
-              color: '#f87171',
-              padding: '12px 16px',
-              borderRadius: '8px',
-              marginBottom: '20px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              fontSize: '0.9rem'
-            }}>
-              <AlertCircle size={18} /> {error}
-            </div>
-          )}
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<ArrowLeft size={16} />}
+                  onClick={handleBackToHub}
+                  sx={{
+                    textTransform: 'none',
+                    borderColor: 'rgba(255, 255, 255, 0.2)',
+                    color: 'var(--text-secondary)',
+                    fontWeight: 600,
+                    fontSize: '0.84rem',
+                    borderRadius: 1.5,
+                    px: 1.5,
+                    py: 0.6,
+                    '&:hover': { borderColor: 'var(--vimeo-blue)', color: 'var(--text-primary)' }
+                  }}
+                >
+                  {googleUser ? 'My Library' : 'New Video'}
+                </Button>
+              </>
+            )}
 
-          {/* Cache Notice Banner */}
-          {cacheNotice && (
-            <div style={{
-              background: 'rgba(16, 185, 129, 0.15)',
-              border: '1px solid #10b981',
-              color: '#34d399',
-              padding: '12px 16px',
-              borderRadius: '8px',
-              marginBottom: '20px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              fontSize: '0.9rem',
-              fontWeight: 500
-            }}>
-              <Check size={18} /> {cacheNotice}
-            </div>
-          )}
-
-          {/* Input Form */}
-          <div style={{
-            background: 'var(--panel-bg)',
-            border: '1px solid var(--border-color)',
-            padding: '8px',
-            borderRadius: '12px',
-            display: 'flex',
-            gap: '8px',
-            boxShadow: '0 12px 32px rgba(0,0,0,0.4)'
-          }}>
-            <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
-              <Video size={20} style={{ position: 'absolute', left: '14px', color: 'var(--text-secondary)' }} />
-              <input
-                type="text"
-                placeholder="Paste Vimeo link or ID (e.g. https://vimeo.com/1229247139)..."
-                value={urlInput}
-                onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
-                onPaste={handlePasteUrl}
-                onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
-                style={{
-                  width: '100%',
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  color: 'var(--text-primary)',
-                  fontSize: '1rem',
-                  paddingLeft: '44px',
-                  paddingRight: '14px'
+            {/* Top-Right Google Sign-In or User Profile Menu */}
+            {!googleUser ? (
+              <Button
+                variant="contained"
+                onClick={() => handleGoogleSignIn(false)}
+                startIcon={<GoogleIcon />}
+                sx={{
+                  background: '#ffffff',
+                  color: '#1f2937',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  fontSize: '0.84rem',
+                  borderRadius: '20px',
+                  padding: '5px 14px',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+                  '&:hover': { background: '#f3f4f6' }
                 }}
-              />
-            </div>
+              >
+                Sign in with Google
+              </Button>
+            ) : (
+              <>
+                <Tooltip title={`${googleUser.name || 'Google User'} (${googleUser.email})`}>
+                  <IconButton
+                    onClick={(e) => setUserMenuAnchor(e.currentTarget)}
+                    sx={{ p: 0.5, border: '2px solid rgba(0, 173, 239, 0.5)', '&:hover': { borderColor: '#00adef' } }}
+                  >
+                    <Avatar
+                      alt={googleUser.name || googleUser.email}
+                      src={googleUser.picture}
+                      sx={{ width: 34, height: 34, bgcolor: '#00adef', fontSize: '0.85rem', fontWeight: 700 }}
+                    >
+                      {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
+                    </Avatar>
+                  </IconButton>
+                </Tooltip>
 
-            <button
-              onClick={() => handleTranscribe()}
-              disabled={loading || !urlInput.trim()}
-              style={{
-                background: 'var(--vimeo-blue)',
-                color: '#ffffff',
-                border: 'none',
-                padding: '12px 28px',
-                borderRadius: '8px',
-                fontWeight: 700,
-                fontSize: '0.95rem',
-                cursor: 'pointer',
-                display: 'flex',
+                <Menu
+                  anchorEl={userMenuAnchor}
+                  open={Boolean(userMenuAnchor)}
+                  onClose={() => setUserMenuAnchor(null)}
+                  PaperProps={{
+                    sx: {
+                      bgcolor: '#1e293b',
+                      color: '#f8fafc',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      boxShadow: '0 12px 30px rgba(0,0,0,0.6)',
+                      minWidth: 240,
+                      borderRadius: 2,
+                      mt: 1.5,
+                      p: 1
+                    }
+                  }}
+                  transformOrigin={{ horizontal: 'right', vertical: 'top' }}
+                  anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+                >
+                  <Box sx={{ px: 2, py: 1.5 }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#f8fafc' }}>
+                      {googleUser.name || 'Google Scholar'}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#94a3b8', wordBreak: 'break-all', display: 'block' }}>
+                      {googleUser.email}
+                    </Typography>
+                  </Box>
+                  <Divider sx={{ my: 1, borderColor: 'rgba(255, 255, 255, 0.1)' }} />
+                  <MenuItem
+                    onClick={() => {
+                      setUserMenuAnchor(null);
+                      handleBackToHub();
+                    }}
+                    sx={{ borderRadius: 1, py: 1 }}
+                  >
+                    <ListItemIcon>
+                      <Folder size={18} color="#00adef" />
+                    </ListItemIcon>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      My Lecture Library ({userLibrary.length})
+                    </Typography>
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      setUserMenuAnchor(null);
+                      if (activeData) openDownloadModal('cloud');
+                    }}
+                    disabled={!activeData}
+                    sx={{ borderRadius: 1, py: 1 }}
+                  >
+                    <ListItemIcon>
+                      <Cloud size={18} color="#10b981" />
+                    </ListItemIcon>
+                    <Typography variant="body2">
+                      Google Drive Sync Active
+                    </Typography>
+                  </MenuItem>
+                  <Divider sx={{ my: 1, borderColor: 'rgba(255, 255, 255, 0.1)' }} />
+                  <MenuItem
+                    onClick={() => {
+                      setUserMenuAnchor(null);
+                      handleGoogleSignOut();
+                    }}
+                    sx={{ borderRadius: 1, py: 1, color: '#f87171' }}
+                  >
+                    <ListItemIcon>
+                      <LogOut size={18} color="#f87171" />
+                    </ListItemIcon>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      Sign Out
+                    </Typography>
+                  </MenuItem>
+                </Menu>
+              </>
+            )}
+          </Box>
+        </header>
+
+        {/* Main Content Area */}
+        {loading && !activeData ? (
+          <Box sx={{ maxWidth: '800px', mx: 'auto', p: { xs: 4, md: 8 }, textAlign: 'center' }}>
+            <Paper sx={{ p: 5, borderRadius: 4, bgcolor: '#1e293b', border: '1px solid rgba(255, 255, 255, 0.1)', boxShadow: '0 12px 32px rgba(0,0,0,0.4)' }}>
+              <RefreshCw size={44} color="#00adef" style={{ animation: 'spin 2s linear infinite', display: 'inline-block' }} />
+              <Typography variant="h5" sx={{ mt: 3, fontWeight: 700, color: '#f8fafc' }}>
+                Loading Lecture {getLectureIdFromPath(currentPath) ? `#${getLectureIdFromPath(currentPath)}` : ''}...
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 1, color: '#94a3b8' }}>
+                Fetching video config, transcript cues, Algolia search indexes, and Pinecone RAG vectors...
+              </Typography>
+            </Paper>
+          </Box>
+        ) : error && !activeData && getLectureIdFromPath(currentPath) ? (
+          <Box sx={{ maxWidth: '800px', mx: 'auto', p: { xs: 4, md: 8 }, textAlign: 'center' }}>
+            <Paper sx={{ p: 5, borderRadius: 4, bgcolor: '#1e293b', border: '1px solid rgba(239, 68, 68, 0.4)', boxShadow: '0 12px 32px rgba(0,0,0,0.4)' }}>
+              <AlertCircle size={44} color="#f87171" style={{ display: 'inline-block' }} />
+              <Typography variant="h5" sx={{ mt: 2, fontWeight: 700, color: '#f8fafc' }}>
+                Could Not Load Lecture
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 1, color: '#94a3b8', mb: 3 }}>
+                {error}
+              </Typography>
+              <Button
+                variant="contained"
+                onClick={handleBackToHub}
+                startIcon={<ArrowLeft size={16} />}
+                sx={{ bgcolor: '#00adef', color: '#ffffff', textTransform: 'none', fontWeight: 700, '&:hover': { bgcolor: '#0095ce' } }}
+              >
+                Back to {googleUser ? 'My Library' : 'Home'}
+              </Button>
+            </Paper>
+          </Box>
+        ) : !activeData ? (
+          googleUser ? (
+            /* ================= FLOW 1: SIGNED-IN LMS DASHBOARD ================= */
+            <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>
+              {/* Scholar Greeting & Stats Banner */}
+              <Paper
+                elevation={0}
+                sx={{
+                  p: { xs: 2.5, md: 3 },
+                  mb: 4,
+                  borderRadius: 3,
+                  background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  display: 'flex',
+                  flexDirection: { xs: 'column', md: 'row' },
+                  alignItems: { xs: 'flex-start', md: 'center' },
+                  justifyContent: 'space-between',
+                  gap: 2
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Avatar
+                    src={googleUser.picture}
+                    alt={googleUser.name}
+                    sx={{ width: 56, height: 56, bgcolor: '#00adef', fontWeight: 800, fontSize: '1.4rem' }}
+                  >
+                    {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
+                  </Avatar>
+                  <Box>
+                    <Typography variant="h5" sx={{ fontWeight: 800, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 1 }}>
+                      Welcome back, {googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')}! 🎓
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: '#94a3b8', mt: 0.5 }}>
+                      Personal Learning Management System • Verified Study History & Cloud Backups
+                    </Typography>
+                  </Box>
+                </Box>
+
+                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      px: 2.5,
+                      py: 1.2,
+                      borderRadius: 2,
+                      bgcolor: 'rgba(0, 173, 239, 0.1)',
+                      border: '1px solid rgba(0, 173, 239, 0.25)',
+                      textAlign: 'center'
+                    }}
+                  >
+                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
+                    <Typography variant="h6" sx={{ color: '#00adef', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
+                  </Paper>
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      px: 2.5,
+                      py: 1.2,
+                      borderRadius: 2,
+                      bgcolor: 'rgba(16, 185, 129, 0.1)',
+                      border: '1px solid rgba(16, 185, 129, 0.25)',
+                      textAlign: 'center'
+                    }}
+                  >
+                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
+                    <Typography variant="h6" sx={{ color: '#10b981', fontWeight: 800, lineHeight: 1 }}>
+                      {userLibrary.filter(x => x.drive_folder_url).length}
+                    </Typography>
+                  </Paper>
+                </Box>
+              </Paper>
+
+              {/* Quick-Add Lecture Bar */}
+              <Paper
+                elevation={2}
+                sx={{
+                  p: '6px 12px',
+                  mb: 3,
+                  borderRadius: 3,
+                  display: 'flex',
+                  alignItems: 'center',
+                  bgcolor: '#1e293b',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.35)'
+                }}
+              >
+                <Video size={22} color="#94a3b8" style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
+                <InputBase
+                  placeholder="Paste any Vimeo video URL or ID to study & save (e.g. https://vimeo.com/1229247139)..."
+                  value={urlInput}
+                  onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
+                  onPaste={handlePasteUrl}
+                  onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
+                  sx={{ flex: 1, color: '#f8fafc', fontSize: '0.95rem' }}
+                />
+                <Button
+                  variant="contained"
+                  onClick={() => handleTranscribe()}
+                  disabled={loading || !urlInput.trim()}
+                  startIcon={loading ? <RefreshCw className="loading-pulse" size={16} /> : <Sparkles size={16} />}
+                  sx={{
+                    bgcolor: '#00adef',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    textTransform: 'none',
+                    px: 3,
+                    py: 1,
+                    borderRadius: 2,
+                    '&:hover': { bgcolor: '#0095ce' }
+                  }}
+                >
+                  {loading ? 'Ingesting...' : 'Transcribe & Study'}
+                </Button>
+              </Paper>
+
+              {/* Error Banner */}
+              {error && (
+                <Box sx={{
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid #ef4444',
+                  color: '#f87171',
+                  p: 1.5,
+                  borderRadius: 2,
+                  mb: 3,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                  fontSize: '0.9rem'
+                }}>
+                  <AlertCircle size={18} /> {error}
+                </Box>
+              )}
+
+              {/* Cache Notice Banner */}
+              {cacheNotice && (
+                <Box sx={{
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid #10b981',
+                  color: '#34d399',
+                  p: 1.5,
+                  borderRadius: 2,
+                  mb: 3,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                  fontSize: '0.9rem',
+                  fontWeight: 500
+                }}>
+                  <Check size={18} /> {cacheNotice}
+                </Box>
+              )}
+
+              {/* Library Header & Search Bar */}
+              <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 800, color: '#f8fafc' }}>
+                    My Lecture Library
+                  </Typography>
+                  <Chip
+                    label={`${filteredLibrary.length} ${filteredLibrary.length === 1 ? 'lecture' : 'lectures'}`}
+                    size="small"
+                    sx={{ bgcolor: 'rgba(0, 173, 239, 0.15)', color: '#00adef', fontWeight: 700 }}
+                  />
+                  <Tooltip title="Refresh Library">
+                    <IconButton
+                      size="small"
+                      onClick={() => fetchUserLibrary(googleUser?.email)}
+                      sx={{ color: '#94a3b8', '&:hover': { color: '#00adef' } }}
+                    >
+                      <RefreshCw size={15} className={libraryLoading ? 'loading-pulse' : ''} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+
+                <TextField
+                  size="small"
+                  placeholder="Search by title or video ID..."
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search size={16} color="#94a3b8" />
+                      </InputAdornment>
+                    ),
+                    sx: {
+                      bgcolor: '#1e293b',
+                      borderRadius: 2,
+                      fontSize: '0.85rem',
+                      color: '#f8fafc',
+                      width: { xs: '100%', sm: 280 },
+                      '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.12)' },
+                      '&:hover fieldset': { borderColor: '#00adef' }
+                    }
+                  }}
+                />
+              </Box>
+
+              {/* Cards Grid */}
+              {filteredLibrary.length > 0 ? (
+                <Grid container spacing={2.5}>
+                  {filteredLibrary.map((item) => (
+                    <Grid item xs={12} sm={6} md={4} key={item.video_id}>
+                      <Card
+                        sx={{
+                          bgcolor: '#1e293b',
+                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          borderRadius: 2.5,
+                          transition: 'all 0.2s ease-in-out',
+                          height: '100%',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          '&:hover': {
+                            transform: 'translateY(-3px)',
+                            borderColor: 'rgba(0, 173, 239, 0.4)',
+                            boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
+                          }
+                        }}
+                      >
+                        <CardContent sx={{ flex: 1, p: 2.5 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Chip
+                                label={`/lecture/${item.video_id}`}
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleTranscribe(item.video_url || item.video_id);
+                                }}
+                                title="Open dedicated lecture route"
+                                sx={{
+                                  fontFamily: 'monospace',
+                                  fontWeight: 700,
+                                  fontSize: '0.72rem',
+                                  bgcolor: 'rgba(0, 173, 239, 0.12)',
+                                  color: '#00adef',
+                                  border: '1px solid rgba(0, 173, 239, 0.3)',
+                                  cursor: 'pointer',
+                                  '&:hover': { bgcolor: 'rgba(0, 173, 239, 0.25)' }
+                                }}
+                              />
+                            </Box>
+                            <Typography variant="caption" sx={{ color: '#64748b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Clock size={12} /> {formatRelativeTime(item.last_accessed_at || item.created_at)}
+                            </Typography>
+                          </Box>
+
+                          <Typography
+                            variant="subtitle1"
+                            sx={{
+                              fontWeight: 700,
+                              color: '#f8fafc',
+                              lineHeight: 1.4,
+                              mb: 1.5,
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                              cursor: 'pointer',
+                              '&:hover': { color: '#00adef' }
+                            }}
+                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                          >
+                            {item.video_title || `Vimeo Lecture ${item.video_id}`}
+                          </Typography>
+
+                          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap' }}>
+                            {item.drive_folder_url ? (
+                              <Chip
+                                icon={<Folder size={13} color="#10b981" />}
+                                label="In Google Drive"
+                                size="small"
+                                component="a"
+                                href={item.drive_folder_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                clickable
+                                sx={{
+                                  bgcolor: 'rgba(16, 185, 129, 0.15)',
+                                  color: '#34d399',
+                                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                                  fontWeight: 600,
+                                  fontSize: '0.7rem'
+                                }}
+                              />
+                            ) : (
+                              <Chip
+                                label="Local / Database"
+                                size="small"
+                                sx={{
+                                  bgcolor: 'rgba(255, 255, 255, 0.05)',
+                                  color: '#94a3b8',
+                                  fontSize: '0.7rem'
+                                }}
+                              />
+                            )}
+                            <Chip
+                              label="Algolia Search"
+                              size="small"
+                              sx={{
+                                bgcolor: 'rgba(0, 173, 239, 0.1)',
+                                color: '#00adef',
+                                fontSize: '0.7rem'
+                              }}
+                            />
+                            <Chip
+                              label="Pinecone RAG"
+                              size="small"
+                              sx={{
+                                bgcolor: 'rgba(139, 92, 246, 0.1)',
+                                color: '#a78bfa',
+                                fontSize: '0.7rem'
+                              }}
+                            />
+                          </Box>
+                        </CardContent>
+
+                        <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.06)' }} />
+
+                        <CardActions sx={{ p: 1.5, justifyContent: 'space-between' }}>
+                          <Button
+                            variant="contained"
+                            size="small"
+                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                            sx={{
+                              textTransform: 'none',
+                              fontWeight: 700,
+                              fontSize: '0.82rem',
+                              bgcolor: '#00adef',
+                              '&:hover': { bgcolor: '#0095ce' }
+                            }}
+                          >
+                            Study Lecture →
+                          </Button>
+
+                          <Box sx={{ display: 'flex', gap: 0.5 }}>
+                            {item.drive_folder_url && (
+                              <Tooltip title="Open in Google Drive">
+                                <IconButton
+                                  size="small"
+                                  component="a"
+                                  href={item.drive_folder_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  sx={{ color: '#10b981', '&:hover': { bgcolor: 'rgba(16, 185, 129, 0.1)' } }}
+                                >
+                                  <ExternalLink size={16} />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                            <Tooltip title="Remove from My Library">
+                              <IconButton
+                                size="small"
+                                onClick={() => handleDeleteFromLibrary(item.video_id)}
+                                sx={{ color: '#64748b', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
+                              >
+                                <Trash2 size={16} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        </CardActions>
+                      </Card>
+                    </Grid>
+                  ))}
+                </Grid>
+              ) : (
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 6,
+                    textAlign: 'center',
+                    bgcolor: '#1e293b',
+                    border: '1px dashed rgba(255, 255, 255, 0.15)',
+                    borderRadius: 3
+                  }}
+                >
+                  <BookOpen size={48} color="#00adef" style={{ margin: '0 auto 16px', opacity: 0.8 }} />
+                  <Typography variant="h6" sx={{ color: '#f8fafc', fontWeight: 700, mb: 1 }}>
+                    {librarySearch ? 'No matching lectures found' : 'Your Lecture Library is Empty'}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: '#94a3b8', maxWidth: 460, mx: 'auto', mb: 3 }}>
+                    {librarySearch
+                      ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new Vimeo URL above.`
+                      : 'Paste any Vimeo lecture link in the quick-add bar above to transcribe, index into Algolia and Pinecone, and start studying!'}
+                  </Typography>
+                  {!librarySearch && (
+                    <Button
+                      variant="outlined"
+                      onClick={() => {
+                        setUrlInput('https://vimeo.com/1229247139');
+                        handleTranscribe('https://vimeo.com/1229247139');
+                      }}
+                      sx={{
+                        textTransform: 'none',
+                        borderColor: '#00adef',
+                        color: '#00adef',
+                        fontWeight: 600,
+                        borderRadius: 2
+                      }}
+                    >
+                      Load Sample Lecture (#1229247139)
+                    </Button>
+                  )}
+                </Paper>
+              )}
+            </Box>
+          ) : (
+            /* ================= FLOW 2: GUEST / NON-SIGNED-IN SCREEN ================= */
+            <div className="fade-in" style={{
+              maxWidth: '800px',
+              margin: '60px auto',
+              padding: '0 24px',
+              textAlign: 'center'
+            }}>
+              <div style={{
+                display: 'inline-flex',
                 alignItems: 'center',
                 gap: '8px',
-                transition: 'all 0.2s ease',
-                opacity: loading || !urlInput.trim() ? 0.6 : 1
-              }}
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="loading-pulse" size={18} /> Ingesting Data...
-                </>
-              ) : (
-                <>
-                  <Sparkles size={18} /> Ingest & Transcribe
-                </>
-              )}
-            </button>
-          </div>
-
-          {/* Quick Preset Buttons */}
-          <div style={{ marginTop: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Try example:</span>
-            <button
-              onClick={() => {
-                setUrlInput('https://vimeo.com/1229247139');
-                handleTranscribe('https://vimeo.com/1229247139');
-              }}
-              style={{
-                background: 'var(--card-bg)',
-                border: '1px solid var(--border-color)',
-                color: 'var(--vimeo-blue)',
-                padding: '6px 14px',
+                background: 'rgba(0, 173, 239, 0.1)',
+                border: '1px solid rgba(0, 173, 239, 0.3)',
+                padding: '6px 16px',
                 borderRadius: '20px',
+                color: 'var(--vimeo-blue)',
                 fontSize: '0.85rem',
-                cursor: 'pointer'
-              }}
-            >
-              📹 Introduction to Research (#1229247139)
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* TRANSCRIPT & TRIAD WORKSPACE */
+                fontWeight: 600,
+                marginBottom: '24px'
+              }}>
+                <Zap size={16} /> Triad Engine: Postgres + Algolia Instant Search + Pinecone RAG
+              </div>
+
+              <h1 style={{
+                fontSize: '2.8rem',
+                fontWeight: 800,
+                lineHeight: 1.2,
+                letterSpacing: '-1px',
+                marginBottom: '16px'
+              }}>
+                Vimeo Transcripts & Video AI <br />
+                <span style={{ color: 'var(--vimeo-blue)' }}>Algolia Search + Pinecone RAG</span>
+              </h1>
+
+              <p style={{
+                color: 'var(--text-secondary)',
+                fontSize: '1.1rem',
+                maxWidth: '600px',
+                margin: '0 auto 28px',
+                lineHeight: 1.6
+              }}>
+                Paste any Vimeo video link. Algolia provides sub-10ms instant typo-tolerant search while Pinecone vector search powers grounded AI Chatbot answers.
+              </p>
+
+              {/* Google Sign-in Callout Box */}
+              <Paper
+                elevation={0}
+                sx={{
+                  maxWidth: '640px',
+                  mx: 'auto',
+                  mb: 4,
+                  p: 2,
+                  borderRadius: 2.5,
+                  bgcolor: 'rgba(0, 173, 239, 0.08)',
+                  border: '1px solid rgba(0, 173, 239, 0.25)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 2,
+                  textAlign: 'left'
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <GoogleIcon />
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#f8fafc' }}>
+                      Sign in for your LMS Study Library
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>
+                      Keep a persistent history of all your lectures and backup full video bundles to Google Drive.
+                    </Typography>
+                  </Box>
+                </Box>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={() => handleGoogleSignIn(false)}
+                  sx={{
+                    bgcolor: '#ffffff',
+                    color: '#1f2937',
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.8rem',
+                    borderRadius: 2,
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+                    '&:hover': { bgcolor: '#f3f4f6' }
+                  }}
+                >
+                  Sign In
+                </Button>
+              </Paper>
+
+              {/* Error Banner */}
+              {error && (
+                <div style={{
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid #ef4444',
+                  color: '#f87171',
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  marginBottom: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  fontSize: '0.9rem'
+                }}>
+                  <AlertCircle size={18} /> {error}
+                </div>
+              )}
+
+              {/* Cache Notice Banner */}
+              {cacheNotice && (
+                <div style={{
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid #10b981',
+                  color: '#34d399',
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  marginBottom: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  fontSize: '0.9rem',
+                  fontWeight: 500
+                }}>
+                  <Check size={18} /> {cacheNotice}
+                </div>
+              )}
+
+              {/* Input Form */}
+              <div style={{
+                background: 'var(--panel-bg)',
+                border: '1px solid var(--border-color)',
+                padding: '8px',
+                borderRadius: '12px',
+                display: 'flex',
+                gap: '8px',
+                boxShadow: '0 12px 32px rgba(0,0,0,0.4)'
+              }}>
+                <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <Video size={20} style={{ position: 'absolute', left: '14px', color: 'var(--text-secondary)' }} />
+                  <input
+                    type="text"
+                    placeholder="Paste Vimeo link or ID (e.g. https://vimeo.com/1229247139)..."
+                    value={urlInput}
+                    onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
+                    onPaste={handlePasteUrl}
+                    onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
+                    style={{
+                      width: '100%',
+                      background: 'transparent',
+                      border: 'none',
+                      outline: 'none',
+                      color: 'var(--text-primary)',
+                      fontSize: '1rem',
+                      paddingLeft: '44px',
+                      paddingRight: '14px'
+                    }}
+                  />
+                </div>
+
+                <button
+                  onClick={() => handleTranscribe()}
+                  disabled={loading || !urlInput.trim()}
+                  style={{
+                    background: 'var(--vimeo-blue)',
+                    color: '#ffffff',
+                    border: 'none',
+                    padding: '12px 28px',
+                    borderRadius: '8px',
+                    fontWeight: 700,
+                    fontSize: '0.95rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    transition: 'all 0.2s ease',
+                    opacity: loading || !urlInput.trim() ? 0.6 : 1
+                  }}
+                >
+                  {loading ? (
+                    <>
+                      <RefreshCw className="loading-pulse" size={18} /> Ingesting Data...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={18} /> Ingest & Transcribe
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div style={{ marginTop: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Try example:</span>
+                <button
+                  onClick={() => {
+                    setUrlInput('https://vimeo.com/1229247139');
+                    handleTranscribe('https://vimeo.com/1229247139');
+                  }}
+                  style={{
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--vimeo-blue)',
+                    padding: '6px 14px',
+                    borderRadius: '20px',
+                    fontSize: '0.85rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  📹 Introduction to Research (#1229247139)
+                </button>
+              </div>
+            </div>
+          )
+        ) : (
+          /* TRANSCRIPT & TRIAD WORKSPACE */
         <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden' }}>
           
           {/* Left Panel: Real Embedded Vimeo Player */}
@@ -1002,6 +1885,28 @@ export default function App() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3 }}>{activeData.title}</h1>
+                <Chip
+                  icon={<Bookmark size={13} color="#00adef" />}
+                  label={`/lecture/${activeData.videoId}`}
+                  size="small"
+                  onClick={() => {
+                    const fullUrl = `${window.location.origin}/lecture/${activeData.videoId}`;
+                    navigator.clipboard.writeText(fullUrl);
+                    setCacheNotice(`🔗 Copied permanent route: ${fullUrl}`);
+                    setTimeout(() => setCacheNotice(null), 3000);
+                  }}
+                  title="Click to copy permanent direct lecture route"
+                  sx={{
+                    fontFamily: 'monospace',
+                    bgcolor: 'rgba(0, 173, 239, 0.12)',
+                    color: '#00adef',
+                    fontWeight: 700,
+                    fontSize: '0.74rem',
+                    cursor: 'pointer',
+                    border: '1px solid rgba(0, 173, 239, 0.3)',
+                    '&:hover': { bgcolor: 'rgba(0, 173, 239, 0.22)' }
+                  }}
+                />
                 {activeData.cached && (
                   <span style={{
                     display: 'inline-flex',
@@ -1914,34 +2819,8 @@ export default function App() {
                         Sign Out
                       </button>
                     </div>
-                  ) : gdriveStatus?.configured ? (
-                    /* CASE 2: Server Service Account Active */
-                    <div style={{
-                      padding: '14px 18px',
-                      background: 'rgba(16, 185, 129, 0.08)',
-                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                      borderRadius: '10px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between'
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <Cloud size={20} color="#10b981" />
-                        <div>
-                          <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                            Server Service Account Active
-                          </div>
-                          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                            {gdriveStatus.service_account_email || 'Verified Cloud Credentials'}
-                          </div>
-                        </div>
-                      </div>
-                      <span style={{ fontSize: '0.75rem', background: '#10b981', color: '#fff', padding: '3px 8px', borderRadius: '10px', fontWeight: 700 }}>
-                        Ready
-                      </span>
-                    </div>
                   ) : (gdriveStatus?.client_id || googleClientIdInput || (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID)) ? (
-                    /* CASE 3: Client ID is known -> Prominent 1-Click Sign In */
+                    /* CASE 2: Client ID is known -> Prominent 1-Click Sign In */
                     <div style={{
                       padding: '20px 18px',
                       background: 'var(--card-bg)',
@@ -2080,29 +2959,100 @@ export default function App() {
                         {gdriveJob.current_step}
                       </div>
 
-                      {/* Completed Link */}
-                      {gdriveJob.status === 'COMPLETED' && gdriveJob.folder_url && (
-                        <div style={{ marginTop: '6px' }}>
-                          <a
-                            href={gdriveJob.folder_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
+                      {/* Video Warning Notice (if documents uploaded but video had notice) */}
+                      {gdriveJob.video_warning && (
+                        <div style={{
+                          background: 'rgba(245, 158, 11, 0.1)',
+                          border: '1px solid rgba(245, 158, 11, 0.3)',
+                          borderRadius: '8px',
+                          padding: '10px 12px',
+                          color: '#f59e0b',
+                          fontSize: '0.8rem',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          lineHeight: 1.4
+                        }}>
+                          <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '2px' }} />
+                          <div>
+                            <strong>Notice:</strong> {gdriveJob.video_warning}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Completed Files & Link */}
+                      {gdriveJob.status === 'COMPLETED' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                          {gdriveJob.folder_url && (
+                            <a
+                              href={gdriveJob.folder_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '8px',
+                                padding: '10px 16px',
+                                background: '#10b981',
+                                color: '#ffffff',
+                                borderRadius: '8px',
+                                textDecoration: 'none',
+                                fontSize: '0.88rem',
+                                fontWeight: 700
+                              }}
+                            >
+                              <ExternalLink size={16} />
+                              Open Bundle in Google Drive
+                            </a>
+                          )}
+
+                          {gdriveJob.files && gdriveJob.files.length > 0 && (
+                            <div style={{
+                              display: 'flex',
+                              flexDirection: 'column',
                               gap: '6px',
-                              padding: '8px 16px',
-                              background: '#10b981',
-                              color: '#ffffff',
-                              borderRadius: '8px',
-                              textDecoration: 'none',
-                              fontSize: '0.84rem',
-                              fontWeight: 700
-                            }}
-                          >
-                            <ExternalLink size={15} />
-                            Open Bundle in Google Drive
-                          </a>
+                              marginTop: '6px',
+                              background: 'var(--bg-secondary)',
+                              padding: '10px',
+                              borderRadius: '8px'
+                            }}>
+                              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                Uploaded Files ({gdriveJob.files.length})
+                              </div>
+                              {gdriveJob.files.map(file => (
+                                <a
+                                  key={file.id || file.name}
+                                  href={file.url || gdriveJob.folder_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    padding: '6px 8px',
+                                    background: 'var(--card-bg)',
+                                    borderRadius: '6px',
+                                    textDecoration: 'none',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '0.8rem',
+                                    border: file.is_video ? '1px solid rgba(0, 173, 239, 0.4)' : '1px solid var(--border-color)'
+                                  }}
+                                >
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {file.is_video ? <Video size={14} color="#00adef" /> : <FileText size={14} color="var(--text-secondary)" />}
+                                    <strong style={{ color: file.is_video ? '#00adef' : 'inherit' }}>{file.name}</strong>
+                                    {file.is_video && (
+                                      <span style={{ fontSize: '0.7rem', background: 'rgba(0,173,239,0.15)', color: '#00adef', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                        Video MP4
+                                      </span>
+                                    )}
+                                  </span>
+                                  <ExternalLink size={12} color="var(--text-secondary)" />
+                                </a>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -2116,7 +3066,7 @@ export default function App() {
                   )}
 
                   {/* Upload Trigger Button - Appears once user is signed in */}
-                  {(!gdriveJob || gdriveJob.status === 'FAILED') && (gdriveAccessToken || gdriveStatus?.configured) && (
+                  {(!gdriveJob || gdriveJob.status === 'FAILED') && gdriveAccessToken && (
                     <button
                       onClick={handleStartGdriveUpload}
                       disabled={gdriveUploading}
@@ -2171,7 +3121,8 @@ export default function App() {
         </div>
       )}
 
-    </div>
+      </div>
+    </ThemeProvider>
   );
 }
 

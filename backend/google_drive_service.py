@@ -7,11 +7,9 @@ Provides seamless cloud packaging and asynchronous upload of the Full Lecture Bu
 3. captions.vtt - WebVTT subtitle track
 4. metadata.json - Machine-readable metadata (title, video ID, stream URLs)
 5. download_guide.txt - Terminal CLI commands (yt-dlp, ffmpeg) for offline video capture
+6. {title}.mp4 - Full lecture video recording
 
-Supports authentication via:
-- Google Cloud Service Account JSON file (`GOOGLE_SERVICE_ACCOUNT_FILE`)
-- Raw Service Account JSON string in environment (`GOOGLE_SERVICE_ACCOUNT_JSON`)
-- User-supplied OAuth2 Bearer Access Token (OAuth2 flow)
+Authenticated directly via user Google OAuth 2.0 Access Token (1-click Sign in with Google).
 """
 from __future__ import annotations
 
@@ -29,16 +27,16 @@ from typing import Dict, Any, Optional, List
 
 # Optional Google API client library imports
 try:
-    from google.oauth2 import service_account, credentials as oauth_credentials
+    from google.oauth2 import credentials as oauth_credentials
     from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload, MediaFileUpload
+    from googleapiclient.http import MediaIoBaseUpload
     HAS_GOOGLE_DRIVE_LIBS = True
 except ImportError:
     HAS_GOOGLE_DRIVE_LIBS = False
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/userinfo.email",
 ]
 
 
@@ -48,35 +46,8 @@ class GoogleDriveService:
     def __init__(self):
         self._jobs: Dict[str, Dict[str, Any]] = {}
 
-    def is_configured(self) -> bool:
-        """Returns True if Google Drive credentials or configuration are detected."""
-        sa_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-        if sa_file and Path(sa_file).exists():
-            return True
-        sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-        if sa_json and sa_json.strip():
-            return True
-        return False
-
     def get_auth_status(self) -> Dict[str, Any]:
-        """Diagnostic helper returning the operational readiness of Google Drive."""
-        configured = self.is_configured()
-        sa_email = None
-
-        if configured:
-            sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-            sa_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-            try:
-                if sa_json:
-                    data = json.loads(sa_json)
-                    sa_email = data.get("client_email")
-                elif sa_file and Path(sa_file).exists():
-                    with open(sa_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        sa_email = data.get("client_email")
-            except Exception:
-                pass
-
+        """Diagnostic helper returning Google OAuth configuration status."""
         client_id = os.getenv("GOOGLE_CLIENT_ID") or os.getenv("VITE_GOOGLE_CLIENT_ID") or ""
         if not client_id:
             env_file = Path(__file__).parent.parent / ".env"
@@ -94,16 +65,11 @@ class GoogleDriveService:
                 except Exception:
                     pass
         return {
-            "configured": configured,
             "has_libraries": HAS_GOOGLE_DRIVE_LIBS,
-            "auth_type": "service_account" if configured else "google_sign_in",
-            "service_account_email": sa_email,
             "client_id": client_id,
-            "message": (
-                "Google Drive Service Account active and ready."
-                if configured
-                else "Sign in with Google to export to your personal Google Drive."
-            )
+            "configured": bool(client_id),
+            "auth_type": "google_sign_in",
+            "message": "Sign in with Google to export to your personal Google Drive."
         }
 
     def create_job(self, video_id: str, title: str) -> str:
@@ -131,29 +97,119 @@ class GoogleDriveService:
         return self._jobs.get(job_id)
 
     def _get_drive_client(self, access_token: Optional[str] = None):
-        """Builds an authorized Google Drive API client using service account or bearer token."""
+        """Builds an authorized Google Drive API client using the user's bearer token."""
         if not HAS_GOOGLE_DRIVE_LIBS:
             raise RuntimeError("google-api-python-client is not installed in the environment.")
 
-        # 1. Bearer access token supplied by user
+        if not access_token or not access_token.strip():
+            raise RuntimeError("Google OAuth access token is required. Please sign in with Google.")
+
+        creds = oauth_credentials.Credentials(token=access_token.strip())
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+    def _get_bearer_token(self, access_token: Optional[str] = None) -> str:
+        """Returns the user's active OAuth2 Bearer token."""
         if access_token and access_token.strip():
-            creds = oauth_credentials.Credentials(token=access_token.strip())
-            return build("drive", "v3", credentials=creds, cache_discovery=False)
+            return access_token.strip()
 
-        # 2. Service account JSON file
-        sa_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-        if sa_file and Path(sa_file).exists():
-            creds = service_account.Credentials.from_service_account_file(sa_file, scopes=SCOPES)
-            return build("drive", "v3", credentials=creds, cache_discovery=False)
+        raise RuntimeError("Google OAuth access token is required. Please sign in with Google.")
 
-        # 3. Service account raw JSON string
-        sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-        if sa_json and sa_json.strip():
-            info = json.loads(sa_json)
-            creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-            return build("drive", "v3", credentials=creds, cache_discovery=False)
+    def _upload_file_resumable(
+        self,
+        file_path: Path,
+        folder_id: str,
+        mime_type: str = "video/mp4",
+        access_token: Optional[str] = None,
+        job: Optional[Dict[str, Any]] = None,
+        start_pct: int = 55,
+        end_pct: int = 85,
+    ) -> Dict[str, Any]:
+        """
+        Uploads a large file to Google Drive using the direct HTTP Resumable Upload protocol.
+        Chunks are sent directly to the upload session URL via requests.put without relying
+        on googleapiclient AuthorizedSession, preventing token-refresh crashes and providing
+        smooth, resilient, and non-blocking chunk progress.
+        """
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
 
-        raise RuntimeError("No Google credentials found (neither service account nor user token provided).")
+        file_size = file_path.stat().st_size
+        bearer_token = self._get_bearer_token(access_token)
+
+        # 1. Initiate Resumable Upload Session
+        init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,webViewLink,size"
+        init_headers = {
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": mime_type,
+            "X-Upload-Content-Length": str(file_size),
+        }
+        init_body = {
+            "name": file_path.name,
+            "parents": [folder_id],
+        }
+
+        init_resp = requests.post(init_url, headers=init_headers, json=init_body, timeout=60)
+        if init_resp.status_code == 401:
+            raise RuntimeError(
+                "Google Drive access token expired (HTTP 401). Please sign in with Google again to refresh your session."
+            )
+        if init_resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Failed to start Google Drive resumable upload (HTTP {init_resp.status_code}): {init_resp.text}"
+            )
+
+        session_url = init_resp.headers.get("Location")
+        if not session_url:
+            raise RuntimeError("Google Drive did not provide a resumable session Location URL.")
+
+        # 2. Upload file in 10 MB chunks
+        chunk_size = 10 * 1024 * 1024  # 10 MB chunks (multiple of 256 KB)
+        uploaded_bytes = 0
+        final_meta = None
+
+        with open(file_path, "rb") as f:
+            while uploaded_bytes < file_size:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                start_byte = uploaded_bytes
+                end_byte = uploaded_bytes + len(chunk) - 1
+
+                chunk_headers = {
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {start_byte}-{end_byte}/{file_size}",
+                }
+
+                # Note: Session URL is self-authenticating for the chunk uploads
+                chunk_resp = requests.put(session_url, headers=chunk_headers, data=chunk, timeout=180)
+
+                if chunk_resp.status_code in (200, 201):
+                    final_meta = chunk_resp.json()
+                    uploaded_bytes = file_size
+                    if job:
+                        job["progress"] = end_pct
+                        job["current_step"] = f"Video upload complete: 100% ({round(file_size / (1024*1024), 1)} MB)"
+                    break
+                elif chunk_resp.status_code == 308:
+                    # 308 Resume Incomplete indicates chunk was received successfully
+                    uploaded_bytes += len(chunk)
+                    if job and file_size > 0:
+                        frac = min(1.0, uploaded_bytes / file_size)
+                        job["progress"] = start_pct + int(frac * (end_pct - start_pct))
+                        pct = int(frac * 100)
+                        u_mb = round(uploaded_bytes / (1024 * 1024), 1)
+                        t_mb = round(file_size / (1024 * 1024), 1)
+                        job["current_step"] = f"Uploading video: {pct}% ({u_mb}/{t_mb} MB)..."
+                elif chunk_resp.status_code == 401:
+                    raise RuntimeError("Google Drive authorization expired during upload (HTTP 401). Please sign in again.")
+                else:
+                    raise RuntimeError(f"Chunk upload failed (HTTP {chunk_resp.status_code}): {chunk_resp.text}")
+
+        if not final_meta:
+            raise RuntimeError("Resumable upload completed without receiving file metadata.")
+
+        return final_meta
 
     def _download_lecture_video(
         self,
@@ -171,27 +227,43 @@ class GoogleDriveService:
         temp_dir.mkdir(parents=True, exist_ok=True)
         target_mp4 = temp_dir / f"{safe_title}.mp4"
 
+        # If already downloaded in a previous attempt and valid, reuse it immediately!
+        if target_mp4.exists() and target_mp4.stat().st_size > 1024 * 1024:
+            if job:
+                job["progress"] = 40
+                job["current_step"] = f"Reusing downloaded lecture video ({round(target_mp4.stat().st_size / (1024*1024), 1)} MB)..."
+            return target_mp4
+
         # 1. Progressive MP4 streams (direct download)
         progressive_streams = (streams_info or {}).get("progressive_streams", [])
         if progressive_streams and isinstance(progressive_streams, list):
-            best = progressive_streams[0]
-            url = best.get("url")
+            # Prefer 720p or highest available <= 720p to maintain quality and fast download
+            chosen = None
+            for ps in progressive_streams:
+                h = ps.get("height") or 0
+                if h <= 720:
+                    chosen = ps
+                    break
+            if not chosen and progressive_streams:
+                chosen = progressive_streams[0]
+
+            url = chosen.get("url") if chosen else None
             if url:
                 try:
                     if job:
-                        job["current_step"] = f"Downloading video MP4 stream ({best.get('quality', 'high')})..."
-                    with requests.get(url, stream=True, timeout=180) as r:
+                        job["current_step"] = f"Downloading video MP4 stream ({chosen.get('quality', '720p')})..."
+                    with requests.get(url, stream=True, timeout=300) as r:
                         r.raise_for_status()
                         total_size = int(r.headers.get("content-length", 0))
                         downloaded = 0
                         with open(target_mp4, "wb") as f:
-                            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                            for chunk in r.iter_content(chunk_size=2 * 1024 * 1024):
                                 if chunk:
                                     f.write(chunk)
                                     downloaded += len(chunk)
                                     if total_size and job:
                                         pct = int((downloaded / total_size) * 100)
-                                        job["progress"] = 55 + int(pct * 0.20)
+                                        job["progress"] = 5 + int(pct * 0.35)
                                         job["current_step"] = f"Downloading video file: {pct}%..."
                     if target_mp4.exists() and target_mp4.stat().st_size > 1000:
                         return target_mp4
@@ -209,16 +281,23 @@ class GoogleDriveService:
 
             if job:
                 job["current_step"] = "Downloading HLS lecture video stream..."
-                job["progress"] = 60
+                job["progress"] = 10
 
-            vimeo_url = f"https://player.vimeo.com/video/{video_id}"
+            # Determine best source URL for yt-dlp:
+            # Prefer direct CDN master playlist URL (hls_url) to avoid Vimeo webpage bot blocks!
+            hls_url = (streams_info or {}).get("hls_url")
+            source_url = hls_url if hls_url else f"https://player.vimeo.com/video/{video_id}"
+
             ydl_opts = {
                 "outtmpl": str(temp_dir / f"{safe_title}.%(ext)s"),
-                "format": "bestvideo+bestaudio/best",
+                "format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
                 "merge_output_format": "mp4",
                 "nocheckcertificate": True,
                 "quiet": True,
                 "no_warnings": True,
+                "concurrent_fragment_downloads": 4,
+                "retries": 5,
+                "fragment_retries": 5,
             }
 
             def yt_progress_hook(d):
@@ -227,13 +306,13 @@ class GoogleDriveService:
                     downloaded = d.get("downloaded_bytes", 0)
                     if total:
                         pct = int((downloaded / total) * 100)
-                        job["progress"] = 55 + int(pct * 0.20)
+                        job["progress"] = 5 + int(pct * 0.35)
                         job["current_step"] = f"Downloading lecture stream: {pct}%..."
 
             ydl_opts["progress_hooks"] = [yt_progress_hook]
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([vimeo_url])
+                ydl.download([source_url])
 
             candidates = list(temp_dir.glob(f"{safe_title}*.mp4"))
             if candidates and candidates[0].exists() and candidates[0].stat().st_size > 1000:
@@ -254,22 +333,118 @@ class GoogleDriveService:
         streams_info: Optional[Dict[str, Any]] = None,
         parent_folder_id: Optional[str] = None,
         access_token: Optional[str] = None,
+        user_email: Optional[str] = None,
     ):
         """
         Executes background Google Drive bundle upload:
-        1. Formats all 5 bundle assets.
+        1. Captures and encodes the lecture video (.mp4) FIRST.
         2. Creates dedicated Google Drive folder.
-        3. Uploads files into folder with progress notifications.
+        3. Uploads the lecture video via direct chunked resumable upload.
+        4. Uploads all 5 documentation, transcript, subtitle, and metadata files.
+        5. Syncs Google Drive folder URL to user's LMS library.
         """
         job = self._jobs.get(job_id)
         if not job:
             return
 
         try:
-            job["progress"] = 15
-            job["current_step"] = "Preparing bundle files (Markdown, WebVTT, Metadata)..."
+            # STEP 1: Download lecture video (.mp4) FIRST so drive session is fresh
+            job["progress"] = 5
+            job["current_step"] = f"Downloading lecture video ({title})..."
+            video_file = None
+            try:
+                video_file = self._download_lecture_video(
+                    video_id=video_id,
+                    title=title,
+                    streams_info=streams_info,
+                    job=job
+                )
+            except Exception as ve:
+                print(f"[Google Drive Export] Video download error: {ve}")
+                job["video_warning"] = f"Video capture failed ({ve})"
 
-            # Prepare files
+            # STEP 2: Connect to Google Drive API & Create Dedicated Folder
+            job["progress"] = 45
+            job["current_step"] = "Connecting to Google Drive API..."
+
+            service = self._get_drive_client(access_token=access_token)
+
+            folder_name = f"LectureScribe - {title} ({video_id})"
+            folder_metadata: Dict[str, Any] = {
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder"
+            }
+            if parent_folder_id:
+                folder_metadata["parents"] = [parent_folder_id]
+
+            job["progress"] = 50
+            job["current_step"] = f"Creating dedicated folder '{folder_name}'..."
+
+            folder = service.files().create(
+                body=folder_metadata,
+                fields="id, webViewLink"
+            ).execute()
+
+            folder_id = folder.get("id")
+            folder_url = folder.get("webViewLink") or f"https://drive.google.com/drive/folders/{folder_id}"
+
+            job["folder_id"] = folder_id
+            job["folder_url"] = folder_url
+
+            if user_email and user_email.strip():
+                try:
+                    from backend.database import db_manager
+                    db_manager.record_user_lecture(
+                        user_email=user_email,
+                        video_id=video_id,
+                        title=title,
+                        drive_folder_url=folder_url
+                    )
+                except Exception as de:
+                    print(f"[User Library Sync Notice]: {de}")
+
+            uploaded_files = []
+
+            # STEP 3: Upload the Video File (.mp4) into the Folder
+            if video_file and video_file.exists():
+                v_size_mb = round(video_file.stat().st_size / (1024 * 1024), 1)
+                job["current_step"] = f"Uploading '{video_file.name}' ({v_size_mb} MB) to Google Drive..."
+                job["progress"] = 55
+
+                try:
+                    v_resp = self._upload_file_resumable(
+                        file_path=video_file,
+                        folder_id=folder_id,
+                        mime_type="video/mp4",
+                        access_token=access_token,
+                        job=job,
+                        start_pct=55,
+                        end_pct=85,
+                    )
+                    uploaded_files.append({
+                        "id": v_resp.get("id"),
+                        "name": v_resp.get("name"),
+                        "url": v_resp.get("webViewLink") or f"https://drive.google.com/file/d/{v_resp.get('id')}/view",
+                        "size": v_resp.get("size") or str(video_file.stat().st_size),
+                        "is_video": True,
+                    })
+                    print(f"[Google Drive Export] Video '{video_file.name}' ({v_size_mb} MB) successfully uploaded.")
+                except Exception as vue:
+                    print(f"[Google Drive Export Warning] Video upload error: {vue}")
+                    job["video_warning"] = str(vue)
+                finally:
+                    try:
+                        video_file.unlink()
+                    except Exception:
+                        pass
+            else:
+                if not job.get("video_warning"):
+                    job["video_warning"] = "Video stream could not be captured. Uploading documents and download guide."
+
+            # STEP 4: Format & Upload the 5 Documentation & Subtitle Bundle Assets
+            job["progress"] = 85
+            job["current_step"] = "Uploading documentation, transcripts, and subtitles..."
+
             files_to_upload: List[Dict[str, Any]] = []
 
             # 1. summary.md
@@ -348,42 +523,10 @@ class GoogleDriveService:
                 "content": "\n".join(guide_lines).encode("utf-8")
             })
 
-            job["progress"] = 30
-            job["current_step"] = "Connecting to Google Drive API..."
-
-            service = self._get_drive_client(access_token=access_token)
-
-            # Create folder
-            folder_name = f"LectureScribe - {title} ({video_id})"
-            folder_metadata: Dict[str, Any] = {
-                "name": folder_name,
-                "mimeType": "application/vnd.google-apps.folder"
-            }
-            if parent_folder_id:
-                folder_metadata["parents"] = [parent_folder_id]
-
-            job["progress"] = 40
-            job["current_step"] = f"Creating dedicated folder '{folder_name}'..."
-
-            folder = service.files().create(
-                body=folder_metadata,
-                fields="id, webViewLink"
-            ).execute()
-
-            folder_id = folder.get("id")
-            folder_url = folder.get("webViewLink") or f"https://drive.google.com/drive/folders/{folder_id}"
-
-            job["folder_id"] = folder_id
-            job["folder_url"] = folder_url
-
-            # Upload each file into folder
-            # 1. Upload text and markdown documents
-            total_files = len(files_to_upload)
-            uploaded_files = []
-
+            total_doc_files = len(files_to_upload)
             for idx, item in enumerate(files_to_upload):
-                job["progress"] = 35 + int((idx / total_files) * 20)
-                job["current_step"] = f"Uploading '{item['name']}' to Google Drive ({idx + 1}/{total_files})..."
+                job["progress"] = 85 + int((idx / total_doc_files) * 12)
+                job["current_step"] = f"Uploading '{item['name']}' ({idx + 1}/{total_doc_files})..."
 
                 file_metadata = {
                     "name": item["name"],
@@ -404,71 +547,18 @@ class GoogleDriveService:
                     "id": uploaded.get("id"),
                     "name": uploaded.get("name"),
                     "url": uploaded.get("webViewLink"),
+                    "is_video": False,
                 })
-
-            # 2. Download and Upload the actual Lecture Video (.mp4)
-            job["progress"] = 55
-            job["current_step"] = f"Downloading lecture video ({title})..."
-            video_file = None
-            try:
-                video_file = self._download_lecture_video(
-                    video_id=video_id,
-                    title=title,
-                    streams_info=streams_info,
-                    job=job
-                )
-                if video_file and video_file.exists():
-                    v_size_mb = round(video_file.stat().st_size / (1024 * 1024), 1)
-                    job["current_step"] = f"Uploading '{video_file.name}' ({v_size_mb} MB) to Google Drive..."
-                    job["progress"] = 75
-
-                    v_meta = {
-                        "name": video_file.name,
-                        "parents": [folder_id]
-                    }
-                    v_media = MediaFileUpload(
-                        str(video_file),
-                        mimetype="video/mp4",
-                        resumable=True
-                    )
-                    v_req = service.files().create(
-                        body=v_meta,
-                        media_body=v_media,
-                        fields="id, name, webViewLink, size"
-                    )
-                    v_resp = None
-                    while v_resp is None:
-                        status, v_resp = v_req.next_chunk()
-                        if status:
-                            pct = int(status.progress() * 100)
-                            job["progress"] = 75 + int(pct * 0.23)
-                            job["current_step"] = f"Uploading video: {pct}% ({v_size_mb} MB)..."
-
-                    uploaded_files.insert(0, {
-                        "id": v_resp.get("id"),
-                        "name": v_resp.get("name"),
-                        "url": v_resp.get("webViewLink"),
-                        "size": v_resp.get("size")
-                    })
-                    print(f"[Google Drive Export] Video '{video_file.name}' ({v_size_mb} MB) uploaded to Google Drive.")
-                else:
-                    print(f"[Google Drive Export Notice] Video stream was not captured; documents uploaded.")
-            except Exception as ve:
-                print(f"[Google Drive Export Notice] Video stream capture error: {ve}")
-                job["video_warning"] = str(ve)
-            finally:
-                if video_file and video_file.exists():
-                    try:
-                        video_file.unlink()
-                    except Exception:
-                        pass
 
             job["files"] = uploaded_files
             job["progress"] = 100
-            job["current_step"] = "Full bundle (including video) successfully uploaded to Google Drive!"
+            if job.get("video_warning"):
+                job["current_step"] = f"Bundle documents uploaded to Google Drive. (Notice: {job.get('video_warning')})"
+            else:
+                job["current_step"] = "Full bundle (including video) successfully uploaded to Google Drive!"
             job["status"] = "COMPLETED"
             job["completed_at"] = datetime.utcnow().isoformat()
-            print(f"[Google Drive Export] Successfully uploaded lecture bundle for '{video_id}' to {folder_url}")
+            print(f"[Google Drive Export] Successfully completed job '{job_id}' for '{video_id}' at {folder_url}")
 
         except Exception as e:
             print(f"[Google Drive Export Error] Failed upload for job {job_id}: {e}")

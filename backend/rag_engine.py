@@ -58,7 +58,7 @@ class Llama3PineconeRAGStore:
         self.api_key = os.getenv("PINECONE_API_KEY", "")
         self.index_name = os.getenv("PINECONE_INDEX", "lecturescribe-rag-index")
         self.namespace = os.getenv("PINECONE_NAMESPACE", "lecturescribe_v1")
-        self.model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
+        self.model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
         self.pc: Optional[Pinecone] = None
         self.index = None
         self.video_id: str = ""

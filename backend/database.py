@@ -90,6 +90,7 @@ class RelationalDBManager:
                         duration TEXT,
                         source_url TEXT,
                         caption_label TEXT,
+                        user_email TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
@@ -119,13 +120,39 @@ class RelationalDBManager:
                         user_prompt TEXT NOT NULL,
                         ai_reply TEXT NOT NULL,
                         citations_json TEXT,
+                        user_email TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY(video_id) REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE
                     );
                 """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS lecturescribe_user_library (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_email TEXT NOT NULL,
+                        video_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        duration TEXT,
+                        source_url TEXT,
+                        drive_folder_url TEXT,
+                        last_viewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_email, video_id)
+                    );
+                """)
+
+                # Migrations: Ensure user_email column exists on existing installations
+                try:
+                    cursor.execute("ALTER TABLE lecturescribe_videos ADD COLUMN user_email TEXT;")
+                except Exception:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE lecturescribe_chat_logs ADD COLUMN user_email TEXT;")
+                except Exception:
+                    pass
+
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_cues_vid ON lecturescribe_transcript_cues(video_id);")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_sum_vid ON lecturescribe_summaries(video_id);")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_vid ON lecturescribe_chat_logs(video_id);")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_lib_email ON lecturescribe_user_library(user_email);")
                 conn.commit()
                 print(f"[SQLite DB] Initialized local schema at '{self.sqlite_path}'.")
         except Exception as e:
@@ -146,6 +173,7 @@ class RelationalDBManager:
                             duration VARCHAR(64),
                             source_url TEXT,
                             caption_label VARCHAR(128),
+                            user_email VARCHAR(255),
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         );
 
@@ -170,8 +198,37 @@ class RelationalDBManager:
                             user_prompt TEXT NOT NULL,
                             ai_reply TEXT NOT NULL,
                             citations_json JSONB,
+                            user_email VARCHAR(255),
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         );
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_user_library (
+                            id SERIAL PRIMARY KEY,
+                            user_email VARCHAR(255) NOT NULL,
+                            video_id VARCHAR(128) NOT NULL,
+                            title TEXT NOT NULL,
+                            duration VARCHAR(64),
+                            source_url TEXT,
+                            drive_folder_url TEXT,
+                            last_viewed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            UNIQUE(user_email, video_id)
+                        );
+
+                        DO $$ 
+                        BEGIN 
+                            BEGIN
+                                ALTER TABLE lecturescribe_videos ADD COLUMN user_email VARCHAR(255);
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column user_email already exists in lecturescribe_videos.';
+                            END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_chat_logs ADD COLUMN user_email VARCHAR(255);
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column user_email already exists in lecturescribe_chat_logs.';
+                            END;
+                        END $$;
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_user_lib_email ON lecturescribe_user_library(user_email);
                     """)
                     conn.commit()
             conn.close()
@@ -233,22 +290,26 @@ class RelationalDBManager:
         source_url: str,
         caption_label: str,
         cues: List[Dict[str, str]],
-        summary_sections: List[Dict[str, Any]]
+        summary_sections: List[Dict[str, Any]],
+        user_email: Optional[str] = None
     ):
         """Save video, transcript cues, and AI summaries to SQLite and PostgreSQL (dual persistence)."""
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+
         # 1. Save to SQLite (Always persists locally)
         try:
             with self._get_sqlite_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label, user_email)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(video_id) DO UPDATE SET
                         title = excluded.title,
                         duration = excluded.duration,
                         source_url = excluded.source_url,
-                        caption_label = excluded.caption_label;
-                """, (video_id, title, duration, source_url, caption_label))
+                        caption_label = excluded.caption_label,
+                        user_email = COALESCE(excluded.user_email, lecturescribe_videos.user_email);
+                """, (video_id, title, duration, source_url, caption_label, clean_email))
 
                 cursor.execute("DELETE FROM lecturescribe_transcript_cues WHERE video_id = ?;", (video_id,))
                 cue_rows = [
@@ -280,12 +341,13 @@ class RelationalDBManager:
                     with conn:
                         with conn.cursor() as cursor:
                             cursor.execute("""
-                                INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label)
-                                VALUES (%s, %s, %s, %s, %s)
+                                INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label, user_email)
+                                VALUES (%s, %s, %s, %s, %s, %s)
                                 ON CONFLICT (video_id) 
                                 DO UPDATE SET title = EXCLUDED.title, duration = EXCLUDED.duration, 
-                                              source_url = EXCLUDED.source_url, caption_label = EXCLUDED.caption_label;
-                            """, (video_id, title, duration, source_url, caption_label))
+                                              source_url = EXCLUDED.source_url, caption_label = EXCLUDED.caption_label,
+                                              user_email = COALESCE(EXCLUDED.user_email, lecturescribe_videos.user_email);
+                            """, (video_id, title, duration, source_url, caption_label, clean_email))
 
                             cursor.execute("DELETE FROM lecturescribe_transcript_cues WHERE video_id = %s;", (video_id,))
                             cue_tuples = [
@@ -313,7 +375,17 @@ class RelationalDBManager:
             except Exception as e:
                 print(f"[Cloud PostgreSQL Error] Failed saving video: {e}")
 
-        # 3. Update L1 In-Memory Cache
+        # 3. If user_email is present, auto-record into their library
+        if clean_email:
+            self.record_user_lecture(
+                user_email=clean_email,
+                video_id=video_id,
+                title=title,
+                duration=duration,
+                source_url=source_url
+            )
+
+        # 4. Update L1 In-Memory Cache
         self._memory_cache[video_id] = {
             "videoId": video_id,
             "title": title,
@@ -399,6 +471,19 @@ class RelationalDBManager:
                         except Exception:
                             summary_sections = []
 
+                    # Auto-upgrade legacy hardcoded summaries to authentic dynamic summaries
+                    s_str = json.dumps(summary_sections)
+                    if (
+                        not summary_sections
+                        or "Session Introduction & Core Scope" in s_str
+                        or "Course Structure & Evaluation Framework" in s_str
+                        or ": Seen [" in s_str
+                        or ": Question [" in s_str
+                    ):
+                        from backend.summary_generator import generate_summary_sections
+                        summary_sections = generate_summary_sections(cues, v_row["title"])
+                        self.update_summary_sections(video_id, summary_sections)
+
                     record = {
                         "videoId": v_row["video_id"],
                         "title": v_row["title"],
@@ -438,8 +523,18 @@ class RelationalDBManager:
                                     WHERE video_id = %s 
                                     ORDER BY id DESC LIMIT 1;
                                 """, (video_id,))
-                                s_row = cursor.fetchone()
                                 summary_sections = s_row["sections_json"] if s_row and "sections_json" in s_row else []
+                                s_str = json.dumps(summary_sections)
+                                if (
+                                    not summary_sections
+                                    or "Session Introduction & Core Scope" in s_str
+                                    or "Course Structure & Evaluation Framework" in s_str
+                                    or ": Seen [" in s_str
+                                    or ": Question [" in s_str
+                                ):
+                                    from backend.summary_generator import generate_summary_sections
+                                    summary_sections = generate_summary_sections([dict(c) for c in cues], v_row["title"])
+                                    self.update_summary_sections(video_id, summary_sections)
 
                                 record = {
                                     "videoId": v_row["video_id"],
@@ -465,16 +560,25 @@ class RelationalDBManager:
 
         return None
 
-    def save_chat_log(self, video_id: str, user_prompt: str, ai_reply: str, citations: List[Dict[str, Any]]):
+    def save_chat_log(
+        self,
+        video_id: str,
+        user_prompt: str,
+        ai_reply: str,
+        citations: List[Dict[str, Any]],
+        user_email: Optional[str] = None
+    ):
         """Save chat interaction to SQLite and PostgreSQL."""
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+
         # 1. SQLite
         try:
             with self._get_sqlite_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO lecturescribe_chat_logs (video_id, user_prompt, ai_reply, citations_json)
-                    VALUES (?, ?, ?, ?);
-                """, (video_id, user_prompt, ai_reply, json.dumps(citations)))
+                    INSERT INTO lecturescribe_chat_logs (video_id, user_prompt, ai_reply, citations_json, user_email)
+                    VALUES (?, ?, ?, ?, ?);
+                """, (video_id, user_prompt, ai_reply, json.dumps(citations), clean_email))
                 conn.commit()
         except Exception as e:
             print(f"[SQLite DB Error] Failed saving chat log: {e}")
@@ -487,9 +591,9 @@ class RelationalDBManager:
                     with conn:
                         with conn.cursor() as cursor:
                             cursor.execute("""
-                                INSERT INTO lecturescribe_chat_logs (video_id, user_prompt, ai_reply, citations_json)
-                                VALUES (%s, %s, %s, %s::jsonb);
-                            """, (video_id, user_prompt, ai_reply, json.dumps(citations)))
+                                INSERT INTO lecturescribe_chat_logs (video_id, user_prompt, ai_reply, citations_json, user_email)
+                                VALUES (%s, %s, %s, %s::jsonb, %s);
+                            """, (video_id, user_prompt, ai_reply, json.dumps(citations), clean_email))
                             conn.commit()
                     conn.close()
             except Exception as e:
@@ -502,6 +606,221 @@ class RelationalDBManager:
         elif len(parts) == 2:
             return int(parts[0]) * 60 + int(parts[1].split(".")[0])
         return 0
+
+    def record_user_lecture(
+        self,
+        user_email: str,
+        video_id: str,
+        title: str,
+        duration: str = "",
+        source_url: str = "",
+        drive_folder_url: Optional[str] = None
+    ) -> bool:
+        """Upsert a lecture into the user's LMS library in SQLite and PostgreSQL."""
+        if not user_email or not video_id:
+            return False
+
+        clean_email = user_email.strip().lower()
+
+        # 1. SQLite
+        try:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, drive_folder_url, last_viewed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_email, video_id) DO UPDATE SET
+                        title = excluded.title,
+                        duration = COALESCE(NULLIF(excluded.duration, ''), lecturescribe_user_library.duration),
+                        source_url = COALESCE(NULLIF(excluded.source_url, ''), lecturescribe_user_library.source_url),
+                        drive_folder_url = COALESCE(excluded.drive_folder_url, lecturescribe_user_library.drive_folder_url),
+                        last_viewed_at = CURRENT_TIMESTAMP;
+                """, (clean_email, video_id, title, duration, source_url, drive_folder_url))
+                conn.commit()
+        except Exception as e:
+            print(f"[SQLite DB Error] Failed recording user lecture: {e}")
+
+        # 2. PostgreSQL
+        if self.use_postgres:
+            try:
+                conn = self._get_postgres_connection()
+                if conn:
+                    with conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                INSERT INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, drive_folder_url, last_viewed_at)
+                                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                                ON CONFLICT(user_email, video_id) DO UPDATE SET
+                                    title = EXCLUDED.title,
+                                    duration = COALESCE(NULLIF(EXCLUDED.duration, ''), lecturescribe_user_library.duration),
+                                    source_url = COALESCE(NULLIF(EXCLUDED.source_url, ''), lecturescribe_user_library.source_url),
+                                    drive_folder_url = COALESCE(EXCLUDED.drive_folder_url, lecturescribe_user_library.drive_folder_url),
+                                    last_viewed_at = NOW();
+                            """, (clean_email, video_id, title, duration, source_url, drive_folder_url))
+                            conn.commit()
+                    conn.close()
+            except Exception as e:
+                print(f"[Cloud PostgreSQL Error] Failed recording user lecture: {e}")
+
+        return True
+
+    def auto_map_videos_to_user(self, user_email: str):
+        """Maps all unassigned or existing database videos to the currently logged in user."""
+        if not user_email:
+            return
+        clean_email = user_email.strip().lower()
+        try:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE lecturescribe_videos
+                    SET user_email = ?
+                    WHERE user_email IS NULL OR user_email = '';
+                """, (clean_email,))
+                cursor.execute("""
+                    INSERT OR IGNORE INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, last_viewed_at)
+                    SELECT ?, video_id, title, duration, source_url, created_at
+                    FROM lecturescribe_videos;
+                """, (clean_email,))
+                conn.commit()
+        except Exception as e:
+            print(f"[Auto-Map SQLite Notice] {e}")
+
+        if self.use_postgres:
+            try:
+                conn = self._get_postgres_connection()
+                if conn:
+                    with conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                UPDATE lecturescribe_videos
+                                SET user_email = %s
+                                WHERE user_email IS NULL OR user_email = '';
+                            """, (clean_email,))
+                            cursor.execute("""
+                                INSERT INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, last_viewed_at)
+                                SELECT %s, video_id, title, duration, source_url, created_at
+                                FROM lecturescribe_videos
+                                ON CONFLICT (user_email, video_id) DO NOTHING;
+                            """, (clean_email,))
+                            conn.commit()
+                    conn.close()
+            except Exception as e:
+                print(f"[Auto-Map PostgreSQL Notice] {e}")
+
+    def get_user_library(self, user_email: str) -> List[Dict[str, Any]]:
+        """Retrieve all lectures saved in the user's LMS library."""
+        if not user_email:
+            return []
+
+        clean_email = user_email.strip().lower()
+
+        # Dynamically ensure existing database videos are mapped to the active user
+        self.auto_map_videos_to_user(clean_email)
+
+        # Try SQLite first
+        try:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at
+                    FROM lecturescribe_user_library
+                    WHERE user_email = ?
+                    ORDER BY last_viewed_at DESC;
+                """, (clean_email,))
+                rows = cursor.fetchall()
+                if rows:
+                    return [
+                        {
+                            "videoId": r["video_id"],
+                            "video_id": r["video_id"],
+                            "title": r["title"],
+                            "video_title": r["title"],
+                            "duration": r["duration"] or "Unknown",
+                            "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "driveFolderUrl": r["drive_folder_url"],
+                            "drive_folder_url": r["drive_folder_url"],
+                            "lastViewedAt": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                            "last_viewed_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                            "created_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                        }
+                        for r in rows
+                    ]
+        except Exception as e:
+            print(f"[SQLite DB Error] Failed fetching user library: {e}")
+
+        # Fallback to PostgreSQL
+        if self.use_postgres:
+            try:
+                conn = self._get_postgres_connection()
+                if conn:
+                    with conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at
+                                FROM lecturescribe_user_library
+                                WHERE user_email = %s
+                                ORDER BY last_viewed_at DESC;
+                            """, (clean_email,))
+                            rows = cursor.fetchall()
+                            if rows:
+                                return [
+                                    {
+                                        "videoId": r["video_id"],
+                                        "video_id": r["video_id"],
+                                        "title": r["title"],
+                                        "video_title": r["title"],
+                                        "duration": r["duration"] or "Unknown",
+                                        "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                                        "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                                        "driveFolderUrl": r["drive_folder_url"],
+                                        "drive_folder_url": r["drive_folder_url"],
+                                        "lastViewedAt": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                                        "last_viewed_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                                        "created_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                                    }
+                                    for r in rows
+                                ]
+                    conn.close()
+            except Exception as e:
+                print(f"[Cloud PostgreSQL Error] Failed fetching user library: {e}")
+
+        return []
+
+    def remove_user_lecture(self, user_email: str, video_id: str) -> bool:
+        """Remove a lecture from the user's LMS library."""
+        if not user_email or not video_id:
+            return False
+
+        clean_email = user_email.strip().lower()
+        try:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    DELETE FROM lecturescribe_user_library
+                    WHERE user_email = ? AND video_id = ?;
+                """, (clean_email, video_id))
+                conn.commit()
+        except Exception as e:
+            print(f"[SQLite DB Error] Failed removing user lecture: {e}")
+
+        if self.use_postgres:
+            try:
+                conn = self._get_postgres_connection()
+                if conn:
+                    with conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                DELETE FROM lecturescribe_user_library
+                                WHERE user_email = %s AND video_id = %s;
+                            """, (clean_email, video_id))
+                            conn.commit()
+                    conn.close()
+            except Exception as e:
+                print(f"[Cloud PostgreSQL Error] Failed removing user lecture: {e}")
+
+        return True
 
 
 # Export singleton instance

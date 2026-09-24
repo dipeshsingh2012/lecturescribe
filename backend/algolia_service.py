@@ -9,9 +9,21 @@ from __future__ import annotations
 import os
 import re
 from typing import List, Dict, Any, Optional
-from dotenv import load_dotenv
-
-load_dotenv()
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+except ImportError:
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        try:
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ[k.strip()] = v.strip().strip("'\"")
+        except Exception:
+            pass
 
 try:
     from algoliasearch.search.client import SearchClientSync
@@ -33,6 +45,9 @@ class AlgoliaSearchService:
         self._init_algolia()
 
     def _init_algolia(self):
+        self.app_id = os.getenv("ALGOLIA_APP_ID", "")
+        self.api_key = os.getenv("ALGOLIA_API_KEY", "")
+        self.index_name = os.getenv("ALGOLIA_INDEX_NAME", "lecturescribe_transcripts_v1")
         try:
             if HAS_ALGOLIA and self.app_id and self.api_key:
                 self.client = SearchClientSync(self.app_id, self.api_key)
@@ -41,6 +56,25 @@ class AlgoliaSearchService:
                 print(f"[Algolia Service] ALGOLIA_APP_ID / ALGOLIA_API_KEY not configured. Using dynamic indexer.")
         except Exception as e:
             print(f"[Algolia Warning] Could not initialize Algolia client: {e}")
+
+    def setup_index(self) -> bool:
+        """Create and configure Algolia index settings on server start."""
+        self._init_algolia()
+        if not self.client:
+            return False
+
+        try:
+            settings = {
+                "searchableAttributes": ["text", "timestamp", "video_title"],
+                "attributesForFaceting": ["filterOnly(video_id)"],
+                "customRanking": ["asc(seconds)"]
+            }
+            self.client.set_settings(index_name=self.index_name, index_settings=settings)
+            print(f"✅ [Algolia Startup] Index '{self.index_name}' configured with search & faceting rules.")
+            return True
+        except Exception as e:
+            print(f"⚠️ [Algolia Startup Notice] Index settings setup: {e}")
+            return True
 
     def parse_timestamp_seconds(self, ts: str) -> int:
         if not ts:

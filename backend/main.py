@@ -16,6 +16,8 @@ from pydantic import BaseModel
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from contextlib import asynccontextmanager
+
 # Import extraction and service modules
 sys.path.append(str(Path(__file__).parent.parent))
 from lecturescribe import extract_video_id, fetch_player_config, get_text_tracks, fetch_vtt, parse_vtt, format_timestamp
@@ -23,7 +25,57 @@ from backend.rag_engine import pinecone_rag_engine
 from backend.algolia_service import algolia_service
 from backend.database import db_manager
 
-app = FastAPI(title="LectureScribe Triad API (Postgres + Algolia + Pinecone)")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle manager: Automatically creates & verifies all indexes and databases on server start."""
+    print("\n" + "=" * 60)
+    print("🚀 LectureScribe Triad Server Starting Up...")
+    print("=" * 60)
+
+    # 1. Relational Database verification & seed
+    print("📦 [1/3] Verifying Relational DB (PostgreSQL/SQLite)...")
+    try:
+        db_manager._init_sqlite_schema()
+        if db_manager.use_postgres:
+            db_manager._init_postgres_schema()
+        db_manager._seed_sample_data_if_needed()
+        print("✅ [Database Startup] Relational database ready.")
+    except Exception as e:
+        print(f"⚠️ [Database Startup Warning]: {e}")
+
+    # 2. Pinecone Index creation & connection
+    print("🌲 [2/3] Verifying/Creating Pinecone Vector Index...")
+    pinecone_rag_engine.setup_index()
+
+    # 3. Algolia Search Index verification & settings
+    print("🔍 [3/3] Verifying/Configuring Algolia Search Index...")
+    algolia_service.setup_index()
+
+    # 4. Warm-up pre-index sample video if present in DB
+    try:
+        sample = db_manager.get_saved_video("1229247139")
+        if sample:
+            algolia_service.ingest_cues("1229247139", sample["title"], sample["cues"])
+            pinecone_rag_engine.ingest_transcript("1229247139", sample["title"], sample["cues"])
+            print(f"⚡ [Warmup] Pre-indexed sample video '1229247139' ({len(sample['cues'])} cues).")
+    except Exception as e:
+        print(f"⚠️ [Warmup Notice]: {e}")
+
+    print("=" * 60)
+    print("✨ All Triad Engines & Indexes Ready!")
+    print("=" * 60 + "\n")
+
+    yield
+
+    # --- Server Shutdown ---
+    print("\n🛑 LectureScribe Triad Server Shutting Down...")
+
+
+app = FastAPI(
+    title="LectureScribe Triad API (Postgres + Algolia + Pinecone)",
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,

@@ -22,7 +22,21 @@ except ImportError:
         Pinecone = None
         HAS_SERVERLESS = False
 
-load_dotenv()
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+except ImportError:
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        try:
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ[k.strip()] = v.strip().strip("'\"")
+        except Exception:
+            pass
 
 try:
     from huggingface_hub import InferenceClient
@@ -54,6 +68,9 @@ class Llama3PineconeRAGStore:
         self._init_pinecone()
 
     def _init_pinecone(self):
+        self.api_key = os.getenv("PINECONE_API_KEY", "")
+        self.index_name = os.getenv("PINECONE_INDEX", "lecturescribe-rag-index")
+        self.namespace = os.getenv("PINECONE_NAMESPACE", "lecturescribe_v1")
         try:
             if not Pinecone:
                 print("[Llama-3.2 RAG Warning] Pinecone package not installed. Using local chunk store.")
@@ -61,28 +78,56 @@ class Llama3PineconeRAGStore:
 
             if self.api_key:
                 self.pc = Pinecone(api_key=self.api_key)
-
-                # Check if index exists, auto-create if missing
-                try:
-                    existing_indexes = [idx.name for idx in self.pc.list_indexes()]
-                    if self.index_name not in existing_indexes:
-                        print(f"[Llama-3.2 RAG] Index '{self.index_name}' not found. Creating serverless index (dim=768, metric=cosine)...")
-                        if HAS_SERVERLESS:
-                            self.pc.create_index(
-                                name=self.index_name,
-                                dimension=768,
-                                metric="cosine",
-                                spec=ServerlessSpec(cloud="aws", region="us-east-1")
-                            )
-                            print(f"[Llama-3.2 RAG] Created new Pinecone index '{self.index_name}'.")
-                except Exception as create_err:
-                    print(f"[Llama-3.2 RAG Notice] Index check: {create_err}")
-
                 self.index = self.pc.Index(self.index_name)
                 print(f"[Llama-3.2 RAG] Connected to Pinecone Index '{self.index_name}' (Namespace: '{self.namespace}').")
             else:
                 print(f"[Llama-3.2 RAG Warning] PINECONE_API_KEY environment variable is not set.")
         except Exception as e:
+            print(f"[Llama-3.2 RAG Warning] Could not initialize Pinecone: {e}")
+
+    def setup_index(self) -> bool:
+        """Create and verify Pinecone index on server start."""
+        self.api_key = os.getenv("PINECONE_API_KEY", "")
+        self.index_name = os.getenv("PINECONE_INDEX", "lecturescribe-rag-index")
+        self.namespace = os.getenv("PINECONE_NAMESPACE", "lecturescribe_v1")
+
+        if not Pinecone:
+            print("[Pinecone Startup] pinecone package not installed. Local vector store active.")
+            return False
+
+        if not self.api_key:
+            print("[Pinecone Startup] PINECONE_API_KEY not configured. Local vector store active.")
+            return False
+
+        try:
+            if not self.pc:
+                self.pc = Pinecone(api_key=self.api_key)
+
+            existing_indexes = [idx.name for idx in self.pc.list_indexes()]
+            if self.index_name not in existing_indexes:
+                print(f"🚀 [Pinecone Startup] Index '{self.index_name}' not found. Creating serverless index (dim=768, metric=cosine, aws/us-east-1)...")
+                if HAS_SERVERLESS:
+                    self.pc.create_index(
+                        name=self.index_name,
+                        dimension=768,
+                        metric="cosine",
+                        spec=ServerlessSpec(cloud="aws", region="us-east-1")
+                    )
+                else:
+                    self.pc.create_index(
+                        name=self.index_name,
+                        dimension=768,
+                        metric="cosine"
+                    )
+                print(f"✅ [Pinecone Startup] Created Pinecone index: '{self.index_name}'.")
+            else:
+                print(f"✅ [Pinecone Startup] Pinecone index '{self.index_name}' verified and ready.")
+
+            self.index = self.pc.Index(self.index_name)
+            return True
+        except Exception as e:
+            print(f"⚠️ [Pinecone Startup Warning] Error creating/verifying Pinecone index: {e}")
+            return False
             print(f"[Llama-3.2 RAG Warning] Could not initialize Pinecone: {e}")
 
     def _generate_embedding(self, text: str) -> List[float]:

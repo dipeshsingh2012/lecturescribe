@@ -116,3 +116,104 @@ def format_timestamp(ts: str) -> str:
             return f"{int(h)}:{m}:{s}"
         return f"{m}:{s}"
     return ts.split(".")[0]
+
+
+def format_duration(seconds: int | float | None) -> str:
+    """Format total seconds into human-readable duration (e.g. '1h 42m 01s' or '45m 30s')."""
+    if not seconds:
+        return "Unknown"
+    sec = int(seconds)
+    hours = sec // 3600
+    minutes = (sec % 3600) // 60
+    remaining_secs = sec % 60
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m {remaining_secs:02d}s"
+    return f"{minutes}m {remaining_secs:02d}s"
+
+
+def get_video_download_streams(config: Dict[str, Any], video_id: str = "") -> Dict[str, Any]:
+    """Extract direct progressive MP4 downloads, HLS streams, and download commands from Vimeo player config."""
+    req = config.get("request", {})
+    files = req.get("files", {})
+    video_meta = config.get("video", {})
+
+    title = video_meta.get("title") or f"Lecture_{video_id}"
+    duration = video_meta.get("duration")
+    duration_str = format_duration(duration)
+    owner = video_meta.get("owner", {}).get("name", "Unknown")
+
+    # 1. Progressive MP4 streams (direct downloadable files)
+    progressive_streams: List[Dict[str, Any]] = []
+    raw_prog = files.get("progressive") or []
+    if isinstance(raw_prog, list):
+        for item in raw_prog:
+            if isinstance(item, dict) and item.get("url"):
+                progressive_streams.append({
+                    "quality": item.get("quality", "standard"),
+                    "width": item.get("width"),
+                    "height": item.get("height"),
+                    "fps": item.get("fps"),
+                    "mime": item.get("mime", "video/mp4"),
+                    "url": item.get("url"),
+                })
+        # Sort highest resolution first
+        progressive_streams.sort(key=lambda x: (x.get("height") or 0), reverse=True)
+
+    # 2. HLS Adaptive Streaming (.m3u8)
+    hls_data = files.get("hls", {})
+    hls_master_url: Optional[str] = None
+    hls_cdn: Optional[str] = None
+    hls_qualities: List[str] = []
+
+    if isinstance(hls_data, dict):
+        cdns = hls_data.get("cdns", {})
+        default_cdn = hls_data.get("default_cdn")
+        if default_cdn and default_cdn in cdns:
+            hls_cdn = default_cdn
+            hls_master_url = cdns[default_cdn].get("url")
+        elif cdns:
+            first_key = list(cdns.keys())[0]
+            hls_cdn = first_key
+            hls_master_url = cdns[first_key].get("url")
+        elif hls_data.get("url"):
+            hls_master_url = hls_data.get("url")
+
+        raw_streams = hls_data.get("streams", [])
+        if isinstance(raw_streams, list):
+            for s in raw_streams:
+                if isinstance(s, dict) and s.get("quality"):
+                    q = s.get("quality")
+                    if q not in hls_qualities:
+                        hls_qualities.append(q)
+
+    # 3. Helper download commands for HLS (VLC, ffmpeg, yt-dlp)
+    safe_filename = re.sub(r'[^a-zA-Z0-9_\- ]', '_', title).strip().replace(' ', '_')
+    if not safe_filename:
+        safe_filename = f"lecture_{video_id}"
+
+    commands: Dict[str, str] = {}
+    if hls_master_url:
+        commands = {
+            "ffmpeg": f'ffmpeg -i "{hls_master_url}" -c copy "{safe_filename}.mp4"',
+            "yt_dlp": f'yt-dlp "{hls_master_url}" -o "{safe_filename}.mp4"',
+            "vlc": f'vlc "{hls_master_url}"',
+        }
+
+    return {
+        "video_id": video_id,
+        "title": title,
+        "duration": duration,
+        "duration_formatted": duration_str,
+        "owner": owner,
+        "has_progressive": len(progressive_streams) > 0,
+        "progressive_streams": progressive_streams,
+        "has_hls": bool(hls_master_url),
+        "hls": {
+            "master_url": hls_master_url,
+            "cdn": hls_cdn,
+            "qualities": hls_qualities,
+        },
+        "commands": commands,
+        "filename": f"{safe_filename}.mp4",
+    }
+

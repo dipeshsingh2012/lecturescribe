@@ -14,6 +14,15 @@
 - 📊 **Structured Executive AI Summaries**: Automatically generates structured takeaway sections (Course Structure, Core Concepts, Thrust Areas, Q&A).
 - 🎬 **Embedded Vimeo Player Integration**: Synchronized video playback using `@vimeo/player` SDK with active cue highlighting during playback.
 - 💾 **Dual-Layer Database**: Seamless persistence using local SQLite (`lecturescribe.db`) with automatic remote Cloud PostgreSQL (Neon DB) synchronization when configured.
+- 📥 **Option 1: Download to Device**:
+  - Direct progressive MP4 downloads when available.
+  - Multi-bitrate Adaptive HLS stream extraction (`.m3u8`) with 1-click terminal commands (`yt-dlp`, `ffmpeg`, `vlc`).
+  - Instant browser downloads for `transcript.md`, `summary.md`, and `captions.vtt`.
+- ☁️ **Option 2: Download to Cloud (Google Drive Full Bundle)**:
+  - Asynchronous background export creating a dedicated Google Drive folder: `LectureScribe - <Title> (<VideoId>)`.
+  - Packages the **Full Bundle**: `summary.md`, `transcript.md`, `captions.vtt`, `metadata.json`, and `download_guide.txt`.
+  - Real-time progress tracking bar and direct clickable Google Drive web link upon completion.
+
 
 ---
 
@@ -106,22 +115,24 @@ Open `http://localhost:5173` in your browser.
 ```
 lecturescribe/
 ├── backend/
-│   ├── main.py              # FastAPI endpoints (/api/transcript, /api/search, /api/rag/query)
-│   ├── database.py          # Unified SQLite & PostgreSQL database manager + L1 cache
-│   ├── algolia_service.py   # Algolia instant search indexing & query service
-│   ├── rag_engine.py        # Pinecone vector retrieval & Llama-3.2 inference engine
-│   └── vimeo_client.py      # Vimeo player config & caption extraction client
+│   ├── main.py                 # FastAPI endpoints (Transcripts, Search, RAG, Downloads, Cloud Export)
+│   ├── database.py             # Unified SQLite & PostgreSQL database manager + L1 cache
+│   ├── summary_generator.py    # Dynamic transcript-driven summarizer & topic segmenter
+│   ├── algolia_service.py      # Algolia instant search indexing & query service
+│   ├── rag_engine.py           # Pinecone vector retrieval & Llama-3.2 inference engine
+│   ├── vimeo_client.py         # Vimeo player config, stream manifest & caption extractor
+│   └── google_drive_service.py # Google Drive client, folder generator & background bundle uploader
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx          # React app (Player, Algolia Search, Summary, RAG Chatbot)
-│   │   ├── main.jsx         # React root entry
-│   │   └── index.css        # Dark theme styling & Vimeo branding
-│   ├── package.json         # Node dependencies (@vimeo/player, lucide-react, etc.)
-│   └── vite.config.js       # Vite configuration with /api proxy to backend
-├── .env.example             # Environment variables template
-├── .gitignore               # Ignored dependencies, caches, and secrets
-├── requirements.txt         # Python dependencies
-└── README.md                # Project documentation
+│   │   ├── App.jsx             # React app (Player, Algolia Search, Summary, RAG, Export Modal)
+│   │   ├── main.jsx            # React root entry
+│   │   └── index.css           # Dark theme styling & Vimeo branding
+│   ├── package.json            # Node dependencies (@vimeo/player, lucide-react, etc.)
+│   └── vite.config.js          # Vite configuration with /api proxy to backend
+├── .env.example                # Environment variables template
+├── .gitignore                  # Ignored dependencies, caches, and secrets
+├── requirements.txt            # Python dependencies
+└── README.md                   # Project documentation
 ```
 
 ---

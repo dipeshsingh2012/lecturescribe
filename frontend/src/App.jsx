@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Player from '@vimeo/player';
-import { Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy, AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database, Zap } from 'lucide-react';
+import {
+  Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
+  AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
+  Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2
+} from 'lucide-react';
 
 export default function App() {
   const [urlInput, setUrlInput] = useState('');
@@ -13,16 +17,51 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [activeCueIdx, setActiveCueIdx] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [regeneratingSummary, setRegeneratingSummary] = useState(false);
 
-  // Client-side cache: In-memory & LocalStorage
+  // Download & Cloud Export Modal State
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+  const [downloadModalTab, setDownloadModalTab] = useState('device'); // 'device' | 'cloud'
+  const [streamData, setStreamData] = useState(null);
+  const [streamLoading, setStreamLoading] = useState(false);
+  const [streamError, setStreamError] = useState(null);
+  const [copiedCmd, setCopiedCmd] = useState(null);
+  const [activeCmdTab, setActiveCmdTab] = useState('yt_dlp'); // 'yt_dlp' | 'ffmpeg' | 'vlc'
+
+  // Google Drive Cloud State
+  const [gdriveStatus, setGdriveStatus] = useState(null);
+  const [gdriveJobId, setGdriveJobId] = useState(null);
+  const [gdriveJob, setGdriveJob] = useState(null);
+  const [gdriveUploading, setGdriveUploading] = useState(false);
+  const [gdriveAccessToken, setGdriveAccessToken] = useState('');
+  const [gdriveError, setGdriveError] = useState(null);
+  const pollIntervalRef = useRef(null);
+
+  // Client-side cache: In-memory & LocalStorage (Auto-purges stale hardcoded summaries)
   const [cachedVideos, setCachedVideos] = useState(() => {
     try {
       const stored = localStorage.getItem('lecturescribe_cached_videos');
-      return stored ? JSON.parse(stored) : {};
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        let modified = false;
+        Object.keys(parsed).forEach(k => {
+          const str = JSON.stringify(parsed[k].summarySections || []);
+          if (str.includes("Course Structure & Evaluation Framework") || str.includes("34 credits")) {
+            delete parsed[k];
+            modified = true;
+          }
+        });
+        if (modified) {
+          localStorage.setItem('lecturescribe_cached_videos', JSON.stringify(parsed));
+        }
+        return parsed;
+      }
+      return {};
     } catch {
       return {};
     }
   });
+
 
   const extractVideoId = (url) => {
     if (!url) return '';
@@ -195,11 +234,12 @@ export default function App() {
     setChatMessages([
       {
         sender: 'bot',
-        text: `🔍 **Pinecone Vector RAG Ready** for *${title}*!\n\nAsk any question to retrieve grounded answers with exact video timestamp citations:\n- *"What is the COVID-19 case study axiom?"*\n- *"Explain Sovereign Technology and semiconductor Fabs"*\n- *"Summarize this lecture in 100 lines"*`,
+        text: `🔍 **Pinecone Vector RAG Ready** for *${title}*!\n\nAsk any question to retrieve grounded answers with exact video timestamp citations:\n- *"What are the core objectives and themes covered in this lecture?"*\n- *"Explain the primary methodology and key concepts discussed"*\n- *"Summarize the main takeaways and conclusions"*\n- *"What specific questions or challenges were addressed?"*`,
         citations: []
       }
     ]);
   };
+
 
   const handleSendMessage = async (customPrompt = null) => {
     const textToSend = customPrompt || chatInput;
@@ -262,6 +302,244 @@ export default function App() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  // Helper to trigger browser download of text/markdown/vtt files
+  const downloadTextFile = (filename, content, mime = 'text/plain') => {
+    const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadTranscript = () => {
+    if (!activeData) return;
+    let md = `# Full Transcript: ${activeData.title}\nSource: ${activeData.sourceUrl}\nVideo ID: ${activeData.videoId}\n\n---\n\n`;
+    activeData.cues.forEach(c => {
+      md += `**[${c.time}]** ${c.text}\n\n`;
+    });
+    const safeTitle = (activeData.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim();
+    downloadTextFile(`${safeTitle}_transcript.md`, md, 'text/markdown');
+  };
+
+  const handleDownloadSummary = () => {
+    if (!activeData) return;
+    let md = `# Executive AI Summary: ${activeData.title}\nSource: ${activeData.sourceUrl}\n\n---\n\n`;
+    (activeData.summarySections || []).forEach(sec => {
+      md += `### ${sec.title}\n`;
+      (sec.points || []).forEach(pt => {
+        md += `- ${pt}\n`;
+      });
+      md += '\n';
+    });
+    const safeTitle = (activeData.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim();
+    downloadTextFile(`${safeTitle}_summary.md`, md, 'text/markdown');
+  };
+
+  const handleDownloadVtt = () => {
+    if (!activeData) return;
+    let vtt = "WEBVTT\n\n";
+    activeData.cues.forEach((c, idx) => {
+      const start = c.time.length === 5 ? `00:${c.time}.000` : `${c.time}.000`;
+      vtt += `${idx + 1}\n${start} --> 99:99:99.000\n${c.text}\n\n`;
+    });
+    const safeTitle = (activeData.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim();
+    downloadTextFile(`${safeTitle}_captions.vtt`, vtt, 'text/vtt');
+  };
+
+  const handleRegenerateSummary = async () => {
+    if (!activeData) return;
+    setRegeneratingSummary(true);
+    setCacheNotice(null);
+    try {
+      const res = await fetch('/api/summary/regenerate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_id: activeData.videoId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updatedSections = data.summarySections;
+        const updatedActive = { ...activeData, summarySections: updatedSections, cached: false };
+        setActiveData(updatedActive);
+        setCachedVideos(prev => {
+          const up = { ...prev, [activeData.videoId]: updatedActive };
+          try { localStorage.setItem('lecturescribe_cached_videos', JSON.stringify(up)); } catch {}
+          return up;
+        });
+        setCacheNotice("✨ Dynamic AI Summary freshly extracted from transcript cues!");
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || "Failed to regenerate dynamic summary");
+      }
+    } catch (err) {
+      console.error("Summary regeneration error:", err);
+      setError(err.message || "Failed to regenerate summary.");
+    } finally {
+      setRegeneratingSummary(false);
+    }
+  };
+
+  const renderSummaryPoint = (pt) => {
+    const match = String(pt).match(/^\[(.*?)\]\s*(.*)/);
+    if (match) {
+      const time = match[1];
+      const text = match[2];
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => handleCueClick(time)}
+            title={`Jump video to ${time}`}
+            style={{
+              background: 'rgba(0, 173, 239, 0.15)',
+              border: '1px solid rgba(0, 173, 239, 0.4)',
+              color: 'var(--vimeo-blue)',
+              padding: '1px 6px',
+              borderRadius: '4px',
+              fontSize: '0.75rem',
+              fontFamily: 'monospace',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+          >
+            ▶ [{time}]
+          </button>
+          <span>{text}</span>
+        </span>
+      );
+    }
+    return <span>{pt}</span>;
+  };
+
+  const openDownloadModal = async (initialTab = 'device') => {
+    if (!activeData) return;
+    setDownloadModalTab(initialTab);
+    setIsDownloadModalOpen(true);
+    setStreamLoading(true);
+    setStreamError(null);
+    setGdriveError(null);
+
+    try {
+      const [streamsRes, gdriveRes] = await Promise.all([
+        fetch(`/api/video/download-options?url=${encodeURIComponent(activeData.videoId)}`),
+        fetch('/api/cloud/gdrive/status')
+      ]);
+
+      if (streamsRes.ok) {
+        const sData = await streamsRes.json();
+        setStreamData(sData);
+      } else {
+        const errJson = await streamsRes.json().catch(() => ({}));
+        setStreamError(errJson.detail || "Could not retrieve download streams");
+      }
+
+      if (gdriveRes.ok) {
+        const gData = await gdriveRes.json();
+        setGdriveStatus(gData);
+      }
+    } catch (err) {
+      console.warn("Error fetching download options:", err);
+      setStreamError("Failed to fetch stream details from server.");
+    } finally {
+      setStreamLoading(false);
+    }
+  };
+
+  const closeDownloadModal = () => {
+    setIsDownloadModalOpen(false);
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  const handleCopyCmd = (key, text) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedCmd(key);
+    setTimeout(() => setCopiedCmd(null), 2000);
+  };
+
+  const handleStartGdriveUpload = async () => {
+    if (!activeData) return;
+    setGdriveUploading(true);
+    setGdriveError(null);
+    setGdriveJob(null);
+
+    let summaryMd = `# Executive Summary: ${activeData.title}\n\n`;
+    (activeData.summarySections || []).forEach(sec => {
+      summaryMd += `### ${sec.title}\n`;
+      (sec.points || []).forEach(pt => {
+        summaryMd += `- ${pt}\n`;
+      });
+      summaryMd += '\n';
+    });
+
+    try {
+      const res = await fetch('/api/cloud/gdrive/upload-bundle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: activeData.videoId,
+          title: activeData.title,
+          summary_content: summaryMd,
+          access_token: gdriveAccessToken.trim() || null
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Upload trigger failed (Status ${res.status})`);
+      }
+
+      const jobData = await res.json();
+      const jobId = jobData.job_id;
+      setGdriveJobId(jobId);
+      setGdriveJob({ status: 'PROCESSING', progress: 10, current_step: 'Job queued on server...' });
+
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+
+      pollIntervalRef.current = setInterval(async () => {
+        try {
+          const pollRes = await fetch(`/api/cloud/jobs/${jobId}`);
+          if (pollRes.ok) {
+            const currentJob = await pollRes.json();
+            setGdriveJob(currentJob);
+
+            if (currentJob.status === 'COMPLETED' || currentJob.status === 'FAILED') {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+              setGdriveUploading(false);
+              if (currentJob.status === 'FAILED') {
+                setGdriveError(currentJob.error || currentJob.current_step || "Upload failed");
+              }
+            }
+          }
+        } catch (pollErr) {
+          console.warn("Polling error:", pollErr);
+        }
+      }, 1000);
+
+    } catch (err) {
+      console.error("Gdrive upload initiation error:", err);
+      setGdriveError(err.message);
+      setGdriveUploading(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
+
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg-dark)', color: 'var(--text-primary)' }}>
@@ -357,7 +635,28 @@ export default function App() {
             </div>
 
             <button
+              onClick={() => openDownloadModal('device')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: 'linear-gradient(135deg, rgba(0, 173, 239, 0.15), rgba(16, 185, 129, 0.15))',
+                color: 'var(--vimeo-blue)',
+                border: '1px solid rgba(0, 173, 239, 0.35)',
+                padding: '6px 14px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <Download size={15} /> Download & Cloud
+            </button>
+
+            <button
               onClick={() => { setActiveData(null); setError(null); }}
+
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -635,6 +934,28 @@ export default function App() {
                 {copied ? <Check size={16} color="var(--vimeo-blue)" /> : <Copy size={16} />}
                 {copied ? 'Copied Markdown!' : 'Copy Markdown'}
               </button>
+
+              <button
+                onClick={() => openDownloadModal('device')}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  background: 'linear-gradient(135deg, rgba(0, 173, 239, 0.18), rgba(16, 185, 129, 0.18))',
+                  color: 'var(--vimeo-blue)',
+                  border: '1px solid rgba(0, 173, 239, 0.35)',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <Download size={16} /> Download & Cloud
+              </button>
             </div>
           </div>
 
@@ -726,22 +1047,45 @@ export default function App() {
                     Structured executive insights extracted directly from lecture captions
                   </p>
                 </div>
-                {activeData.cached && (
-                  <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    background: 'rgba(16, 185, 129, 0.15)',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
-                    color: '#34d399',
-                    padding: '4px 10px',
-                    borderRadius: '12px',
-                    fontSize: '0.78rem',
-                    fontWeight: 600
-                  }}>
-                    <Check size={14} /> Reused from Cache
-                  </span>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    onClick={handleRegenerateSummary}
+                    disabled={regeneratingSummary}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'var(--card-bg)',
+                      border: '1px solid var(--border-color)',
+                      color: 'var(--vimeo-blue)',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      cursor: regeneratingSummary ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <RefreshCw size={13} className={regeneratingSummary ? 'loading-pulse' : ''} />
+                    {regeneratingSummary ? 'Extracting Dynamic Summary...' : 'Regenerate Dynamic Summary'}
+                  </button>
+                  {activeData.cached && (
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      background: 'rgba(16, 185, 129, 0.15)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      color: '#34d399',
+                      padding: '4px 10px',
+                      borderRadius: '12px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600
+                    }}>
+                      <Check size={14} /> Reused from Cache
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -756,16 +1100,17 @@ export default function App() {
                     <h3 style={{ fontSize: '1.02rem', fontWeight: 700, color: 'var(--vimeo-blue)', marginBottom: '10px' }}>
                       {sec.title}
                     </h3>
-                    <ul style={{ paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <ul style={{ paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       {(sec.points || []).map((pt, pIdx) => (
                         <li key={pIdx} style={{ fontSize: '0.88rem', color: 'var(--text-primary)', lineHeight: 1.5 }}>
-                          {pt}
+                          {renderSummaryPoint(pt)}
                         </li>
                       ))}
                     </ul>
                   </div>
                 ))}
               </div>
+
             </div>
           ) : (
             /* PINECONE RAG AI TUTOR VIEW */
@@ -919,7 +1264,7 @@ export default function App() {
                 background: 'var(--bg-dark)'
               }}>
                 <button
-                  onClick={() => handleSendMessage("What is the COVID 19 case study axiom?")}
+                  onClick={() => handleSendMessage("What are the main objectives and scope covered in this lecture?")}
                   style={{
                     whiteSpace: 'nowrap',
                     background: 'var(--card-bg)',
@@ -932,10 +1277,10 @@ export default function App() {
                     fontWeight: 600
                   }}
                 >
-                  🛡️ COVID-19 Axiom
+                  🎯 Main Objectives
                 </button>
                 <button
-                  onClick={() => handleSendMessage("Explain Sovereign Technology and semiconductor Fabs")}
+                  onClick={() => handleSendMessage("Explain the core concepts and methodologies discussed in this session")}
                   style={{
                     whiteSpace: 'nowrap',
                     background: 'var(--card-bg)',
@@ -948,10 +1293,10 @@ export default function App() {
                     fontWeight: 600
                   }}
                 >
-                  ⚡ Sovereign Tech & Fabs
+                  💡 Core Methodology
                 </button>
                 <button
-                  onClick={() => handleSendMessage("Summarize this lecture in 100 lines")}
+                  onClick={() => handleSendMessage("Summarize the key takeaways, action items, and conclusions")}
                   style={{
                     whiteSpace: 'nowrap',
                     background: 'var(--card-bg)',
@@ -964,7 +1309,23 @@ export default function App() {
                     fontWeight: 600
                   }}
                 >
-                  📜 100-Line Summary
+                  📜 Key Takeaways
+                </button>
+                <button
+                  onClick={() => handleSendMessage("What specific questions or challenges were discussed in this video?")}
+                  style={{
+                    whiteSpace: 'nowrap',
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--vimeo-blue)',
+                    padding: '6px 12px',
+                    borderRadius: '16px',
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    fontWeight: 600
+                  }}
+                >
+                  ❓ Key Questions & Discussion
                 </button>
               </div>
 
@@ -980,7 +1341,7 @@ export default function App() {
                 }}>
                   <input
                     type="text"
-                    placeholder="Ask RAG tutor (e.g. 'What are the 34 credits assigned for?')..."
+                    placeholder="Ask RAG tutor about key concepts, methodology, or questions..."
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
@@ -1021,6 +1382,561 @@ export default function App() {
         </div>
       )}
 
+      {/* ============================================================================== */}
+      {/* Download to Device & Cloud Export Modal Dialog                                  */}
+      {/* ============================================================================== */}
+      {isDownloadModalOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '20px'
+        }}>
+          <div style={{
+            background: 'var(--panel-bg)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '16px',
+            width: '100%',
+            maxWidth: '680px',
+            maxHeight: '90vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 24px 60px rgba(0, 0, 0, 0.5)',
+            overflow: 'hidden'
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '18px 24px',
+              borderBottom: '1px solid var(--border-color)',
+              background: 'var(--card-bg)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Download size={20} color="var(--vimeo-blue)" />
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Export & Download Lecture Package
+                </h3>
+              </div>
+              <button
+                onClick={closeDownloadModal}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  borderRadius: '6px',
+                  display: 'flex'
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Tabs */}
+            <div style={{
+              display: 'flex',
+              borderBottom: '1px solid var(--border-color)',
+              background: 'var(--card-bg)'
+            }}>
+              <button
+                onClick={() => setDownloadModalTab('device')}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  padding: '12px',
+                  background: downloadModalTab === 'device' ? 'var(--panel-bg)' : 'transparent',
+                  border: 'none',
+                  borderBottom: downloadModalTab === 'device' ? '2px solid var(--vimeo-blue)' : '2px solid transparent',
+                  color: downloadModalTab === 'device' ? 'var(--vimeo-blue)' : 'var(--text-secondary)',
+                  fontWeight: 600,
+                  fontSize: '0.9rem',
+                  cursor: 'pointer'
+                }}
+              >
+                <HardDrive size={16} />
+                Option 1: Download to Device
+              </button>
+              <button
+                onClick={() => setDownloadModalTab('cloud')}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  padding: '12px',
+                  background: downloadModalTab === 'cloud' ? 'var(--panel-bg)' : 'transparent',
+                  border: 'none',
+                  borderBottom: downloadModalTab === 'cloud' ? '2px solid var(--vimeo-blue)' : '2px solid transparent',
+                  color: downloadModalTab === 'cloud' ? 'var(--vimeo-blue)' : 'var(--text-secondary)',
+                  fontWeight: 600,
+                  fontSize: '0.9rem',
+                  cursor: 'pointer'
+                }}
+              >
+                <Cloud size={16} />
+                Option 2: Download to Cloud (Google Drive)
+              </button>
+            </div>
+
+            {/* Modal Scrollable Body */}
+            <div style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {streamLoading ? (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary)' }}>
+                  <RefreshCw className="spinner" size={28} style={{ animation: 'spin 1s linear infinite', marginBottom: '12px' }} />
+                  <div>Inspecting video stream manifests and cloud connections...</div>
+                </div>
+              ) : downloadModalTab === 'device' ? (
+                /* ================= OPTION 1: DEVICE ================= */
+                <>
+                  {streamError && (
+                    <div style={{
+                      padding: '12px 16px',
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      borderRadius: '8px',
+                      color: '#f87171',
+                      fontSize: '0.85rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}>
+                      <AlertCircle size={16} />
+                      {streamError}
+                    </div>
+                  )}
+
+                  {/* Document Assets */}
+                  <div>
+                    <h4 style={{ margin: '0 0 10px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <FileText size={16} color="var(--vimeo-blue)" />
+                      Lecture Documents & Subtitles
+                    </h4>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                      <button
+                        onClick={handleDownloadSummary}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '10px 14px',
+                          background: 'var(--card-bg)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer',
+                          fontSize: '0.82rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        <Download size={14} color="var(--vimeo-blue)" />
+                        Summary (summary.md)
+                      </button>
+                      <button
+                        onClick={handleDownloadTranscript}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '10px 14px',
+                          background: 'var(--card-bg)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer',
+                          fontSize: '0.82rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        <Download size={14} color="var(--vimeo-blue)" />
+                        Transcript (transcript.md)
+                      </button>
+                      <button
+                        onClick={handleDownloadVTT}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '10px 14px',
+                          background: 'var(--card-bg)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer',
+                          fontSize: '0.82rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        <Download size={14} color="var(--vimeo-blue)" />
+                        Subtitles (captions.vtt)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Progressive MP4 Downloads if available */}
+                  {streamData?.progressive_mp4s && streamData.progressive_mp4s.length > 0 && (
+                    <div>
+                      <h4 style={{ margin: '0 0 10px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Video size={16} color="var(--vimeo-blue)" />
+                        Direct MP4 Video Downloads
+                      </h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {streamData.progressive_mp4s.map((mp4, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '10px 14px',
+                              background: 'var(--card-bg)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '8px'
+                            }}
+                          >
+                            <div>
+                              <span style={{ fontWeight: 700, color: 'var(--vimeo-blue)', fontSize: '0.88rem' }}>
+                                {mp4.quality || 'Standard'} ({mp4.width}x{mp4.height})
+                              </span>
+                              {mp4.fps && <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginLeft: '8px' }}>{mp4.fps} fps</span>}
+                            </div>
+                            <a
+                              href={mp4.url}
+                              download
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '6px 12px',
+                                background: 'var(--vimeo-blue)',
+                                color: '#ffffff',
+                                borderRadius: '6px',
+                                textDecoration: 'none',
+                                fontSize: '0.8rem',
+                                fontWeight: 600
+                              }}
+                            >
+                              <Download size={13} />
+                              Download MP4
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Adaptive HLS Stream Capture Guide */}
+                  <div>
+                    <h4 style={{ margin: '0 0 8px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Terminal size={16} color="var(--vimeo-blue)" />
+                      Download Video Stream via CLI (yt-dlp / ffmpeg)
+                    </h4>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      Vimeo protects high-definition video using multi-bitrate Adaptive HLS (<code style={{ color: 'var(--vimeo-blue)' }}>.m3u8</code>). Use these 1-click commands to download the full HD video directly onto your machine:
+                    </p>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {/* yt-dlp */}
+                      <div style={{
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '8px',
+                        padding: '10px 14px'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>yt-dlp (Recommended)</span>
+                          <button
+                            onClick={() => handleCopyCmd('ytdlp', `yt-dlp "${streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -o "${(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"`)}
+                            style={{
+                              background: 'transparent',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '4px',
+                              color: copiedCmd === 'ytdlp' ? '#10b981' : 'var(--text-secondary)',
+                              padding: '2px 8px',
+                              fontSize: '0.72rem',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                          >
+                            {copiedCmd === 'ytdlp' ? <Check size={12} /> : <Copy size={12} />}
+                            {copiedCmd === 'ytdlp' ? 'Copied' : 'Copy Command'}
+                          </button>
+                        </div>
+                        <code style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all', display: 'block' }}>
+                          yt-dlp "{streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -o "{(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"
+                        </code>
+                      </div>
+
+                      {/* ffmpeg */}
+                      <div style={{
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '8px',
+                        padding: '10px 14px'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>ffmpeg</span>
+                          <button
+                            onClick={() => handleCopyCmd('ffmpeg', `ffmpeg -i "${streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -c copy "${(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"`)}
+                            style={{
+                              background: 'transparent',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '4px',
+                              color: copiedCmd === 'ffmpeg' ? '#10b981' : 'var(--text-secondary)',
+                              padding: '2px 8px',
+                              fontSize: '0.72rem',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                          >
+                            {copiedCmd === 'ffmpeg' ? <Check size={12} /> : <Copy size={12} />}
+                            {copiedCmd === 'ffmpeg' ? 'Copied' : 'Copy Command'}
+                          </button>
+                        </div>
+                        <code style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all', display: 'block' }}>
+                          ffmpeg -i "{streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -c copy "{(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"
+                        </code>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                /* ================= OPTION 2: CLOUD (GOOGLE DRIVE) ================= */
+                <>
+                  <div style={{
+                    padding: '14px 18px',
+                    background: 'rgba(0, 173, 239, 0.08)',
+                    border: '1px solid rgba(0, 173, 239, 0.25)',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: 'var(--vimeo-blue)', fontSize: '0.9rem' }}>
+                      <Folder size={18} />
+                      Dedicated Cloud Folder: LectureScribe - {activeData?.title} ({activeData?.videoId})
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      Exports the complete lecture bundle into Google Drive:
+                      <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                        <li><code>summary.md</code> — Executive dynamic AI summary & key questions</li>
+                        <li><code>transcript.md</code> — Chronological verbatim lecture transcript</li>
+                        <li><code>captions.vtt</code> — Complete WebVTT subtitle track</li>
+                        <li><code>metadata.json</code> — Video ID, stream URLs, timestamps, & statistics</li>
+                        <li><code>download_guide.txt</code> — Multi-bitrate HLS URLs & terminal download commands</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  {/* Auth Configuration Status */}
+                  <div style={{
+                    padding: '12px 16px',
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Google Drive Integration Status:
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        {gdriveStatus?.configured ? (
+                          <span style={{ color: '#10b981', fontWeight: 600 }}>● Service Account active & verified</span>
+                        ) : (
+                          <span>OAuth2 Bearer Token or service account configuration</span>
+                        )}
+                      </div>
+                    </div>
+                    {gdriveStatus?.configured && (
+                      <span style={{
+                        background: 'rgba(16, 185, 129, 0.15)',
+                        color: '#10b981',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        padding: '4px 10px',
+                        borderRadius: '12px',
+                        fontSize: '0.75rem',
+                        fontWeight: 700
+                      }}>
+                        Ready
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Token Input if not configured */}
+                  {!gdriveStatus?.configured && (
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                        Google OAuth2 Access Token (Optional if service account configured in .env):
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="ya29.a0AfH6SMB..."
+                        value={gdriveAccessToken}
+                        onChange={(e) => setGdriveAccessToken(e.target.value)}
+                        style={{
+                          width: '100%',
+                          background: 'var(--card-bg)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          padding: '10px 14px',
+                          color: 'var(--text-primary)',
+                          fontSize: '0.85rem',
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {/* Active Job Progress View */}
+                  {gdriveJob && (
+                    <div style={{
+                      padding: '16px',
+                      background: 'var(--card-bg)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                          {gdriveJob.status === 'COMPLETED' ? '✅ Upload Complete!' : gdriveJob.status === 'FAILED' ? '❌ Upload Failed' : '⏳ Uploading in Background...'}
+                        </span>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--vimeo-blue)' }}>
+                          {gdriveJob.progress}%
+                        </span>
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div style={{ width: '100%', height: '8px', background: 'var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${gdriveJob.progress}%`,
+                          height: '100%',
+                          background: gdriveJob.status === 'FAILED' ? '#ef4444' : gdriveJob.status === 'COMPLETED' ? '#10b981' : 'var(--vimeo-blue)',
+                          transition: 'width 0.4s ease'
+                        }} />
+                      </div>
+
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                        {gdriveJob.current_step}
+                      </div>
+
+                      {/* Completed Link */}
+                      {gdriveJob.status === 'COMPLETED' && gdriveJob.folder_url && (
+                        <div style={{ marginTop: '6px' }}>
+                          <a
+                            href={gdriveJob.folder_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '8px 16px',
+                              background: '#10b981',
+                              color: '#ffffff',
+                              borderRadius: '8px',
+                              textDecoration: 'none',
+                              fontSize: '0.84rem',
+                              fontWeight: 700
+                            }}
+                          >
+                            <ExternalLink size={15} />
+                            Open Bundle in Google Drive
+                          </a>
+                        </div>
+                      )}
+
+                      {/* Error details */}
+                      {gdriveJob.status === 'FAILED' && (
+                        <div style={{ color: '#f87171', fontSize: '0.8rem', marginTop: '4px' }}>
+                          {gdriveJob.error}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Upload Trigger Button */}
+                  {(!gdriveJob || gdriveJob.status === 'FAILED') && (
+                    <button
+                      onClick={handleStartGdriveUpload}
+                      disabled={gdriveUploading}
+                      style={{
+                        padding: '12px 20px',
+                        background: 'var(--vimeo-blue)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '0.9rem',
+                        fontWeight: 700,
+                        cursor: gdriveUploading ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        opacity: gdriveUploading ? 0.6 : 1
+                      }}
+                    >
+                      {gdriveUploading ? <RefreshCw className="spinner" size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <Cloud size={18} />}
+                      {gdriveUploading ? 'Starting Upload...' : 'Upload Full Bundle to Google Drive'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{
+              padding: '14px 24px',
+              borderTop: '1px solid var(--border-color)',
+              background: 'var(--card-bg)',
+              display: 'flex',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                onClick={closeDownloadModal}
+                style={{
+                  padding: '8px 18px',
+                  background: 'transparent',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '6px',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontSize: '0.84rem'
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
+

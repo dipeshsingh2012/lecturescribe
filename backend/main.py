@@ -13,16 +13,27 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 from contextlib import asynccontextmanager
 
 # Import extraction and service modules
-from backend.vimeo_client import extract_video_id, fetch_player_config, get_text_tracks, fetch_vtt, parse_vtt, format_timestamp
+from backend.vimeo_client import (
+    extract_video_id,
+    fetch_player_config,
+    get_text_tracks,
+    fetch_vtt,
+    parse_vtt,
+    format_timestamp,
+    get_video_download_streams,
+)
 from backend.rag_engine import pinecone_rag_engine
 from backend.algolia_service import algolia_service
 from backend.database import db_manager
+from backend.google_drive_service import google_drive_service
+from backend.summary_generator import generate_summary_sections
+
 
 
 @asynccontextmanager
@@ -100,83 +111,10 @@ class AlgoliaSearchRequest(BaseModel):
     video_id: Optional[str] = None
     limit: Optional[int] = 20
 
-def generate_summary_sections(cues: List[Dict[str, str]], title: str) -> List[Dict[str, Any]]:
-    """Generate structured executive summary sections from transcript cues."""
-    if "Research" in title or "Introduction" in title:
-        return [
-            {
-                "title": "📌 1. Course Structure & Evaluation Framework",
-                "points": [
-                    "Core Objective: Bridge theoretical knowledge with applied research methodology leading up to thesis defense, patents, and peer-reviewed publications.",
-                    "Total Academic Weightage: 34 credits dedicated to research projects across upcoming semesters.",
-                    "Attendance Policy: Mandatory video-on policy during live interactive sessions.",
-                    "Class Note Submission: Post-class portal open for 24 hours; requires a concise 100-word reflection summary.",
-                    "Evaluation Breakdown: Continuous assignment evaluations, class note submissions, mid-term reviews, and final project report defense.",
-                    "Systematic Syllabus Progression: Need for Research ➔ Topic Exploration ➔ Literature Review ➔ Gap Analysis ➔ Experimental Validation ➔ IPR/Patents ➔ Thesis Defense."
-                ]
-            },
-            {
-                "title": "💡 2. Why Research Matters: Historical & Societal Perspective",
-                "points": [
-                    "Human Evolution: Driven from Stone Age survival to Generative AI & 6G connectivity era.",
-                    "Transformative Milestones: Medical breakthroughs (uncurable diseases to targeted therapies), supersonic aviation, global telecommunications, and edge computing.",
-                    "Research Paradigm Shift: Moving from pure profit-driven industrial mindsets to societal impact + IP creation.",
-                    "Monetization & Asset Creation: Academic research creates long-term intellectual assets through patent licensing and royalties.",
-                    "Relevance vs. Extinction: Companies failing to invest in continuous R&D become obsolete (e.g. legacy mobile handset makers).",
-                    "Innovation as DNA: R&D is the core operational culture required for long-term sustainability."
-                ]
-            },
-            {
-                "title": "🎯 3. National Thrust Areas & Sovereign Technology",
-                "points": [
-                    "Key Thrust Domains: Water & Sanitation, Energy Grids, Food & Agriculture, Healthcare & MedTech, EdTech, Sovereign Tech.",
-                    "Sovereign Tech Vision: Developing indigenous semiconductor fabrication (Fab) and microelectronics for Viksit Bharat 2047.",
-                    "Scaling Challenge: Translating lab-scale prototypes into mass-deployable solutions for large populations.",
-                    "Interdisciplinary Intersections: Data Science + Healthcare (Predictive monitoring), AI + Semiconductor Yield Optimization."
-                ]
-            },
-            {
-                "title": "🛡️ 4. Case Study: Crisis Management & Research Axiom",
-                "points": [
-                    "COVID-19 Response: Rapid scientific research converts public panic into structured understanding.",
-                    "Core Axiom: 'Research turns fear into understanding, and understanding into survival.'",
-                    "Vaccine Acceleration: Genomic sequencing and mRNA platform research reduced development timelines from decades to months."
-                ]
-            },
-            {
-                "title": "❓ 5. Student Q&A & Research Exploration Methods",
-                "points": [
-                    "Intelligent Systems: Systems that ingest continuous data (e.g. 2 months CGM glucose data), predict states, and execute automated corrective actions.",
-                    "Kickstart Problem: Overcoming paralysis in choosing research topics via Top-to-Bottom and Bottom-to-Top exploration methodologies."
-                ]
-            },
-            {
-                "title": "🔬 6. Methodology: Top-Down vs. Bottom-Up Exploration",
-                "points": [
-                    "Top-Down Approach: Macro societal challenge ➔ Sub-domain bottleneck ➔ Technical ML intervention.",
-                    "Bottom-Up Approach: Specific ML algorithm (e.g. Graph Neural Nets) ➔ Applied to domain topology (e.g. Drug Discovery)."
-                ]
-            }
-        ]
+class RegenerateSummaryRequest(BaseModel):
+    video_id: str
 
-    total_cues = len(cues)
-    chunk_size = max(1, total_cues // 5)
-    sections = []
-    labels = ["📌 Executive Overview", "💡 Core Concepts & Discussion", "🎯 Key Takeaways & Applications", "❓ Questions & Insights", "🚀 Action Items & Conclusion"]
-    
-    for idx, label in enumerate(labels):
-        start_i = idx * chunk_size
-        end_i = min(total_cues, (idx + 1) * chunk_size)
-        slice_cues = cues[start_i:end_i]
-        points = [c["text"] for c in slice_cues if len(c["text"]) > 25][:5]
-        if not points:
-            points = [f"Key discussion point from segment {start_i} to {end_i}."]
-        sections.append({
-            "title": f"{label}",
-            "points": points
-        })
 
-    return sections
 
 @app.get("/api/health")
 def health_check():
@@ -300,3 +238,179 @@ def chat_with_transcript(req: ChatRequest):
         "reply": reply,
         "citations": citations
     }
+
+
+# ==============================================================================
+# Dynamic AI Summary Regeneration Endpoint
+# ==============================================================================
+
+@app.post("/api/summary/regenerate")
+def regenerate_summary(req: RegenerateSummaryRequest):
+    """Regenerate dynamic AI summary from actual transcript cues and persist to DB."""
+    video_id = req.video_id.strip()
+    saved = db_manager.get_saved_video(video_id)
+    if not saved or not saved.get("cues"):
+        raise HTTPException(status_code=404, detail=f"No cues found in database for video {video_id}.")
+
+    title = saved.get("title", f"Lecture {video_id}")
+    new_summary = generate_summary_sections(saved["cues"], title)
+
+    # Persist updated dynamic summary to SQLite / PostgreSQL
+    db_manager.update_summary_sections(video_id, new_summary)
+
+    return {
+        "status": "success",
+        "video_id": video_id,
+        "title": title,
+        "summarySections": new_summary
+    }
+
+
+# ==============================================================================
+# Video Download & Cloud Export Endpoints
+# ==============================================================================
+
+class CloudUploadRequest(BaseModel):
+    video_id: str
+    url: Optional[str] = None
+    title: Optional[str] = "Lecture"
+    summary_content: Optional[str] = None
+    parent_folder_id: Optional[str] = None
+    access_token: Optional[str] = None
+
+
+@app.get("/api/video/download-options")
+def get_download_options(url: str = Query(..., description="Vimeo URL or Video ID")):
+    """Extract direct progressive MP4 downloads, adaptive HLS streams, and CLI download commands."""
+    try:
+        video_id = extract_video_id(url)
+        config = fetch_player_config(video_id)
+        streams_info = get_video_download_streams(config, video_id)
+        return {
+            "status": "success",
+            **streams_info
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to extract video streams: {str(e)}")
+
+
+@app.get("/api/cloud/gdrive/status")
+def get_google_drive_status():
+    """Diagnostic endpoint checking Google Drive configuration & auth readiness."""
+    return google_drive_service.get_auth_status()
+
+
+@app.post("/api/cloud/gdrive/upload-bundle")
+def upload_lecture_bundle_to_gdrive(
+    req: CloudUploadRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Export full Lecture Bundle to Google Drive:
+    - Dedicated Folder: 'LectureScribe - <Title> (<VideoId>)'
+    - summary.md, transcript.md, captions.vtt, metadata.json, download_guide.txt
+    Runs asynchronously via background task with live progress reporting.
+    """
+    video_id = req.video_id.strip()
+    if req.url and not video_id:
+        try:
+            video_id = extract_video_id(req.url)
+        except Exception:
+            pass
+
+    if not video_id:
+        raise HTTPException(status_code=400, detail="A valid video_id or Vimeo URL is required.")
+
+    # Check configuration
+    if not req.access_token and not google_drive_service.is_configured():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Google Drive credentials not configured. Please set GOOGLE_SERVICE_ACCOUNT_FILE or "
+                "GOOGLE_SERVICE_ACCOUNT_JSON in .env, or supply an access token."
+            )
+        )
+
+    # 1. Fetch or load video cues, VTT, and title
+    saved = db_manager.get_saved_video(video_id)
+    cues: List[Dict[str, str]] = []
+    vtt_content = ""
+    title = req.title or "Lecture"
+    streams_info = None
+
+    try:
+        config = fetch_player_config(video_id)
+        streams_info = get_video_download_streams(config, video_id)
+        if not title or title == "Lecture":
+            title = streams_info.get("title", f"Lecture {video_id}")
+
+        tracks = get_text_tracks(config)
+        if tracks:
+            track = next((t for t in tracks if t.get("default")), tracks[0])
+            vtt_url = track.get("url") or track.get("src")
+            if vtt_url:
+                vtt_content = fetch_vtt(vtt_url)
+                raw_segments = parse_vtt(vtt_content)
+                cues = [
+                    {"start": s["start"], "time": format_timestamp(s["start"]), "text": s["text"]}
+                    for s in raw_segments
+                ]
+    except Exception as e:
+        print(f"⚠️ [Vimeo Config Notice during bundle upload]: {e}")
+
+    # Fallback to saved DB cues if live fetch was skipped or failed
+    if not cues and saved and saved.get("cues"):
+        cues = saved.get("cues", [])
+        if not title or title == "Lecture":
+            title = saved.get("title", f"Lecture {video_id}")
+
+    # Build summary markdown dynamically if not explicitly provided
+    summary_md = req.summary_content
+    if not summary_md:
+        sections = saved.get("summarySections") if saved else None
+        if not sections and cues:
+            sections = generate_summary_sections(cues, title)
+
+        if sections:
+            s_lines = [f"# Executive Summary: {title}", "", "---", ""]
+            for sec in sections:
+                s_lines.append(f"### {sec.get('title', 'Section')}")
+                for pt in sec.get("points", []):
+                    s_lines.append(f"- {pt}")
+                s_lines.append("")
+            summary_md = "\n".join(s_lines)
+
+    # Create background job
+    job_id = google_drive_service.create_job(video_id, title)
+
+    # Schedule background execution
+    background_tasks.add_task(
+        google_drive_service.execute_bundle_upload,
+        job_id=job_id,
+        video_id=video_id,
+        title=title,
+        vtt_content=vtt_content,
+        cues=cues,
+        summary_content=summary_md,
+        streams_info=streams_info,
+        parent_folder_id=req.parent_folder_id,
+        access_token=req.access_token,
+    )
+
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "video_id": video_id,
+        "title": title,
+        "message": "Full lecture bundle upload scheduled to Google Drive in background."
+    }
+
+
+@app.get("/api/cloud/jobs/{job_id}")
+def get_cloud_job_status(job_id: str):
+    """Poll progress status of an active or completed Google Drive upload job."""
+    job = google_drive_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+

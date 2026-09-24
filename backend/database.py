@@ -208,61 +208,9 @@ class RelationalDBManager:
             source_url = f"https://vimeo.com/{sample_video_id}"
             caption_label = "English (auto-generated)"
 
-            summary_sections = [
-                {
-                    "title": "📌 1. Course Structure & Evaluation Framework",
-                    "points": [
-                        "Core Objective: Bridge theoretical knowledge with applied research methodology leading up to thesis defense, patents, and peer-reviewed publications.",
-                        "Total Academic Weightage: 34 credits dedicated to research projects across upcoming semesters.",
-                        "Attendance Policy: Mandatory video-on policy during live interactive sessions.",
-                        "Class Note Submission: Post-class portal open for 24 hours; requires a concise 100-word reflection summary.",
-                        "Evaluation Breakdown: Continuous assignment evaluations, class note submissions, mid-term reviews, and final project report defense.",
-                        "Systematic Syllabus Progression: Need for Research ➔ Topic Exploration ➔ Literature Review ➔ Gap Analysis ➔ Experimental Validation ➔ IPR/Patents ➔ Thesis Defense."
-                    ]
-                },
-                {
-                    "title": "💡 2. Why Research Matters: Historical & Societal Perspective",
-                    "points": [
-                        "Human Evolution: Driven from Stone Age survival to Generative AI & 6G connectivity era.",
-                        "Transformative Milestones: Medical breakthroughs (uncurable diseases to targeted therapies), supersonic aviation, global telecommunications, and edge computing.",
-                        "Research Paradigm Shift: Moving from pure profit-driven industrial mindsets to societal impact + IP creation.",
-                        "Monetization & Asset Creation: Academic research creates long-term intellectual assets through patent licensing and royalties.",
-                        "Relevance vs. Extinction: Companies failing to invest in continuous R&D become obsolete (e.g. legacy mobile handset makers).",
-                        "Innovation as DNA: R&D is the core operational culture required for long-term sustainability."
-                    ]
-                },
-                {
-                    "title": "🎯 3. National Thrust Areas & Sovereign Technology",
-                    "points": [
-                        "Key Thrust Domains: Water & Sanitation, Energy Grids, Food & Agriculture, Healthcare & MedTech, EdTech, Sovereign Tech.",
-                        "Sovereign Tech Vision: Developing indigenous semiconductor fabrication (Fab) and microelectronics for Viksit Bharat 2047.",
-                        "Scaling Challenge: Translating lab-scale prototypes into mass-deployable solutions for large populations.",
-                        "Interdisciplinary Intersections: Data Science + Healthcare (Predictive monitoring), AI + Semiconductor Yield Optimization."
-                    ]
-                },
-                {
-                    "title": "🛡️ 4. Case Study: Crisis Management & Research Axiom",
-                    "points": [
-                        "COVID-19 Response: Rapid scientific research converts public panic into structured understanding.",
-                        "Core Axiom: 'Research turns fear into understanding, and understanding into survival.'",
-                        "Vaccine Acceleration: Genomic sequencing and mRNA platform research reduced development timelines from decades to months."
-                    ]
-                },
-                {
-                    "title": "❓ 5. Student Q&A & Research Exploration Methods",
-                    "points": [
-                        "Intelligent Systems: Systems that ingest continuous data (e.g. 2 months CGM glucose data), predict states, and execute automated corrective actions.",
-                        "Kickstart Problem: Overcoming paralysis in choosing research topics via Top-to-Bottom and Bottom-to-Top exploration methodologies."
-                    ]
-                },
-                {
-                    "title": "🔬 6. Methodology: Top-Down vs. Bottom-Up Exploration",
-                    "points": [
-                        "Top-Down Approach: Macro societal challenge ➔ Sub-domain bottleneck ➔ Technical ML intervention.",
-                        "Bottom-Up Approach: Specific ML algorithm (e.g. Graph Neural Nets) ➔ Applied to domain topology (e.g. Drug Discovery)."
-                    ]
-                }
-            ]
+            from backend.summary_generator import generate_summary_sections
+            summary_sections = generate_summary_sections(cues, title)
+
 
             self.save_video_transcript(
                 video_id=sample_video_id,
@@ -377,7 +325,45 @@ class RelationalDBManager:
             "cached": True
         }
 
+    def update_summary_sections(self, video_id: str, summary_sections: List[Dict[str, Any]]):
+        """Update or replace summary sections in SQLite, PostgreSQL, and memory cache."""
+        # 1. SQLite
+        try:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM lecturescribe_summaries WHERE video_id = ?;", (video_id,))
+                cursor.execute("""
+                    INSERT INTO lecturescribe_summaries (video_id, sections_json)
+                    VALUES (?, ?);
+                """, (video_id, json.dumps(summary_sections)))
+                conn.commit()
+                print(f"[SQLite DB] Updated dynamic summary for video '{video_id}'.")
+        except Exception as e:
+            print(f"[SQLite DB Error] Failed updating summary: {e}")
+
+        # 2. PostgreSQL
+        if self.use_postgres:
+            try:
+                conn = self._get_postgres_connection()
+                if conn:
+                    with conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("DELETE FROM lecturescribe_summaries WHERE video_id = %s;", (video_id,))
+                            cursor.execute("""
+                                INSERT INTO lecturescribe_summaries (video_id, sections_json)
+                                VALUES (%s, %s::jsonb);
+                            """, (video_id, json.dumps(summary_sections)))
+                            conn.commit()
+                    conn.close()
+            except Exception as e:
+                print(f"[Cloud PostgreSQL Notice] Could not update summary in Postgres: {e}")
+
+        # 3. Memory cache
+        if video_id in self._memory_cache:
+            self._memory_cache[video_id]["summarySections"] = summary_sections
+
     def get_saved_video(self, video_id: str) -> Optional[Dict[str, Any]]:
+
         """Fetch video transcript from In-Memory Cache, SQLite, or PostgreSQL.
         Returns None only if never processed before."""
         # 1. Check L1 In-Memory Cache

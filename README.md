@@ -7,7 +7,7 @@
 
 ## ✨ Features
 
-- ⚡ **Zero-Dependency CLI Extractor**: Extract timestamped transcripts directly from Vimeo API endpoints using Python standard libraries (`urllib`, `re`, `json`, `pathlib`).
+- ⚡ **Direct Vimeo Ingestion**: Ingests timestamped captions and video metadata directly from Vimeo API endpoints without headless browser rendering.
 - 🔄 **Smart Caching & Deduplication**: Videos transcribed and summarized once are persisted to the database. Pasting the same Vimeo URL reuses existing transcripts and executive summaries with **0ms re-generation**.
 - 🔍 **Algolia Instant Search**: Sub-10ms keyword search with full typo-tolerance across thousands of transcript cues. Clicking any cue jumps the Vimeo player directly to that timestamp.
 - 🤖 **Pinecone Vector RAG Tutor**: Semantic RAG chatbot powered by dense embeddings and Llama-3.2, providing grounded answers with clickable timestamp citations.
@@ -101,26 +101,6 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## 💻 CLI Usage
-
-You can also use the standalone CLI extractor without running the web UI:
-
-```bash
-# Basic extraction (auto-names markdown based on video title)
-python3 lecturescribe.py https://vimeo.com/1229247139
-
-# Custom output file
-python3 lecturescribe.py https://vimeo.com/1229247139 --output lecture1.md
-
-# Using raw Vimeo Video ID
-python3 lecturescribe.py 1229247139
-
-# Force re-generation (bypass local database cache)
-python3 lecturescribe.py 1229247139 --force
-```
-
----
-
 ## 📂 Project Structure
 
 ```
@@ -129,7 +109,8 @@ lecturescribe/
 │   ├── main.py              # FastAPI endpoints (/api/transcript, /api/search, /api/rag/query)
 │   ├── database.py          # Unified SQLite & PostgreSQL database manager + L1 cache
 │   ├── algolia_service.py   # Algolia instant search indexing & query service
-│   └── rag_engine.py        # Pinecone vector retrieval & Llama-3.2 inference engine
+│   ├── rag_engine.py        # Pinecone vector retrieval & Llama-3.2 inference engine
+│   └── vimeo_client.py      # Vimeo player config & caption extraction client
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx          # React app (Player, Algolia Search, Summary, RAG Chatbot)
@@ -137,9 +118,6 @@ lecturescribe/
 │   │   └── index.css        # Dark theme styling & Vimeo branding
 │   ├── package.json         # Node dependencies (@vimeo/player, lucide-react, etc.)
 │   └── vite.config.js       # Vite configuration with /api proxy to backend
-├── lecturescribe.py         # Standalone CLI transcript extractor
-├── sample_transcript.md     # Pre-parsed sample lecture transcript
-├── summary.md               # Pre-generated executive summary
 ├── .env.example             # Environment variables template
 ├── .gitignore               # Ignored dependencies, caches, and secrets
 ├── requirements.txt         # Python dependencies
@@ -148,23 +126,7 @@ lecturescribe/
 
 ---
 
-## 📝 Sample Transcript Output
-
-```markdown
-# Introduction to Research Live session -1 (22 / 9 / 2026)
-
-**Source:** https://vimeo.com/1229247139
-**Captions:** English (auto-generated)
-**Segments:** 1351
-
----
-
-**[06:29]** Good evening, all.
-
-**[06:34]** Good evening, sir.
-
-**[06:38]** Yeah. Hope I can- Good evening, sir. You can hear me?
-```
+## 📄 License
 
 ---
 

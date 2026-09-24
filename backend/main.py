@@ -19,8 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 # Import extraction and service modules
-sys.path.append(str(Path(__file__).parent.parent))
-from lecturescribe import extract_video_id, fetch_player_config, get_text_tracks, fetch_vtt, parse_vtt, format_timestamp
+from backend.vimeo_client import extract_video_id, fetch_player_config, get_text_tracks, fetch_vtt, parse_vtt, format_timestamp
 from backend.rag_engine import pinecone_rag_engine
 from backend.algolia_service import algolia_service
 from backend.database import db_manager

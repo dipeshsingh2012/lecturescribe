@@ -1,13 +1,18 @@
 :root {
-  --vimeo-blue: #00adef;
-  --vimeo-hover: #29bbf5;
-  --bg-dark: #0f1015;
-  --panel-bg: #181920;
-  --card-bg: #21232d;
-  --border-color: #2e313e;
-  --text-primary: #ffffff;
-  --text-secondary: #9aa0a6;
-  --highlight-bg: rgba(0, 173, 239, 0.15);
+  --header-bg: #022758;
+  --header-text: #ffffff;
+  --vimeo-blue: #0075ED;
+  --vimeo-hover: #005ec0;
+  --bg-dark: #f4f6f9;
+  --panel-bg: #ffffff;
+  --card-bg: #ffffff;
+  --border-color: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --highlight-bg: rgba(0, 117, 237, 0.12);
+  --badge-bg: rgba(0, 117, 237, 0.1);
+  --badge-color: #0062c4;
+  --badge-border: rgba(0, 117, 237, 0.25);
   --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
@@ -23,6 +28,7 @@ body {
   font-family: var(--font-family);
   line-height: 1.5;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Animations */
@@ -47,6 +53,7 @@ body {
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: var(--bg-dark);
@@ -58,4 +65,3 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
-

@@ -28,159 +28,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
 import InputBase from '@mui/material/InputBase';
-
-export const LMS_THEMES = {
-  iiitdwd: {
-    id: 'iiitdwd',
-    name: 'IIIT Dharwad BAZ',
-    icon: '🏛️',
-    badge: 'Default • Official IIITD Portal',
-    palette: {
-      primary: '#0075ED',
-      primaryHover: '#005ec0',
-      primaryNavy: '#022758',
-      secondary: '#027654',
-      accentCta: '#0642CD',
-      background: '#070c18',
-      panelBg: '#0e172a',
-      cardBg: '#131e36',
-      cardBorder: 'rgba(0, 117, 237, 0.28)',
-      cardShadow: '0 1px 3px rgba(2, 39, 88, 0.08), 0 8px 24px rgba(2, 39, 88, 0.06)',
-      cardHoverShadow: '0 8px 28px rgba(2, 39, 88, 0.55), 0 16px 36px rgba(0, 117, 237, 0.25)',
-      headerGradient: 'linear-gradient(120deg, #022758 0%, #011b3e 55%, #0642CD 130%)',
-      textPrimary: '#f8fafc',
-      textSecondary: '#94a3b8',
-      badgeBg: 'rgba(2, 39, 88, 0.85)',
-      badgeBorder: 'rgba(0, 117, 237, 0.4)',
-      badgeColor: '#99CBFF'
-    }
-  },
-  canvas: {
-    id: 'canvas',
-    name: 'Canvas LMS',
-    icon: '🎓',
-    badge: 'Instructure • Higher-Ed',
-    palette: {
-      primary: '#E02424',
-      primaryHover: '#b91c1c',
-      primaryNavy: '#821313',
-      secondary: '#008EE2',
-      accentCta: '#E02424',
-      background: '#0b0f14',
-      panelBg: '#161c24',
-      cardBg: '#1e2530',
-      cardBorder: 'rgba(224, 36, 36, 0.28)',
-      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
-      cardHoverShadow: '0 8px 30px rgba(224, 36, 36, 0.35)',
-      headerGradient: 'linear-gradient(120deg, #821313 0%, #4c0b0b 55%, #1F2937 130%)',
-      textPrimary: '#f9fafb',
-      textSecondary: '#9ca3af',
-      badgeBg: 'rgba(224, 36, 36, 0.18)',
-      badgeBorder: 'rgba(224, 36, 36, 0.4)',
-      badgeColor: '#fca5a5'
-    }
-  },
-  moodle_boost: {
-    id: 'moodle_boost',
-    name: 'Moodle Classic',
-    icon: '🧡',
-    badge: 'Open-Source • Boost',
-    palette: {
-      primary: '#F98012',
-      primaryHover: '#ea6d00',
-      primaryNavy: '#0F6CBF',
-      secondary: '#10b981',
-      accentCta: '#F98012',
-      background: '#0b1016',
-      panelBg: '#121922',
-      cardBg: '#172230',
-      cardBorder: 'rgba(249, 128, 18, 0.28)',
-      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
-      cardHoverShadow: '0 8px 30px rgba(249, 128, 18, 0.3)',
-      headerGradient: 'linear-gradient(120deg, #0F6CBF 0%, #083c6c 55%, #F98012 135%)',
-      textPrimary: '#f8fafc',
-      textSecondary: '#94a3b8',
-      badgeBg: 'rgba(249, 128, 18, 0.18)',
-      badgeBorder: 'rgba(249, 128, 18, 0.4)',
-      badgeColor: '#fdba74'
-    }
-  },
-  blackboard: {
-    id: 'blackboard',
-    name: 'Blackboard Ultra',
-    icon: '⚡',
-    badge: 'Blackboard • Enterprise',
-    palette: {
-      primary: '#EAB308',
-      primaryHover: '#ca8a04',
-      primaryNavy: '#27272A',
-      secondary: '#06B6D4',
-      accentCta: '#CA8A04',
-      background: '#09090b',
-      panelBg: '#141416',
-      cardBg: '#1f1f23',
-      cardBorder: 'rgba(234, 179, 8, 0.28)',
-      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.5)',
-      cardHoverShadow: '0 8px 30px rgba(234, 179, 8, 0.3)',
-      headerGradient: 'linear-gradient(120deg, #27272A 0%, #18181B 60%, #854D0E 130%)',
-      textPrimary: '#fafafa',
-      textSecondary: '#a1a1aa',
-      badgeBg: 'rgba(234, 179, 8, 0.15)',
-      badgeBorder: 'rgba(234, 179, 8, 0.4)',
-      badgeColor: '#fef08a'
-    }
-  },
-  coursera: {
-    id: 'coursera',
-    name: 'Coursera / edX',
-    icon: '🌐',
-    badge: 'MOOC • Modern Learning',
-    palette: {
-      primary: '#0056D2',
-      primaryHover: '#0042a3',
-      primaryNavy: '#002f6c',
-      secondary: '#00875A',
-      accentCta: '#0056D2',
-      background: '#070d17',
-      panelBg: '#0e1624',
-      cardBg: '#141d2d',
-      cardBorder: 'rgba(0, 86, 210, 0.28)',
-      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
-      cardHoverShadow: '0 8px 30px rgba(0, 86, 210, 0.35)',
-      headerGradient: 'linear-gradient(120deg, #002f6c 0%, #001f48 55%, #0056D2 130%)',
-      textPrimary: '#f8fafc',
-      textSecondary: '#94a3b8',
-      badgeBg: 'rgba(0, 86, 210, 0.18)',
-      badgeBorder: 'rgba(0, 86, 210, 0.4)',
-      badgeColor: '#93c5fd'
-    }
-  },
-  vimeo_dark: {
-    id: 'vimeo_dark',
-    name: 'Vimeo Studio AI',
-    icon: '🌌',
-    badge: 'LectureScribe • Midnight',
-    palette: {
-      primary: '#00adef',
-      primaryHover: '#0095ce',
-      primaryNavy: '#005b82',
-      secondary: '#8b5cf6',
-      accentCta: '#00adef',
-      background: '#0b1120',
-      panelBg: '#181920',
-      cardBg: '#1e293b',
-      cardBorder: 'rgba(0, 173, 239, 0.25)',
-      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
-      cardHoverShadow: '0 8px 30px rgba(0, 173, 239, 0.35)',
-      headerGradient: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%)',
-      textPrimary: '#f8fafc',
-      textSecondary: '#94a3b8',
-      badgeBg: 'rgba(0, 173, 239, 0.15)',
-      badgeBorder: 'rgba(0, 173, 239, 0.35)',
-      badgeColor: '#00adef'
-    }
-  }
-};
+import { useThemeStore, LMS_THEMES, applyThemeCssVariables } from './store/themeStore';
 
 const formatRelativeTime = (dateStr) => {
   if (!dateStr) return 'Recently';
@@ -318,36 +166,19 @@ export default function App() {
   const [librarySearch, setLibrarySearch] = useState('');
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
 
-  // LMS Theme State (Default: IIIT Dharwad BAZ Theme)
-  const [currentThemeId, setCurrentThemeId] = useState(() => {
-    try {
-      return localStorage.getItem('lecturescribe_theme') || 'iiitdwd';
-    } catch {
-      return 'iiitdwd';
-    }
-  });
+  // LMS Theme State via Zustand (Default: IIIT Dharwad BAZ Theme)
+  const { currentThemeId, setTheme } = useThemeStore();
   const [themeMenuAnchor, setThemeMenuAnchor] = useState(null);
 
   const currentTheme = LMS_THEMES[currentThemeId] || LMS_THEMES.iiitdwd;
 
   useEffect(() => {
-    try {
-      localStorage.setItem('lecturescribe_theme', currentThemeId);
-    } catch {}
-    const p = currentTheme.palette;
-    document.documentElement.style.setProperty('--vimeo-blue', p.primary);
-    document.documentElement.style.setProperty('--vimeo-hover', p.primaryHover || p.primary);
-    document.documentElement.style.setProperty('--bg-dark', p.background);
-    document.documentElement.style.setProperty('--panel-bg', p.panelBg);
-    document.documentElement.style.setProperty('--card-bg', p.cardBg);
-    document.documentElement.style.setProperty('--border-color', p.cardBorder);
-    document.documentElement.style.setProperty('--text-primary', p.textPrimary);
-    document.documentElement.style.setProperty('--text-secondary', p.textSecondary);
+    applyThemeCssVariables(currentTheme);
   }, [currentThemeId, currentTheme]);
 
   const muiTheme = useMemo(() => createTheme({
     palette: {
-      mode: 'dark',
+      mode: currentTheme.mode || 'light',
       primary: { main: currentTheme.palette.primary },
       secondary: { main: currentTheme.palette.secondary },
       background: {
@@ -358,6 +189,7 @@ export default function App() {
         primary: currentTheme.palette.textPrimary,
         secondary: currentTheme.palette.textSecondary,
       },
+      divider: currentTheme.palette.cardBorder,
     },
     typography: {
       fontFamily: '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -1125,26 +957,40 @@ export default function App() {
         
         {/* Header */}
         <header style={{
-          backgroundColor: 'var(--panel-bg)',
-          borderBottom: '1px solid var(--border-color)',
+          background: currentTheme.palette.headerGradient || currentTheme.palette.headerBg,
+          color: currentTheme.palette.headerText || '#ffffff',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.15)',
           padding: '0 24px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          height: '60px'
+          height: '62px',
+          boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontWeight: 700, fontSize: '1.1rem' }}>
-            <span style={{ color: 'var(--vimeo-blue)', fontWeight: 900, fontSize: '1.3rem', letterSpacing: '-0.5px', cursor: 'pointer' }} onClick={handleBackToHub}>vimeo</span>
-            <span style={{ cursor: 'pointer' }} onClick={handleBackToHub}>Transcript Triad Engine</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.1rem' }}>
+            <span style={{ fontSize: '1.4rem', cursor: 'pointer' }} onClick={handleBackToHub}>{currentTheme.icon}</span>
+            <span
+              style={{ color: '#ffffff', fontWeight: 800, fontSize: '1.15rem', letterSpacing: '-0.3px', cursor: 'pointer' }}
+              onClick={handleBackToHub}
+            >
+              {currentTheme.shortName || 'IIIT Dharwad'}
+            </span>
+            <span style={{ color: 'rgba(255, 255, 255, 0.45)', fontWeight: 300, fontSize: '0.9rem' }}>|</span>
+            <span
+              style={{ cursor: 'pointer', color: 'rgba(255, 255, 255, 0.95)', fontWeight: 600, fontSize: '0.92rem' }}
+              onClick={handleBackToHub}
+            >
+              LectureScribe
+            </span>
             <span style={{
-              background: 'rgba(0, 173, 239, 0.2)',
-              color: 'var(--vimeo-blue)',
-              fontSize: '0.75rem',
+              background: 'rgba(255, 255, 255, 0.16)',
+              color: '#ffffff',
+              fontSize: '0.7rem',
               padding: '2px 8px',
               borderRadius: '12px',
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px'
-            }}>PG + Algolia + Pinecone</span>
+              fontWeight: 700,
+              letterSpacing: '0.3px'
+            }}>LMS Study Hub</span>
           </div>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -1153,22 +999,22 @@ export default function App() {
                 <div style={{
                   display: 'flex',
                   gap: '4px',
-                  background: 'var(--bg-dark)',
+                  background: 'rgba(0, 0, 0, 0.2)',
                   padding: '4px',
                   borderRadius: '8px',
-                  border: '1px solid var(--border-color)'
+                  border: '1px solid rgba(255, 255, 255, 0.15)'
                 }}>
                   <button
                     onClick={() => setActiveTab('transcript')}
                     style={{
-                      background: activeTab === 'transcript' ? 'var(--vimeo-blue)' : 'transparent',
-                      color: activeTab === 'transcript' ? '#ffffff' : 'var(--text-secondary)',
+                      background: activeTab === 'transcript' ? '#ffffff' : 'transparent',
+                      color: activeTab === 'transcript' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                       border: 'none',
                       padding: '6px 14px',
                       borderRadius: '6px',
                       cursor: 'pointer',
                       fontSize: '0.85rem',
-                      fontWeight: 600,
+                      fontWeight: 700,
                       transition: 'all 0.2s ease'
                     }}
                   >
@@ -1177,14 +1023,14 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('summary')}
                     style={{
-                      background: activeTab === 'summary' ? 'var(--vimeo-blue)' : 'transparent',
-                      color: activeTab === 'summary' ? '#ffffff' : 'var(--text-secondary)',
+                      background: activeTab === 'summary' ? '#ffffff' : 'transparent',
+                      color: activeTab === 'summary' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                       border: 'none',
                       padding: '6px 14px',
                       borderRadius: '6px',
                       cursor: 'pointer',
                       fontSize: '0.85rem',
-                      fontWeight: 600,
+                      fontWeight: 700,
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
@@ -1196,14 +1042,14 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('chat')}
                     style={{
-                      background: activeTab === 'chat' ? 'var(--vimeo-blue)' : 'transparent',
-                      color: activeTab === 'chat' ? '#ffffff' : 'var(--text-secondary)',
+                      background: activeTab === 'chat' ? '#ffffff' : 'transparent',
+                      color: activeTab === 'chat' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                       border: 'none',
                       padding: '6px 14px',
                       borderRadius: '6px',
                       cursor: 'pointer',
                       fontSize: '0.85rem',
-                      fontWeight: 600,
+                      fontWeight: 700,
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
@@ -1220,9 +1066,9 @@ export default function App() {
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    background: 'linear-gradient(135deg, rgba(0, 173, 239, 0.15), rgba(16, 185, 129, 0.15))',
-                    color: 'var(--vimeo-blue)',
-                    border: '1px solid rgba(0, 173, 239, 0.35)',
+                    background: 'rgba(255, 255, 255, 0.16)',
+                    color: '#ffffff',
+                    border: '1px solid rgba(255, 255, 255, 0.3)',
                     padding: '6px 14px',
                     borderRadius: '6px',
                     cursor: 'pointer',
@@ -1241,14 +1087,14 @@ export default function App() {
                   onClick={handleBackToHub}
                   sx={{
                     textTransform: 'none',
-                    borderColor: 'rgba(255, 255, 255, 0.2)',
-                    color: 'var(--text-secondary)',
+                    borderColor: 'rgba(255, 255, 255, 0.35)',
+                    color: '#ffffff',
                     fontWeight: 600,
                     fontSize: '0.84rem',
                     borderRadius: 1.5,
                     px: 1.5,
                     py: 0.6,
-                    '&:hover': { borderColor: 'var(--vimeo-blue)', color: 'var(--text-primary)' }
+                    '&:hover': { borderColor: '#ffffff', bgcolor: 'rgba(255, 255, 255, 0.1)' }
                   }}
                 >
                   {googleUser ? 'My Library' : 'New Video'}
@@ -1260,13 +1106,13 @@ export default function App() {
             <Button
               variant="outlined"
               size="small"
-              startIcon={<Palette size={15} color={currentTheme.palette.primary} />}
+              startIcon={<Palette size={15} color="#ffffff" />}
               onClick={(e) => setThemeMenuAnchor(e.currentTarget)}
               sx={{
                 textTransform: 'none',
-                borderColor: currentTheme.palette.cardBorder,
-                bgcolor: 'rgba(255, 255, 255, 0.05)',
-                color: currentTheme.palette.textPrimary,
+                borderColor: 'rgba(255, 255, 255, 0.3)',
+                bgcolor: 'rgba(255, 255, 255, 0.14)',
+                color: '#ffffff',
                 fontWeight: 600,
                 fontSize: '0.82rem',
                 borderRadius: 2,
@@ -1276,13 +1122,13 @@ export default function App() {
                 alignItems: 'center',
                 gap: 0.6,
                 '&:hover': {
-                  borderColor: currentTheme.palette.primary,
-                  bgcolor: 'rgba(255, 255, 255, 0.1)'
+                  borderColor: '#ffffff',
+                  bgcolor: 'rgba(255, 255, 255, 0.22)'
                 }
               }}
             >
               <span>{currentTheme.icon}</span>
-              <Typography variant="caption" sx={{ fontWeight: 700, display: { xs: 'none', sm: 'inline' } }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: '#ffffff', display: { xs: 'none', sm: 'inline' } }}>
                 {currentTheme.name}
               </Typography>
             </Button>
@@ -1293,21 +1139,21 @@ export default function App() {
               onClose={() => setThemeMenuAnchor(null)}
               PaperProps={{
                 sx: {
-                  bgcolor: currentTheme.palette.panelBg,
-                  border: `1px solid ${currentTheme.palette.cardBorder}`,
+                  bgcolor: '#ffffff',
+                  border: '1px solid #e2e8f0',
                   borderRadius: 3,
-                  boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
-                  minWidth: 270,
+                  boxShadow: '0 12px 36px rgba(0,0,0,0.14)',
+                  minWidth: 280,
                   p: 0.5
                 }
               }}
             >
-              <Box sx={{ px: 2, py: 1.2, borderBottom: '1px solid rgba(255, 255, 255, 0.08)', mb: 0.5 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box sx={{ px: 2, py: 1.2, borderBottom: '1px solid #f1f5f9', mb: 0.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Palette size={16} color={currentTheme.palette.primary} /> LMS Theme Selector
                 </Typography>
-                <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
-                  Standard LMS palettes & campus themes
+                <Typography variant="caption" sx={{ color: '#64748b' }}>
+                  Authentic campus & higher-ed LMS palettes
                 </Typography>
               </Box>
 
@@ -1317,7 +1163,7 @@ export default function App() {
                   <MenuItem
                     key={thm.id}
                     onClick={() => {
-                      setCurrentThemeId(thm.id);
+                      setTheme(thm.id);
                       setThemeMenuAnchor(null);
                     }}
                     selected={isSelected}
@@ -1328,17 +1174,17 @@ export default function App() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      bgcolor: isSelected ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
-                      '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.12)' }
+                      bgcolor: isSelected ? 'rgba(0, 117, 237, 0.08)' : 'transparent',
+                      '&:hover': { bgcolor: '#f8fafc' }
                     }}
                   >
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                      <span style={{ fontSize: '1.2rem' }}>{thm.icon}</span>
+                      <span style={{ fontSize: '1.25rem' }}>{thm.icon}</span>
                       <Box>
-                        <Typography variant="body2" sx={{ fontWeight: isSelected ? 800 : 600, color: '#f8fafc' }}>
+                        <Typography variant="body2" sx={{ fontWeight: isSelected ? 800 : 600, color: '#0f172a' }}>
                           {thm.name}
                         </Typography>
-                        <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', fontSize: '0.72rem' }}>
+                        <Typography variant="caption" sx={{ color: '#64748b', display: 'block', fontSize: '0.72rem' }}>
                           {thm.badge}
                         </Typography>
                       </Box>
@@ -1349,8 +1195,8 @@ export default function App() {
                           width: 14,
                           height: 14,
                           borderRadius: '50%',
-                          bgcolor: thm.palette.primary,
-                          border: '2px solid rgba(255, 255, 255, 0.4)'
+                          bgcolor: thm.palette.headerBg || thm.palette.primary,
+                          border: '2px solid rgba(0, 0, 0, 0.1)'
                         }}
                       />
                       {isSelected && <Check size={16} color={thm.palette.primary} />}
@@ -1385,12 +1231,12 @@ export default function App() {
                 <Tooltip title={`${googleUser.name || 'Google User'} (${googleUser.email})`}>
                   <IconButton
                     onClick={(e) => setUserMenuAnchor(e.currentTarget)}
-                    sx={{ p: 0.5, border: '2px solid rgba(0, 173, 239, 0.5)', '&:hover': { borderColor: '#00adef' } }}
+                    sx={{ p: 0.5, border: '2px solid rgba(255, 255, 255, 0.6)', '&:hover': { borderColor: '#ffffff' } }}
                   >
                     <Avatar
                       alt={googleUser.name || googleUser.email}
                       src={googleUser.picture}
-                      sx={{ width: 34, height: 34, bgcolor: '#00adef', fontSize: '0.85rem', fontWeight: 700 }}
+                      sx={{ width: 34, height: 34, bgcolor: currentTheme.palette.primary, fontSize: '0.85rem', fontWeight: 700 }}
                     >
                       {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
                     </Avatar>
@@ -1403,10 +1249,10 @@ export default function App() {
                   onClose={() => setUserMenuAnchor(null)}
                   PaperProps={{
                     sx: {
-                      bgcolor: '#1e293b',
-                      color: '#f8fafc',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      boxShadow: '0 12px 30px rgba(0,0,0,0.6)',
+                      bgcolor: currentTheme.palette.cardBg,
+                      color: currentTheme.palette.textPrimary,
+                      border: `1px solid ${currentTheme.palette.cardBorder}`,
+                      boxShadow: currentTheme.palette.cardShadow,
                       minWidth: 240,
                       borderRadius: 2,
                       mt: 1.5,
@@ -1433,7 +1279,7 @@ export default function App() {
                     sx={{ borderRadius: 1, py: 1 }}
                   >
                     <ListItemIcon>
-                      <Folder size={18} color="#00adef" />
+                      <Folder size={18} color={currentTheme.palette.primary} />
                     </ListItemIcon>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       My Lecture Library ({userLibrary.length})
@@ -1454,16 +1300,16 @@ export default function App() {
                       Google Drive Sync Active
                     </Typography>
                   </MenuItem>
-                  <Divider sx={{ my: 1, borderColor: 'rgba(255, 255, 255, 0.1)' }} />
+                  <Divider sx={{ my: 1, borderColor: currentTheme.palette.cardBorder }} />
                   <MenuItem
                     onClick={() => {
                       setUserMenuAnchor(null);
                       handleGoogleSignOut();
                     }}
-                    sx={{ borderRadius: 1, py: 1, color: '#f87171' }}
+                    sx={{ borderRadius: 1, py: 1, color: '#dc2626' }}
                   >
                     <ListItemIcon>
-                      <LogOut size={18} color="#f87171" />
+                      <LogOut size={18} color="#dc2626" />
                     </ListItemIcon>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       Sign Out
@@ -1478,20 +1324,20 @@ export default function App() {
         {/* Main Content Area */}
         {loading && !activeData ? (
           <Box sx={{ maxWidth: '800px', mx: 'auto', p: { xs: 4, md: 8 }, textAlign: 'center' }}>
-            <Paper sx={{ p: 5, borderRadius: 4, bgcolor: '#1e293b', border: '1px solid rgba(255, 255, 255, 0.1)', boxShadow: '0 12px 32px rgba(0,0,0,0.4)' }}>
-              <RefreshCw size={44} color="#00adef" style={{ animation: 'spin 2s linear infinite', display: 'inline-block' }} />
-              <Typography variant="h5" sx={{ mt: 3, fontWeight: 700, color: '#f8fafc' }}>
+            <Paper sx={{ p: 5, borderRadius: 4, bgcolor: currentTheme.palette.cardBg, border: `1px solid ${currentTheme.palette.cardBorder}`, boxShadow: currentTheme.palette.cardShadow }}>
+              <RefreshCw size={44} color={currentTheme.palette.primary} style={{ animation: 'spin 2s linear infinite', display: 'inline-block' }} />
+              <Typography variant="h5" sx={{ mt: 3, fontWeight: 700, color: currentTheme.palette.textPrimary }}>
                 Loading Lecture {getLectureIdFromPath(currentPath) ? `#${getLectureIdFromPath(currentPath)}` : ''}...
               </Typography>
-              <Typography variant="body2" sx={{ mt: 1, color: '#94a3b8' }}>
+              <Typography variant="body2" sx={{ mt: 1, color: currentTheme.palette.textSecondary }}>
                 Fetching video config, transcript cues, Algolia search indexes, and Pinecone RAG vectors...
               </Typography>
             </Paper>
           </Box>
         ) : error && !activeData && getLectureIdFromPath(currentPath) ? (
           <Box sx={{ maxWidth: '800px', mx: 'auto', p: { xs: 4, md: 8 }, textAlign: 'center' }}>
-            <Paper sx={{ p: 5, borderRadius: 4, bgcolor: '#1e293b', border: '1px solid rgba(239, 68, 68, 0.4)', boxShadow: '0 12px 32px rgba(0,0,0,0.4)' }}>
-              <AlertCircle size={44} color="#f87171" style={{ display: 'inline-block' }} />
+            <Paper sx={{ p: 5, borderRadius: 4, bgcolor: currentTheme.palette.cardBg, border: '1px solid rgba(239, 68, 68, 0.4)', boxShadow: currentTheme.palette.cardShadow }}>
+              <AlertCircle size={44} color="#dc2626" style={{ display: 'inline-block' }} />
               <Typography variant="h5" sx={{ mt: 2, fontWeight: 700, color: '#f8fafc' }}>
                 Could Not Load Lecture
               </Typography>
@@ -1502,7 +1348,7 @@ export default function App() {
                 variant="contained"
                 onClick={handleBackToHub}
                 startIcon={<ArrowLeft size={16} />}
-                sx={{ bgcolor: '#00adef', color: '#ffffff', textTransform: 'none', fontWeight: 700, '&:hover': { bgcolor: '#0095ce' } }}
+                sx={{ bgcolor: currentTheme.palette.primary, color: '#ffffff', textTransform: 'none', fontWeight: 700, '&:hover': { bgcolor: currentTheme.palette.primaryHover } }}
               >
                 Back to {googleUser ? 'My Library' : 'Home'}
               </Button>
@@ -1526,7 +1372,7 @@ export default function App() {
                   alignItems: { xs: 'flex-start', md: 'center' },
                   justifyContent: 'space-between',
                   gap: 2,
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.25)'
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.15)'
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -1541,7 +1387,7 @@ export default function App() {
                     <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
                       Welcome back, {googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')}! 🎓
                     </Typography>
-                    <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.78)', mt: 0.5 }}>
+                    <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', mt: 0.5 }}>
                       {currentTheme.name} • Verified Study History & Cloud Backups
                     </Typography>
                   </Box>
@@ -1554,13 +1400,13 @@ export default function App() {
                       px: 2.5,
                       py: 1.2,
                       borderRadius: 2.5,
-                      bgcolor: 'rgba(255, 255, 255, 0.12)',
+                      bgcolor: 'rgba(255, 255, 255, 0.15)',
                       backdropFilter: 'blur(8px)',
-                      border: '1px solid rgba(255, 255, 255, 0.18)',
+                      border: '1px solid rgba(255, 255, 255, 0.22)',
                       textAlign: 'center'
                     }}
                   >
-                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.8)', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
+                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
                     <Typography variant="h6" sx={{ color: '#ffffff', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
                   </Paper>
                   <Paper
@@ -1569,14 +1415,14 @@ export default function App() {
                       px: 2.5,
                       py: 1.2,
                       borderRadius: 2.5,
-                      bgcolor: 'rgba(255, 255, 255, 0.12)',
+                      bgcolor: 'rgba(255, 255, 255, 0.15)',
                       backdropFilter: 'blur(8px)',
-                      border: '1px solid rgba(255, 255, 255, 0.18)',
+                      border: '1px solid rgba(255, 255, 255, 0.22)',
                       textAlign: 'center'
                     }}
                   >
-                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.8)', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
-                    <Typography variant="h6" sx={{ color: '#34d399', fontWeight: 800, lineHeight: 1 }}>
+                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
+                    <Typography variant="h6" sx={{ color: '#a7f3d0', fontWeight: 800, lineHeight: 1 }}>
                       {userLibrary.filter(x => x.drive_folder_url).length}
                     </Typography>
                   </Paper>
@@ -1585,26 +1431,26 @@ export default function App() {
 
               {/* Quick-Add Lecture Bar */}
               <Paper
-                elevation={2}
+                elevation={0}
                 sx={{
                   p: '6px 12px',
                   mb: 3,
                   borderRadius: 3,
                   display: 'flex',
                   alignItems: 'center',
-                  bgcolor: '#1e293b',
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.35)'
+                  bgcolor: currentTheme.palette.cardBg,
+                  border: `1px solid ${currentTheme.palette.cardBorder}`,
+                  boxShadow: currentTheme.palette.cardShadow
                 }}
               >
-                <Video size={22} color="#94a3b8" style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
+                <Video size={22} color={currentTheme.palette.textSecondary} style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
                 <InputBase
                   placeholder="Paste any Vimeo video URL or ID to study & save (e.g. https://vimeo.com/1229247139)..."
                   value={urlInput}
                   onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
                   onPaste={handlePasteUrl}
                   onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
-                  sx={{ flex: 1, color: '#f8fafc', fontSize: '0.95rem' }}
+                  sx={{ flex: 1, color: currentTheme.palette.textPrimary, fontSize: '0.95rem' }}
                 />
                 <Button
                   variant="contained"
@@ -1612,14 +1458,14 @@ export default function App() {
                   disabled={loading || !urlInput.trim()}
                   startIcon={loading ? <RefreshCw className="loading-pulse" size={16} /> : <Sparkles size={16} />}
                   sx={{
-                    bgcolor: '#00adef',
+                    bgcolor: currentTheme.palette.primary,
                     color: '#ffffff',
                     fontWeight: 700,
                     textTransform: 'none',
                     px: 3,
                     py: 1,
                     borderRadius: 2,
-                    '&:hover': { bgcolor: '#0095ce' }
+                    '&:hover': { bgcolor: currentTheme.palette.primaryHover }
                   }}
                 >
                   {loading ? 'Ingesting...' : 'Transcribe & Study'}
@@ -1666,19 +1512,19 @@ export default function App() {
               {/* Library Header & Search Bar */}
               <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <Typography variant="h6" sx={{ fontWeight: 800, color: '#f8fafc' }}>
+                  <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
                     My Lecture Library
                   </Typography>
                   <Chip
                     label={`${filteredLibrary.length} ${filteredLibrary.length === 1 ? 'lecture' : 'lectures'}`}
                     size="small"
-                    sx={{ bgcolor: 'rgba(0, 173, 239, 0.15)', color: '#00adef', fontWeight: 700 }}
+                    sx={{ bgcolor: currentTheme.palette.badgeBg, color: currentTheme.palette.badgeColor, fontWeight: 700, border: `1px solid ${currentTheme.palette.badgeBorder}` }}
                   />
                   <Tooltip title="Refresh Library">
                     <IconButton
                       size="small"
                       onClick={() => fetchUserLibrary(googleUser?.email)}
-                      sx={{ color: '#94a3b8', '&:hover': { color: '#00adef' } }}
+                      sx={{ color: currentTheme.palette.textSecondary, '&:hover': { color: currentTheme.palette.primary } }}
                     >
                       <RefreshCw size={15} className={libraryLoading ? 'loading-pulse' : ''} />
                     </IconButton>
@@ -1693,17 +1539,17 @@ export default function App() {
                   InputProps={{
                     startAdornment: (
                       <InputAdornment position="start">
-                        <Search size={16} color="#94a3b8" />
+                        <Search size={16} color={currentTheme.palette.textSecondary} />
                       </InputAdornment>
                     ),
                     sx: {
-                      bgcolor: '#1e293b',
+                      bgcolor: currentTheme.palette.cardBg,
                       borderRadius: 2,
                       fontSize: '0.85rem',
-                      color: '#f8fafc',
+                      color: currentTheme.palette.textPrimary,
                       width: { xs: '100%', sm: 280 },
-                      '& fieldset': { borderColor: 'rgba(255, 255, 255, 0.12)' },
-                      '&:hover fieldset': { borderColor: '#00adef' }
+                      '& fieldset': { borderColor: currentTheme.palette.cardBorder },
+                      '&:hover fieldset': { borderColor: currentTheme.palette.primary }
                     }
                   }}
                 />
@@ -1828,9 +1674,10 @@ export default function App() {
                             label="Algolia Search"
                             size="small"
                             sx={{
-                              bgcolor: 'rgba(0, 173, 239, 0.1)',
-                              color: '#00adef',
-                              fontSize: '0.7rem'
+                              bgcolor: currentTheme.palette.badgeBg,
+                              color: currentTheme.palette.badgeColor,
+                              fontSize: '0.7rem',
+                              fontWeight: 600
                             }}
                           />
                           <Chip
@@ -1838,14 +1685,15 @@ export default function App() {
                             size="small"
                             sx={{
                               bgcolor: 'rgba(139, 92, 246, 0.1)',
-                              color: '#a78bfa',
-                              fontSize: '0.7rem'
+                              color: '#8b5cf6',
+                              fontSize: '0.7rem',
+                              fontWeight: 600
                             }}
                           />
                         </Box>
                       </CardContent>
 
-                      <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.06)' }} />
+                      <Divider sx={{ borderColor: currentTheme.palette.cardBorder }} />
 
                       <CardActions sx={{ p: 1.5, justifyContent: 'space-between' }}>
                         <Button
@@ -1899,16 +1747,17 @@ export default function App() {
                   sx={{
                     p: 6,
                     textAlign: 'center',
-                    bgcolor: '#1e293b',
-                    border: '1px dashed rgba(255, 255, 255, 0.15)',
-                    borderRadius: 3
+                    bgcolor: currentTheme.palette.cardBg,
+                    border: `1px dashed ${currentTheme.palette.cardBorder}`,
+                    borderRadius: 3,
+                    boxShadow: currentTheme.palette.cardShadow
                   }}
                 >
-                  <BookOpen size={48} color="#00adef" style={{ margin: '0 auto 16px', opacity: 0.8 }} />
-                  <Typography variant="h6" sx={{ color: '#f8fafc', fontWeight: 700, mb: 1 }}>
+                  <BookOpen size={48} color={currentTheme.palette.primary} style={{ margin: '0 auto 16px', opacity: 0.85 }} />
+                  <Typography variant="h6" sx={{ color: currentTheme.palette.textPrimary, fontWeight: 700, mb: 1 }}>
                     {librarySearch ? 'No matching lectures found' : 'Your Lecture Library is Empty'}
                   </Typography>
-                  <Typography variant="body2" sx={{ color: '#94a3b8', maxWidth: 460, mx: 'auto', mb: 3 }}>
+                  <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 460, mx: 'auto', mb: 3 }}>
                     {librarySearch
                       ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new Vimeo URL above.`
                       : 'Paste any Vimeo lecture link in the quick-add bar above to transcribe, index into Algolia and Pinecone, and start studying!'}
@@ -1922,10 +1771,11 @@ export default function App() {
                       }}
                       sx={{
                         textTransform: 'none',
-                        borderColor: '#00adef',
-                        color: '#00adef',
+                        borderColor: currentTheme.palette.primary,
+                        color: currentTheme.palette.primary,
                         fontWeight: 600,
-                        borderRadius: 2
+                        borderRadius: 2,
+                        '&:hover': { bgcolor: currentTheme.palette.badgeBg, borderColor: currentTheme.palette.primaryHover }
                       }}
                     >
                       Load Sample Lecture (#1229247139)
@@ -1947,13 +1797,13 @@ export default function App() {
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '8px',
-                  background: 'rgba(0, 173, 239, 0.1)',
-                  border: '1px solid rgba(0, 173, 239, 0.3)',
+                  background: currentTheme.palette.badgeBg,
+                  border: `1px solid ${currentTheme.palette.badgeBorder}`,
                   padding: '6px 16px',
                   borderRadius: '20px',
-                  color: 'var(--vimeo-blue)',
+                  color: currentTheme.palette.badgeColor,
                   fontSize: '0.85rem',
-                  fontWeight: 600,
+                  fontWeight: 700,
                   marginBottom: '24px'
                 }}>
                   <Zap size={16} /> Triad Engine: Postgres + Algolia Instant Search + Pinecone RAG
@@ -1964,14 +1814,15 @@ export default function App() {
                   fontWeight: 800,
                   lineHeight: 1.2,
                   letterSpacing: '-1px',
-                  marginBottom: '16px'
+                  marginBottom: '16px',
+                  color: currentTheme.palette.textPrimary
                 }}>
                   Vimeo Transcripts & Video AI <br />
-                  <span style={{ color: 'var(--vimeo-blue)' }}>Algolia Search + Pinecone RAG</span>
+                  <span style={{ color: currentTheme.palette.primary }}>Algolia Search + Pinecone RAG</span>
                 </h1>
 
                 <p style={{
-                  color: 'var(--text-secondary)',
+                  color: currentTheme.palette.textSecondary,
                   fontSize: '1.1rem',
                   maxWidth: '600px',
                   margin: '0 auto 28px',
@@ -1989,8 +1840,9 @@ export default function App() {
                     mb: 4,
                     p: 2,
                     borderRadius: 2.5,
-                    bgcolor: 'rgba(0, 173, 239, 0.08)',
-                    border: '1px solid rgba(0, 173, 239, 0.25)',
+                    bgcolor: currentTheme.palette.cardBg,
+                    border: `1px solid ${currentTheme.palette.cardBorder}`,
+                    boxShadow: currentTheme.palette.cardShadow,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
@@ -2001,10 +1853,10 @@ export default function App() {
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                     <GoogleIcon />
                     <Box>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#f8fafc' }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
                         Sign in for your LMS Study Library
                       </Typography>
-                      <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>
+                      <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block' }}>
                         Keep a persistent history of all your lectures and backup full video bundles to Google Drive.
                       </Typography>
                     </Box>
@@ -2014,15 +1866,15 @@ export default function App() {
                     size="small"
                     onClick={() => handleGoogleSignIn(false)}
                     sx={{
-                      bgcolor: '#ffffff',
-                      color: '#1f2937',
+                      bgcolor: currentTheme.palette.primary,
+                      color: '#ffffff',
                       textTransform: 'none',
                       fontWeight: 700,
                       fontSize: '0.8rem',
                       borderRadius: 2,
                       whiteSpace: 'nowrap',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
-                      '&:hover': { bgcolor: '#f3f4f6' }
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.12)',
+                      '&:hover': { bgcolor: currentTheme.palette.primaryHover }
                     }}
                   >
                     Sign In
@@ -2032,28 +1884,9 @@ export default function App() {
                 {/* Error Banner */}
                 {error && (
                   <div style={{
-                    background: 'rgba(239, 68, 68, 0.15)',
+                    background: 'rgba(239, 68, 68, 0.12)',
                     border: '1px solid #ef4444',
-                    color: '#f87171',
-                    padding: '12px 16px',
-                    borderRadius: '8px',
-                    marginBottom: '20px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    fontSize: '0.9rem'
-                  }}>
-                    <AlertCircle size={18} /> {error}
-                  </div>
-                )}
-
-                {/* Cache Notice Banner */}
-                {cacheNotice && (
-                  <div style={{
-                    background: 'rgba(16, 185, 129, 0.15)',
-                    border: '1px solid #10b981',
-                    color: '#34d399',
+                    color: '#dc2626',
                     padding: '12px 16px',
                     borderRadius: '8px',
                     marginBottom: '20px',
@@ -2062,7 +1895,27 @@ export default function App() {
                     justifyContent: 'center',
                     gap: '8px',
                     fontSize: '0.9rem',
-                    fontWeight: 500
+                    fontWeight: 600
+                  }}>
+                    <AlertCircle size={18} /> {error}
+                  </div>
+                )}
+
+                {/* Cache Notice Banner */}
+                {cacheNotice && (
+                  <div style={{
+                    background: 'rgba(16, 185, 129, 0.12)',
+                    border: '1px solid #10b981',
+                    color: '#059669',
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    marginBottom: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    fontSize: '0.9rem',
+                    fontWeight: 600
                   }}>
                     <Check size={18} /> {cacheNotice}
                   </div>
@@ -2070,16 +1923,16 @@ export default function App() {
 
                 {/* Input Form */}
                 <div style={{
-                  background: 'var(--panel-bg)',
-                  border: '1px solid var(--border-color)',
+                  background: currentTheme.palette.cardBg,
+                  border: `1px solid ${currentTheme.palette.cardBorder}`,
                   padding: '8px',
                   borderRadius: '12px',
                   display: 'flex',
                   gap: '8px',
-                  boxShadow: '0 12px 32px rgba(0,0,0,0.4)'
+                  boxShadow: currentTheme.palette.cardShadow
                 }}>
                   <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    <Video size={20} style={{ position: 'absolute', left: '14px', color: 'var(--text-secondary)' }} />
+                    <Video size={20} style={{ position: 'absolute', left: '14px', color: currentTheme.palette.textSecondary }} />
                     <input
                       type="text"
                       placeholder="Paste Vimeo link or ID (e.g. https://vimeo.com/1229247139)..."
@@ -2092,7 +1945,7 @@ export default function App() {
                         background: 'transparent',
                         border: 'none',
                         outline: 'none',
-                        color: 'var(--text-primary)',
+                        color: currentTheme.palette.textPrimary,
                         fontSize: '1rem',
                         paddingLeft: '44px',
                         paddingRight: '14px'
@@ -2104,7 +1957,7 @@ export default function App() {
                     onClick={() => handleTranscribe()}
                     disabled={loading || !urlInput.trim()}
                     style={{
-                      background: 'var(--vimeo-blue)',
+                      background: currentTheme.palette.primary,
                       color: '#ffffff',
                       border: 'none',
                       padding: '12px 28px',
@@ -2133,20 +1986,22 @@ export default function App() {
 
                 {/* Quick Preset Buttons */}
                 <div style={{ marginTop: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Try example:</span>
+                  <span style={{ fontSize: '0.85rem', color: currentTheme.palette.textSecondary }}>Try example:</span>
                   <button
                     onClick={() => {
                       setUrlInput('https://vimeo.com/1229247139');
                       handleTranscribe('https://vimeo.com/1229247139');
                     }}
                     style={{
-                      background: 'var(--card-bg)',
-                      border: '1px solid var(--border-color)',
-                      color: 'var(--vimeo-blue)',
+                      background: currentTheme.palette.cardBg,
+                      border: `1px solid ${currentTheme.palette.cardBorder}`,
+                      color: currentTheme.palette.primary,
                       padding: '6px 14px',
                       borderRadius: '20px',
                       fontSize: '0.85rem',
-                      cursor: 'pointer'
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
                     }}
                   >
                     📹 Introduction to Research (#1229247139)
@@ -2196,7 +2051,7 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3 }}>{activeData.title}</h1>
                 <Chip
-                  icon={<Bookmark size={13} color="#00adef" />}
+                  icon={<Bookmark size={13} color={currentTheme.palette.primary} />}
                   label={`/lecture/${activeData.videoId}`}
                   size="small"
                   onClick={() => {
@@ -2208,13 +2063,13 @@ export default function App() {
                   title="Click to copy permanent direct lecture route"
                   sx={{
                     fontFamily: 'monospace',
-                    bgcolor: 'rgba(0, 173, 239, 0.12)',
-                    color: '#00adef',
+                    bgcolor: currentTheme.palette.badgeBg,
+                    color: currentTheme.palette.badgeColor,
                     fontWeight: 700,
                     fontSize: '0.74rem',
                     cursor: 'pointer',
-                    border: '1px solid rgba(0, 173, 239, 0.3)',
-                    '&:hover': { bgcolor: 'rgba(0, 173, 239, 0.22)' }
+                    border: `1px solid ${currentTheme.palette.badgeBorder}`,
+                    '&:hover': { opacity: 0.85 }
                   }}
                 />
                 {activeData.cached && (
@@ -3350,10 +3205,10 @@ export default function App() {
                                   }}
                                 >
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    {file.is_video ? <Video size={14} color="#00adef" /> : <FileText size={14} color="var(--text-secondary)" />}
-                                    <strong style={{ color: file.is_video ? '#00adef' : 'inherit' }}>{file.name}</strong>
+                                    {file.is_video ? <Video size={14} color="var(--vimeo-blue)" /> : <FileText size={14} color="var(--text-secondary)" />}
+                                    <strong style={{ color: file.is_video ? 'var(--vimeo-blue)' : 'inherit' }}>{file.name}</strong>
                                     {file.is_video && (
-                                      <span style={{ fontSize: '0.7rem', background: 'rgba(0,173,239,0.15)', color: '#00adef', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                      <span style={{ fontSize: '0.7rem', background: 'var(--highlight-bg)', color: 'var(--vimeo-blue)', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
                                         Video MP4
                                       </span>
                                     )}

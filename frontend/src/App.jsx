@@ -1889,61 +1889,11 @@ export default function App() {
                   color: currentTheme.palette.textSecondary,
                   fontSize: '1.15rem',
                   maxWidth: '620px',
-                  margin: '0 auto 28px',
+                  margin: '0 auto 32px',
                   lineHeight: 1.5
                 }}>
                   Instant transcript search, executive summaries, and interactive AI Tutor for your lectures.
                 </p>
-
-                {/* Google Sign-in Callout Box */}
-                <Paper
-                  elevation={0}
-                  sx={{
-                    maxWidth: '640px',
-                    mx: 'auto',
-                    mb: 4,
-                    p: 2,
-                    borderRadius: 2.5,
-                    bgcolor: currentTheme.palette.cardBg,
-                    border: `1px solid ${currentTheme.palette.cardBorder}`,
-                    boxShadow: currentTheme.palette.cardShadow,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 2,
-                    textAlign: 'left'
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <GoogleIcon />
-                    <Box>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
-                        Sign in for your LMS Study Library
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block' }}>
-                        Keep a persistent history of all your lectures and backup full video bundles to Google Drive.
-                      </Typography>
-                    </Box>
-                  </Box>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    onClick={() => handleGoogleSignIn(false)}
-                    sx={{
-                      bgcolor: currentTheme.palette.primary,
-                      color: '#ffffff',
-                      textTransform: 'none',
-                      fontWeight: 700,
-                      fontSize: '0.8rem',
-                      borderRadius: 2,
-                      whiteSpace: 'nowrap',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.12)',
-                      '&:hover': { bgcolor: currentTheme.palette.primaryHover }
-                    }}
-                  >
-                    Sign In
-                  </Button>
-                </Paper>
 
                 {/* Error Banner */}
                 {error && (

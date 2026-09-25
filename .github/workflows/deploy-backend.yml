@@ -23,7 +23,7 @@ jobs:
       service_name: 'lecturescribe-api'
       port: 8080
       region: 'us-central1'
-      project_id: 'mycommerce-508208'
+      project_id: 'lecturescribe-509611'
       gar_repository: 'services'
       dockerfile: 'Dockerfile'
       context: '.'

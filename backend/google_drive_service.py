@@ -21,7 +21,7 @@ import re
 import shutil
 import tempfile
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -87,7 +87,7 @@ class GoogleDriveService:
             "folder_url": None,
             "files": [],
             "error": None,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
         }
         return job_id
@@ -458,7 +458,7 @@ class GoogleDriveService:
             transcript_lines = [
                 f"# Verbatim Transcript: {title}",
                 f"Video ID: {video_id}",
-                f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
                 "",
                 "---",
                 ""
@@ -492,7 +492,7 @@ class GoogleDriveService:
             metadata_obj = {
                 "videoId": video_id,
                 "title": title,
-                "exported_at": datetime.utcnow().isoformat(),
+                "exported_at": datetime.now(timezone.utc).isoformat(),
                 "cue_count": len(cues),
                 "streams": streams_info or {},
             }
@@ -507,7 +507,7 @@ class GoogleDriveService:
                 f"LectureScribe Video Download Guide: {title}",
                 "=" * 60,
                 f"Video ID: {video_id}",
-                f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
                 "",
                 "1. Multi-bitrate HLS Stream URL:",
             ]
@@ -557,7 +557,7 @@ class GoogleDriveService:
             else:
                 job["current_step"] = "Full bundle (including video) successfully uploaded to Google Drive!"
             job["status"] = "COMPLETED"
-            job["completed_at"] = datetime.utcnow().isoformat()
+            job["completed_at"] = datetime.now(timezone.utc).isoformat()
             print(f"[Google Drive Export] Successfully completed job '{job_id}' for '{video_id}' at {folder_url}")
 
         except Exception as e:
@@ -565,7 +565,7 @@ class GoogleDriveService:
             job["status"] = "FAILED"
             job["error"] = str(e)
             job["current_step"] = f"Upload failed: {str(e)}"
-            job["completed_at"] = datetime.utcnow().isoformat()
+            job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
 
 # Export singleton instance

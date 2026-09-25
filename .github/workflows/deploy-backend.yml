@@ -1,0 +1,33 @@
+name: Deploy Backend to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Call Reusable Cloud Run Deployment
+    uses: dipeshsingh2012/shared-workflows/.github/workflows/deploy-cloud-run.yml@main
+    with:
+      service_name: 'lecturescribe-api'
+      port: 8080
+      region: 'us-central1'
+      project_id: 'mycommerce-508208'
+      gar_repository: 'services'
+      dockerfile: 'Dockerfile'
+      context: '.'
+      health_check_path: '/health'
+    secrets:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      EXTRA_ENV_VARS: ${{ secrets.EXTRA_ENV_VARS }}

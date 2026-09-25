@@ -28,6 +28,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
 import InputBase from '@mui/material/InputBase';
+import { ProtonThemeSelector } from '@dipesh.singh/proton';
 import { useThemeStore, LMS_THEMES, applyThemeCssVariables } from './store/themeStore';
 
 const formatRelativeTime = (dateStr) => {
@@ -168,7 +169,6 @@ export default function App() {
 
   // LMS Theme State via Zustand (Default: Academic Classic Blue)
   const { currentThemeId, setTheme } = useThemeStore();
-  const [themeMenuAnchor, setThemeMenuAnchor] = useState(null);
 
   const currentTheme = LMS_THEMES[currentThemeId] || LMS_THEMES.academic;
 
@@ -253,33 +253,11 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Client-side cache: In-memory & LocalStorage (Auto-purges stale hardcoded summaries)
+  // Client-side cache: In-memory & LocalStorage
   const [cachedVideos, setCachedVideos] = useState(() => {
     try {
       const stored = localStorage.getItem('lecturescribe_cached_videos');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        let modified = false;
-        Object.keys(parsed).forEach(k => {
-          const str = JSON.stringify(parsed[k].summarySections || []);
-          if (
-            str.includes("Course Structure & Evaluation Framework") ||
-            str.includes("34 credits") ||
-            str.includes("Session Introduction & Core Scope") ||
-            str.includes("Theoretical Foundations & Key Themes") ||
-            str.includes(": Seen [") ||
-            str.includes(": Question [")
-          ) {
-            delete parsed[k];
-            modified = true;
-          }
-        });
-        if (modified) {
-          localStorage.setItem('lecturescribe_cached_videos', JSON.stringify(parsed));
-        }
-        return parsed;
-      }
-      return {};
+      return stored ? JSON.parse(stored) : {};
     } catch {
       return {};
     }
@@ -1150,109 +1128,15 @@ export default function App() {
               </>
             )}
 
-            {/* LMS Theme Selector */}
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Palette size={15} color="#ffffff" />}
-              onClick={(e) => setThemeMenuAnchor(e.currentTarget)}
-              sx={{
-                textTransform: 'none',
-                borderColor: 'rgba(255, 255, 255, 0.3)',
-                bgcolor: 'rgba(255, 255, 255, 0.14)',
-                color: '#ffffff',
-                fontWeight: 600,
-                fontSize: '0.82rem',
-                borderRadius: 2,
-                px: 1.4,
-                py: 0.5,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.6,
-                '&:hover': {
-                  borderColor: '#ffffff',
-                  bgcolor: 'rgba(255, 255, 255, 0.22)'
-                }
-              }}
-            >
-              <span>{currentTheme.icon}</span>
-              <Typography variant="caption" sx={{ fontWeight: 700, color: '#ffffff', display: { xs: 'none', sm: 'inline' } }}>
-                {currentTheme.name}
-              </Typography>
-            </Button>
+            {/* LMS Theme Selector from Proton */}
+            <ProtonThemeSelector
+              themes={LMS_THEMES}
+              currentThemeId={currentThemeId}
+              onSelectTheme={(themeId) => setTheme(themeId)}
+              title="LMS Theme Selector"
+              subtitle="Authentic campus & higher-ed LMS palettes"
+            />
 
-            <Menu
-              anchorEl={themeMenuAnchor}
-              open={Boolean(themeMenuAnchor)}
-              onClose={() => setThemeMenuAnchor(null)}
-              PaperProps={{
-                sx: {
-                  bgcolor: '#ffffff',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 3,
-                  boxShadow: '0 12px 36px rgba(0,0,0,0.14)',
-                  minWidth: 280,
-                  p: 0.5
-                }
-              }}
-            >
-              <Box sx={{ px: 2, py: 1.2, borderBottom: '1px solid #f1f5f9', mb: 0.5 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Palette size={16} color={currentTheme.palette.primary} /> LMS Theme Selector
-                </Typography>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>
-                  Authentic campus & higher-ed LMS palettes
-                </Typography>
-              </Box>
-
-              {Object.values(LMS_THEMES).map((thm) => {
-                const isSelected = thm.id === currentThemeId;
-                return (
-                  <MenuItem
-                    key={thm.id}
-                    onClick={() => {
-                      setTheme(thm.id);
-                      setThemeMenuAnchor(null);
-                    }}
-                    selected={isSelected}
-                    sx={{
-                      borderRadius: 2,
-                      mx: 0.5,
-                      my: 0.3,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      bgcolor: isSelected ? 'rgba(0, 117, 237, 0.08)' : 'transparent',
-                      '&:hover': { bgcolor: '#f8fafc' }
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                      <span style={{ fontSize: '1.25rem' }}>{thm.icon}</span>
-                      <Box>
-                        <Typography variant="body2" sx={{ fontWeight: isSelected ? 800 : 600, color: '#0f172a' }}>
-                          {thm.name}
-                        </Typography>
-                        <Typography variant="caption" sx={{ color: '#64748b', display: 'block', fontSize: '0.72rem' }}>
-                          {thm.badge}
-                        </Typography>
-                      </Box>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                      <Box
-                        sx={{
-                          width: 14,
-                          height: 14,
-                          borderRadius: '50%',
-                          bgcolor: thm.palette.headerBg || thm.palette.primary,
-                          border: '2px solid rgba(0, 0, 0, 0.1)'
-                        }}
-                      />
-                      {isSelected && <Check size={16} color={thm.palette.primary} />}
-                    </Box>
-                  </MenuItem>
-                );
-              })}
-            </Menu>
 
             {/* Top-Right Google Sign-In or User Profile Menu */}
             {!googleUser ? (
@@ -1493,7 +1377,7 @@ export default function App() {
               >
                 <Video size={22} color={currentTheme.palette.textSecondary} style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
                 <InputBase
-                  placeholder="Paste any lecture video URL or ID to study & save (e.g. 1229247139)..."
+                  placeholder="Paste any lecture video URL or ID to study & save..."
                   value={urlInput}
                   onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
                   onPaste={handlePasteUrl}
@@ -1805,30 +1689,11 @@ export default function App() {
                   <Typography variant="h6" sx={{ color: currentTheme.palette.textPrimary, fontWeight: 700, mb: 1 }}>
                     {librarySearch ? 'No matching lectures found' : 'Your Lecture Library is Empty'}
                   </Typography>
-                  <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 460, mx: 'auto', mb: 3 }}>
+                  <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 460, mx: 'auto', mb: 1 }}>
                     {librarySearch
                       ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new lecture URL above.`
                       : 'Paste any lecture link in the quick-add bar above to transcribe, index into search and AI tutor, and start studying!'}
                   </Typography>
-                  {!librarySearch && (
-                    <Button
-                      variant="outlined"
-                      onClick={() => {
-                        setUrlInput('https://vimeo.com/1229247139');
-                        handleTranscribe('https://vimeo.com/1229247139');
-                      }}
-                      sx={{
-                        textTransform: 'none',
-                        borderColor: currentTheme.palette.primary,
-                        color: currentTheme.palette.primary,
-                        fontWeight: 600,
-                        borderRadius: 2,
-                        '&:hover': { bgcolor: currentTheme.palette.badgeBg, borderColor: currentTheme.palette.primaryHover }
-                      }}
-                    >
-                      Load Sample Lecture (#1229247139)
-                    </Button>
-                  )}
                 </Paper>
               )}
             </Box>
@@ -1983,7 +1848,7 @@ export default function App() {
                     <Video size={20} style={{ position: 'absolute', left: '14px', color: currentTheme.palette.textSecondary }} />
                     <input
                       type="text"
-                      placeholder="Paste lecture video link or ID (e.g. 1229247139)..."
+                      placeholder="Paste lecture video link or ID..."
                       value={urlInput}
                       onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
                       onPaste={handlePasteUrl}
@@ -2029,30 +1894,6 @@ export default function App() {
                         <Sparkles size={18} /> Ingest & Transcribe
                       </>
                     )}
-                  </button>
-                </div>
-
-                {/* Quick Preset Buttons */}
-                <div style={{ marginTop: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                  <span style={{ fontSize: '0.85rem', color: currentTheme.palette.textSecondary }}>Try example:</span>
-                  <button
-                    onClick={() => {
-                      setUrlInput('https://vimeo.com/1229247139');
-                      handleTranscribe('https://vimeo.com/1229247139');
-                    }}
-                    style={{
-                      background: currentTheme.palette.cardBg,
-                      border: `1px solid ${currentTheme.palette.cardBorder}`,
-                      color: currentTheme.palette.primary,
-                      padding: '6px 14px',
-                      borderRadius: '20px',
-                      fontSize: '0.85rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
-                    }}
-                  >
-                    📹 Introduction to Research (#1229247139)
                   </button>
                 </div>
               </div>

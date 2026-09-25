@@ -58,11 +58,11 @@ class RelationalDBManager:
                 "DATABASE_URL environment variable is missing. PostgreSQL is required."
             )
 
-        # Initialize PostgreSQL schema
-        self._init_postgres_schema()
-
-        # Seed default sample lecture data if database is empty
-        self._seed_sample_data_if_needed()
+        # Initialize PostgreSQL schema (deferred if database is unreachable during import)
+        try:
+            self._init_postgres_schema()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] Initial connection deferred: {e}")
 
     def _get_connection(self):
         """Create and return a new PostgreSQL connection with RealDictCursor."""
@@ -147,49 +147,6 @@ class RelationalDBManager:
             print("[PostgreSQL] Connection verified and schema initialized successfully.")
         finally:
             conn.close()
-
-    def _seed_sample_data_if_needed(self):
-        """Seed sample video 1229247139 if it does not yet exist in PostgreSQL."""
-        sample_video_id = "1229247139"
-        if self.get_saved_video(sample_video_id):
-            return
-
-        sample_transcript_file = Path(__file__).parent.parent / "sample_transcript.md"
-        if not sample_transcript_file.exists():
-            return
-
-        try:
-            import re
-            content = sample_transcript_file.read_text(encoding="utf-8")
-            cues = []
-            for line in content.splitlines():
-                m = re.match(r"\*\*\[(.*?)\]\*\*\s*(.*)", line.strip())
-                if m:
-                    cues.append({"time": m.group(1), "text": m.group(2)})
-
-            if not cues:
-                return
-
-            title = "Introduction to Research Live session -1 (22 / 9 / 2026)"
-            duration = "1h 41m"
-            source_url = f"https://vimeo.com/{sample_video_id}"
-            caption_label = "English (auto-generated)"
-
-            from backend.summary_generator import generate_summary_sections
-            summary_sections = generate_summary_sections(cues, title)
-
-            self.save_video_transcript(
-                video_id=sample_video_id,
-                title=title,
-                duration=duration,
-                source_url=source_url,
-                caption_label=caption_label,
-                cues=cues,
-                summary_sections=summary_sections
-            )
-            print(f"[PostgreSQL Seed] Seeded video '{sample_video_id}' with {len(cues)} cues.")
-        except Exception as e:
-            print(f"[PostgreSQL Seed Notice] Could not seed sample video data: {e}")
 
     def save_video_transcript(
         self,

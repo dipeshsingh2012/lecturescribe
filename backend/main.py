@@ -45,11 +45,10 @@ async def lifespan(app: FastAPI):
     print("🚀 LectureScribe Triad Server Starting Up...")
     print("=" * 60)
 
-    # 1. Relational Database verification & seed
+    # 1. Relational Database verification
     print("📦 [1/3] Verifying Relational DB (PostgreSQL)...")
     try:
         db_manager._init_postgres_schema()
-        db_manager._seed_sample_data_if_needed()
         print("✅ [Database Startup] PostgreSQL database ready.")
     except Exception as e:
         print(f"⚠️ [Database Startup Warning]: {e}")
@@ -62,15 +61,17 @@ async def lifespan(app: FastAPI):
     print("🔍 [3/3] Verifying/Configuring Algolia Search Index...")
     algolia_service.setup_index()
 
-    # 4. Warm-up pre-index sample video if present in DB
-    try:
-        sample = db_manager.get_saved_video("1229247139")
-        if sample:
-            algolia_service.ingest_cues("1229247139", sample["title"], sample["cues"])
-            pinecone_rag_engine.ingest_transcript("1229247139", sample["title"], sample["cues"])
-            print(f"⚡ [Warmup] Pre-indexed sample video '1229247139' ({len(sample['cues'])} cues).")
-    except Exception as e:
-        print(f"⚠️ [Warmup Notice]: {e}")
+    # 4. Optional warm-up pre-index if WARMUP_VIDEO_ID environment variable is set
+    warmup_vid = os.getenv("WARMUP_VIDEO_ID")
+    if warmup_vid:
+        try:
+            sample = db_manager.get_saved_video(warmup_vid)
+            if sample:
+                algolia_service.ingest_cues(warmup_vid, sample["title"], sample["cues"])
+                pinecone_rag_engine.ingest_transcript(warmup_vid, sample["title"], sample["cues"])
+                print(f"⚡ [Warmup] Pre-indexed warmup video '{warmup_vid}' ({len(sample['cues'])} cues).")
+        except Exception as e:
+            print(f"⚠️ [Warmup Notice]: {e}")
 
     print("=" * 60)
     print("✨ All Triad Engines & Indexes Ready!")
@@ -97,8 +98,8 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
-    video_id: Optional[str] = "1229247139"
-    video_title: Optional[str] = "Introduction to Research"
+    video_id: Optional[str] = None
+    video_title: Optional[str] = None
     cues: List[Dict[str, str]] = []
     user_email: Optional[str] = None
     model_id: Optional[str] = None
@@ -124,7 +125,7 @@ class RegenerateSummaryRequest(BaseModel):
 
 
 
-@app.get("/api/health")
+@app.get("/health")
 def health_check():
     return {
         "status": "ok",

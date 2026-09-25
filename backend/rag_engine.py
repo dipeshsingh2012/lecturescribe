@@ -128,7 +128,6 @@ class Llama3PineconeRAGStore:
         except Exception as e:
             print(f"⚠️ [Pinecone Startup Warning] Error creating/verifying Pinecone index: {e}")
             return False
-            print(f"[Llama-3.2 RAG Warning] Could not initialize Pinecone: {e}")
 
     def _generate_embedding(self, text: str) -> List[float]:
         """Generate 768-dim embedding vector for transcript text."""

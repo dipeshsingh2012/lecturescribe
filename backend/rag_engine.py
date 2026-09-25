@@ -241,63 +241,6 @@ class Llama3PineconeRAGStore:
             }
         ]
 
-    def _retrieve_relevant_lecture_cues(
-        self,
-        query: str,
-        cues: List[Dict[str, str]],
-        video_id: str,
-        video_title: str,
-        window_size: int = 5,
-        step: int = 3,
-        top_k: int = 4
-    ) -> List[Dict[str, Any]]:
-        """Rank sliding-window transcript chunks strictly from the active lecture's cues."""
-        if not cues:
-            return []
-
-        query_terms = set(re.findall(r"\w+", query.lower()))
-        stop_words = {
-            "the", "a", "an", "is", "are", "was", "were", "what", "which", "who", "whom",
-            "this", "that", "these", "those", "how", "why", "when", "where", "in", "on",
-            "at", "to", "for", "with", "about", "against", "between", "into", "through",
-            "during", "before", "after", "above", "below", "from", "up", "down", "in",
-            "out", "on", "off", "over", "under", "again", "further", "then", "once", "here",
-            "there", "all", "any", "both", "each", "few", "more", "most", "other", "some",
-            "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
-            "can", "will", "just", "should", "now"
-        }
-        meaningful_terms = {t for t in query_terms if t not in stop_words and len(t) > 2}
-        effective_terms = meaningful_terms if meaningful_terms else query_terms
-
-        scored_windows = []
-        total_cues = len(cues)
-
-        for i in range(0, total_cues, step):
-            window = cues[i : i + window_size]
-            if not window:
-                continue
-            start_time = window[0].get("time", "00:00")
-            end_time = window[-1].get("time", start_time)
-            chunk_text = " ".join([c.get("text", "") for c in window if c.get("text")])
-            if not chunk_text.strip():
-                continue
-
-            chunk_words = re.findall(r"\w+", chunk_text.lower())
-            score = sum(1.0 for w in chunk_words if w in effective_terms)
-
-            metadata = {
-                "video_id": video_id,
-                "video_title": video_title,
-                "start_time": start_time,
-                "end_time": end_time,
-                "text": chunk_text[:2000]
-            }
-            scored_windows.append((score, i, metadata))
-
-        # Sort by relevance score descending; tie-break by chronological position
-        scored_windows.sort(key=lambda x: (x[0], -x[1]), reverse=True)
-
-        return [w[2] for w in scored_windows[:top_k]]
 
     def reciprocal_rank_fusion(
         self,
@@ -558,16 +501,7 @@ class Llama3PineconeRAGStore:
             except Exception as e:
                 print(f"    ⚠️ [Algolia Search Warning]: {e}")
 
-            cue_matches = []
-            from backend.database import db_manager
-            saved = db_manager.get_saved_video(vid) if vid else None
-            cues = saved.get("cues", []) if saved else []
-            if cues and not pinecone_matches and not algolia_matches:
-                cue_matches = self._retrieve_relevant_lecture_cues(
-                    query=query, cues=cues, video_id=vid, video_title=lecture_title, top_k=top_k
-                )
-
-            ranked = [s for s in [pinecone_matches, algolia_matches, cue_matches] if s]
+            ranked = [s for s in [pinecone_matches, algolia_matches] if s]
             combined = self.reciprocal_rank_fusion(ranked, k=60)[:top_k] if ranked else []
 
             out = []

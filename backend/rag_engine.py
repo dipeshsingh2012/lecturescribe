@@ -725,12 +725,21 @@ class Llama3PineconeRAGStore:
         messages = [
             {"role": "system", "content": system_prompt},
             *prior_messages,
-            {"role": "user", "content": f"Student Request: {query} (Lecture: '{lecture_title}', Video ID: '{target_video_id}')"}
+            {
+                "role": "user",
+                "content": (
+                    f"Student Request: {query}\n"
+                    f"Context: Lecture '{lecture_title}' (Video ID: '{target_video_id}').\n"
+                    "INSTRUCTION: You do NOT have the transcript in context. In your first step, you MUST invoke a tool "
+                    "(search_transcript, get_lecture_outline, or get_transcript_window) to retrieve grounded evidence from the lecture. "
+                    "Do NOT attempt to answer until you have retrieved information from the lecture."
+                )
+            }
         ]
 
         all_citations = []
         all_web_sources = []
-        max_steps = 3
+        max_steps = 4
         current_step = 0
         final_answer = ""
 
@@ -743,6 +752,9 @@ class Llama3PineconeRAGStore:
 
             tool_calls = []
             content_str = ""
+
+            # Force tool invocation on Step 1 for providers supporting tool_choice="required"
+            step_tool_choice = "required" if (current_step == 1 and provider in ["groq", "openai"]) else "auto"
 
             if provider == "huggingface" and HAS_HF:
                 try:
@@ -777,7 +789,7 @@ class Llama3PineconeRAGStore:
                     "model": model_name,
                     "messages": messages,
                     "tools": self.AGENT_TOOLS,
-                    "tool_choice": "auto",
+                    "tool_choice": step_tool_choice,
                     "max_tokens": 1024,
                     "temperature": 0.25
                 }
@@ -856,6 +868,24 @@ class Llama3PineconeRAGStore:
                     )
                 if not clean_answer:
                     raise RuntimeError(f"Agent LLM returned empty response at step {current_step}.")
+
+                # Step 1 Rejection Guard: Never allow premature exit without calling retrieval tools
+                if current_step == 1 and not all_citations:
+                    print(f"⚠️ [Agent Step 1 Guard] LLM attempted to exit on Step 1 with 0 tool calls. Forcing tool invocation...")
+                    messages.append({
+                        "role": "assistant",
+                        "content": clean_answer
+                    })
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "CRITICAL GROUNDING ERROR: You cannot answer directly from memory or lecture title alone. "
+                            "You MUST invoke one of your tools (e.g. 'search_transcript', 'get_lecture_outline', or 'get_transcript_window') "
+                            "to inspect and retrieve from the lecture transcript now."
+                        )
+                    })
+                    continue
+
                 print(f"🎯 [Agent Step {current_step}] LLM provided direct final answer ({len(clean_answer)} chars). Exiting agent loop.")
                 final_answer = clean_answer
                 break

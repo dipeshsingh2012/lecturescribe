@@ -452,15 +452,27 @@ class Llama3PineconeRAGStore:
             sections = saved.get("summarySections") or saved.get("summary_sections") or []
             cues = saved.get("cues", [])
 
-            # Ensure sections exist; regenerate if legacy naive n-gram titles are detected
-            has_naive_topics = any(
-                any(bad in sec.get("title", "").lower() for bad in ["three comma", "comma", "step size", "data type"])
-                for sec in sections
-            )
-            if (not sections or has_naive_topics) and cues:
+            # Ensure sections exist; regenerate if legacy fallback, uninformative, or duplicate titles are detected
+            def _needs_summary_regeneration(secs: List[Dict[str, Any]]) -> bool:
+                if not secs or len(secs) < 2:
+                    return True
+                titles = [s.get("title", "").lower() for s in secs]
+                legacy_patterns = [
+                    "lecture discussion", "executive overview", "key concepts & questions",
+                    "three comma", "comma", "step size", "data type"
+                ]
+                if any(any(pat in t for pat in legacy_patterns) for t in titles):
+                    return True
+                cleaned = [re.sub(r"\[.*?\]", "", t).strip() for t in titles]
+                if len(cleaned) != len(set(cleaned)):
+                    return True
+                return False
+
+            if _needs_summary_regeneration(sections) and cues:
                 from backend.summary_generator import generate_summary_sections
                 sections = generate_summary_sections(cues, saved.get("title", lecture_title))
-                db_manager.update_summary_sections(vid, sections)
+                if sections:
+                    db_manager.update_summary_sections(vid, sections)
 
             # Reconstruct full sentences from cues for rich dialogue extraction
             reconstructed_sentences = []
@@ -754,12 +766,19 @@ class Llama3PineconeRAGStore:
                 "\n\n🎯 FORMAT DIRECTIVE (DEEP-DIVE COMPREHENSIVE STUDY GUIDE):\n"
                 "The student requested a comprehensive multi-minute reading guide (e.g. 15-30 min read). "
                 "This must be an extensive, thorough academic document with substantial depth (NOT a short bullet list).\n"
-                "Structure your response with clear Markdown headings for each chapter/phase of the lecture:\n"
-                "1. Comprehensive Walkthrough: Unpack the concepts, theoretical motivations, and technical explanations taught by the instructor.\n"
-                "2. Code & Implementation Details: Explain any code syntax, parameters (e.g., axes, reshaping rules, strides/slicing), or formulas demonstrated.\n"
-                "3. Dialogue & Insights: Integrate verbatim quotes and explanations from the instructor with exact [MM:SS] timestamps.\n"
-                "4. Student Questions & Clarifications: Document specific student inquiries and instructor answers.\n"
-                "Ensure every chapter has rich, detailed paragraphs and code blocks."
+                "STRUCTURE REQUIREMENTS:\n"
+                "1. Organize your study guide CHAPTER-BY-CHAPTER using the authentic topics returned by get_lecture_outline.\n"
+                "2. Create a distinct Markdown heading (e.g. '## 1. Course Overview and Structure [19:43 - 20:45]') for EACH chapter from the outline.\n"
+                "3. In each chapter section:\n"
+                "   - Provide 1-2 thorough, comprehensive paragraphs synthesizing what the professor taught, explained, or demonstrated.\n"
+                "   - Seamlessly integrate key quotes, student inquiries, or technical explanations from `substantive_dialogue` with exact inline [MM:SS] timestamps.\n"
+                "   - Mention specific tools, assignment weights, code concepts, or operational rules discussed in that phase.\n"
+                "4. STRICT ANTI-REPETITION:\n"
+                "   - NEVER repeat or rephrase the same statement or idea within the same section or across sections.\n"
+                "   - DO NOT create generic global headings like 'Comprehensive Walkthrough', 'Code and Implementation Details', or 'Dialogue and Insights'.\n"
+                "   - Each distinct point or quote must appear exactly once.\n"
+                "5. PROHIBITED PREAMBLES & CLOSINGS:\n"
+                "   - Start immediately with the first chapter heading. NEVER say 'Based on the lecture outline...', 'Here is a comprehensive walkthrough...', or conclude with 'I hope this helps' or 'This comprehensive study guide covers...'.\n"
             )
         elif is_assignment:
             intent_directive = (
@@ -781,7 +800,7 @@ class Llama3PineconeRAGStore:
                 # Skip legacy poisoned boilerplate or hallucinations from prior messages
                 if "invention, discovery, and innovation" in txt.lower() or "literature review to patenting" in txt.lower():
                     continue
-                if "based on the lecture outline, the main takeaways" in txt.lower() or "these takeaways are based on the chapters" in txt.lower():
+                if "based on the lecture outline" in txt.lower() or "these takeaways are based on the chapters" in txt.lower() or "comprehensive walkthrough of the lecture" in txt.lower():
                     continue
                 if txt and not txt.startswith("<function="):
                     if role == "assistant" and len(txt) > 800:
@@ -825,16 +844,18 @@ class Llama3PineconeRAGStore:
             # Force tool invocation on Step 1 for providers supporting tool_choice="required"
             step_tool_choice = "required" if (current_step == 1 and provider in ["groq", "openai"]) else "auto"
 
+            step_max_tokens = 2048 if is_long_read else 1024
             if provider == "huggingface" and HAS_HF:
                 try:
-                    hf_client = InferenceClient(api_key=hf_token)
+                    hf_client = InferenceClient(token=hf_token)
                     resp = hf_client.chat.completions.create(
                         model=model_name,
                         messages=messages,
                         tools=self.AGENT_TOOLS,
                         tool_choice="auto",
-                        max_tokens=1024,
-                        temperature=0.25
+                        max_tokens=step_max_tokens,
+                        temperature=0.35,
+                        frequency_penalty=0.3
                     )
                     choice = resp.choices[0]
                     msg_obj = choice.message
@@ -859,8 +880,9 @@ class Llama3PineconeRAGStore:
                     "messages": messages,
                     "tools": self.AGENT_TOOLS,
                     "tool_choice": step_tool_choice,
-                    "max_tokens": 1024,
-                    "temperature": 0.25
+                    "max_tokens": step_max_tokens,
+                    "temperature": 0.35,
+                    "frequency_penalty": 0.3
                 }
                 resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
                 if resp.status_code != 200:
@@ -1015,14 +1037,16 @@ class Llama3PineconeRAGStore:
         if not final_answer:
             print(f"🧠 [Agent Synthesis] Grounding final answer with {len(messages)} history turns using {display_model}...")
             t_synth = time.time()
+            synth_max_tokens = 2048 if is_long_read else 1024
             if provider == "huggingface" and HAS_HF:
                 try:
-                    hf_client = InferenceClient(api_key=hf_token)
+                    hf_client = InferenceClient(token=hf_token)
                     resp = hf_client.chat.completions.create(
                         model=model_name,
                         messages=messages,
-                        max_tokens=1024,
-                        temperature=0.25
+                        max_tokens=synth_max_tokens,
+                        temperature=0.35,
+                        frequency_penalty=0.3
                     )
                     final_answer = resp.choices[0].message.content.strip()
                 except Exception as e:
@@ -1032,8 +1056,9 @@ class Llama3PineconeRAGStore:
                 payload = {
                     "model": model_name,
                     "messages": messages,
-                    "max_tokens": 1024,
-                    "temperature": 0.25
+                    "max_tokens": synth_max_tokens,
+                    "temperature": 0.35,
+                    "frequency_penalty": 0.3
                 }
                 resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
                 if resp.status_code == 200:
@@ -1055,6 +1080,35 @@ class Llama3PineconeRAGStore:
                 seen_ts.add(k)
                 dedup_citations.append(c)
 
+        # Strip conversational AI preambles and meta pleasantries from final answer
+        final_answer = re.sub(
+            r"^(?:Based on (?:the )?(?:lecture outline|transcript|video|chapters)[^.\n]*?[.:]+\s*)+",
+            "",
+            final_answer,
+            flags=re.IGNORECASE
+        )
+        final_answer = re.sub(
+            r"^(?:Here is a (?:comprehensive walkthrough|summary|detailed overview)[^.\n]*?[.:]+\s*)+",
+            "",
+            final_answer,
+            flags=re.IGNORECASE
+        )
+        final_answer = re.sub(
+            r"\n*(?:I hope this (?:comprehensive walkthrough|summary|guide|breakdown)[^.\n]*?[.!]?)\s*$",
+            "",
+            final_answer,
+            flags=re.IGNORECASE
+        )
+        final_answer = re.sub(
+            r"\n+(?:This (?:comprehensive )?(?:study guide|summary|overview|walkthrough) (?:provides|covers|summarizes|delivers|gives)[\s\S]*?[.!]?)\s*$",
+            "",
+            final_answer,
+            flags=re.IGNORECASE
+        ).strip()
+
+        # Deduplicate repetitive looping sentences and duplicate paragraphs
+        final_answer = self._deduplicate_repetitive_text(final_answer)
+
         total_time = time.time() - t_rag_start
         print(f"🏁 [Agentic RAG Engine] Finished in {total_time:.2f}s | Citations: {len(dedup_citations)} | Web: {len(all_web_sources)}")
         print("-" * 50)
@@ -1068,6 +1122,50 @@ class Llama3PineconeRAGStore:
             "lecture_title": lecture_title,
             "video_id": target_video_id
         }
+
+    def _deduplicate_repetitive_text(self, text: str) -> str:
+        """
+        Detect and prune repetitive looping sentences or repeated paragraphs across sections.
+        Preserves Markdown headers, code blocks, and distinct substantive sentences.
+        """
+        if not text:
+            return ""
+        sections = text.split("\n\n")
+        cleaned_sections = []
+        for sec in sections:
+            lines = sec.strip().split("\n")
+            new_lines = []
+            seen_in_section = []
+            for line in lines:
+                if line.startswith("#"):
+                    new_lines.append(line)
+                    seen_in_section.clear()
+                    continue
+                raw_sents = re.split(r"(?<=[.!?])\s+", line)
+                clean_sents = []
+                for s in raw_sents:
+                    s_strip = s.strip()
+                    if not s_strip:
+                        continue
+                    norm = re.sub(r"[^\w\s]", "", s_strip.lower()).split()
+                    sig_words = frozenset(w for w in norm if len(w) > 3)
+                    if len(sig_words) >= 3:
+                        is_dup = False
+                        for seen in seen_in_section:
+                            overlap = len(sig_words & seen)
+                            union = len(sig_words | seen)
+                            if union > 0 and (overlap / union) >= 0.65:
+                                is_dup = True
+                                break
+                        if is_dup:
+                            continue
+                        seen_in_section.append(sig_words)
+                    clean_sents.append(s_strip)
+                if clean_sents:
+                    new_lines.append(" ".join(clean_sents))
+            if new_lines:
+                cleaned_sections.append("\n".join(new_lines))
+        return "\n\n".join(cleaned_sections)
 
     def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
         """Strip markdown syntax, timestamps, and AI boilerplate from text."""

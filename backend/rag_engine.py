@@ -351,7 +351,7 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "get_lecture_outline",
-                "description": "Fetch structured chapter outlines, syllabus topics, key takeaways, and spoken transcript excerpts across the lecture with timestamps.",
+                "description": "Fetch structured chapter outlines, syllabus topics, key takeaways, and spoken transcript excerpts across the lecture with timestamps. Recommended primary tool for session summaries, 10/15-minute reads, outlines, and overall lecture structure.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -368,7 +368,7 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "search_transcript",
-                "description": "Search the lecture transcript using hybrid vector and keyword search for specific technical concepts, definitions, formulas, or questions.",
+                "description": "Search the lecture transcript using hybrid vector and keyword search for specific technical concepts, definitions, formulas, or questions. For broad lecture summaries or full session overviews, use get_lecture_outline instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -728,12 +728,13 @@ class Llama3PineconeRAGStore:
             f"You are an encouraging, articulate Academic AI Tutor assisting a student learning from the lecture: '{lecture_title}'. "
             f"The video ID is '{target_video_id}'.\n\n"
             "YOU HAVE ACCESS TO SPECIALIZED RETRIEVAL TOOLS:\n"
-            "- get_lecture_outline(video_id): Retrieves the structured chapter syllabus, timestamps, key takeaways, and spoken dialogue excerpts across the session.\n"
-            "- search_transcript(query, top_k): Searches the lecture transcript using hybrid vector and keyword search for specific concepts, terms, discussions, or questions.\n"
+            "- get_lecture_outline(video_id): Retrieves the structured chapter syllabus, timestamps, key takeaways, and spoken dialogue excerpts across the entire lecture. Use this as your primary tool for overall summaries, overviews, recaps, and 10/15-minute reads.\n"
+            "- search_transcript(query, top_k): Searches the lecture transcript using hybrid vector and keyword search for specific technical concepts, definitions, formulas, or targeted questions.\n"
             "- get_transcript_window(start_time, end_time): Retrieves verbatim dialogue from the professor for a specific timestamp range.\n"
             "- search_web_context(search_query): Retrieves external academic context or mathematical background if needed.\n\n"
             "PEDAGOGICAL & CITATION RULES:\n"
             "- Ground your answer thoroughly in the lecture using your retrieval tools.\n"
+            "- For summaries, session recaps, or multi-minute reads: Inspect the entire lecture structure and dialogue using get_lecture_outline. If deeper explanation is needed on a specific subtopic, follow up with get_transcript_window or search_transcript.\n"
             "- MANDATORY Inline Timestamps: Every key statement, topic, or finding MUST include its exact timestamp tag [MM:SS] or [MM:SS - MM:SS] so the student can jump to that exact part of the video.\n"
             "- SUBSTANTIVE CONTENT: Directly explain the concepts, methodologies, examples, and insights taught by the professor. Ground your answer in what was actually discussed in the lecture. NEVER output meta-instructions or advice on how to take notes.\n"
             "- Clarity & Rigor: Structure with clear paragraphs, mathematical notation, and bullet points where helpful."
@@ -746,6 +747,9 @@ class Llama3PineconeRAGStore:
             for m in (db_history or [])[-6:]:
                 role = "user" if m.get("sender") == "user" or m.get("role") == "user" else "assistant"
                 txt = (m.get("text") or m.get("content") or "").strip()
+                # Skip legacy poisoned boilerplate or hallucinations from prior messages
+                if "invention, discovery, and innovation" in txt.lower() or "literature review to patenting" in txt.lower():
+                    continue
                 if txt and not txt.startswith("<function="):
                     if role == "assistant" and len(txt) > 800:
                         txt = txt[:800] + "..."

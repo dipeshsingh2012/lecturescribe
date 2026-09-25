@@ -143,6 +143,21 @@ class RelationalDBManager:
                             EXCEPTION
                                 WHEN duplicate_column THEN RAISE NOTICE 'column user_email already exists in lecturescribe_chat_logs.';
                             END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_chat_logs ADD COLUMN submission_text TEXT;
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column submission_text already exists in lecturescribe_chat_logs.';
+                            END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_chat_logs ADD COLUMN model VARCHAR(128);
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column model already exists in lecturescribe_chat_logs.';
+                            END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_chat_logs ADD COLUMN web_sources_json JSONB;
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column web_sources_json already exists in lecturescribe_chat_logs.';
+                            END;
                         END $$;
 
                         CREATE INDEX IF NOT EXISTS idx_pg_cues_vid ON lecturescribe_transcript_cues(video_id);
@@ -317,9 +332,15 @@ class RelationalDBManager:
         user_prompt: str,
         ai_reply: str,
         citations: List[Dict[str, Any]],
-        user_email: Optional[str] = None
+        user_email: Optional[str] = None,
+        submission_text: Optional[str] = None,
+        model: Optional[str] = None,
+        web_sources: Optional[List[Dict[str, Any]]] = None
     ):
         """Save chat interaction directly to PostgreSQL."""
+        if not video_id or not user_prompt:
+            return
+
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
 
         conn = self._get_connection()
@@ -327,10 +348,112 @@ class RelationalDBManager:
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO lecturescribe_chat_logs (video_id, user_prompt, ai_reply, citations_json, user_email)
-                        VALUES (%s, %s, %s, %s::jsonb, %s);
-                    """, (video_id, user_prompt, ai_reply, json.dumps(citations), clean_email))
+                        INSERT INTO lecturescribe_chat_logs (
+                            video_id, user_prompt, ai_reply, citations_json, user_email,
+                            submission_text, model, web_sources_json
+                        )
+                        VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb);
+                    """, (
+                        video_id,
+                        user_prompt,
+                        ai_reply,
+                        json.dumps(citations or []),
+                        clean_email,
+                        submission_text or "",
+                        model or "",
+                        json.dumps(web_sources or [])
+                    ))
                     conn.commit()
+        finally:
+            conn.close()
+
+    def get_chat_history(
+        self,
+        video_id: str,
+        user_email: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch chronological chat history for a lecture from PostgreSQL.
+        Returns a list of messages formatted for UI rendering.
+        """
+        if not video_id:
+            return []
+
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    query = """
+                        SELECT id, video_id, user_prompt, ai_reply, citations_json, user_email,
+                               submission_text, model, web_sources_json, created_at
+                        FROM lecturescribe_chat_logs
+                        WHERE video_id = %s
+                    """
+                    params = [video_id]
+                    if clean_email:
+                        query += " AND (user_email = %s OR user_email IS NULL)"
+                        params.append(clean_email)
+                    query += " ORDER BY created_at ASC LIMIT %s;"
+                    params.append(limit)
+
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall()
+                    history = []
+                    for r in rows:
+                        c_id = str(r["id"])
+                        ts_str = r["created_at"].isoformat() if r.get("created_at") else ""
+                        # 1. User turn
+                        history.append({
+                            "id": f"msg_user_{c_id}",
+                            "sender": "user",
+                            "text": r["user_prompt"],
+                            "created_at": ts_str
+                        })
+                        # 2. Bot turn
+                        citations = r["citations_json"] if isinstance(r.get("citations_json"), list) else []
+                        web_sources = r["web_sources_json"] if isinstance(r.get("web_sources_json"), list) else []
+                        history.append({
+                            "id": f"msg_bot_{c_id}",
+                            "sender": "bot",
+                            "text": r["ai_reply"],
+                            "submission_text": r.get("submission_text") or "",
+                            "citations": citations,
+                            "web_sources": web_sources,
+                            "model": r.get("model") or "",
+                            "created_at": ts_str
+                        })
+                    return history
+        finally:
+            conn.close()
+
+    def clear_chat_history(
+        self,
+        video_id: str,
+        user_email: Optional[str] = None
+    ) -> bool:
+        """Clear conversation history for a video/user session."""
+        if not video_id:
+            return False
+
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_chat_logs
+                            WHERE video_id = %s AND (user_email = %s OR user_email IS NULL);
+                        """, (video_id, clean_email))
+                    else:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_chat_logs
+                            WHERE video_id = %s;
+                        """, (video_id,))
+                    conn.commit()
+            return True
         finally:
             conn.close()
 

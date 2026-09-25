@@ -615,7 +615,9 @@ class Llama3PineconeRAGStore:
         cues: Optional[List[Dict[str, str]]] = None,
         top_k: int = 10,
         model_id: Optional[str] = None,
-        enable_web_search: bool = True
+        enable_web_search: bool = True,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        user_email: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Agentic RAG Engine:
@@ -706,8 +708,23 @@ class Llama3PineconeRAGStore:
             "- Clarity & Rigor: Structure with clear paragraphs, mathematical notation, and bullet points where helpful."
         )
 
+        prior_messages = []
+        try:
+            from backend.database import db_manager
+            db_history = chat_history if chat_history is not None else db_manager.get_chat_history(target_video_id, user_email=user_email, limit=6)
+            for m in (db_history or [])[-6:]:
+                role = "user" if m.get("sender") == "user" or m.get("role") == "user" else "assistant"
+                txt = (m.get("text") or m.get("content") or "").strip()
+                if txt and not txt.startswith("<function="):
+                    if role == "assistant" and len(txt) > 800:
+                        txt = txt[:800] + "..."
+                    prior_messages.append({"role": role, "content": txt})
+        except Exception as e:
+            print(f"⚠️ [Chat Context Notice]: {e}")
+
         messages = [
             {"role": "system", "content": system_prompt},
+            *prior_messages,
             {"role": "user", "content": f"Student Request: {query} (Lecture: '{lecture_title}', Video ID: '{target_video_id}')"}
         ]
 

@@ -126,6 +126,7 @@ class ChatRequest(BaseModel):
     model_id: Optional[str] = None
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
+    chat_history: Optional[List[Dict[str, Any]]] = None
 
 class RAGQueryRequest(BaseModel):
     query: str
@@ -137,6 +138,7 @@ class RAGQueryRequest(BaseModel):
     model_id: Optional[str] = None
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
+    chat_history: Optional[List[Dict[str, Any]]] = None
 
 class SubmissionRequest(BaseModel):
     original_text: str
@@ -316,7 +318,9 @@ def rag_query(req: RAGQueryRequest):
             cues=req.cues,
             top_k=req.top_k or 10,
             model_id=req.model_id,
-            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
+            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+            user_email=req.user_email,
+            chat_history=req.chat_history
         )
     except Exception as e:
         elapsed = time.time() - t_start
@@ -355,7 +359,10 @@ def rag_query(req: RAGQueryRequest):
                 user_prompt=req.query,
                 ai_reply=result.get("answer", ""),
                 citations=result.get("citations", []),
-                user_email=req.user_email
+                user_email=req.user_email,
+                submission_text=result.get("submission_text", ""),
+                model=result.get("model", ""),
+                web_sources=result.get("web_sources", [])
             )
         except Exception as e:
             print(f"⚠️ [Chat Log Notice]: {e}")
@@ -414,7 +421,9 @@ def chat_with_transcript(req: ChatRequest):
             cues=cues,
             top_k=10,
             model_id=req.model_id,
-            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
+            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+            user_email=req.user_email,
+            chat_history=req.chat_history
         )
     except Exception as e:
         elapsed = time.time() - t_start
@@ -447,7 +456,16 @@ def chat_with_transcript(req: ChatRequest):
 
     # Save to Chat History DB
     try:
-        db_manager.save_chat_log(video_id, user_prompt, reply, citations, user_email=req.user_email)
+        db_manager.save_chat_log(
+            video_id=video_id,
+            user_prompt=user_prompt,
+            ai_reply=reply,
+            citations=citations,
+            user_email=req.user_email,
+            submission_text=sub_text,
+            model=rag_res.get("model", ""),
+            web_sources=rag_res.get("web_sources", [])
+        )
     except Exception as e:
         print(f"⚠️ [Chat Log Notice]: {e}")
 
@@ -476,6 +494,46 @@ def chat_with_transcript(req: ChatRequest):
         "model": rag_res.get("model", ""),
         "submission_text": sub_text,
         "submission_word_count": sub_word_count
+    }
+
+
+@app.get("/api/chat/history")
+def get_chat_history(
+    video_id: str = Query(..., description="Vimeo Video ID"),
+    email: Optional[str] = Query(None, description="User email for scoped history"),
+    user_email: Optional[str] = Query(None, description="User email alias")
+):
+    """Retrieve full chronological conversation history for a lecture from PostgreSQL."""
+    vid = video_id.strip()
+    target_email = (email or user_email or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="video_id parameter is required.")
+
+    messages = db_manager.get_chat_history(vid, user_email=target_email)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "count": len(messages),
+        "messages": messages
+    }
+
+
+@app.delete("/api/chat/history")
+def clear_chat_history(
+    video_id: str = Query(..., description="Vimeo Video ID"),
+    email: Optional[str] = Query(None, description="User email for scoped history"),
+    user_email: Optional[str] = Query(None, description="User email alias")
+):
+    """Clear conversation history for a video/user session."""
+    vid = video_id.strip()
+    target_email = (email or user_email or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="video_id parameter is required.")
+
+    success = db_manager.clear_chat_history(vid, user_email=target_email)
+    return {
+        "status": "success" if success else "failed",
+        "video_id": vid
     }
 
 

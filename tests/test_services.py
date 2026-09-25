@@ -145,5 +145,81 @@ class TestServices(unittest.TestCase):
                     lecture_title="CV"
                 )
 
+    def test_chat_history_db_methods(self):
+        """Verify get_chat_history and clear_chat_history format and execute correctly."""
+        from unittest.mock import patch, MagicMock
+        from backend.database import db_manager
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            {
+                "id": 1,
+                "video_id": "test_vid",
+                "user_prompt": "What is attention?",
+                "ai_reply": "Attention is a mechanism in deep learning.",
+                "citations_json": [{"timestamp": "01:23", "text": "attention"}],
+                "user_email": "student@example.com",
+                "submission_text": "Attention enables models to weight tokens.",
+                "model": "Groq Llama 3.3 70B",
+                "web_sources_json": [],
+                "created_at": None
+            }
+        ]
+        mock_conn = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+        with patch.object(db_manager, "_get_connection", return_value=mock_conn):
+            # Test retrieval
+            history = db_manager.get_chat_history("test_vid", "student@example.com")
+            self.assertEqual(len(history), 2)
+            self.assertEqual(history[0]["sender"], "user")
+            self.assertEqual(history[0]["text"], "What is attention?")
+            self.assertEqual(history[1]["sender"], "bot")
+            self.assertEqual(history[1]["text"], "Attention is a mechanism in deep learning.")
+            self.assertEqual(history[1]["model"], "Groq Llama 3.3 70B")
+            self.assertEqual(history[1]["submission_text"], "Attention enables models to weight tokens.")
+
+            # Test clear
+            success = db_manager.clear_chat_history("test_vid", "student@example.com")
+            self.assertTrue(success)
+
+    def test_rag_query_request_chat_history(self):
+        from backend.main import RAGQueryRequest
+        req = RAGQueryRequest(
+            query="Tell me more about point 2",
+            video_id="test_vid",
+            chat_history=[
+                {"role": "user", "content": "Explain SVMs."},
+                {"role": "assistant", "content": "Support Vector Machines find optimal hyperplanes."}
+            ]
+        )
+        self.assertEqual(len(req.chat_history), 2)
+        self.assertEqual(req.chat_history[0]["role"], "user")
+
+    def test_api_chat_history_endpoints(self):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        client = TestClient(app)
+        with patch("backend.main.db_manager.get_chat_history") as mock_get:
+            mock_get.return_value = [
+                {"id": "msg_user_1", "sender": "user", "text": "Hello"},
+                {"id": "msg_bot_1", "sender": "bot", "text": "Welcome to class!"}
+            ]
+            resp = client.get("/api/chat/history?video_id=test_vid&email=test@example.com")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["count"], 2)
+            self.assertEqual(len(data["messages"]), 2)
+
+        with patch("backend.main.db_manager.clear_chat_history") as mock_clear:
+            mock_clear.return_value = True
+            resp = client.delete("/api/chat/history?video_id=test_vid&email=test@example.com")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+
 if __name__ == "__main__":
     unittest.main()

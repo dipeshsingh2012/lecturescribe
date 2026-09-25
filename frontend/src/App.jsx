@@ -557,7 +557,7 @@ export default function App() {
       const cached = cachedVideos[vidId];
       setActiveData({ ...cached, cached: true });
       setUrlInput(cached.sourceUrl || `https://vimeo.com/${vidId}`);
-      initChatMessages(cached.title);
+      initChatMessages(cached.title, vidId);
       setCacheNotice("⚡ Loaded instantly from browser cache — Transcripts and summary were reused!");
       if (googleUser?.email) {
         fetch(`${API_BASE}/api/user/library/record`, {
@@ -590,7 +590,7 @@ export default function App() {
         const data = await res.json();
         setActiveData(data);
         setUrlInput(data.sourceUrl || `https://vimeo.com/${data.videoId}`);
-        initChatMessages(data.title);
+        initChatMessages(data.title, data.videoId);
 
         // Store into client cache for instant repeated loads
         setCachedVideos((prev) => {
@@ -666,6 +666,13 @@ export default function App() {
     }
   }, [activeData]);
 
+  // Synchronize persisted conversation history when lecture opens or changes
+  useEffect(() => {
+    if (activeData?.videoId) {
+      fetchChatHistory(activeData.videoId, googleUser?.email);
+    }
+  }, [activeData?.videoId, googleUser?.email]);
+
   const handlePasteUrl = (e) => {
     const pasted = e.clipboardData?.getData('text') || '';
     const vidId = extractVideoId(pasted);
@@ -678,8 +685,51 @@ export default function App() {
     }
   };
 
-  const initChatMessages = () => {
+  const fetchChatHistory = async (videoId, userEmail = null) => {
+    if (!videoId) return;
+    try {
+      const emailParam = userEmail ? `&email=${encodeURIComponent(userEmail)}` : '';
+      const res = await fetch(`${API_BASE}/api/chat/history?video_id=${encodeURIComponent(videoId)}${emailParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.messages && Array.isArray(data.messages)) {
+          setChatMessages(data.messages);
+          const summaries = {};
+          data.messages.forEach(m => {
+            if (m.sender === 'bot' && m.submission_text) {
+              summaries[m.id] = m.submission_text;
+            }
+          });
+          setSubmissionSummaries(prev => ({ ...prev, ...summaries }));
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch chat history:", e);
+    }
+  };
+
+  const clearChatHistory = async () => {
+    if (!activeData?.videoId) return;
+    try {
+      const emailParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
+      await fetch(`${API_BASE}/api/chat/history?video_id=${encodeURIComponent(activeData.videoId)}${emailParam}`, {
+        method: 'DELETE'
+      });
+    } catch (e) {
+      console.warn("Could not clear chat history on server:", e);
+    }
     setChatMessages([]);
+    setSubmissionSummaries({});
+  };
+
+  const initChatMessages = (title, videoId = null) => {
+    const targetVid = videoId || activeData?.videoId;
+    if (targetVid) {
+      fetchChatHistory(targetVid, googleUser?.email);
+    } else {
+      setChatMessages([]);
+    }
   };
 
 
@@ -703,7 +753,11 @@ export default function App() {
           top_k: 10,
           user_email: googleUser?.email || null,
           model_id: selectedModel,
-          enable_web_search: webSearchEnabled
+          enable_web_search: webSearchEnabled,
+          chat_history: chatMessages.slice(-6).map(m => ({
+            role: m.sender === 'user' ? 'user' : 'assistant',
+            content: m.text
+          }))
         })
       });
 
@@ -2266,6 +2320,39 @@ export default function App() {
                   >
                     <Globe size={13} color={webSearchEnabled ? '#10b981' : 'var(--text-secondary)'} />
                     <span>Web: {webSearchEnabled ? 'ON' : 'OFF'}</span>
+                  </button>
+
+                  {/* New Chat / Reset Thread Button */}
+                  <button
+                    onClick={clearChatHistory}
+                    title="Start a new chat thread (clears chat for this lecture)"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '5px 10px',
+                      borderRadius: '8px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--panel-bg)',
+                      color: 'var(--text-secondary)',
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = 'var(--text-primary)';
+                      e.currentTarget.style.borderColor = 'var(--theme-primary)';
+                      e.currentTarget.style.background = 'var(--card-bg)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = 'var(--text-secondary)';
+                      e.currentTarget.style.borderColor = 'var(--border-color)';
+                      e.currentTarget.style.background = 'var(--panel-bg)';
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>New Chat</span>
                   </button>
 
                   {/* Model Dropdown */}

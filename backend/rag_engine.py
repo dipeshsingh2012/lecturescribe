@@ -1069,63 +1069,6 @@ class Llama3PineconeRAGStore:
             "video_id": target_video_id
         }
 
-    def extract_lecture_keywords(self, video_id: str = "", title: str = "", top_n: int = 8) -> List[str]:
-        """Extract domain keywords/keyphrases from the lecture transcript & summaries."""
-        keywords = []
-        text_corpus = ""
-
-        if video_id:
-            try:
-                from backend.database import db_manager
-                saved = db_manager.get_saved_video(video_id)
-                if saved:
-                    # 1. Use summary section headings / takeaways if present
-                    summary_secs = saved.get("summarySections") or saved.get("summary_sections") or []
-                    for sec in summary_secs:
-                        title_val = sec.get("title") or sec.get("heading") or ""
-                        clean_t = re.sub(r"\[.*?\]", "", title_val).strip()
-                        clean_t = re.sub(r"^[^\w\s]+\s*", "", clean_t).strip()
-                        if clean_t and clean_t not in keywords:
-                            keywords.append(clean_t)
-                    # 2. Add text from cues
-                    cues = saved.get("cues", [])
-                    text_corpus = " ".join([c.get("text", "") for c in cues[:150]])
-            except Exception:
-                pass
-
-        if not text_corpus and self.local_chunks:
-            text_corpus = " ".join([c.get("metadata", {}).get("text", "") for c in self.local_chunks[:25]])
-
-        # Stop words filter for technical keyword extraction
-        stop_words = {
-            "the", "a", "an", "is", "are", "was", "were", "what", "which", "who", "whom",
-            "this", "that", "these", "those", "how", "why", "when", "where", "in", "on",
-            "at", "to", "for", "with", "about", "against", "between", "into", "through",
-            "during", "before", "after", "above", "below", "from", "up", "down", "out",
-            "off", "over", "under", "again", "further", "then", "once", "here", "there",
-            "all", "any", "both", "each", "few", "more", "most", "other", "some", "such",
-            "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "can",
-            "will", "just", "should", "now", "lecture", "student", "today", "going", "discuss",
-            "talk", "understand", "see", "also", "well", "like", "know", "mean", "right",
-            "good", "morning", "session", "okay", "yeah", "video", "thank", "please", "yes",
-            "here", "let", "first", "second", "third", "one", "two", "three", "point", "thing"
-        }
-        words = re.findall(r"\b[a-zA-Z]{4,}\b", (text_corpus + " " + title).lower())
-        freq = {}
-        for w in words:
-            if w not in stop_words:
-                freq[w] = freq.get(w, 0) + 1
-
-        sorted_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)
-        for w, _ in sorted_words:
-            if len(keywords) >= top_n:
-                break
-            cap_w = w.capitalize()
-            if cap_w not in keywords and w not in keywords:
-                keywords.append(w)
-
-        return keywords[:top_n]
-
     def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
         """Strip markdown syntax, timestamps, and AI boilerplate from text."""
         # 1. Strip timestamp patterns like [01:23] or [01:23:45] or [00:00 - 15:20]
@@ -1190,8 +1133,6 @@ class Llama3PineconeRAGStore:
             raise ValueError(f"Cannot generate academic submission from unexecuted tool call: {original_text}")
 
         clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
-        keywords = self.extract_lecture_keywords(video_id=video_id or "", top_n=6)
-        kw_str = ", ".join(keywords) if keywords else "the core lecture topics"
 
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
@@ -1221,7 +1162,7 @@ class Llama3PineconeRAGStore:
             "2. Tone: Professional, practical, academically rigorous, and grounded. Reflect both real-world industrial insight and deep graduate-level theoretical understanding.\n"
             "3. Format: Clean plain text only. STRICTLY NO MARKDOWN: no asterisks, no bolding, no headers, no bullet points, and NO bracketed timestamps [MM:SS].\n"
             "4. NO AI CLICHES OR PREAMBLES: Never say 'Here is a concise academic submission...', 'Here is my summary', 'In conclusion', 'As an AI', 'In this lecture', or 'Based on the explanation'. Start IMMEDIATELY with the first sentence of technical analysis.\n"
-            f"5. Domain Concepts: Seamlessly integrate relevant technical terminology: {kw_str}."
+            "5. Domain Concepts: Seamlessly integrate the relevant technical terminology and methodologies discussed in the explanation."
         )
 
         user_content = (
@@ -1338,7 +1279,6 @@ class Llama3PineconeRAGStore:
             "submission_text": final_submission,
             "word_count": len(words),
             "target_word_count": word_count,
-            "keywords": keywords,
             "model": model_used
         }
 

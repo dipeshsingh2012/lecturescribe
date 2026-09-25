@@ -4,8 +4,7 @@ Dynamic AI Summary Generator for LectureScribe
 Generates structured, authentic executive summaries from video transcript cues:
 1. Reconstructs complete, grammatical sentences across fragmented caption cues.
 2. Generates high-quality topical chapters via LLM (Groq / Gemini / Hugging Face / OpenAI).
-3. Provides a clean, deterministic time-sliced fallback when LLMs are unavailable.
-4. Extracts genuine questions explored during the lecture.
+3. Provides a clean, minimal fallback when LLMs are unavailable.
 """
 from __future__ import annotations
 
@@ -110,42 +109,6 @@ def score_sentence(s: str) -> float:
             score += weight
 
     return score
-
-
-def extract_substantive_questions(sentences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Extract authentic questions asked or addressed during the lecture."""
-    question_starters = (
-        'what', 'how', 'why', 'can', 'should', 'is', 'are', 'which', 'who', 'where', 'when', 'does', 'do'
-    )
-    results = []
-    seen = set()
-
-    for s in sentences:
-        txt = s["text"]
-        if not txt.endswith("?"):
-            continue
-        if len(txt.split()) < 6:
-            continue
-
-        words = txt.lower().split()
-        first_word = re.sub(r"[^a-z]", "", words[0])
-        is_q = first_word in question_starters
-        if not is_q and len(words) >= 2:
-            is_q = words[1] in question_starters
-
-        if is_q:
-            clean_q = re.sub(r"^(?:So|Then|Now|And)[,\s]+", "", txt, flags=re.IGNORECASE)
-            norm = clean_q.lower()[:35]
-            if norm not in seen:
-                seen.add(norm)
-                results.append({"time": s["time"], "text": clean_q})
-
-    return results
-
-
-def extract_dynamic_phase_topic(sentences: List[Dict[str, Any]], video_title: str, used_topics: Optional[set] = None) -> str:
-    """Legacy compatibility stub: returns safe general topic description."""
-    return "Methodology & Analytical Discussions"
 
 
 def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[List[Dict[str, Any]]]:
@@ -278,95 +241,11 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
     return None
 
 
-def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dict[str, Any]]:
-    """
-    Deterministic NLP fallback when LLM is unavailable:
-    1. Reconstructs full grammatical sentences from caption cues.
-    2. Groups into chronological lecture phases.
-    3. Selects top substantive takeaway statements with exact timestamps.
-    4. Extracts real student and instructor inquiry questions.
-    """
+def generate_summary_sections(cues: List[Dict[str, str]], title: str) -> List[Dict[str, Any]]:
+    """Master summary function: Generates structured summary sections using LLM."""
     if not cues:
         return [{"title": "📌 Lecture Overview", "points": ["No transcript cues available for summary generation."]}]
 
-    sentences = reconstruct_sentences(cues)
-    if not sentences:
-        sentences = [
-            {"time": c.get("time", "00:00"), "text": clean_sentence_text(c.get("text", ""))}
-            for c in cues if len(c.get("text", "").split()) >= 4
-        ]
-
-    total_s = len(sentences)
-    if total_s < 20:
-        num_phases = 2
-    elif total_s < 60:
-        num_phases = 3
-    elif total_s < 150:
-        num_phases = 4
-    else:
-        num_phases = 5
-
-    chunk_size = max(1, total_s // num_phases)
-    sections = []
-
-    # 1. Executive Overview from introductory lecture sentences
-    intro_slice = sentences[:max(chunk_size, 15)]
-    intro_scored = sorted(intro_slice, key=lambda x: score_sentence(x["text"]), reverse=True)
-    intro_points = []
-    for cand in intro_scored:
-        if len(intro_points) >= 3:
-            break
-        if not any(cand["text"][:30].lower() == p[:30].lower() for p in intro_points):
-            intro_points.append(f"[{cand['time']}] {cand['text']}")
-
-    if not intro_points and sentences:
-        intro_points = [f"[{sentences[0]['time']}] {sentences[0]['text']}"]
-
-    sections.append({
-        "title": "🎯 Executive Overview & Session Scope",
-        "points": intro_points
-    })
-
-    # 2. Chronological Lecture Chapters
-    for i in range(num_phases):
-        slice_s = sentences[i * chunk_size : min(total_s, (i + 1) * chunk_size)]
-        if not slice_s:
-            continue
-
-        t_start = slice_s[0]["time"]
-        t_end = slice_s[-1]["time"]
-        scored = sorted(slice_s, key=lambda x: score_sentence(x["text"]), reverse=True)
-        picked = []
-        for cand in scored:
-            if len(picked) >= 4:
-                break
-            if any(cand["text"][:30].lower() == p[:30].lower() for p in picked):
-                continue
-            picked.append(f"[{cand['time']}] {cand['text']}")
-
-        if not picked:
-            picked = [f"[{t_start}] Key concepts and topics covered in this lecture segment."]
-
-        sections.append({
-            "title": f"📑 Lecture Discussion [{t_start} - {t_end}]",
-            "points": picked
-        })
-
-    # 3. Substantive Questions Explored
-    real_questions = extract_substantive_questions(sentences)
-    if real_questions:
-        q_points = [f"[{q['time']}] {q['text']}" for q in real_questions[:5]]
-        if q_points:
-            sections.append({
-                "title": "❓ Key Concepts & Questions Explored",
-                "points": q_points
-            })
-
-    return sections
-
-
-def generate_summary_sections(cues: List[Dict[str, str]], title: str) -> List[Dict[str, Any]]:
-    """Master summary function: Attempts LLM generation first, with clean dynamic fallback."""
     try:
         llm_res = generate_llm_summary(cues, title)
         if llm_res:
@@ -374,4 +253,13 @@ def generate_summary_sections(cues: List[Dict[str, str]], title: str) -> List[Di
     except Exception as e:
         print(f"[Summary Generator Notice] LLM summary attempt skipped: {e}")
 
-    return generate_dynamic_summary(cues, title)
+    # Clean fallback when LLM is unavailable
+    sentences = reconstruct_sentences(cues)
+    points = [f"[{s['time']}] {s['text']}" for s in sentences[:4]] if sentences else ["Lecture summary in progress."]
+    return [{"title": "🎯 Session Overview", "points": points}]
+
+
+# Backward compatibility aliases
+generate_dynamic_summary = generate_summary_sections
+extract_dynamic_phase_topic = lambda *args, **kwargs: "Methodology & Analytical Discussions"
+extract_substantive_questions = lambda *args, **kwargs: []

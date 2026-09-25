@@ -100,7 +100,7 @@ class ChatRequest(BaseModel):
     message: str
     video_id: Optional[str] = None
     video_title: Optional[str] = None
-    cues: List[Dict[str, str]] = []
+    cues: Optional[List[Dict[str, str]]] = None
     user_email: Optional[str] = None
     model_id: Optional[str] = None
     enable_web_search: Optional[bool] = True
@@ -110,10 +110,17 @@ class RAGQueryRequest(BaseModel):
     video_id: Optional[str] = ""
     video_title: Optional[str] = None
     cues: Optional[List[Dict[str, str]]] = None
-    top_k: Optional[int] = 4
+    top_k: Optional[int] = 10
     user_email: Optional[str] = None
     model_id: Optional[str] = None
     enable_web_search: Optional[bool] = True
+
+class SubmissionRequest(BaseModel):
+    original_text: str
+    video_id: Optional[str] = None
+    word_count: Optional[int] = 100
+    user_email: Optional[str] = None
+    model_id: Optional[str] = None
 
 class AlgoliaSearchRequest(BaseModel):
     query: str
@@ -261,10 +268,26 @@ def rag_query(req: RAGQueryRequest):
         video_id=req.video_id,
         video_title=req.video_title,
         cues=req.cues,
-        top_k=req.top_k or 4,
+        top_k=req.top_k or 10,
         model_id=req.model_id,
         enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
     )
+    
+    # Auto-generate academic submission version (~120 words, human graduate persona)
+    try:
+        sub_res = pinecone_rag_engine.generate_submission_version(
+            original_text=result.get("answer", ""),
+            video_id=req.video_id,
+            word_count=120,
+            model_id=req.model_id
+        )
+        result["submission_text"] = sub_res.get("submission_text", "")
+        result["submission_word_count"] = sub_res.get("word_count", 0)
+    except Exception as e:
+        print(f"[Submission Gen Notice]: {e}")
+        result["submission_text"] = ""
+        result["submission_word_count"] = 0
+
     if req.video_id:
         try:
             db_manager.save_chat_log(
@@ -286,21 +309,36 @@ def chat_with_transcript(req: ChatRequest):
     title = req.video_title or "Lecture"
     video_id = req.video_id or "active"
 
-    if cues and len(pinecone_rag_engine.local_chunks) == 0:
-        pinecone_rag_engine.ingest_transcript(video_id, title, cues)
-        algolia_service.ingest_cues(video_id, title, cues)
+    if req.cues is not None and len(req.cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
+        pinecone_rag_engine.ingest_transcript(video_id, title, req.cues)
+        algolia_service.ingest_cues(video_id, title, req.cues)
 
     rag_res = pinecone_rag_engine.query_rag(
         user_prompt,
         video_id=video_id,
         video_title=title,
         cues=cues,
-        top_k=4,
+        top_k=10,
         model_id=req.model_id,
         enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
     )
     reply = rag_res.get("answer", "")
     citations = rag_res.get("citations", [])
+
+    # Auto-generate academic submission version
+    sub_text = ""
+    sub_word_count = 0
+    try:
+        sub_res = pinecone_rag_engine.generate_submission_version(
+            original_text=reply,
+            video_id=video_id,
+            word_count=120,
+            model_id=req.model_id
+        )
+        sub_text = sub_res.get("submission_text", "")
+        sub_word_count = sub_res.get("word_count", 0)
+    except Exception as e:
+        print(f"[Submission Gen Notice]: {e}")
 
     # Save to Chat History DB
     db_manager.save_chat_log(video_id, user_prompt, reply, citations, user_email=req.user_email)
@@ -309,8 +347,25 @@ def chat_with_transcript(req: ChatRequest):
         "reply": reply,
         "citations": citations,
         "web_sources": rag_res.get("web_sources", []),
-        "model": rag_res.get("model", "")
+        "model": rag_res.get("model", ""),
+        "submission_text": sub_text,
+        "submission_word_count": sub_word_count
     }
+
+
+@app.post("/api/rag/query/submission")
+@app.post("/api/rag/condense")
+@app.post("/api/submission")
+def condense_for_submission(req: SubmissionRequest):
+    """Condense learning answer into an authentic 100-150 word academic submission."""
+    if not req.original_text.strip():
+        raise HTTPException(status_code=400, detail="original_text cannot be empty")
+    return pinecone_rag_engine.generate_submission_version(
+        original_text=req.original_text,
+        video_id=req.video_id or "",
+        word_count=req.word_count or 120,
+        model_id=req.model_id
+    )
 
 
 # ==============================================================================

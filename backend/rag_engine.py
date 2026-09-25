@@ -140,7 +140,7 @@ class Llama3PineconeRAGStore:
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
 
-    def ingest_transcript(self, video_id: str, video_title: str, cues: List[Dict[str, str]], window_size: int = 4, overlap: int = 2) -> int:
+    def ingest_transcript(self, video_id: str, video_title: str, cues: List[Dict[str, str]], window_size: int = 8, overlap: int = 3) -> int:
         """Chunk transcript cues & upsert embeddings to Pinecone."""
         if self.video_id == video_id and len(self.local_chunks) > 0:
             return len(self.local_chunks)
@@ -176,7 +176,7 @@ class Llama3PineconeRAGStore:
                     "video_title": video_title,
                     "start_time": start_time,
                     "end_time": end_time,
-                    "text": chunk_text.strip()[:1000]
+                    "text": chunk_text.strip()[:2000]
                 }
 
                 chunk_obj = {
@@ -291,7 +291,7 @@ class Llama3PineconeRAGStore:
                 "video_title": video_title,
                 "start_time": start_time,
                 "end_time": end_time,
-                "text": chunk_text[:1000]
+                "text": chunk_text[:2000]
             }
             scored_windows.append((score, i, metadata))
 
@@ -300,13 +300,48 @@ class Llama3PineconeRAGStore:
 
         return [w[2] for w in scored_windows[:top_k]]
 
+    def reciprocal_rank_fusion(
+        self,
+        ranked_lists: List[List[Dict[str, Any]]],
+        k: int = 60
+    ) -> List[Dict[str, Any]]:
+        """
+        Combine multiple ranked lists of chunk dictionaries using Reciprocal Rank Fusion.
+        Score(d) = sum(1 / (k + rank_i(d)))
+        """
+        rrf_scores = {}
+        chunk_map = {}
+
+        for ranked_list in ranked_lists:
+            for rank_0, item in enumerate(ranked_list):
+                rank = rank_0 + 1
+                # Use start_time + text prefix as unique signature
+                doc_id = f"{item.get('start_time', '')}_{item.get('text', '')[:60]}"
+                if doc_id not in chunk_map:
+                    chunk_map[doc_id] = item
+                rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+
+        sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        return [chunk_map[doc_id] for doc_id in sorted_ids]
+
+    def _parse_timestamp(self, ts: str) -> float:
+        """Convert timestamp string 'MM:SS' or 'HH:MM:SS' to seconds for sorting."""
+        if not ts:
+            return 0.0
+        parts = ts.split(':')
+        if len(parts) == 3:
+            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+        elif len(parts) == 2:
+            return float(parts[0]) * 60 + float(parts[1])
+        return 0.0
+
     def query_rag(
         self,
         query: str,
         video_id: Optional[str] = None,
         video_title: Optional[str] = None,
         cues: Optional[List[Dict[str, str]]] = None,
-        top_k: int = 4,
+        top_k: int = 10,
         model_id: Optional[str] = None,
         enable_web_search: bool = True
     ) -> Dict[str, Any]:
@@ -335,6 +370,7 @@ class Llama3PineconeRAGStore:
         retrieved_metadata = []
 
         # 1. Pinecone Vector Search (Strictly filtered by video_id)
+        pinecone_matches = []
         if self.index:
             try:
                 query_kwargs = {
@@ -353,13 +389,51 @@ class Llama3PineconeRAGStore:
                             m_vid = str(match.metadata.get("video_id", ""))
                             # Strictly filter out any match from a different lecture
                             if not target_video_id or m_vid == target_video_id:
-                                retrieved_metadata.append(match.metadata)
+                                pinecone_matches.append(match.metadata)
             except Exception as e:
                 print(f"[RAG Engine Warning] Vector search error: {e}")
 
-        # 2. Local/DB Transcript Search: Strictly use the active lecture's transcript cues
-        if not retrieved_metadata:
-            if lecture_cues:
+        # 2. Hybrid Retrieval: If cues not passed, use RRF fusion of Pinecone + Algolia
+        if not lecture_cues:
+            # Fetch Algolia hits for keyword matches
+            algolia_chunks = []
+            try:
+                from backend.algolia_service import algolia_service
+                algolia_hits = algolia_service.search(query, video_id=target_video_id, limit=top_k * 2)
+                for h in algolia_hits:
+                    algolia_chunks.append({
+                        "video_id": target_video_id,
+                        "video_title": lecture_title,
+                        "start_time": h.get("timestamp", "00:00"),
+                        "end_time": h.get("timestamp", "00:00"),
+                        "text": h.get("text", "")
+                    })
+            except Exception as e:
+                print(f"[RAG Engine Warning] Algolia search error: {e}")
+
+            # Combine Pinecone and Algolia using RRF fusion
+            if pinecone_matches or algolia_chunks:
+                retrieved_metadata = self.reciprocal_rank_fusion([pinecone_matches, algolia_chunks], k=60)
+            else:
+                # Fallback: Load transcript from Postgres and score via sliding window
+                try:
+                    from backend.database import db_manager
+                    saved = db_manager.get_saved_video(target_video_id)
+                    if saved and saved.get("cues"):
+                        lecture_cues = saved.get("cues", [])
+                        retrieved_metadata = self._retrieve_relevant_lecture_cues(
+                            query=query,
+                            cues=lecture_cues,
+                            video_id=target_video_id,
+                            video_title=lecture_title,
+                            top_k=top_k
+                        )
+                except Exception as e:
+                    print(f"[RAG Engine Warning] Fallback DB retrieval error: {e}")
+        else:
+            # Use original logic if cues are provided
+            retrieved_metadata = pinecone_matches
+            if not retrieved_metadata:
                 retrieved_metadata = self._retrieve_relevant_lecture_cues(
                     query=query,
                     cues=lecture_cues,
@@ -374,6 +448,9 @@ class Llama3PineconeRAGStore:
                     if not target_video_id or str(c.get("metadata", {}).get("video_id", "")) == target_video_id
                 ]
                 retrieved_metadata = matched_local[:top_k]
+
+        # 3. Chronological Sorting: Sort chunks by start_time before feeding into context_str
+        retrieved_metadata.sort(key=lambda x: self._parse_timestamp(x.get("start_time", "00:00")))
 
         context_str = ""
         citations = []
@@ -542,5 +619,233 @@ class Llama3PineconeRAGStore:
         )
         return tip, "Transcript Retrieval"
 
+    def extract_lecture_keywords(self, video_id: str = "", title: str = "", top_n: int = 8) -> List[str]:
+        """Extract domain keywords/keyphrases from the lecture transcript & summaries."""
+        keywords = []
+        text_corpus = ""
+
+        if video_id:
+            try:
+                from backend.database import db_manager
+                saved = db_manager.get_saved_video(video_id)
+                if saved:
+                    # 1. Use summary section headings / takeaways if present
+                    for sec in saved.get("summary_sections", []):
+                        if sec.get("heading"):
+                            h = sec["heading"].strip()
+                            if h and h not in keywords:
+                                keywords.append(h)
+                    # 2. Add text from cues
+                    cues = saved.get("cues", [])
+                    text_corpus = " ".join([c.get("text", "") for c in cues[:150]])
+            except Exception:
+                pass
+
+        if not text_corpus and self.local_chunks:
+            text_corpus = " ".join([c.get("metadata", {}).get("text", "") for c in self.local_chunks[:25]])
+
+        # Stop words filter for technical keyword extraction
+        stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "what", "which", "who", "whom",
+            "this", "that", "these", "those", "how", "why", "when", "where", "in", "on",
+            "at", "to", "for", "with", "about", "against", "between", "into", "through",
+            "during", "before", "after", "above", "below", "from", "up", "down", "out",
+            "off", "over", "under", "again", "further", "then", "once", "here", "there",
+            "all", "any", "both", "each", "few", "more", "most", "other", "some", "such",
+            "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "can",
+            "will", "just", "should", "now", "lecture", "student", "today", "going", "discuss",
+            "talk", "understand", "see", "also", "well", "like", "know", "mean", "right",
+            "good", "morning", "session", "okay", "yeah", "video", "thank", "please", "yes",
+            "here", "let", "first", "second", "third", "one", "two", "three", "point", "thing"
+        }
+        words = re.findall(r"\b[a-zA-Z]{4,}\b", (text_corpus + " " + title).lower())
+        freq = {}
+        for w in words:
+            if w not in stop_words:
+                freq[w] = freq.get(w, 0) + 1
+
+        sorted_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+        for w, _ in sorted_words:
+            if len(keywords) >= top_n:
+                break
+            cap_w = w.capitalize()
+            if cap_w not in keywords and w not in keywords:
+                keywords.append(w)
+
+        return keywords[:top_n]
+
+    def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
+        """Strip markdown syntax, timestamps, and AI boilerplate from text."""
+        # 1. Strip timestamp patterns like [01:23] or [01:23:45]
+        cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?\]", "", text)
+        # 2. Strip Markdown headers, bold, italics, code fences, blockquotes, bullets
+        cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
+        cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+        cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+        cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+        cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
+        cleaned = re.sub(r"_([^_]+)_", r"\1", cleaned)
+        cleaned = re.sub(r"^\s*[-*+]\s+", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r"^\s*\d+\.\s+", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r">\s*", "", cleaned)
+        # 3. Strip AI cliches and intros
+        ai_cliches = [
+            r"^based on (the )?(professor's )?(lecture|transcript|video|explanation)[^:.\n]*?[,.:]+\s*",
+            r"^(we can identify|we see that|we can observe|it can be seen that)\s+",
+            r"^here('s| is) (what|a summary|my takeaway|the answer).*?[:.,\n]+\s*",
+            r"^in this lecture.*?,\s*",
+            r"^as an ai language model.*?,\s*",
+            r"💡\s*\*\*ai tutor connected\*\*.*",
+            r"\*\(tip:.*?\)\*",
+            r"^in conclusion.*?,\s*"
+        ]
+        for pat in ai_cliches:
+            cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
+
+        # 4. Collapse whitespace
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        # 5. Trim to approximate target words at sentence boundary if too long
+        words = cleaned.split()
+        if len(words) > target_words + 30:
+            trimmed = " ".join(words[:target_words + 15])
+            last_period = max(trimmed.rfind("."), trimmed.rfind("!"), trimmed.rfind("?"))
+            if last_period > len(trimmed) // 2:
+                cleaned = trimmed[:last_period + 1]
+            else:
+                cleaned = " ".join(words[:target_words]) + "."
+        return cleaned
+
+    def generate_submission_version(
+        self,
+        original_text: str,
+        video_id: Optional[str] = "",
+        word_count: int = 100,
+        model_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Synthesize an academic submission (~100 words, plain text) from the persona of
+        an Indian student pursuing a Master's degree while working in the industry.
+        """
+        import requests
+
+        clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
+        keywords = self.extract_lecture_keywords(video_id=video_id or "", top_n=6)
+        kw_str = ", ".join(keywords) if keywords else "the core lecture topics"
+
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
+
+        target_model = model_id or "gemini-2.0-flash" if gemini_key else ("llama-3.3-70b-versatile" if groq_key else "meta-llama/Llama-3.1-8B-Instruct")
+        if target_model.startswith("gemini") and not gemini_key:
+            target_model = "llama-3.3-70b-versatile" if groq_key else "meta-llama/Llama-3.1-8B-Instruct"
+        elif target_model.startswith("llama-3.3") and not groq_key:
+            target_model = "gemini-2.0-flash" if gemini_key else "meta-llama/Llama-3.1-8B-Instruct"
+
+        system_prompt = (
+            "You are an Indian graduate student pursuing a Master's degree (M.Tech / M.S.) in Computer Science / Engineering, "
+            "who is simultaneously working as a software / systems engineer in the corporate industry.\n\n"
+            f"Your professor has assigned a concise academic submission of strictly around {word_count} words (between 85 and 115 words) "
+            "summarizing your technical takeaway or solution for this topic.\n\n"
+            "STRICT RULES:\n"
+            f"1. Target length: strictly around {word_count} words.\n"
+            "2. Tone: Professional, practical, academically rigorous, and grounded. Reflect both real-world industrial insight and deep graduate-level theoretical understanding.\n"
+            "3. Format: Clean plain text only. STRICTLY NO MARKDOWN: no asterisks, no bolding, no headers, no bullet points, and NO bracketed timestamps [MM:SS].\n"
+            "4. NO AI CLICHES: Never say 'Here is my summary', 'In conclusion', 'As an AI', 'In this lecture', or 'Based on the explanation'. Start directly with the substantive analysis.\n"
+            f"5. Domain Concepts: Seamlessly integrate relevant technical terminology: {kw_str}."
+        )
+
+        user_content = (
+            f"Draft the authentic ~{word_count}-word student submission based on this technical explanation:\n\n{clean_base}"
+        )
+
+        raw_output = ""
+        model_used = ""
+
+        # 1. Gemini
+        if (target_model.startswith("gemini") or "flash" in target_model) and gemini_key:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
+                }
+                r = requests.post(url, json=payload, timeout=12)
+                if r.status_code == 200:
+                    data = r.json()
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0]:
+                        parts = candidates[0]["content"].get("parts", [])
+                        if parts:
+                            raw_output = parts[0].get("text", "").strip()
+                            model_used = "Gemini 2.0 Flash"
+            except Exception as e:
+                print(f"[Gemini Submission Inference Error]: {e}")
+
+        # 2. Groq
+        if not raw_output and (target_model.startswith("llama-3.3") or "groq" in target_model.lower()) and groq_key:
+            try:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 300
+                }
+                r = requests.post(url, headers=headers, json=payload, timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    choices = data.get("choices", [])
+                    if choices and "message" in choices[0]:
+                        raw_output = choices[0]["message"].get("content", "").strip()
+                        model_used = "Groq Llama 3.3 70B"
+            except Exception as e:
+                print(f"[Groq Submission Inference Error]: {e}")
+
+        # 3. Hugging Face
+        if not raw_output and hf_token:
+            try:
+                from huggingface_hub import InferenceClient
+                client = InferenceClient(api_key=hf_token)
+                resp = client.chat.completions.create(
+                    model="meta-llama/Llama-3.1-8B-Instruct",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    max_tokens=300,
+                    temperature=0.3
+                )
+                if resp and resp.choices and resp.choices[0].message:
+                    raw_output = resp.choices[0].message.content.strip()
+                    model_used = "Hugging Face Llama 3.1 8B"
+            except Exception as e:
+                print(f"[HF Submission Inference Error]: {e}")
+
+        # 4. Fallback if no LLM responded or keys are missing
+        if not raw_output:
+            raw_output = clean_base
+            model_used = "Rule-based Student Formatter"
+
+        final_submission = self._clean_for_submission(raw_output, target_words=word_count)
+        words = final_submission.split()
+
+        return {
+            "status": "success",
+            "submission_text": final_submission,
+            "word_count": len(words),
+            "target_word_count": word_count,
+            "keywords": keywords,
+            "model": model_used
+        }
+
 
 pinecone_rag_engine = Llama3PineconeRAGStore()
+

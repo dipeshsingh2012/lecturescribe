@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Player from '@vimeo/player';
+import ReactMarkdown from 'react-markdown';
 import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
   Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut,
-  Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp, Globe
+  Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp, Globe, Book
 } from 'lucide-react';
 
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -279,6 +280,9 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  const [viewMode, setViewMode] = useState('learning'); // 'learning' or 'submission'
+  const [submissionSummaries, setSubmissionSummaries] = useState({}); // Store submission versions
+  const [copiedSubmissionId, setCopiedSubmissionId] = useState(null);
   const chatEndRef = useRef(null);
 
   // Fetch available AI models
@@ -425,6 +429,116 @@ export default function App() {
       }
       return part;
     });
+  };
+
+  // Recursively process children to find text and turn timestamps into clickable buttons
+  const renderChildrenWithTimestamps = (children) => {
+    if (!children) return null;
+    if (typeof children === 'string') {
+      return renderMessageWithTimestamps(children);
+    }
+    if (Array.isArray(children)) {
+      return children.map((child, idx) => {
+        if (typeof child === 'string') {
+          return <React.Fragment key={idx}>{renderMessageWithTimestamps(child)}</React.Fragment>;
+        }
+        return child;
+      });
+    }
+    return children;
+  };
+
+  // Clean fallback in case LLM condenser is still loading or offline
+  const cleanSubmissionFallback = (text, targetWords = 120) => {
+    if (!text) return '';
+    let cleaned = text
+      .replace(/^(based on (the )?(professor's )?(lecture|transcript|video|explanation|sources)[^:.\n]*?[,.:]+\s*)/i, '')
+      .replace(/^(we can identify|we see that|we can observe|it can be seen that)\s+/i, '')
+      .replace(/^(here('s| is) (what|a summary|my takeaway|the answer)[^:.,\n]*[:.,\n]+)/i, '')
+      .replace(/^(certainly|sure thing|as an ai|in this lecture)[^:.,\n]*[:.,\n]+/i, '')
+      .replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g, '')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/^\s*\d+\.\s+/gm, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const words = cleaned.split(/\s+/);
+    if (words.length > targetWords + 15) {
+      cleaned = words.slice(0, targetWords).join(' ') + '.';
+    }
+    return cleaned;
+  };
+
+  // Custom component to render markdown with clickable timestamps
+  const MarkdownWithTimestamps = ({ content }) => {
+    return (
+      <ReactMarkdown
+        components={{
+          // Custom renderer for inline text to handle timestamps
+          p: ({ children }) => (
+            <p style={{ margin: '0.4rem 0', lineHeight: 1.6 }}>{renderChildrenWithTimestamps(children)}</p>
+          ),
+          li: ({ children }) => (
+            <li style={{ marginBottom: '0.25rem', lineHeight: 1.5 }}>{renderChildrenWithTimestamps(children)}</li>
+          ),
+          strong: ({ children }) => (
+            <strong style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{children}</strong>
+          ),
+          em: ({ children }) => (
+            <em style={{ fontStyle: 'italic', color: 'var(--text-secondary)' }}>{children}</em>
+          ),
+          h1: ({ children }) => (
+            <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: '0.6rem 0 0.3rem', color: 'var(--text-primary)' }}>{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 style={{ fontSize: '1.25rem', fontWeight: 600, margin: '0.5rem 0 0.25rem', color: 'var(--text-primary)' }}>{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 600, margin: '0.4rem 0 0.2rem', color: 'var(--text-primary)' }}>{children}</h3>
+          ),
+          ul: ({ children }) => (
+            <ul style={{ paddingLeft: '1.3rem', margin: '0.4rem 0' }}>{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol style={{ paddingLeft: '1.3rem', margin: '0.4rem 0' }}>{children}</ol>
+          ),
+          code: ({ children }) => (
+            <code style={{
+              background: 'var(--panel-bg)',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              fontFamily: 'monospace',
+              fontSize: '0.85rem',
+              color: 'var(--theme-primary)'
+            }}>{children}</code>
+          ),
+          pre: ({ children }) => (
+            <pre style={{
+              background: 'var(--panel-bg)',
+              padding: '0.8rem',
+              borderRadius: '8px',
+              overflow: 'auto',
+              margin: '0.5rem 0'
+            }}>{children}</pre>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote style={{
+              borderLeft: '4px solid var(--theme-primary)',
+              paddingLeft: '0.8rem',
+              margin: '0.5rem 0',
+              fontStyle: 'italic',
+              color: 'var(--text-secondary)'
+            }}>{children}</blockquote>
+          )
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    );
   };
 
   const handleTranscribe = async (targetUrl = urlInput, pushRoute = true) => {
@@ -590,8 +704,7 @@ export default function App() {
           query: textToSend,
           video_id: activeData.videoId,
           video_title: activeData.title,
-          cues: activeData.cues || [],
-          top_k: 4,
+          top_k: 10,
           user_email: googleUser?.email || null,
           model_id: selectedModel,
           enable_web_search: webSearchEnabled
@@ -600,27 +713,92 @@ export default function App() {
 
       if (res.ok) {
         const data = await res.json();
-        setChatMessages([...newMessages, { 
-          sender: 'bot', 
+        const messageId = Date.now();
+        const subText = data.submission_text || '';
+        
+        if (subText) {
+          setSubmissionSummaries(prev => ({
+            ...prev,
+            [messageId]: subText
+          }));
+        }
+
+        setChatMessages([...newMessages, {
+          sender: 'bot',
           text: data.answer,
           citations: data.citations || [],
           web_sources: data.web_sources || [],
-          model: data.model || null
+          model: data.model || null,
+          submission_text: subText,
+          submission_word_count: data.submission_word_count || 0,
+          id: messageId
         }]);
+        
+        // If backend did not return submission text, invoke async generation with fallback
+        if (!subText) {
+          generateSubmissionVersion(data.answer, activeData.videoId, messageId);
+        }
       } else {
         const errJson = await res.json().catch(() => ({}));
         throw new Error(errJson.detail || "RAG Query failed");
       }
     } catch (err) {
       console.error("RAG Query Error:", err);
-      setChatMessages([...newMessages, { 
-        sender: 'bot', 
+      setChatMessages([...newMessages, {
+        sender: 'bot',
         text: `⚠️ **Error querying RAG engine**: ${err.message}`,
         citations: []
       }]);
     } finally {
       setChatLoading(false);
     }
+  };
+
+  const generateSubmissionVersion = async (originalText, videoId, messageId) => {
+    try {
+      const res = await fetch('/api/rag/query/submission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          original_text: originalText,
+          video_id: videoId,
+          word_count: 120,
+          user_email: googleUser?.email || null,
+          model_id: selectedModel
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.submission_text) {
+          setSubmissionSummaries(prev => ({
+            ...prev,
+            [messageId]: data.submission_text
+          }));
+          return;
+        }
+      }
+      // Fallback if API response did not contain submission_text
+      const fallback = cleanSubmissionFallback(originalText, 120);
+      setSubmissionSummaries(prev => ({
+        ...prev,
+        [messageId]: fallback
+      }));
+    } catch (err) {
+      console.error("Submission generation error:", err);
+      const fallback = cleanSubmissionFallback(originalText, 120);
+      setSubmissionSummaries(prev => ({
+        ...prev,
+        [messageId]: fallback
+      }));
+    }
+  };
+
+  const copySubmissionText = (text, messageId) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedSubmissionId(messageId);
+    setTimeout(() => setCopiedSubmissionId(null), 2000);
   };
 
   const displayCues = searchQuery.trim() && searchResults.length > 0
@@ -2132,8 +2310,61 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Model Selector & Web Search Controls */}
+                {/* Model Selector & View Mode Controls */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {/* View Mode Segmented Control in Header */}
+                  <div style={{
+                    display: 'inline-flex',
+                    background: 'var(--panel-bg)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    padding: '2px',
+                    gap: '2px'
+                  }}>
+                    <button
+                      onClick={() => setViewMode('learning')}
+                      title="Comprehensive learning mode: formatted Markdown, clickable timestamps, and lecture citations"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '0.74rem',
+                        fontWeight: viewMode === 'learning' ? 700 : 500,
+                        cursor: 'pointer',
+                        border: 'none',
+                        background: viewMode === 'learning' ? 'var(--theme-primary)' : 'transparent',
+                        color: viewMode === 'learning' ? '#ffffff' : 'var(--text-secondary)',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <BookOpen size={12} />
+                      <span>Learning View</span>
+                    </button>
+                    <button
+                      onClick={() => setViewMode('submission')}
+                      title="Academic submission mode: 100-150 words, plain human style, no markdown or timestamps, 1-click copy"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '0.74rem',
+                        fontWeight: viewMode === 'submission' ? 700 : 500,
+                        cursor: 'pointer',
+                        border: 'none',
+                        background: viewMode === 'submission' ? 'var(--theme-primary)' : 'transparent',
+                        color: viewMode === 'submission' ? '#ffffff' : 'var(--text-secondary)',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <FileText size={12} />
+                      <span>Submission View</span>
+                    </button>
+                  </div>
+
                   {/* Web Grounding Toggle */}
                   <button
                     onClick={() => setWebSearchEnabled(prev => !prev)}
@@ -2199,100 +2430,262 @@ export default function App() {
                 flexDirection: 'column',
                 gap: '14px'
               }}>
-                {chatMessages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      display: 'flex',
-                      gap: '10px',
-                      alignItems: 'flex-start',
-                      alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-                      maxWidth: '85%'
-                    }}
-                  >
-                    {msg.sender === 'bot' && (
-                      <div style={{
-                        width: '28px',
-                        height: '28px',
-                        borderRadius: '50%',
-                        background: 'var(--highlight-bg)',
+                {chatMessages.map((msg, idx) => {
+                  const currentMsgMode = msg.viewOverride || viewMode;
+                  const submissionText = submissionSummaries[msg.id] || msg.submission_text || cleanSubmissionFallback(msg.text);
+                  const submissionWords = submissionText ? submissionText.trim().split(/\s+/).filter(Boolean).length : 0;
+                  const isTargetRange = submissionWords >= 85 && submissionWords <= 155;
+
+                  return (
+                    <div
+                      key={msg.id || idx}
+                      style={{
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                        marginTop: '2px'
-                      }}>
-                        <Bot size={16} color="var(--theme-primary)" />
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '100%' }}>
-                      <div style={{
-                        background: msg.sender === 'user' ? 'var(--theme-primary)' : 'var(--card-bg)',
-                        color: msg.sender === 'user' ? '#ffffff' : 'var(--text-primary)',
-                        padding: '10px 14px',
-                        borderRadius: '12px',
-                        borderTopLeftRadius: msg.sender === 'bot' ? '2px' : '12px',
-                        borderTopRightRadius: msg.sender === 'user' ? '2px' : '12px',
-                        fontSize: '0.88rem',
-                        lineHeight: '1.5',
-                        whiteSpace: 'pre-wrap',
-                        border: msg.sender === 'bot' ? '1px solid var(--border-color)' : 'none',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
-                      }}>
-                        {renderMessageWithTimestamps(msg.text)}
-                      </div>
-
-                      {/* Lecture Transcript Citations Pill Bar */}
-                      {msg.sender === 'bot' && msg.citations && msg.citations.length > 0 && (
+                        gap: '10px',
+                        alignItems: 'flex-start',
+                        alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+                        maxWidth: '88%'
+                      }}
+                    >
+                      {msg.sender === 'bot' && (
                         <div style={{
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '50%',
+                          background: 'var(--highlight-bg)',
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: '6px',
-                          padding: '8px 12px',
-                          background: 'var(--panel-bg)',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: '8px',
-                          fontSize: '0.75rem',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
                           marginTop: '2px'
                         }}>
-                          <div style={{ fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                            <Clock size={12} color="var(--theme-primary)" /> Lecture Citations (Click to jump):
-                          </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                            {msg.citations.map((cite, cIdx) => (
-                              <button
-                                key={cIdx}
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  handleCueClick(cite.timestamp);
-                                }}
-                                title={cite.text ? `Jump to ${cite.timestamp}: "${cite.text}"` : `Jump to ${cite.timestamp}`}
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  background: 'var(--card-bg)',
-                                  border: '1px solid var(--border-color)',
-                                  color: 'var(--theme-primary)',
-                                  padding: '3px 8px',
-                                  borderRadius: '6px',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                  transition: 'all 0.15s ease'
-                                }}
-                              >
-                                <Play size={10} style={{ fill: 'currentColor' }} />
-                                <span>{cite.timestamp}</span>
-                              </button>
-                            ))}
-                          </div>
+                          <Bot size={16} color="var(--theme-primary)" />
                         </div>
                       )}
 
-                      {/* Model & Web Source Badges */}
-                      {msg.sender === 'bot' && (msg.model || (msg.web_sources && msg.web_sources.length > 0)) && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '100%' }}>
+                        {/* Per-Message View Mode Toggle */}
+                        {msg.sender === 'bot' && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '6px',
+                            marginBottom: '2px',
+                            flexWrap: 'wrap'
+                          }}>
+                            <div style={{
+                              display: 'inline-flex',
+                              background: 'var(--panel-bg)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '6px',
+                              padding: '1px',
+                              gap: '2px'
+                            }}>
+                              <button
+                                onClick={() => {
+                                  setChatMessages(prev => prev.map((m, i) => (i === idx || m.id === msg.id) ? { ...m, viewOverride: 'learning' } : m));
+                                }}
+                                style={{
+                                  background: currentMsgMode === 'learning' ? 'var(--theme-primary)' : 'transparent',
+                                  color: currentMsgMode === 'learning' ? '#ffffff' : 'var(--text-secondary)',
+                                  border: 'none',
+                                  padding: '3px 8px',
+                                  borderRadius: '5px',
+                                  fontSize: '0.72rem',
+                                  fontWeight: currentMsgMode === 'learning' ? 700 : 500,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  transition: 'all 0.15s ease'
+                                }}
+                              >
+                                <BookOpen size={11} /> Learning View
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setChatMessages(prev => prev.map((m, i) => (i === idx || m.id === msg.id) ? { ...m, viewOverride: 'submission' } : m));
+                                }}
+                                style={{
+                                  background: currentMsgMode === 'submission' ? 'var(--theme-primary)' : 'transparent',
+                                  color: currentMsgMode === 'submission' ? '#ffffff' : 'var(--text-secondary)',
+                                  border: 'none',
+                                  padding: '3px 8px',
+                                  borderRadius: '5px',
+                                  fontSize: '0.72rem',
+                                  fontWeight: currentMsgMode === 'submission' ? 700 : 500,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  transition: 'all 0.15s ease'
+                                }}
+                              >
+                                <FileText size={11} /> Submission View
+                              </button>
+                            </div>
+
+                            {currentMsgMode === 'submission' && (
+                              <span style={{
+                                fontSize: '0.7rem',
+                                color: isTargetRange ? '#10b981' : 'var(--text-secondary)',
+                                fontWeight: 600,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px'
+                              }}>
+                                {isTargetRange ? '✓' : '•'} {submissionWords} words (Target: 100–150)
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Main Message Bubble */}
+                        <div style={{
+                          background: msg.sender === 'user' ? 'var(--theme-primary)' : 'var(--card-bg)',
+                          color: msg.sender === 'user' ? '#ffffff' : 'var(--text-primary)',
+                          padding: currentMsgMode === 'submission' && msg.sender === 'bot' ? '14px 16px' : '10px 14px',
+                          borderRadius: '12px',
+                          borderTopLeftRadius: msg.sender === 'bot' ? '2px' : '12px',
+                          borderTopRightRadius: msg.sender === 'user' ? '2px' : '12px',
+                          fontSize: '0.88rem',
+                          lineHeight: '1.6',
+                          border: msg.sender === 'bot' ? (currentMsgMode === 'submission' ? '1px solid rgba(0, 117, 237, 0.25)' : '1px solid var(--border-color)') : 'none',
+                          boxShadow: currentMsgMode === 'submission' && msg.sender === 'bot' ? '0 2px 8px rgba(0, 117, 237, 0.08)' : '0 1px 3px rgba(0,0,0,0.06)'
+                        }}>
+                          {msg.sender === 'user' ? (
+                            <div style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</div>
+                          ) : currentMsgMode === 'learning' ? (
+                            <MarkdownWithTimestamps content={msg.text} />
+                          ) : (
+                            /* Submission Mode View: Clean human academic prose */
+                            <div>
+                              <div style={{
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.04em',
+                                color: 'var(--theme-primary)',
+                                marginBottom: '8px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '5px'
+                              }}>
+                                <FileText size={12} />
+                                <span>Academic Assignment Submission (Graduate Tone)</span>
+                              </div>
+                              <div style={{
+                                fontSize: '0.88rem',
+                                lineHeight: '1.65',
+                                color: 'var(--text-primary)',
+                                fontFamily: 'inherit',
+                                whiteSpace: 'pre-wrap'
+                              }}>
+                                {submissionText || 'Generating condensed submission...'}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Submission Mode Footer Bar: Word Count & 1-Click Copy */}
+                        {msg.sender === 'bot' && currentMsgMode === 'submission' && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '6px 12px',
+                            background: 'var(--panel-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            fontSize: '0.75rem',
+                            gap: '8px',
+                            flexWrap: 'wrap'
+                          }}>
+                            <span style={{
+                              color: isTargetRange ? '#10b981' : 'var(--text-secondary)',
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}>
+                              {isTargetRange ? <CheckCircle2 size={12} color="#10b981" /> : <Clock size={12} />}
+                              {submissionWords} words • Target: 100–150 words
+                            </span>
+
+                            <button
+                              onClick={() => copySubmissionText(submissionText, msg.id)}
+                              style={{
+                                background: copiedSubmissionId === msg.id ? '#10b981' : 'var(--highlight-bg)',
+                                color: copiedSubmissionId === msg.id ? '#ffffff' : 'var(--theme-primary)',
+                                border: '1px solid ' + (copiedSubmissionId === msg.id ? '#10b981' : 'rgba(0, 117, 237, 0.3)'),
+                                padding: '5px 12px',
+                                borderRadius: '6px',
+                                fontSize: '0.74rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              {copiedSubmissionId === msg.id ? <Check size={13} /> : <Copy size={13} />}
+                              <span>{copiedSubmissionId === msg.id ? 'Copied to Clipboard!' : 'Copy for Submission'}</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Lecture Transcript Citations Pill Bar (Shown in Learning Mode) */}
+                        {msg.sender === 'bot' && currentMsgMode === 'learning' && msg.citations && msg.citations.length > 0 && (
+                          <div style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '6px',
+                            padding: '8px 12px',
+                            background: 'var(--panel-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            fontSize: '0.75rem',
+                            marginTop: '2px'
+                          }}>
+                            <div style={{ fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <Clock size={12} color="var(--theme-primary)" /> Lecture Citations (Click to jump):
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                              {msg.citations.map((cite, cIdx) => (
+                                <button
+                                  key={cIdx}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    handleCueClick(cite.timestamp);
+                                  }}
+                                  title={cite.text ? `Jump to ${cite.timestamp}: "${cite.text}"` : `Jump to ${cite.timestamp}`}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    background: 'var(--card-bg)',
+                                    border: '1px solid var(--border-color)',
+                                    color: 'var(--theme-primary)',
+                                    padding: '3px 8px',
+                                    borderRadius: '6px',
+                                    fontSize: '0.74rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                >
+                                  <Play size={10} style={{ fill: 'currentColor' }} />
+                                  <span>{cite.timestamp}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Model & Web Source Badges (Shown in Learning Mode) */}
+                        {msg.sender === 'bot' && currentMsgMode === 'learning' && (msg.model || (msg.web_sources && msg.web_sources.length > 0)) && (
                         <div style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -2390,7 +2783,8 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                ))}
+                );
+              })}
 
                 {chatLoading && (
                   <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>

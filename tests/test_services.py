@@ -1,6 +1,7 @@
 import unittest
 from backend.web_search import search_web_for_context
 from backend.google_drive_service import google_drive_service
+from backend.rag_engine import pinecone_rag_engine
 
 class TestServices(unittest.TestCase):
     def test_web_search_empty_query(self):
@@ -31,6 +32,49 @@ class TestServices(unittest.TestCase):
         self.assertEqual(req.email, "dipesh.singh2012@gmail.com")
         self.assertEqual(req.video_id, "1229629089")
         self.assertEqual(req.video_title, "Introduction to Speech and Natural Language Processing")
+
+    def test_reciprocal_rank_fusion(self):
+        """Test RRF fusion of two ranked lists."""
+        list1 = [
+            {"start_time": "01:00", "text": "First result from list1", "video_id": "123"},
+            {"start_time": "02:00", "text": "Second result from list1", "video_id": "123"},
+            {"start_time": "03:00", "text": "Third result from list1", "video_id": "123"}
+        ]
+        list2 = [
+            {"start_time": "02:00", "text": "Second result from list1", "video_id": "123"},
+            {"start_time": "01:00", "text": "First result from list1", "video_id": "123"},
+            {"start_time": "04:00", "text": "Fourth result from list2", "video_id": "123"}
+        ]
+        
+        fused = pinecone_rag_engine.reciprocal_rank_fusion([list1, list2], k=60)
+        
+        # Should return 4 unique items
+        self.assertEqual(len(fused), 4)
+        
+        # Items appearing in both lists should have higher scores (ranked first)
+        # Items 01:00 and 02:00 appear in both lists, so they should be ranked higher
+        first_two_items = fused[:2]
+        start_times = [item.get("start_time") for item in first_two_items]
+        self.assertIn("01:00", start_times)
+        self.assertIn("02:00", start_times)
+
+    def test_query_rag_without_cues(self):
+        """Test query_rag executes successfully without cues passed in request payload."""
+        # Test with video_id but no cues - should use hybrid retrieval
+        result = pinecone_rag_engine.query_rag(
+            query="test query",
+            video_id="test_video_123",
+            video_title="Test Lecture",
+            cues=None,
+            top_k=5,
+            enable_web_search=False
+        )
+        
+        # Should return a result with expected structure
+        self.assertIn("answer", result)
+        self.assertIn("citations", result)
+        self.assertIn("model", result)
+        self.assertIn("video_id", result)
 
 if __name__ == "__main__":
     unittest.main()

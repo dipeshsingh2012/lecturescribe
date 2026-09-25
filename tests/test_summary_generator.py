@@ -27,7 +27,11 @@ class TestSummaryGenerator(unittest.TestCase):
         self.assertEqual(sentences[0]["time"], "00:01")
         self.assertIn("cryptographic protocols", sentences[0]["text"])
 
-    def test_generate_summary_sections(self):
+    @unittest.mock.patch("backend.summary_generator.generate_llm_summary")
+    def test_generate_summary_sections(self, mock_llm):
+        mock_llm.return_value = [
+            {"title": "Consensus Protocols [00:01 - 00:45]", "points": ["[00:15] Paxos and Raft mechanisms."]}
+        ]
         cues = [
             {"time": "00:01", "text": "In this lecture we analyze distributed consistency models and consensus."},
             {"time": "00:15", "text": "The primary objective is understanding Paxos and Raft mechanisms."},
@@ -36,8 +40,11 @@ class TestSummaryGenerator(unittest.TestCase):
         ]
         sections = generate_summary_sections(cues, "Distributed Systems")
         self.assertIsInstance(sections, list)
-        self.assertGreater(len(sections), 0)
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0]["title"], "Consensus Protocols [00:01 - 00:45]")
         self.assertTrue(any("points" in s for s in sections))
+        mock_llm.assert_called_once_with(cues, "Distributed Systems")
 
 if __name__ == "__main__":
     unittest.main()
+

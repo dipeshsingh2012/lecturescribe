@@ -242,24 +242,8 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
 
 
 def generate_summary_sections(cues: List[Dict[str, str]], title: str) -> List[Dict[str, Any]]:
-    """Master summary function: Generates structured summary sections using LLM."""
+    """Generates structured lecture summary sections directly using LLM."""
     if not cues:
-        return [{"title": "📌 Lecture Overview", "points": ["No transcript cues available for summary generation."]}]
+        return []
+    return generate_llm_summary(cues, title) or []
 
-    try:
-        llm_res = generate_llm_summary(cues, title)
-        if llm_res:
-            return llm_res
-    except Exception as e:
-        print(f"[Summary Generator Notice] LLM summary attempt skipped: {e}")
-
-    # Clean fallback when LLM is unavailable
-    sentences = reconstruct_sentences(cues)
-    points = [f"[{s['time']}] {s['text']}" for s in sentences[:4]] if sentences else ["Lecture summary in progress."]
-    return [{"title": "🎯 Session Overview", "points": points}]
-
-
-# Backward compatibility aliases
-generate_dynamic_summary = generate_summary_sections
-extract_dynamic_phase_topic = lambda *args, **kwargs: "Methodology & Analytical Discussions"
-extract_substantive_questions = lambda *args, **kwargs: []

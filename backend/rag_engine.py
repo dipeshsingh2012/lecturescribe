@@ -207,8 +207,59 @@ class Llama3PineconeRAGStore:
 
         return len(self.local_chunks)
 
-    def query_rag(self, query: str, top_k: int = 4) -> Dict[str, Any]:
-        """Perform Pinecone Vector retrieval + Llama-3.2-3B-Instruct grounded synthesis."""
+    def get_supported_models(self) -> List[Dict[str, Any]]:
+        """Return available models and their configuration status."""
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
+
+        return [
+            {
+                "id": "gemini-2.0-flash",
+                "name": "Gemini 2.0 Flash",
+                "provider": "Google (Free Tier)",
+                "badge": "⚡ Fast • 1M Context",
+                "is_configured": bool(gemini_key),
+                "is_recommended": True,
+                "free_tier_info": "1,500 requests/day free at aistudio.google.com"
+            },
+            {
+                "id": "llama-3.3-70b-versatile",
+                "name": "Groq Llama 3.3 70B",
+                "provider": "Groq Cloud (Free Tier)",
+                "badge": "🚀 500 T/s • 70B Model",
+                "is_configured": bool(groq_key),
+                "is_recommended": True,
+                "free_tier_info": "1,000 requests/day free at console.groq.com"
+            },
+            {
+                "id": "meta-llama/Llama-3.1-8B-Instruct",
+                "name": "Hugging Face Llama 3.1 8B",
+                "provider": "Hugging Face (Serverless)",
+                "badge": "🤗 Active Cloud Default",
+                "is_configured": bool(hf_token),
+                "is_recommended": False,
+                "free_tier_info": "Active via HUGGINGFACE_TOKEN"
+            },
+            {
+                "id": "ollama",
+                "name": "Local Ollama",
+                "provider": "Self-Hosted Offline",
+                "badge": "💻 100% Offline • Free",
+                "is_configured": True,
+                "is_recommended": False,
+                "free_tier_info": "Runs locally on http://localhost:11434"
+            }
+        ]
+
+    def query_rag(
+        self,
+        query: str,
+        top_k: int = 4,
+        model_id: Optional[str] = None,
+        enable_web_search: bool = True
+    ) -> Dict[str, Any]:
+        """Perform grounded retrieval (Transcript + Free DuckDuckGo Web Search) + Multi-Model Synthesis."""
         query_embedding = self._generate_embedding(query)
         retrieved_metadata = []
 
@@ -225,15 +276,11 @@ class Llama3PineconeRAGStore:
                         if match.metadata:
                             retrieved_metadata.append(match.metadata)
             except Exception as e:
-                print(f"[Llama-3.2 RAG Warning] Pinecone vector search error: {e}")
+                print(f"[RAG Engine Warning] Vector search error: {e}")
 
-        if not retrieved_metadata:
-            return {
-                "answer": "No relevant video transcript vector matches found in Pinecone vector database.",
-                "citations": [],
-                "model": self.model_id,
-                "pinecone_vector_matches": 0
-            }
+        # Fallback to local chunks if pinecone returned nothing
+        if not retrieved_metadata and self.local_chunks:
+            retrieved_metadata = self.local_chunks[:top_k]
 
         context_str = ""
         citations = []
@@ -248,59 +295,177 @@ class Llama3PineconeRAGStore:
                 "text": txt[:120] + "..."
             })
 
-        answer = self._generate_llama3_response(query, context_str, retrieved_metadata)
+        # Grounded Web Search (DuckDuckGo + Wikipedia, Free)
+        web_sources = []
+        web_context_str = ""
+        if enable_web_search:
+            try:
+                from backend.web_search import search_web_for_context
+                search_term = f"{self.video_title} {query}" if self.video_title and len(query.split()) < 5 else query
+                web_sources = search_web_for_context(search_term, max_results=3)
+                if web_sources:
+                    web_context_str = "\n".join([
+                        f"• Source: {s.get('title')} ({s.get('url')})\n  Snippet: {s.get('snippet')}"
+                        for s in web_sources
+                    ])
+            except Exception as e:
+                print(f"[Web Search Warning]: {e}")
+
+        # Choose model & synthesize with unchained Socratic tutor prompt
+        answer, model_used = self._generate_llm_response(
+            query=query,
+            context_str=context_str,
+            web_context_str=web_context_str,
+            requested_model=model_id
+        )
 
         return {
             "answer": answer,
             "citations": citations,
-            "model": self.model_id,
+            "web_sources": web_sources,
+            "model": model_used,
             "pinecone_vector_matches": len(retrieved_metadata)
         }
 
-    def _generate_llama3_response(self, query: str, context_str: str, metadata_list: List[Dict[str, Any]]) -> str:
-        """Call Llama-3.2-3B-Instruct using HuggingFace Client or OpenAI-compatible endpoint strictly via live API."""
-        system_prompt = (
-            f"You are LectureScribe AI powered by {self.model_id}. "
-            "Answer the user question accurately using ONLY the provided transcript context. "
-            "Always cite exact video timestamps in your response like [MM:SS]."
-        )
-        prompt_content = f"Video Title: {self.video_title}\n\nRetrieved Transcript Context:\n{context_str}\n\nUser Question: {query}"
+    def _generate_llm_response(
+        self,
+        query: str,
+        context_str: str,
+        web_context_str: str = "",
+        requested_model: Optional[str] = None
+    ) -> Tuple[str, str]:
+        """
+        Synthesize answer using selected or best available LLM provider.
+        Unchained Socratic tutor prompt: grounds in transcript, enriches with academic knowledge & web context.
+        """
+        import requests
+
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
         hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
 
-        if HAS_HF and hf_token and context_str:
-            try:
-                client = InferenceClient(model=self.model_id, token=hf_token)
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt_content}
-                ]
-                resp = client.chat_completion(messages=messages, max_tokens=512, temperature=0.2)
-                if resp and resp.choices and resp.choices[0].message:
-                    return resp.choices[0].message.content
-            except Exception as e:
-                print(f"[Llama-3.2 RAG] HuggingFace inference error: {e}")
+        target_model = requested_model or "gemini-2.0-flash" if gemini_key else ("llama-3.3-70b-versatile" if groq_key else "meta-llama/Llama-3.1-8B-Instruct")
 
-        if HAS_OPENAI and os.getenv("LLAMA_OPENAI_BASE", ""):
+        # Fallback if selected model lacks key
+        if target_model.startswith("gemini") and not gemini_key:
+            if groq_key:
+                target_model = "llama-3.3-70b-versatile"
+            elif hf_token:
+                target_model = "meta-llama/Llama-3.1-8B-Instruct"
+        elif target_model.startswith("llama-3.3") and not groq_key:
+            if gemini_key:
+                target_model = "gemini-2.0-flash"
+            elif hf_token:
+                target_model = "meta-llama/Llama-3.1-8B-Instruct"
+
+        system_prompt = (
+            "You are an encouraging, articulate Academic AI Tutor helping a student learn from this lecture.\n\n"
+            "PEDAGOGICAL INSTRUCTIONS:\n"
+            "1. Grounding in Lecture: When the student asks about what was taught in class, anchor your answer in the professor's explanations from the transcript context.\n"
+            "2. Conceptual Depth: If the student asks for deeper explanations, step-by-step proofs, intuitive analogies, practical code examples, or concepts only briefly introduced by the professor, use your broad academic knowledge and any supplementary web search results below to explain them thoroughly.\n"
+            "3. Format: Structure your explanation with clear paragraphs, bullet points, or code snippets when helpful."
+        )
+
+        prompt_content = f"Lecture Title: {self.video_title or 'Video Lecture'}\n\n"
+        if context_str:
+            prompt_content += f"=== Professor's Lecture Transcript Context ===\n{context_str}\n\n"
+        if web_context_str:
+            prompt_content += f"=== Supplementary Academic / Web Search Context ===\n{web_context_str}\n\n"
+        prompt_content += f"Student Question: {query}"
+
+        # 1. Google Gemini (100% Free Developer Tier)
+        if (target_model.startswith("gemini") or "flash" in target_model) and gemini_key:
             try:
-                client = OpenAI(
-                    base_url=os.getenv("LLAMA_OPENAI_BASE", "http://localhost:11434/v1"),
-                    api_key=os.getenv("LLAMA_OPENAI_KEY", "ollama")
-                )
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": prompt_content}]}],
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "generationConfig": {"temperature": 0.25, "maxOutputTokens": 1024}
+                }
+                r = requests.post(url, json=payload, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0]:
+                        parts = candidates[0]["content"].get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "").strip(), "Gemini 2.0 Flash"
+            except Exception as e:
+                print(f"[Gemini Inference Error]: {e}")
+
+        # 2. Groq Cloud (Llama 3.3 70B - 100% Free Developer Tier)
+        if (target_model.startswith("llama-3.3") or "groq" in target_model.lower()) and groq_key:
+            try:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt_content}
+                    ],
+                    "temperature": 0.25,
+                    "max_tokens": 1024
+                }
+                r = requests.post(url, headers=headers, json=payload, timeout=12)
+                if r.status_code == 200:
+                    data = r.json()
+                    choices = data.get("choices", [])
+                    if choices and "message" in choices[0]:
+                        return choices[0]["message"].get("content", "").strip(), "Groq Llama 3.3 70B"
+            except Exception as e:
+                print(f"[Groq Inference Error]: {e}")
+
+        # 3. Local Ollama (100% Offline / Self-Hosted)
+        if target_model == "ollama":
+            try:
+                ollama_base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+                url = f"{ollama_base.rstrip('/')}/chat/completions"
+                payload = {
+                    "model": os.getenv("OLLAMA_MODEL", "llama3.2"),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt_content}
+                    ],
+                    "temperature": 0.25,
+                    "max_tokens": 1024
+                }
+                r = requests.post(url, json=payload, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    choices = data.get("choices", [])
+                    if choices and "message" in choices[0]:
+                        return choices[0]["message"].get("content", "").strip(), "Local Ollama"
+            except Exception as e:
+                print(f"[Ollama Inference Error]: {e}")
+
+        # 4. Hugging Face InferenceClient (Active Serverless Free)
+        if hf_token:
+            try:
+                from huggingface_hub import InferenceClient
+                client = InferenceClient(api_key=hf_token)
                 resp = client.chat.completions.create(
-                    model=self.model_id,
+                    model="meta-llama/Llama-3.1-8B-Instruct",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": prompt_content}
                     ],
-                    max_tokens=512,
-                    temperature=0.2
+                    max_tokens=800,
+                    temperature=0.25
                 )
-                if resp and resp.choices:
-                    return resp.choices[0].message.content
+                if resp and resp.choices and resp.choices[0].message:
+                    return resp.choices[0].message.content.strip(), "Hugging Face Llama 3.1 8B"
             except Exception as e:
-                print(f"[Llama-3.2 RAG] OpenAI API base error: {e}")
+                print(f"[HuggingFace InferenceClient Error]: {e}")
 
-        return f"⚠️ Could not execute LLM inference for model '{self.model_id}'. Please configure HUGGINGFACE_TOKEN or LLAMA_OPENAI_BASE in .env."
+        # 5. Informative setup tip if no cloud LLM key is configured
+        tip = (
+            "💡 **AI Tutor Connected**\n\n"
+            f"Here is what was found in the lecture for your question: *\"{query}\"*\n\n"
+            f"{context_str[:600] if context_str else 'No direct transcript cues matched, but web search was performed.'}\n\n"
+            "*(Tip: To enable full intelligent conversational explanations, add a free API key to `.env` from [Google AI Studio](https://aistudio.google.com) `GEMINI_API_KEY=` or [Groq Console](https://console.groq.com) `GROQ_API_KEY=`)*"
+        )
+        return tip, "Transcript Retrieval"
 
 
 pinecone_rag_engine = Llama3PineconeRAGStore()

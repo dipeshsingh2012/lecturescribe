@@ -2,12 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export const LMS_THEMES = {
-  iiitdwd: {
-    id: 'iiitdwd',
-    name: 'IIIT Dharwad BAZ',
-    shortName: 'IIIT Dharwad',
+  academic: {
+    id: 'academic',
+    name: 'Academic Classic Blue',
+    shortName: 'Academic Portal',
     icon: '🏛️',
-    badge: 'Default • Official IIITD Portal',
+    badge: 'Default • Clean Academic Portal',
     mode: 'light',
     palette: {
       headerBg: '#022758',
@@ -190,22 +190,22 @@ export const applyThemeCssVariables = (theme) => {
 export const useThemeStore = create(
   persist(
     (set, get) => ({
-      currentThemeId: 'iiitdwd',
+      currentThemeId: 'academic',
       setTheme: (themeId) => {
-        const targetTheme = LMS_THEMES[themeId] || LMS_THEMES.iiitdwd;
+        const targetTheme = LMS_THEMES[themeId] || LMS_THEMES.academic;
         applyThemeCssVariables(targetTheme);
         set({ currentThemeId: targetTheme.id });
       },
       getCurrentTheme: () => {
         const { currentThemeId } = get();
-        return LMS_THEMES[currentThemeId] || LMS_THEMES.iiitdwd;
+        return LMS_THEMES[currentThemeId] || LMS_THEMES.academic;
       }
     }),
     {
       name: 'lecturescribe_theme',
       onRehydrateStorage: () => (state) => {
         if (state) {
-          const targetTheme = LMS_THEMES[state.currentThemeId] || LMS_THEMES.iiitdwd;
+          const targetTheme = LMS_THEMES[state.currentThemeId] || LMS_THEMES.academic;
           applyThemeCssVariables(targetTheme);
         }
       }

@@ -4,7 +4,7 @@ import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
   Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut,
-  Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp
+  Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp, Globe
 } from 'lucide-react';
 
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -166,11 +166,11 @@ export default function App() {
   const [librarySearch, setLibrarySearch] = useState('');
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
 
-  // LMS Theme State via Zustand (Default: IIIT Dharwad BAZ Theme)
+  // LMS Theme State via Zustand (Default: Academic Classic Blue)
   const { currentThemeId, setTheme } = useThemeStore();
   const [themeMenuAnchor, setThemeMenuAnchor] = useState(null);
 
-  const currentTheme = LMS_THEMES[currentThemeId] || LMS_THEMES.iiitdwd;
+  const currentTheme = LMS_THEMES[currentThemeId] || LMS_THEMES.academic;
 
   useEffect(() => {
     applyThemeCssVariables(currentTheme);
@@ -298,7 +298,29 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [availableModels, setAvailableModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const chatEndRef = useRef(null);
+
+  // Fetch available AI models
+  useEffect(() => {
+    fetch('/api/ai/models')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.models && data.models.length > 0) {
+          setAvailableModels(data.models);
+          const rec = data.models.find(m => m.is_recommended && m.is_configured);
+          const firstConf = data.models.find(m => m.is_configured);
+          if (rec) {
+            setSelectedModel(rec.id);
+          } else if (firstConf) {
+            setSelectedModel(firstConf.id);
+          }
+        }
+      })
+      .catch(err => console.warn('Could not load AI models list:', err));
+  }, []);
 
   const iframeRef = useRef(null);
   const playerRef = useRef(null);
@@ -543,7 +565,9 @@ export default function App() {
           query: textToSend,
           video_id: activeData.videoId,
           top_k: 4,
-          user_email: googleUser?.email || null
+          user_email: googleUser?.email || null,
+          model_id: selectedModel,
+          enable_web_search: webSearchEnabled
         })
       });
 
@@ -552,7 +576,9 @@ export default function App() {
         setChatMessages([...newMessages, { 
           sender: 'bot', 
           text: data.answer,
-          citations: data.citations || []
+          citations: data.citations || [],
+          web_sources: data.web_sources || [],
+          model: data.model || null
         }]);
       } else {
         const errJson = await res.json().catch(() => ({}));
@@ -967,7 +993,7 @@ export default function App() {
               style={{ color: '#ffffff', fontWeight: 800, fontSize: '1.15rem', letterSpacing: '-0.3px', cursor: 'pointer' }}
               onClick={handleBackToHub}
             >
-              {currentTheme.shortName || 'IIIT Dharwad'}
+              {currentTheme.shortName || 'Academic Portal'}
             </span>
             <span style={{ color: 'rgba(255, 255, 255, 0.45)', fontWeight: 300, fontSize: '0.9rem' }}>|</span>
             <span
@@ -2183,34 +2209,96 @@ export default function App() {
             /* SIMPLE AI CHAT BOT VIEW */
             <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
               
-              {/* Chat Header */}
+              {/* Chat Header with Model Selector & Web Search Toggle */}
               <div style={{
-                padding: '14px 20px',
+                padding: '12px 18px',
                 borderBottom: '1px solid var(--border-color)',
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
                 gap: '10px',
                 background: 'var(--card-bg)'
               }}>
-                <div style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  background: 'var(--highlight-bg)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <Bot size={18} color="var(--theme-primary)" />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    background: 'var(--highlight-bg)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}>
+                    <Bot size={18} color="var(--theme-primary)" />
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: '0.92rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+                      AI Tutor
+                    </h3>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
+                      Grounded Lecture & Web Socratic Tutor
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-                    AI Tutor
-                  </h3>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
-                    Ask questions and chat about this lecture
-                  </p>
+
+                {/* Model Selector & Web Search Controls */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {/* Web Grounding Toggle */}
+                  <button
+                    onClick={() => setWebSearchEnabled(prev => !prev)}
+                    title={webSearchEnabled ? "Web grounding ENABLED (Free DuckDuckGo & Wikipedia search)" : "Web grounding DISABLED (Transcripts only)"}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '5px 10px',
+                      borderRadius: '8px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: webSearchEnabled ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid var(--border-color)',
+                      background: webSearchEnabled ? 'rgba(16, 185, 129, 0.12)' : 'var(--panel-bg)',
+                      color: webSearchEnabled ? '#10b981' : 'var(--text-secondary)',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <Globe size={13} color={webSearchEnabled ? '#10b981' : 'var(--text-secondary)'} />
+                    <span>Web: {webSearchEnabled ? 'ON' : 'OFF'}</span>
+                  </button>
+
+                  {/* Model Dropdown */}
+                  <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      title="Select the active LLM engine"
+                      style={{
+                        background: 'var(--panel-bg)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '8px',
+                        padding: '5px 10px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        outline: 'none',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                      }}
+                    >
+                      {(availableModels.length > 0 ? availableModels : [
+                        { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', badge: '⚡ Free 1.5k/day' },
+                        { id: 'llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B', badge: '🚀 Free 1k/day' },
+                        { id: 'meta-llama/Llama-3.1-8B-Instruct', name: 'HF Llama 3.1 8B', badge: '🤗 Active Free' },
+                        { id: 'ollama', name: 'Local Ollama', badge: '💻 Offline' }
+                      ]).map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.badge ? `${m.name} (${m.badge})` : m.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -2250,7 +2338,7 @@ export default function App() {
                       </div>
                     )}
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '100%' }}>
                       <div style={{
                         background: msg.sender === 'user' ? 'var(--theme-primary)' : 'var(--card-bg)',
                         color: msg.sender === 'user' ? '#ffffff' : 'var(--text-primary)',
@@ -2266,6 +2354,87 @@ export default function App() {
                       }}>
                         {msg.text}
                       </div>
+
+                      {/* Model & Web Source Badges */}
+                      {msg.sender === 'bot' && (msg.model || (msg.web_sources && msg.web_sources.length > 0)) && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          flexWrap: 'wrap',
+                          fontSize: '0.72rem',
+                          color: 'var(--text-secondary)',
+                          paddingLeft: '2px'
+                        }}>
+                          {msg.model && (
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              background: 'var(--highlight-bg)',
+                              color: 'var(--theme-primary)',
+                              padding: '2px 8px',
+                              borderRadius: '10px',
+                              fontWeight: 600
+                            }}>
+                              <Zap size={10} /> {msg.model}
+                            </span>
+                          )}
+                          {msg.web_sources && msg.web_sources.length > 0 && (
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              background: 'rgba(16, 185, 129, 0.1)',
+                              color: '#10b981',
+                              padding: '2px 8px',
+                              borderRadius: '10px',
+                              fontWeight: 600
+                            }}>
+                              <Globe size={10} /> {msg.web_sources.length} Web Sources Grounded
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Web References Links */}
+                      {msg.sender === 'bot' && msg.web_sources && msg.web_sources.length > 0 && (
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px',
+                          padding: '6px 10px',
+                          background: 'var(--panel-bg)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          fontSize: '0.74rem'
+                        }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Globe size={11} color="#10b981" /> Web References:
+                          </div>
+                          {msg.web_sources.map((src, sIdx) => (
+                            <a
+                              key={sIdx}
+                              href={src.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                color: 'var(--theme-primary)',
+                                textDecoration: 'none',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}
+                              title={src.snippet || src.title}
+                            >
+                              <ExternalLink size={10} /> {src.title || src.url}
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     {msg.sender === 'user' && (

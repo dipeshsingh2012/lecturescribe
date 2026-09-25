@@ -103,12 +103,16 @@ class ChatRequest(BaseModel):
     video_title: Optional[str] = "Introduction to Research"
     cues: List[Dict[str, str]] = []
     user_email: Optional[str] = None
+    model_id: Optional[str] = None
+    enable_web_search: Optional[bool] = True
 
 class RAGQueryRequest(BaseModel):
     query: str
     video_id: Optional[str] = ""
     top_k: Optional[int] = 4
     user_email: Optional[str] = None
+    model_id: Optional[str] = None
+    enable_web_search: Optional[bool] = True
 
 class AlgoliaSearchRequest(BaseModel):
     query: str
@@ -240,13 +244,23 @@ def algolia_search(req: AlgoliaSearchRequest):
     hits = algolia_service.search(req.query, video_id=req.video_id, limit=req.limit or 20)
     return {"hits": hits, "count": len(hits)}
 
+@app.get("/api/ai/models")
+def get_ai_models():
+    """Return available LLM models and their configuration status."""
+    return {"models": pinecone_rag_engine.get_supported_models()}
+
 @app.post("/api/rag/query")
 def rag_query(req: RAGQueryRequest):
-    """Perform Pinecone vector search + grounded answer synthesis with timestamp citations."""
+    """Perform grounded retrieval + multi-model answer synthesis."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty")
     
-    result = pinecone_rag_engine.query_rag(req.query, top_k=req.top_k or 4)
+    result = pinecone_rag_engine.query_rag(
+        req.query,
+        top_k=req.top_k or 4,
+        model_id=req.model_id,
+        enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
+    )
     if req.video_id:
         try:
             db_manager.save_chat_log(
@@ -262,7 +276,7 @@ def rag_query(req: RAGQueryRequest):
 
 @app.post("/api/chat")
 def chat_with_transcript(req: ChatRequest):
-    """Route chat queries through Pinecone RAG engine and save to DB."""
+    """Route chat queries through RAG engine and save to DB."""
     user_prompt = req.message.strip()
     cues = req.cues
     title = req.video_title or "Lecture"
@@ -272,7 +286,12 @@ def chat_with_transcript(req: ChatRequest):
         pinecone_rag_engine.ingest_transcript(video_id, title, cues)
         algolia_service.ingest_cues(video_id, title, cues)
 
-    rag_res = pinecone_rag_engine.query_rag(user_prompt, top_k=4)
+    rag_res = pinecone_rag_engine.query_rag(
+        user_prompt,
+        top_k=4,
+        model_id=req.model_id,
+        enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
+    )
     reply = rag_res.get("answer", "")
     citations = rag_res.get("citations", [])
 
@@ -281,7 +300,9 @@ def chat_with_transcript(req: ChatRequest):
 
     return {
         "reply": reply,
-        "citations": citations
+        "citations": citations,
+        "web_sources": rag_res.get("web_sources", []),
+        "model": rag_res.get("model", "")
     }
 
 

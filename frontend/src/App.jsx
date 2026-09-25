@@ -368,10 +368,13 @@ export default function App() {
   }), [currentTheme]);
 
   const fetchUserLibrary = async (email) => {
+    if (!email) {
+      setUserLibrary([]);
+      return;
+    }
     setLibraryLoading(true);
     try {
-      const url = email ? `/api/user/library?email=${encodeURIComponent(email)}` : '/api/user/library';
-      const res = await fetch(url);
+      const res = await fetch(`/api/user/library?email=${encodeURIComponent(email)}`);
       if (res.ok) {
         const data = await res.json();
         const list = data.library || data.lectures || [];
@@ -401,7 +404,11 @@ export default function App() {
 
   // Automatically fetch library on mount and when signed in
   useEffect(() => {
-    fetchUserLibrary(googleUser?.email);
+    if (googleUser?.email) {
+      fetchUserLibrary(googleUser.email);
+    } else {
+      setUserLibrary([]);
+    }
   }, [googleUser?.email]);
 
   // Load Google Drive Status on initial mount to get Client ID early for top-right sign-in
@@ -2146,200 +2153,6 @@ export default function App() {
                   </button>
                 </div>
               </div>
-
-              {/* Available / Sample Lectures Grid for Guests */}
-              {userLibrary.length > 0 && (
-                <div style={{ marginTop: '56px', textAlign: 'left' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#f8fafc', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <BookOpen size={20} color="#00adef" /> Available Lectures in Library
-                      </h2>
-                      <Chip
-                        label={`${userLibrary.length} ${userLibrary.length === 1 ? 'lecture' : 'lectures'}`}
-                        size="small"
-                        sx={{ bgcolor: 'rgba(0, 173, 239, 0.15)', color: '#00adef', fontWeight: 700 }}
-                      />
-                    </div>
-                    <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
-                      Click any lecture below to study with Algolia Search & Pinecone RAG
-                    </span>
-                  </div>
-
-                  <Box
-                    sx={{
-                      display: 'grid',
-                      gridTemplateColumns: {
-                        xs: '1fr',
-                        sm: 'repeat(2, minmax(0, 1fr))',
-                        md: 'repeat(3, minmax(0, 1fr))'
-                      },
-                      gap: 3,
-                      width: '100%',
-                      alignItems: 'stretch'
-                    }}
-                  >
-                    {userLibrary.map((item) => (
-                      <Card
-                        key={item.video_id}
-                        sx={{
-                          width: '100%',
-                          height: '100%',
-                          minWidth: 0,
-                          boxSizing: 'border-box',
-                          bgcolor: currentTheme.palette.cardBg,
-                          border: `1px solid ${currentTheme.palette.cardBorder}`,
-                          borderRadius: 3,
-                          boxShadow: currentTheme.palette.cardShadow,
-                          transition: 'all 0.2s ease-in-out',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          '&:hover': {
-                            transform: 'translateY(-4px)',
-                            borderColor: currentTheme.palette.primary,
-                            boxShadow: currentTheme.palette.cardHoverShadow
-                          }
-                        }}
-                      >
-                        <CardContent sx={{ flex: 1, p: 2.5, display: 'flex', flexDirection: 'column' }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Chip
-                                label={`/lecture/${item.video_id}`}
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleTranscribe(item.video_url || item.video_id);
-                                }}
-                                title="Open dedicated lecture route"
-                                sx={{
-                                  fontFamily: 'monospace',
-                                  fontWeight: 700,
-                                  fontSize: '0.72rem',
-                                  bgcolor: currentTheme.palette.badgeBg,
-                                  color: currentTheme.palette.badgeColor,
-                                  border: `1px solid ${currentTheme.palette.badgeBorder}`,
-                                  cursor: 'pointer',
-                                  '&:hover': { opacity: 0.85 }
-                                }}
-                              />
-                            </Box>
-                            <Typography variant="caption" sx={{ color: '#64748b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                              <Clock size={12} /> {formatRelativeTime(item.last_accessed_at || item.created_at)}
-                            </Typography>
-                          </Box>
-
-                          <Typography
-                            variant="subtitle1"
-                            sx={{
-                              fontWeight: 700,
-                              color: currentTheme.palette.textPrimary,
-                              lineHeight: 1.4,
-                              mb: 1.5,
-                              minHeight: '2.8em',
-                              display: '-webkit-box',
-                              WebkitLineClamp: 2,
-                              WebkitBoxOrient: 'vertical',
-                              overflow: 'hidden',
-                              cursor: 'pointer',
-                              '&:hover': { color: currentTheme.palette.primary }
-                            }}
-                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
-                          >
-                            {item.video_title || `Vimeo Lecture ${item.video_id}`}
-                          </Typography>
-
-                          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 'auto' }}>
-                            {item.drive_folder_url ? (
-                              <Chip
-                                icon={<Folder size={13} color="#10b981" />}
-                                label="In Google Drive"
-                                size="small"
-                                component="a"
-                                href={item.drive_folder_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                clickable
-                                sx={{
-                                  bgcolor: 'rgba(16, 185, 129, 0.15)',
-                                  color: '#34d399',
-                                  border: '1px solid rgba(16, 185, 129, 0.3)',
-                                  fontWeight: 600,
-                                  fontSize: '0.7rem'
-                                }}
-                              />
-                            ) : (
-                              <Chip
-                                label="Local / Database"
-                                size="small"
-                                sx={{
-                                  bgcolor: 'rgba(255, 255, 255, 0.05)',
-                                  color: '#94a3b8',
-                                  fontSize: '0.7rem'
-                                }}
-                              />
-                            )}
-                            <Chip
-                              label="Algolia Search"
-                              size="small"
-                              sx={{
-                                bgcolor: 'rgba(0, 173, 239, 0.1)',
-                                color: '#00adef',
-                                fontSize: '0.7rem'
-                              }}
-                            />
-                            <Chip
-                              label="Pinecone RAG"
-                              size="small"
-                              sx={{
-                                bgcolor: 'rgba(139, 92, 246, 0.1)',
-                                color: '#a78bfa',
-                                fontSize: '0.7rem'
-                              }}
-                            />
-                          </Box>
-                        </CardContent>
-
-                        <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.06)' }} />
-
-                        <CardActions sx={{ p: 1.5, justifyContent: 'space-between' }}>
-                          <Button
-                            variant="contained"
-                            size="small"
-                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
-                            sx={{
-                              textTransform: 'none',
-                              fontWeight: 700,
-                              fontSize: '0.82rem',
-                              bgcolor: currentTheme.palette.accentCta,
-                              '&:hover': { bgcolor: currentTheme.palette.primaryHover }
-                            }}
-                          >
-                            Study Lecture →
-                          </Button>
-
-                          <Box sx={{ display: 'flex', gap: 0.5 }}>
-                            {item.drive_folder_url && (
-                              <Tooltip title="Open in Google Drive">
-                                <IconButton
-                                  size="small"
-                                  component="a"
-                                  href={item.drive_folder_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  sx={{ color: '#10b981', '&:hover': { bgcolor: 'rgba(16, 185, 129, 0.1)' } }}
-                                >
-                                  <ExternalLink size={16} />
-                                </IconButton>
-                              </Tooltip>
-                            )}
-                          </Box>
-                        </CardActions>
-                      </Card>
-                    ))}
-                  </Box>
-                </div>
-              )}
             </div>
           )
         ) : (

@@ -4,7 +4,6 @@ Dynamic AI Summary Generator for LectureScribe
 Generates structured, authentic executive summaries from video transcript cues:
 1. Reconstructs complete, grammatical sentences across fragmented caption cues.
 2. Generates high-quality topical chapters via LLM (Groq / Gemini / Hugging Face / OpenAI).
-3. Provides a clean, minimal fallback when LLMs are unavailable.
 """
 from __future__ import annotations
 

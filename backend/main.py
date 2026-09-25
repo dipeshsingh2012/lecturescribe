@@ -107,6 +107,8 @@ class ChatRequest(BaseModel):
 class RAGQueryRequest(BaseModel):
     query: str
     video_id: Optional[str] = ""
+    video_title: Optional[str] = None
+    cues: Optional[List[Dict[str, str]]] = None
     top_k: Optional[int] = 4
     user_email: Optional[str] = None
     model_id: Optional[str] = None
@@ -255,6 +257,9 @@ def rag_query(req: RAGQueryRequest):
     
     result = pinecone_rag_engine.query_rag(
         req.query,
+        video_id=req.video_id,
+        video_title=req.video_title,
+        cues=req.cues,
         top_k=req.top_k or 4,
         model_id=req.model_id,
         enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
@@ -286,6 +291,9 @@ def chat_with_transcript(req: ChatRequest):
 
     rag_res = pinecone_rag_engine.query_rag(
         user_prompt,
+        video_id=video_id,
+        video_title=title,
+        cues=cues,
         top_k=4,
         model_id=req.model_id,
         enable_web_search=req.enable_web_search if req.enable_web_search is not None else True

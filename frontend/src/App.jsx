@@ -564,6 +564,8 @@ export default function App() {
         body: JSON.stringify({
           query: textToSend,
           video_id: activeData.videoId,
+          video_title: activeData.title,
+          cues: activeData.cues || [],
           top_k: 4,
           user_email: googleUser?.email || null,
           model_id: selectedModel,

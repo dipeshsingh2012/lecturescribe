@@ -243,35 +243,138 @@ class Llama3PineconeRAGStore:
             }
         ]
 
+    def _retrieve_relevant_lecture_cues(
+        self,
+        query: str,
+        cues: List[Dict[str, str]],
+        video_id: str,
+        video_title: str,
+        window_size: int = 5,
+        step: int = 3,
+        top_k: int = 4
+    ) -> List[Dict[str, Any]]:
+        """Rank sliding-window transcript chunks strictly from the active lecture's cues."""
+        if not cues:
+            return []
+
+        query_terms = set(re.findall(r"\w+", query.lower()))
+        stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "what", "which", "who", "whom",
+            "this", "that", "these", "those", "how", "why", "when", "where", "in", "on",
+            "at", "to", "for", "with", "about", "against", "between", "into", "through",
+            "during", "before", "after", "above", "below", "from", "up", "down", "in",
+            "out", "on", "off", "over", "under", "again", "further", "then", "once", "here",
+            "there", "all", "any", "both", "each", "few", "more", "most", "other", "some",
+            "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
+            "can", "will", "just", "should", "now"
+        }
+        meaningful_terms = {t for t in query_terms if t not in stop_words and len(t) > 2}
+        effective_terms = meaningful_terms if meaningful_terms else query_terms
+
+        scored_windows = []
+        total_cues = len(cues)
+
+        for i in range(0, total_cues, step):
+            window = cues[i : i + window_size]
+            if not window:
+                continue
+            start_time = window[0].get("time", "00:00")
+            end_time = window[-1].get("time", start_time)
+            chunk_text = " ".join([c.get("text", "") for c in window if c.get("text")])
+            if not chunk_text.strip():
+                continue
+
+            chunk_words = re.findall(r"\w+", chunk_text.lower())
+            score = sum(1.0 for w in chunk_words if w in effective_terms)
+
+            metadata = {
+                "video_id": video_id,
+                "video_title": video_title,
+                "start_time": start_time,
+                "end_time": end_time,
+                "text": chunk_text[:1000]
+            }
+            scored_windows.append((score, i, metadata))
+
+        # Sort by relevance score descending; tie-break by chronological position
+        scored_windows.sort(key=lambda x: (x[0], -x[1]), reverse=True)
+
+        return [w[2] for w in scored_windows[:top_k]]
+
     def query_rag(
         self,
         query: str,
+        video_id: Optional[str] = None,
+        video_title: Optional[str] = None,
+        cues: Optional[List[Dict[str, str]]] = None,
         top_k: int = 4,
         model_id: Optional[str] = None,
         enable_web_search: bool = True
     ) -> Dict[str, Any]:
-        """Perform grounded retrieval (Transcript + Free DuckDuckGo Web Search) + Multi-Model Synthesis."""
+        """Perform grounded retrieval strictly tied to the current lecture + Multi-Model Synthesis."""
+        target_video_id = str(video_id).strip() if video_id else ""
+        lecture_title = video_title or ""
+        lecture_cues = cues or []
+
+        # Resolve lecture metadata & transcript cues from PostgreSQL if not passed
+        if target_video_id and (not lecture_cues or not lecture_title):
+            try:
+                from backend.database import db_manager
+                saved = db_manager.get_saved_video(target_video_id)
+                if saved:
+                    if not lecture_title:
+                        lecture_title = saved.get("title", "")
+                    if not lecture_cues:
+                        lecture_cues = saved.get("cues", [])
+            except Exception as e:
+                print(f"[RAG Engine Warning] Could not fetch lecture {target_video_id} from DB: {e}")
+
+        if not lecture_title:
+            lecture_title = self.video_title or "Active Lecture"
+
         query_embedding = self._generate_embedding(query)
         retrieved_metadata = []
 
+        # 1. Pinecone Vector Search (Strictly filtered by video_id)
         if self.index:
             try:
-                res = self.index.query(
-                    vector=query_embedding,
-                    top_k=top_k,
-                    namespace=self.namespace,
-                    include_metadata=True
-                )
+                query_kwargs = {
+                    "vector": query_embedding,
+                    "top_k": top_k,
+                    "namespace": self.namespace,
+                    "include_metadata": True
+                }
+                if target_video_id:
+                    query_kwargs["filter"] = {"video_id": {"$eq": target_video_id}}
+
+                res = self.index.query(**query_kwargs)
                 if res and res.matches:
                     for match in res.matches:
                         if match.metadata:
-                            retrieved_metadata.append(match.metadata)
+                            m_vid = str(match.metadata.get("video_id", ""))
+                            # Strictly filter out any match from a different lecture
+                            if not target_video_id or m_vid == target_video_id:
+                                retrieved_metadata.append(match.metadata)
             except Exception as e:
                 print(f"[RAG Engine Warning] Vector search error: {e}")
 
-        # Fallback to local chunks if pinecone returned nothing
-        if not retrieved_metadata and self.local_chunks:
-            retrieved_metadata = self.local_chunks[:top_k]
+        # 2. Local/DB Transcript Search: Strictly use the active lecture's transcript cues
+        if not retrieved_metadata:
+            if lecture_cues:
+                retrieved_metadata = self._retrieve_relevant_lecture_cues(
+                    query=query,
+                    cues=lecture_cues,
+                    video_id=target_video_id,
+                    video_title=lecture_title,
+                    top_k=top_k
+                )
+            elif self.local_chunks:
+                # If target_video_id is specified, only use local_chunks if they match target_video_id
+                matched_local = [
+                    c["metadata"] for c in self.local_chunks
+                    if not target_video_id or str(c.get("metadata", {}).get("video_id", "")) == target_video_id
+                ]
+                retrieved_metadata = matched_local[:top_k]
 
         context_str = ""
         citations = []
@@ -292,7 +395,7 @@ class Llama3PineconeRAGStore:
         if enable_web_search:
             try:
                 from backend.web_search import search_web_for_context
-                search_term = f"{self.video_title} {query}" if self.video_title and len(query.split()) < 5 else query
+                search_term = f"{lecture_title} {query}" if lecture_title and len(query.split()) < 5 else query
                 web_sources = search_web_for_context(search_term, max_results=3)
                 if web_sources:
                     web_context_str = "\n".join([
@@ -305,6 +408,7 @@ class Llama3PineconeRAGStore:
         # Choose model & synthesize with unchained Socratic tutor prompt
         answer, model_used = self._generate_llm_response(
             query=query,
+            lecture_title=lecture_title,
             context_str=context_str,
             web_context_str=web_context_str,
             requested_model=model_id
@@ -315,19 +419,22 @@ class Llama3PineconeRAGStore:
             "citations": citations,
             "web_sources": web_sources,
             "model": model_used,
-            "pinecone_vector_matches": len(retrieved_metadata)
+            "pinecone_vector_matches": len(retrieved_metadata),
+            "lecture_title": lecture_title,
+            "video_id": target_video_id
         }
 
     def _generate_llm_response(
         self,
         query: str,
+        lecture_title: str,
         context_str: str,
         web_context_str: str = "",
         requested_model: Optional[str] = None
     ) -> Tuple[str, str]:
         """
         Synthesize answer using selected or best available LLM provider.
-        Unchained Socratic tutor prompt: grounds in transcript, enriches with academic knowledge & web context.
+        Unchained Socratic tutor prompt: grounds strictly in current lecture transcript, enriches with academic knowledge & web context.
         """
         import requests
 
@@ -350,14 +457,14 @@ class Llama3PineconeRAGStore:
                 target_model = "meta-llama/Llama-3.1-8B-Instruct"
 
         system_prompt = (
-            "You are an encouraging, articulate Academic AI Tutor helping a student learn from this lecture.\n\n"
+            f"You are an encouraging, articulate Academic AI Tutor helping a student learn from the lecture: '{lecture_title}'.\n\n"
             "PEDAGOGICAL INSTRUCTIONS:\n"
-            "1. Grounding in Lecture: When the student asks about what was taught in class, anchor your answer in the professor's explanations from the transcript context.\n"
-            "2. Conceptual Depth: If the student asks for deeper explanations, step-by-step proofs, intuitive analogies, practical code examples, or concepts only briefly introduced by the professor, use your broad academic knowledge and any supplementary web search results below to explain them thoroughly.\n"
+            "1. Grounding in Lecture: When the student asks about what was taught in class, anchor your answer strictly in the professor's explanations from this lecture's transcript context.\n"
+            "2. Conceptual Depth: If the student asks for deeper explanations, step-by-step proofs, intuitive analogies, practical code examples, or concepts only briefly introduced by the professor, use your broad academic knowledge and any supplementary web search results below to explain them thoroughly in the context of this lecture.\n"
             "3. Format: Structure your explanation with clear paragraphs, bullet points, or code snippets when helpful."
         )
 
-        prompt_content = f"Lecture Title: {self.video_title or 'Video Lecture'}\n\n"
+        prompt_content = f"--- CURRENT LECTURE: {lecture_title} ---\n\n"
         if context_str:
             prompt_content += f"=== Professor's Lecture Transcript Context ===\n{context_str}\n\n"
         if web_context_str:

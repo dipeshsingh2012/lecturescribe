@@ -1,7 +1,7 @@
 # 🎓 LectureScribe
 
 > **Vimeo Video Lecture Transcript Extractor, Instant Search & AI RAG Tutor**  
-> Powered by a Triad Architecture: **PostgreSQL/SQLite** + **Algolia Instant Search** + **Pinecone Vector RAG**.
+> Powered by a Triad Architecture: **PostgreSQL** + **Algolia Instant Search** + **Pinecone Vector RAG**.
 
 ---
 
@@ -13,7 +13,7 @@
 - 🤖 **Pinecone Vector RAG Tutor**: Semantic RAG chatbot powered by dense embeddings and Llama-3.2, providing grounded answers with clickable timestamp citations.
 - 📊 **Structured Executive AI Summaries**: Automatically generates structured takeaway sections (Course Structure, Core Concepts, Thrust Areas, Q&A).
 - 🎬 **Embedded Vimeo Player Integration**: Synchronized video playback using `@vimeo/player` SDK with active cue highlighting during playback.
-- 💾 **Dual-Layer Database**: Seamless persistence using local SQLite (`lecturescribe.db`) with automatic remote Cloud PostgreSQL (Neon DB) synchronization when configured.
+- 💾 **Relational Database**: Persistent storage powered directly by Cloud PostgreSQL (Neon DB) for multi-user libraries and transcripts.
 - 📥 **Option 1: Download to Device**:
   - Direct progressive MP4 downloads when available.
   - Multi-bitrate Adaptive HLS stream extraction (`.m3u8`) with 1-click terminal commands (`yt-dlp`, `ffmpeg`, `vlc`).
@@ -43,14 +43,13 @@
        ▼                          ▼                          ▼
 ┌──────────────┐         ┌────────────────┐         ┌────────────────┐
 │ Relational DB│         │ Algolia Search │         │  Pinecone RAG  │
-│Postgres/SQLite         │ Instant Keyword│         │ Vector Search  │
+│  PostgreSQL  │         │ Instant Keyword│         │ Vector Search  │
 │Source of Truth         │  & Typo-Search │         │ & Grounded Q&A │
 └──────────────┘         └────────────────┘         └────────────────┘
 ```
 
-1. **Relational Database (PostgreSQL / SQLite)**:
-   - Stores video metadata, transcript cues, executive summaries, and chat history.
-   - Uses local SQLite (`lecturescribe.db`) by default with zero setup, falling back or syncing with Cloud PostgreSQL.
+1. **Relational Database (PostgreSQL)**:
+   - Stores video metadata, transcript cues, executive summaries, and chat history in Cloud PostgreSQL.
 2. **Algolia Cloud Search Index**:
    - Powers the search drawer with instant filtering across timestamped transcript cues.
 3. **Pinecone Vector Database**:
@@ -68,7 +67,7 @@ Copy the example environment configuration:
 cp .env.example .env
 ```
 
-Edit `.env` to configure your API keys (Algolia, Pinecone, HuggingFace/Llama, PostgreSQL). If PostgreSQL credentials are omitted, LectureScribe automatically defaults to local SQLite (`lecturescribe.db`).
+Edit `.env` to configure your API keys (PostgreSQL `DATABASE_URL`, Algolia, Pinecone, HuggingFace/Llama).
 
 ### 2. Backend Setup (Python venv & FastAPI)
 
@@ -116,7 +115,7 @@ Open `http://localhost:5173` in your browser.
 lecturescribe/
 ├── backend/
 │   ├── main.py                 # FastAPI endpoints (Transcripts, Search, RAG, Downloads, Cloud Export)
-│   ├── database.py             # Unified SQLite & PostgreSQL database manager + L1 cache
+│   ├── database.py             # PostgreSQL relational database manager + L1 cache
 │   ├── summary_generator.py    # Dynamic transcript-driven summarizer & topic segmenter
 │   ├── algolia_service.py      # Algolia instant search indexing & query service
 │   ├── rag_engine.py           # Pinecone vector retrieval & Llama-3.2 inference engine

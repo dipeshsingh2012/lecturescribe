@@ -10,7 +10,6 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 
 # Relational Database (Cloud PostgreSQL / Neon DB)
-# Note: Local SQLite uses the Python standard library (no install required)
 psycopg2-binary>=2.9.9
 
 # Search & Vector RAG Triad Services

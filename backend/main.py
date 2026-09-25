@@ -2,7 +2,7 @@
 FastAPI Backend for LectureScribe
 --------------------------------
 Triad Architecture:
-1. Relational DB (PostgreSQL/SQLite) -> Source of Truth for Videos, Cues, Notes & Chat History.
+1. Relational DB (PostgreSQL) -> Source of Truth for Videos, Cues, Notes & Chat History.
 2. Algolia Search -> Sub-10ms Instant Keyword & Typo-Tolerant Search for Transcript Drawer.
 3. Pinecone Vector Store -> 768-dim Dense Vector Embeddings for Semantic RAG Chatbot.
 """
@@ -46,13 +46,11 @@ async def lifespan(app: FastAPI):
     print("=" * 60)
 
     # 1. Relational Database verification & seed
-    print("📦 [1/3] Verifying Relational DB (PostgreSQL/SQLite)...")
+    print("📦 [1/3] Verifying Relational DB (PostgreSQL)...")
     try:
-        db_manager._init_sqlite_schema()
-        if db_manager.use_postgres:
-            db_manager._init_postgres_schema()
+        db_manager._init_postgres_schema()
         db_manager._seed_sample_data_if_needed()
-        print("✅ [Database Startup] Relational database ready.")
+        print("✅ [Database Startup] PostgreSQL database ready.")
     except Exception as e:
         print(f"⚠️ [Database Startup Warning]: {e}")
 
@@ -129,7 +127,7 @@ def health_check():
     return {
         "status": "ok",
         "service": "lecturescribe-triad-api",
-        "database": "PostgreSQL/SQLite Ready",
+        "database": "PostgreSQL Ready",
         "algolia_index": algolia_service.index_name,
         "pinecone_index": pinecone_rag_engine.index_name,
         "pinecone_namespace": pinecone_rag_engine.namespace
@@ -202,7 +200,7 @@ def get_transcript(
         source_url = f"https://vimeo.com/{video_id}"
         caption_label = track.get("label", "English")
 
-        # 3. Save to Relational DB (Postgres/SQLite)
+        # 3. Save to Relational DB (PostgreSQL)
         db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email)
 
         # 4. Ingest into Algolia Search Engine
@@ -321,7 +319,7 @@ def regenerate_summary(req: RegenerateSummaryRequest):
     title = saved.get("title", f"Lecture {video_id}")
     new_summary = generate_summary_sections(saved["cues"], title)
 
-    # Persist updated dynamic summary to SQLite / PostgreSQL
+    # Persist updated dynamic summary to PostgreSQL
     db_manager.update_summary_sections(video_id, new_summary)
 
     return {

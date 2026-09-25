@@ -28,6 +28,8 @@ jobs:
       dockerfile: 'Dockerfile'
       context: '.'
       health_check_path: '/health'
+      memory: '1Gi'
+      cpu: '1'
     secrets:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       EXTRA_ENV_VARS: ${{ secrets.EXTRA_ENV_VARS }}

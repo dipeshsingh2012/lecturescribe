@@ -48,18 +48,27 @@ async def lifespan(app: FastAPI):
     # 1. Relational Database verification
     print("📦 [1/3] Verifying Relational DB (PostgreSQL)...")
     try:
-        db_manager._init_postgres_schema()
-        print("✅ [Database Startup] PostgreSQL database ready.")
+        if db_manager and db_manager.postgres_url:
+            db_manager._init_postgres_schema()
+            print("✅ [Database Startup] PostgreSQL database ready.")
+        else:
+            print("⚠️ [Database Startup Warning]: DATABASE_URL not yet configured. Deferring schema initialization.")
     except Exception as e:
         print(f"⚠️ [Database Startup Warning]: {e}")
 
     # 2. Pinecone Index creation & connection
     print("🌲 [2/3] Verifying/Creating Pinecone Vector Index...")
-    pinecone_rag_engine.setup_index()
+    try:
+        pinecone_rag_engine.setup_index()
+    except Exception as e:
+        print(f"⚠️ [Pinecone Startup Warning]: {e}")
 
     # 3. Algolia Search Index verification & settings
     print("🔍 [3/3] Verifying/Configuring Algolia Search Index...")
-    algolia_service.setup_index()
+    try:
+        algolia_service.setup_index()
+    except Exception as e:
+        print(f"⚠️ [Algolia Startup Warning]: {e}")
 
     # 4. Optional warm-up pre-index if WARMUP_VIDEO_ID environment variable is set
     warmup_vid = os.getenv("WARMUP_VIDEO_ID")
@@ -134,13 +143,17 @@ class RegenerateSummaryRequest(BaseModel):
 
 @app.get("/health")
 def health_check():
+    db_status = "PostgreSQL Ready" if (db_manager and db_manager.postgres_url) else "Pending Configuration"
+    algolia_idx = getattr(algolia_service, "index_name", "lecturescribe_transcripts_v1")
+    pinecone_idx = getattr(pinecone_rag_engine, "index_name", "lecturescribe-rag-index")
+    pinecone_ns = getattr(pinecone_rag_engine, "namespace", "lecturescribe_v1")
     return {
         "status": "ok",
         "service": "lecturescribe-triad-api",
-        "database": "PostgreSQL Ready",
-        "algolia_index": algolia_service.index_name,
-        "pinecone_index": pinecone_rag_engine.index_name,
-        "pinecone_namespace": pinecone_rag_engine.namespace
+        "database": db_status,
+        "algolia_index": algolia_idx,
+        "pinecone_index": pinecone_idx,
+        "pinecone_namespace": pinecone_ns
     }
 
 @app.get("/api/lecture/{video_id}")

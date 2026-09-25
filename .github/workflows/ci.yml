@@ -31,7 +31,7 @@ jobs:
         run: python -m py_compile backend/*.py
 
       - name: Run Backend Unit Tests
-        run: pytest tests/ -v
+        run: PYTHONPATH=. pytest tests/ -v
 
   frontend-build:
     name: Frontend Build Check

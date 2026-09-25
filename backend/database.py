@@ -45,18 +45,17 @@ class RelationalDBManager:
     """Dedicated PostgreSQL Database Manager with In-Memory L1 Cache."""
 
     def __init__(self, postgres_url: Optional[str] = None):
-        self.postgres_url = postgres_url or POSTGRES_URL
+        self._explicit_url = postgres_url
         self._memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
-            raise ImportError(
-                "psycopg2 is required for PostgreSQL. Please install psycopg2-binary."
-            )
+            print("⚠️ [PostgreSQL Warning] psycopg2 is required for PostgreSQL. Please install psycopg2-binary.")
+            return
 
         if not self.postgres_url:
-            raise ValueError(
-                "DATABASE_URL environment variable is missing. PostgreSQL is required."
-            )
+            print("⚠️ [PostgreSQL Notice] DATABASE_URL environment variable is missing. Database operations will be deferred until configured.")
+            return
 
         # Initialize PostgreSQL schema (deferred if database is unreachable during import)
         try:
@@ -64,14 +63,22 @@ class RelationalDBManager:
         except Exception as e:
             print(f"[PostgreSQL Notice] Initial connection deferred: {e}")
 
+    @property
+    def postgres_url(self) -> Optional[str]:
+        return self._explicit_url or os.getenv("DATABASE_URL")
+
     def _get_connection(self):
         """Create and return a new PostgreSQL connection with RealDictCursor."""
-        if not self.postgres_url:
+        url = self.postgres_url
+        if not url:
             raise ValueError("DATABASE_URL is not set.")
-        return psycopg2.connect(self.postgres_url, cursor_factory=RealDictCursor)
+        return psycopg2.connect(url, cursor_factory=RealDictCursor)
 
     def _init_postgres_schema(self):
         """Initialize PostgreSQL schema for LectureScribe tables."""
+        if not self.postgres_url:
+            print("⚠️ [PostgreSQL Notice] DATABASE_URL not set yet. Skipping schema initialization.")
+            return
         conn = self._get_connection()
         try:
             with conn:

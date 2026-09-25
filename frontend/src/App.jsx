@@ -1492,9 +1492,6 @@ export default function App() {
                     <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
                       Welcome back, {googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')}! 🎓
                     </Typography>
-                    <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', mt: 0.5 }}>
-                      {currentTheme.name} • Verified Study History & Cloud Backups
-                    </Typography>
                   </Box>
                 </Box>
 

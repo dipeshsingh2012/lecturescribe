@@ -244,8 +244,6 @@ export default function App() {
     }
   }, [googleUser?.email]);
 
-
-
   // Client-side cache: In-memory & LocalStorage
   const [cachedVideos, setCachedVideos] = useState(() => {
     try {

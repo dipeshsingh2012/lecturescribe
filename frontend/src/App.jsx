@@ -521,14 +521,8 @@ export default function App() {
     }
   };
 
-  const initChatMessages = (title) => {
-    setChatMessages([
-      {
-        sender: 'bot',
-        text: `🤖 Hi! I'm your AI Tutor for *${title}*.\n\nAsk me anything about this lecture to help you understand and explore the material.`,
-        citations: []
-      }
-    ]);
+  const initChatMessages = () => {
+    setChatMessages([]);
   };
 
 

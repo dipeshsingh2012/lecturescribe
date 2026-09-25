@@ -44,6 +44,27 @@ with within without won't would wouldn't yes yet you you'd you'll you're you've 
 yours yourself yourselves okay yeah right sir today session video lecture discussing
 discuss discussed example examples kind sort thing things actually basically literally
 going goes went want wanted need needed mean meant think thought know knew
+zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen
+sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand
+first second third fourth fifth last next
+comma dot colon semicolon dash hyphen slash backslash bracket parenthesis quote quotes equals plus minus
+print enter click press write providing provides provide keep keeps keeping
+screen tab window link file folder app application download downloaded install installed
+let lets just also
+""".split())
+
+# Words that should never form or participate in standalone chapter topic titles
+DISALLOWED_TOPIC_WORDS = set("""
+zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen
+sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand
+first second third fourth fifth last next
+comma dot colon semicolon dash hyphen slash backslash bracket parenthesis quote quotes equals plus minus cross
+print enter click press write providing provides provide keep keeps keeping
+thing things stuff sort kind
+sir maam hello yeah okay yes right bye
+screen tab window link file folder app application download downloaded install installed
+let lets just also actually basically literally
+meeting struggle finding audible hear audio
 """.split())
 
 # High-salience academic discourse markers for scoring substantive sentences
@@ -63,7 +84,8 @@ GREETING_PHRASES = [
     "good evening", "good morning", "good afternoon", "can you hear", "am i audible",
     "yes sir", "no sir", "thank you", "joined by", "another meeting", "another link",
     "hello everyone", "let us start", "okay so", "yeah yeah", "bye bye", "screen visible",
-    "is my screen", "audio clear", "hear me", "recording started"
+    "is my screen", "audio clear", "hear me", "recording started", "where is the link",
+    "struggle with finding", "share the link", "meeting link", "unmute", "microphone"
 ]
 
 
@@ -145,30 +167,42 @@ def extract_dynamic_phase_topic(sentences: List[Dict[str, Any]], video_title: st
 
     for s in sentences:
         words = [re.sub(r"[^a-z0-9]", "", w) for w in s["text"].lower().split()]
-        words = [w for w in words if w and len(w) >= 3]
+        words = [w for w in words if w and len(w) >= 3 and not re.match(r"^\d+$", w)]
 
         for i in range(len(words) - 1):
             w1, w2 = words[i], words[i + 1]
-            if w1 not in STOPWORDS and w2 not in STOPWORDS:
+            if (
+                w1 not in STOPWORDS and w2 not in STOPWORDS
+                and w1 not in DISALLOWED_TOPIC_WORDS and w2 not in DISALLOWED_TOPIC_WORDS
+                and len(w1) >= 3 and len(w2) >= 3
+            ):
                 phrases.append(f"{w1.capitalize()} {w2.capitalize()}")
 
         for i in range(len(words) - 2):
             w1, w2, w3 = words[i], words[i + 1], words[i + 2]
-            if w1 not in STOPWORDS and w3 not in STOPWORDS:
+            if (
+                w1 not in STOPWORDS and w3 not in STOPWORDS
+                and w1 not in DISALLOWED_TOPIC_WORDS and w3 not in DISALLOWED_TOPIC_WORDS
+                and len(w1) >= 3 and len(w3) >= 3
+            ):
                 phrases.append(f"{w1.capitalize()} {w2.capitalize()} {w3.capitalize()}")
 
     counts = Counter(phrases)
     picked = None
     for cand, _ in counts.most_common(25):
         cand_words = set(cand.lower().split())
-        if not (cand_words & used_topics) and not all(w in title_words for w in cand_words):
+        if (
+            not (cand_words & used_topics)
+            and not (cand_words & DISALLOWED_TOPIC_WORDS)
+            and not all(w in title_words for w in cand_words)
+        ):
             picked = cand
             break
 
     if not picked:
         for cand, _ in counts.most_common(25):
             cand_words = set(cand.lower().split())
-            if not all(w in title_words for w in cand_words):
+            if not (cand_words & DISALLOWED_TOPIC_WORDS) and not all(w in title_words for w in cand_words):
                 picked = cand
                 break
 

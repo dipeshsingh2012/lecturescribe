@@ -464,13 +464,17 @@ class Llama3PineconeRAGStore:
             sections = saved.get("summarySections") or saved.get("summary_sections") or []
             cues = saved.get("cues", [])
 
-            # Detect legacy hardcoded boilerplate in cached summarySections
+            # Detect legacy hardcoded boilerplate or naive n-gram topics in cached summarySections
             has_legacy_boilerplate = any(
                 any("invention, discovery, and innovation" in str(p).lower() or "literature review to patenting" in str(p).lower()
                     for p in sec.get("points", []))
                 for sec in sections
             )
-            if (not sections or has_legacy_boilerplate) and cues:
+            has_naive_topics = any(
+                any(bad in sec.get("title", "").lower() for bad in ["three comma", "comma", "step size", "data type"])
+                for sec in sections
+            )
+            if (not sections or has_legacy_boilerplate or has_naive_topics) and cues:
                 from backend.summary_generator import generate_summary_sections
                 sections = generate_summary_sections(cues, saved.get("title", lecture_title))
                 db_manager.update_summary_sections(vid, sections)
@@ -539,7 +543,7 @@ class Llama3PineconeRAGStore:
                 formatted_item = {
                     "chapter": clean_title,
                     "timestamp": f"{start_t} - {end_t}",
-                    "takeaways": points
+                    "core_concepts": points
                 }
                 if dialogue_samples:
                     formatted_item["substantive_dialogue"] = dialogue_samples
@@ -755,17 +759,45 @@ class Llama3PineconeRAGStore:
             f"You are an encouraging, articulate Academic AI Tutor assisting a student learning from the lecture: '{lecture_title}'. "
             f"The video ID is '{target_video_id}'.\n\n"
             "YOU HAVE ACCESS TO SPECIALIZED RETRIEVAL TOOLS:\n"
-            "- get_lecture_outline(video_id): Retrieves the structured chapter syllabus, timestamps, key takeaways, and spoken dialogue excerpts across the entire lecture. Use this as your primary tool for overall summaries, overviews, recaps, and 10/15-minute reads.\n"
+            "- get_lecture_outline(video_id): Retrieves the structured chapter syllabus, timestamps, core concepts, and spoken dialogue excerpts across the entire lecture. Use this as your primary tool for overall summaries, overviews, recaps, and 10/15/30-minute reads.\n"
             "- search_transcript(query, top_k): Searches the lecture transcript using hybrid vector and keyword search for specific technical concepts, definitions, formulas, or targeted questions.\n"
             "- get_transcript_window(start_time, end_time): Retrieves verbatim dialogue from the professor for a specific timestamp range.\n"
             "- search_web_context(search_query): Retrieves external academic context or mathematical background if needed.\n\n"
             "PEDAGOGICAL & CITATION RULES:\n"
             "- Ground your answer thoroughly in the lecture using your retrieval tools.\n"
-            "- For summaries, session recaps, or multi-minute reads: Inspect the entire lecture structure and dialogue using get_lecture_outline. Unpack each chapter in depth: explain the professor's real-world analogies, concrete industry examples (e.g. UPI apps, transaction data), instructor roles, and technical concepts (non-stationarity, overfitting, structured vs unstructured data).\n"
+            "- For summaries, session recaps, or multi-minute reads: Inspect the entire lecture structure and dialogue using get_lecture_outline. Unpack each chapter in depth: explain the professor's explanations, code demonstrations, parameter behaviors, real-world analogies, and technical concepts.\n"
             "- MANDATORY Inline Timestamps: Every key statement, topic, or finding MUST include its exact timestamp tag [MM:SS] or [MM:SS - MM:SS] so the student can jump to that exact part of the video.\n"
-            "- SUBSTANTIVE CONTENT: Directly explain the concepts, methodologies, examples, and insights taught by the professor. Ground your answer in what was actually discussed in the lecture. NEVER output meta-instructions or advice on how to take notes.\n"
-            "- Clarity & Rigor: Structure with clear paragraphs, mathematical notation, and bullet points where helpful."
+            "- SUBSTANTIVE CONTENT: Directly explain the concepts, methodologies, code, and insights taught by the professor. Ground your answer in what was actually discussed in the lecture. NEVER output meta-instructions or advice on how to take notes.\n"
+            "- PROHIBITED PHRASINGS: NEVER say 'Based on the lecture outline...', 'According to the outline provided...', or list chapters as metadata at the end (e.g. 'These takeaways are based on the chapters...'). Speak directly and authoritatively as an expert instructor teaching the subject.\n"
+            "- Clarity & Rigor: Structure with clear paragraphs, code blocks, mathematical notation, and bullet points where helpful."
         )
+
+        q_lower = query.lower()
+        is_long_read = any(term in q_lower for term in ["30 min", "15 min", "20 min", "45 min", "detailed summary", "comprehensive summary", "deep dive", "study guide", "full summary", "full breakdown"])
+        is_assignment = any(term in q_lower for term in ["assignment", "homework", "lab", "problem set", "takeaway", "takeaways", "exam prep"])
+
+        intent_directive = ""
+        if is_long_read:
+            intent_directive = (
+                "\n\n🎯 FORMAT DIRECTIVE (DEEP-DIVE COMPREHENSIVE STUDY GUIDE):\n"
+                "The student requested a comprehensive multi-minute reading guide (e.g. 15-30 min read). "
+                "This must be an extensive, thorough academic document with substantial depth (NOT a short bullet list).\n"
+                "Structure your response with clear Markdown headings for each chapter/phase of the lecture:\n"
+                "1. Comprehensive Walkthrough: Unpack the concepts, theoretical motivations, and technical explanations taught by the instructor.\n"
+                "2. Code & Implementation Details: Explain any code syntax, parameters (e.g., axes, reshaping rules, strides/slicing), or formulas demonstrated.\n"
+                "3. Dialogue & Insights: Integrate verbatim quotes and explanations from the instructor with exact [MM:SS] timestamps.\n"
+                "4. Student Questions & Clarifications: Document specific student inquiries and instructor answers.\n"
+                "Ensure every chapter has rich, detailed paragraphs and code blocks."
+            )
+        elif is_assignment:
+            intent_directive = (
+                "\n\n🎯 FORMAT DIRECTIVE (ASSIGNMENT & LAB PREPARATION):\n"
+                "The student requested takeaways to complete an assignment or lab. Deliver actionable, technical, problem-solving takeaways:\n"
+                "1. Core Operations & Syntax: Clearly document functions, operations, or formulas demonstrated, with syntax examples and parameter behaviors.\n"
+                "2. Critical Rules & Distinctions: Highlight essential technical distinctions (e.g. axis=0 vs axis=1, dimensions vs shape, stride/slicing mechanics).\n"
+                "3. Implementation Pitfalls & Caveats: Highlight any warnings, performance issues (e.g. large prints hanging system, loop vs native function overhead), and best practices emphasized by the instructor.\n"
+                "Use clean, structured bullet points with code formatting and inline [MM:SS] timestamps."
+            )
 
         prior_messages = []
         try:
@@ -776,6 +808,8 @@ class Llama3PineconeRAGStore:
                 txt = (m.get("text") or m.get("content") or "").strip()
                 # Skip legacy poisoned boilerplate or hallucinations from prior messages
                 if "invention, discovery, and innovation" in txt.lower() or "literature review to patenting" in txt.lower():
+                    continue
+                if "based on the lecture outline, the main takeaways" in txt.lower() or "these takeaways are based on the chapters" in txt.lower():
                     continue
                 if txt and not txt.startswith("<function="):
                     if role == "assistant" and len(txt) > 800:
@@ -795,6 +829,7 @@ class Llama3PineconeRAGStore:
                     "INSTRUCTION: You do NOT have the transcript in context. In your first step, you MUST invoke a tool "
                     "(search_transcript, get_lecture_outline, or get_transcript_window) to retrieve grounded evidence from the lecture. "
                     "Do NOT attempt to answer until you have retrieved information from the lecture."
+                    f"{intent_directive}"
                 )
             }
         ]
@@ -944,6 +979,23 @@ class Llama3PineconeRAGStore:
                             "CRITICAL GROUNDING ERROR: You cannot answer directly from memory or lecture title alone. "
                             "You MUST invoke one of your tools (e.g. 'search_transcript', 'get_lecture_outline', or 'get_transcript_window') "
                             "to inspect and retrieve from the lecture transcript now."
+                        )
+                    })
+                # Long Read Depth Guard: When student requests 15/30-minute read or deep-dive study guide,
+                # do not accept an abbreviated response (e.g. < 1200 characters).
+                if is_long_read and len(clean_answer) < 1200 and current_step < max_steps:
+                    print(f"⚠️ [Depth Guard] Model provided abbreviated response ({len(clean_answer)} chars) for a comprehensive read. Prompting for full expansion...")
+                    messages.append({
+                        "role": "assistant",
+                        "content": clean_answer
+                    })
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "INSUFFICIENT DEPTH FOR A COMPREHENSIVE STUDY GUIDE: The student requested a 15-30 minute comprehensive read. "
+                            "Your previous answer was too brief. Please expand significantly into an exhaustive, multi-chapter academic guide. "
+                            "For each chapter, thoroughly explain the underlying concepts, code examples, parameter details (e.g. axes, shapes, step sizes), "
+                            "and verbatim dialogues with [MM:SS] timestamps."
                         )
                     })
                     continue

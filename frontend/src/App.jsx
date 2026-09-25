@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
-  Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut,
+  Zap, Cloud, X, Folder, FileCode, CheckCircle2, LogOut,
   Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp, Globe, Book
 } from 'lucide-react';
 
@@ -125,14 +125,8 @@ export default function App() {
     setCacheNotice(null);
   };
 
-  // Download & Cloud Export Modal State
+  // Cloud Export Modal State
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
-  const [downloadModalTab, setDownloadModalTab] = useState('device'); // 'device' | 'cloud'
-  const [streamData, setStreamData] = useState(null);
-  const [streamLoading, setStreamLoading] = useState(false);
-  const [streamError, setStreamError] = useState(null);
-  const [copiedCmd, setCopiedCmd] = useState(null);
-  const [activeCmdTab, setActiveCmdTab] = useState('yt_dlp'); // 'yt_dlp' | 'ffmpeg' | 'vlc'
 
   // Google Drive Cloud State
   const [gdriveStatus, setGdriveStatus] = useState(null);
@@ -1003,37 +997,19 @@ export default function App() {
     return <span>{pt}</span>;
   };
 
-  const openDownloadModal = async (initialTab = 'device') => {
+  const openDownloadModal = async () => {
     if (!activeData) return;
-    setDownloadModalTab(initialTab);
     setIsDownloadModalOpen(true);
-    setStreamLoading(true);
-    setStreamError(null);
     setGdriveError(null);
 
     try {
-      const [streamsRes, gdriveRes] = await Promise.all([
-        fetch(`${API_BASE}/api/video/download-options?url=${encodeURIComponent(activeData.videoId)}`),
-        fetch(`${API_BASE}/api/cloud/gdrive/status`)
-      ]);
-
-      if (streamsRes.ok) {
-        const sData = await streamsRes.json();
-        setStreamData(sData);
-      } else {
-        const errJson = await streamsRes.json().catch(() => ({}));
-        setStreamError(errJson.detail || "Could not retrieve download streams");
-      }
-
+      const gdriveRes = await fetch(`${API_BASE}/api/cloud/gdrive/status`);
       if (gdriveRes.ok) {
         const gData = await gdriveRes.json();
         setGdriveStatus(gData);
       }
     } catch (err) {
-      console.warn("Error fetching download options:", err);
-      setStreamError("Failed to fetch stream details from server.");
-    } finally {
-      setStreamLoading(false);
+      console.warn("Error fetching Google Drive status:", err);
     }
   };
 
@@ -1043,13 +1019,6 @@ export default function App() {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
-  };
-
-  const handleCopyCmd = (key, text) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedCmd(key);
-    setTimeout(() => setCopiedCmd(null), 2000);
   };
 
   const handleGoogleSignIn = async (autoStartUpload = false) => {
@@ -1393,7 +1362,7 @@ export default function App() {
                 </div>
 
                 <button
-                  onClick={() => openDownloadModal('device')}
+                  onClick={() => openDownloadModal()}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1409,7 +1378,7 @@ export default function App() {
                     transition: 'all 0.2s ease'
                   }}
                 >
-                  <Download size={15} /> Download & Cloud
+                  <Cloud size={15} /> Save to Google Drive
                 </button>
 
                 <Button
@@ -1528,7 +1497,7 @@ export default function App() {
                   <MenuItem
                     onClick={() => {
                       setUserMenuAnchor(null);
-                      if (activeData) openDownloadModal('cloud');
+                      if (activeData) openDownloadModal();
                     }}
                     disabled={!activeData}
                     sx={{ borderRadius: 1, py: 1 }}
@@ -3342,9 +3311,9 @@ export default function App() {
               background: 'var(--card-bg)'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Download size={20} color="var(--theme-primary)" />
+                <Cloud size={20} color="var(--theme-primary)" />
                 <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  Export & Download Lecture Package
+                  Save Lecture Bundle to Google Drive
                 </h3>
               </div>
               <button
@@ -3363,287 +3332,9 @@ export default function App() {
               </button>
             </div>
 
-            {/* Modal Tabs */}
-            <div style={{
-              display: 'flex',
-              borderBottom: '1px solid var(--border-color)',
-              background: 'var(--card-bg)'
-            }}>
-              <button
-                onClick={() => setDownloadModalTab('device')}
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  padding: '12px',
-                  background: downloadModalTab === 'device' ? 'var(--panel-bg)' : 'transparent',
-                  border: 'none',
-                  borderBottom: downloadModalTab === 'device' ? '2px solid var(--theme-primary)' : '2px solid transparent',
-                  color: downloadModalTab === 'device' ? 'var(--theme-primary)' : 'var(--text-secondary)',
-                  fontWeight: 600,
-                  fontSize: '0.9rem',
-                  cursor: 'pointer'
-                }}
-              >
-                <HardDrive size={16} />
-                Option 1: Download to Device
-              </button>
-              <button
-                onClick={() => setDownloadModalTab('cloud')}
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  padding: '12px',
-                  background: downloadModalTab === 'cloud' ? 'var(--panel-bg)' : 'transparent',
-                  border: 'none',
-                  borderBottom: downloadModalTab === 'cloud' ? '2px solid var(--theme-primary)' : '2px solid transparent',
-                  color: downloadModalTab === 'cloud' ? 'var(--theme-primary)' : 'var(--text-secondary)',
-                  fontWeight: 600,
-                  fontSize: '0.9rem',
-                  cursor: 'pointer'
-                }}
-              >
-                <Cloud size={16} />
-                Option 2: Download to Cloud (Google Drive)
-              </button>
-            </div>
-
             {/* Modal Scrollable Body */}
             <div style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {streamLoading ? (
-                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary)' }}>
-                  <RefreshCw className="spinner" size={28} style={{ animation: 'spin 1s linear infinite', marginBottom: '12px' }} />
-                  <div>Inspecting video stream manifests and cloud connections...</div>
-                </div>
-              ) : downloadModalTab === 'device' ? (
-                /* ================= OPTION 1: DEVICE ================= */
-                <>
-                  {streamError && (
-                    <div style={{
-                      padding: '12px 16px',
-                      background: 'rgba(239, 68, 68, 0.1)',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
-                      borderRadius: '8px',
-                      color: '#f87171',
-                      fontSize: '0.85rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}>
-                      <AlertCircle size={16} />
-                      {streamError}
-                    </div>
-                  )}
-
-                  {/* Document Assets */}
-                  <div>
-                    <h4 style={{ margin: '0 0 10px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <FileText size={16} color="var(--theme-primary)" />
-                      Lecture Documents & Subtitles
-                    </h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
-                      <button
-                        onClick={handleDownloadSummary}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          padding: '10px 14px',
-                          background: 'var(--card-bg)',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: '8px',
-                          color: 'var(--text-primary)',
-                          cursor: 'pointer',
-                          fontSize: '0.82rem',
-                          fontWeight: 600
-                        }}
-                      >
-                        <Download size={14} color="var(--theme-primary)" />
-                        Summary (summary.md)
-                      </button>
-                      <button
-                        onClick={handleDownloadTranscript}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          padding: '10px 14px',
-                          background: 'var(--card-bg)',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: '8px',
-                          color: 'var(--text-primary)',
-                          cursor: 'pointer',
-                          fontSize: '0.82rem',
-                          fontWeight: 600
-                        }}
-                      >
-                        <Download size={14} color="var(--theme-primary)" />
-                        Transcript (transcript.md)
-                      </button>
-                      <button
-                        onClick={handleDownloadVtt}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          padding: '10px 14px',
-                          background: 'var(--card-bg)',
-                          border: '1px solid var(--border-color)',
-                          borderRadius: '8px',
-                          color: 'var(--text-primary)',
-                          cursor: 'pointer',
-                          fontSize: '0.82rem',
-                          fontWeight: 600
-                        }}
-                      >
-                        <Download size={14} color="var(--theme-primary)" />
-                        Subtitles (captions.vtt)
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Progressive MP4 Downloads if available */}
-                  {streamData?.progressive_mp4s && streamData.progressive_mp4s.length > 0 && (
-                    <div>
-                      <h4 style={{ margin: '0 0 10px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Video size={16} color="var(--theme-primary)" />
-                        Direct MP4 Video Downloads
-                      </h4>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {streamData.progressive_mp4s.map((mp4, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              padding: '10px 14px',
-                              background: 'var(--card-bg)',
-                              border: '1px solid var(--border-color)',
-                              borderRadius: '8px'
-                            }}
-                          >
-                            <div>
-                              <span style={{ fontWeight: 700, color: 'var(--theme-primary)', fontSize: '0.88rem' }}>
-                                {mp4.quality || 'Standard'} ({mp4.width}x{mp4.height})
-                              </span>
-                              {mp4.fps && <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginLeft: '8px' }}>{mp4.fps} fps</span>}
-                            </div>
-                            <a
-                              href={mp4.url}
-                              download
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                padding: '6px 12px',
-                                background: 'var(--theme-primary)',
-                                color: '#ffffff',
-                                borderRadius: '6px',
-                                textDecoration: 'none',
-                                fontSize: '0.8rem',
-                                fontWeight: 600
-                              }}
-                            >
-                              <Download size={13} />
-                              Download MP4
-                            </a>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Adaptive HLS Stream Capture Guide */}
-                  <div>
-                    <h4 style={{ margin: '0 0 8px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Terminal size={16} color="var(--theme-primary)" />
-                      Download Video Stream via CLI (yt-dlp / ffmpeg)
-                    </h4>
-                    <p style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      High-definition lecture video is streamed using multi-bitrate Adaptive HLS (<code style={{ color: 'var(--theme-primary)' }}>.m3u8</code>). Use these 1-click commands to download the full HD video directly onto your machine:
-                    </p>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {/* yt-dlp */}
-                      <div style={{
-                        background: 'var(--card-bg)',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: '8px',
-                        padding: '10px 14px'
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>yt-dlp (Recommended)</span>
-                          <button
-                            onClick={() => handleCopyCmd('ytdlp', `yt-dlp "${streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -o "${(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"`)}
-                            style={{
-                              background: 'transparent',
-                              border: '1px solid var(--border-color)',
-                              borderRadius: '4px',
-                              color: copiedCmd === 'ytdlp' ? '#10b981' : 'var(--text-secondary)',
-                              padding: '2px 8px',
-                              fontSize: '0.72rem',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px'
-                            }}
-                          >
-                            {copiedCmd === 'ytdlp' ? <Check size={12} /> : <Copy size={12} />}
-                            {copiedCmd === 'ytdlp' ? 'Copied' : 'Copy Command'}
-                          </button>
-                        </div>
-                        <code style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all', display: 'block' }}>
-                          yt-dlp "{streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -o "{(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"
-                        </code>
-                      </div>
-
-                      {/* ffmpeg */}
-                      <div style={{
-                        background: 'var(--card-bg)',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: '8px',
-                        padding: '10px 14px'
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)' }}>ffmpeg</span>
-                          <button
-                            onClick={() => handleCopyCmd('ffmpeg', `ffmpeg -i "${streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -c copy "${(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"`)}
-                            style={{
-                              background: 'transparent',
-                              border: '1px solid var(--border-color)',
-                              borderRadius: '4px',
-                              color: copiedCmd === 'ffmpeg' ? '#10b981' : 'var(--text-secondary)',
-                              padding: '2px 8px',
-                              fontSize: '0.72rem',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px'
-                            }}
-                          >
-                            {copiedCmd === 'ffmpeg' ? <Check size={12} /> : <Copy size={12} />}
-                            {copiedCmd === 'ffmpeg' ? 'Copied' : 'Copy Command'}
-                          </button>
-                        </div>
-                        <code style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all', display: 'block' }}>
-                          ffmpeg -i "{streamData?.hls_url || streamData?.source_url || activeData?.sourceUrl}" -c copy "{(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_')}.mp4"
-                        </code>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                /* ================= OPTION 2: CLOUD (GOOGLE DRIVE) ================= */
-                <>
-                  <div style={{
+              <div style={{
                     padding: '14px 18px',
                     background: 'rgba(0, 173, 239, 0.08)',
                     border: '1px solid rgba(0, 173, 239, 0.25)',
@@ -4011,8 +3702,6 @@ export default function App() {
                       {gdriveUploading ? 'Uploading Bundle to Google Drive...' : 'Upload Full Bundle to Google Drive'}
                     </button>
                   )}
-                </>
-              )}
             </div>
 
             {/* Modal Footer */}

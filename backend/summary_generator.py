@@ -1,85 +1,28 @@
 """
 Dynamic AI Summary Generator for LectureScribe
 ----------------------------------------------
-Generates structured, authentic executive summaries from actual video transcript cues.
-100% Dynamic Content:
-- Reconstructs complete, grammatical sentences across broken Vimeo caption cues.
-- Derives genuine semantic topics & chapter titles directly from lecture discussion.
-- Synthesizes an Executive Overview & Scope.
-- Extracts authentic intellectual inquiries and questions asked during the session.
-- Seamlessly integrates with LLMs (Microsoft Phi-3.5 / Llama / OpenAI) when API keys are configured.
+Generates structured, authentic executive summaries from video transcript cues:
+1. Reconstructs complete, grammatical sentences across fragmented caption cues.
+2. Generates high-quality topical chapters via LLM (Groq / Gemini / Hugging Face / OpenAI).
+3. Provides a clean, deterministic time-sliced fallback when LLMs are unavailable.
+4. Extracts genuine questions explored during the lecture.
 """
 from __future__ import annotations
 
 import os
 import re
 import json
-from collections import Counter
 from typing import List, Dict, Any, Optional
-
-# Comprehensive stopwords covering spoken conversational tokens & fillers
-STOPWORDS = set("""
-a about above across after again against all almost along already also although always
-am among an and another any anybody anyone anything anyway anywhere are aren't around
-as at be became because become becomes becoming been before beforehand behind being
-below beside besides between beyond both but by can cannot can't come came could couldn't
-did didn't do does doesn't doing don't done down during each either else elsewhere
-enough even ever every everybody everyone everything everywhere except few for former
-formerly from further get gets getting got had hadn't has hasn't have haven't having
-he he'd he'll he's hence her here here's hers herself him himself his how however
-i i'd i'll i'm i've if in into is isn't it it's its itself just keep keeps kept
-let let's made make makes making many may maybe me meanwhile might mine more moreover
-most mostly much must mustn't my myself near neither never nevertheless next no nobody
-none noone nor not nothing now nowhere of off often on once one only onto or other
-others otherwise ought our ours ourselves out over own per perhaps please rather really
-said same saw see seen shall shan't she she'd she'll she's should shouldn't since so
-some somebody someone something sometime sometimes somewhere still such take taken than
-that that's the their theirs them themselves then thence there thereafter thereby therefore
-therein thereupon these they they'd they'll they're they've this those though through
-throughout thru thus to together too toward towards under until unto up upon us use
-used uses using very via was wasn't way we we'd we'll we're we've well went were weren't
-what whatever what's when whence whenever where whereafter whereas whereby wherein
-whereupon wherever whether which while whither who whoever whole whom whose why will
-with within without won't would wouldn't yes yet you you'd you'll you're you've your
-yours yourself yourselves okay yeah right sir today session video lecture discussing
-discuss discussed example examples kind sort thing things actually basically literally
-going goes went want wanted need needed mean meant think thought know knew
-zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen
-sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand
-first second third fourth fifth last next
-comma dot colon semicolon dash hyphen slash backslash bracket parenthesis quote quotes equals plus minus
-print enter click press write providing provides provide keep keeps keeping
-screen tab window link file folder app application download downloaded install installed
-let lets just also
-""".split())
-
-# Words that should never form or participate in standalone chapter topic titles
-DISALLOWED_TOPIC_WORDS = set("""
-zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen
-sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand
-first second third fourth fifth last next
-comma dot colon semicolon dash hyphen slash backslash bracket parenthesis quote quotes equals plus minus cross
-print enter click press write providing provides provide keep keeps keeping
-thing things stuff sort kind
-sir maam hello yeah okay yes right bye
-screen tab window link file folder app application download downloaded install installed
-let lets just also actually basically literally
-meeting struggle finding audible hear audio
-""".split())
 
 # High-salience academic discourse markers for scoring substantive sentences
 DISCOURSE_MARKERS = {
-    "methodology": 4.0, "hypothesis": 4.0, "framework": 3.5, "objective": 3.5,
-    "strategy": 3.0, "literature": 3.5, "investigation": 3.0, "experiment": 3.0,
-    "validation": 3.0, "analysis": 3.0, "perspective": 2.5, "process": 2.5,
-    "difference": 3.0, "innovation": 3.0, "technology": 2.5, "independent": 3.0,
-    "publication": 3.0, "patent": 3.0, "concept": 2.5, "principle": 2.5,
-    "problem": 2.5, "solution": 2.5, "evaluation": 2.5, "formulation": 3.0,
-    "structure": 2.5, "discovery": 3.0, "invention": 3.0, "crucial": 2.5,
-    "essential": 2.5, "systematic": 3.0, "criterion": 3.0, "syllabus": 2.5
+    "methodology": 3.0, "hypothesis": 3.0, "framework": 3.0, "objective": 3.0,
+    "strategy": 2.5, "experiment": 2.5, "analysis": 2.5, "difference": 2.5,
+    "concept": 2.5, "principle": 2.5, "problem": 2.5, "solution": 2.5,
+    "validation": 2.5, "formulation": 2.5, "structure": 2.0, "process": 2.0,
 }
 
-# Conversational greetings & opening logistics to skip
+# Conversational greetings & opening logistics to filter out
 GREETING_PHRASES = [
     "good evening", "good morning", "good afternoon", "can you hear", "am i audible",
     "yes sir", "no sir", "thank you", "joined by", "another meeting", "another link",
@@ -102,7 +45,6 @@ def clean_sentence_text(text: str) -> str:
     )
 
     t = re.sub(r"[,–—\s]+(?:right|okay|correct|fine|yes|no)\?*$", ".", t, flags=re.IGNORECASE)
-
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"\s*--\s*", " — ", t)
 
@@ -121,7 +63,7 @@ def is_greeting_or_banter(t: str) -> bool:
 
 def reconstruct_sentences(cues: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     """
-    Stitch fragmented Vimeo caption cues into full grammatical sentences.
+    Stitch fragmented caption cues into full grammatical sentences.
     Preserves exact starting timestamp of each sentence.
     """
     sentences = []
@@ -154,64 +96,6 @@ def reconstruct_sentences(cues: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     return sentences
 
 
-def extract_dynamic_phase_topic(sentences: List[Dict[str, Any]], video_title: str, used_topics: Optional[set] = None) -> str:
-    """
-    Derives genuine semantic topics (bigrams/trigrams) from sentences in a specific segment.
-    Ensures non-overlapping, specific topical labels across lecture phases.
-    """
-    if used_topics is None:
-        used_topics = set()
-
-    phrases = []
-    title_words = set(re.sub(r"[^a-z0-9 ]", "", video_title.lower()).split())
-
-    for s in sentences:
-        words = [re.sub(r"[^a-z0-9]", "", w) for w in s["text"].lower().split()]
-        words = [w for w in words if w and len(w) >= 3 and not re.match(r"^\d+$", w)]
-
-        for i in range(len(words) - 1):
-            w1, w2 = words[i], words[i + 1]
-            if (
-                w1 not in STOPWORDS and w2 not in STOPWORDS
-                and w1 not in DISALLOWED_TOPIC_WORDS and w2 not in DISALLOWED_TOPIC_WORDS
-                and len(w1) >= 3 and len(w2) >= 3
-            ):
-                phrases.append(f"{w1.capitalize()} {w2.capitalize()}")
-
-        for i in range(len(words) - 2):
-            w1, w2, w3 = words[i], words[i + 1], words[i + 2]
-            if (
-                w1 not in STOPWORDS and w3 not in STOPWORDS
-                and w1 not in DISALLOWED_TOPIC_WORDS and w3 not in DISALLOWED_TOPIC_WORDS
-                and len(w1) >= 3 and len(w3) >= 3
-            ):
-                phrases.append(f"{w1.capitalize()} {w2.capitalize()} {w3.capitalize()}")
-
-    counts = Counter(phrases)
-    picked = None
-    for cand, _ in counts.most_common(25):
-        cand_words = set(cand.lower().split())
-        if (
-            not (cand_words & used_topics)
-            and not (cand_words & DISALLOWED_TOPIC_WORDS)
-            and not all(w in title_words for w in cand_words)
-        ):
-            picked = cand
-            break
-
-    if not picked:
-        for cand, _ in counts.most_common(25):
-            cand_words = set(cand.lower().split())
-            if not (cand_words & DISALLOWED_TOPIC_WORDS) and not all(w in title_words for w in cand_words):
-                picked = cand
-                break
-
-    if picked:
-        used_topics.update(picked.lower().split())
-        return picked
-    return "Methodology & Analytical Discussions"
-
-
 def score_sentence(s: str) -> float:
     """Score sentence by information density, optimal length, and key academic discourse markers."""
     words = s.lower().split()
@@ -229,11 +113,8 @@ def score_sentence(s: str) -> float:
 
 
 def extract_substantive_questions(sentences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Extracts authentic questions asked or addressed during the lecture.
-    Excludes conversational question tags like 'right?' or 'okay?'.
-    """
-    QUESTION_STARTERS = (
+    """Extract authentic questions asked or addressed during the lecture."""
+    question_starters = (
         'what', 'how', 'why', 'can', 'should', 'is', 'are', 'which', 'who', 'where', 'when', 'does', 'do'
     )
     results = []
@@ -248,9 +129,9 @@ def extract_substantive_questions(sentences: List[Dict[str, Any]]) -> List[Dict[
 
         words = txt.lower().split()
         first_word = re.sub(r"[^a-z]", "", words[0])
-        is_q = first_word in QUESTION_STARTERS
+        is_q = first_word in question_starters
         if not is_q and len(words) >= 2:
-            is_q = words[1] in QUESTION_STARTERS
+            is_q = words[1] in question_starters
 
         if is_q:
             clean_q = re.sub(r"^(?:So|Then|Now|And)[,\s]+", "", txt, flags=re.IGNORECASE)
@@ -262,10 +143,15 @@ def extract_substantive_questions(sentences: List[Dict[str, Any]]) -> List[Dict[
     return results
 
 
+def extract_dynamic_phase_topic(sentences: List[Dict[str, Any]], video_title: str, used_topics: Optional[set] = None) -> str:
+    """Legacy compatibility stub: returns safe general topic description."""
+    return "Methodology & Analytical Discussions"
+
+
 def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[List[Dict[str, Any]]]:
     """
-    Optional LLM generation: If Groq, Gemini, Hugging Face, OpenAI, or Ollama credentials are configured,
-    generates structured summary using an instruction-tuned language model.
+    Generate structured summary using an instruction-tuned language model
+    (Groq, Gemini, Hugging Face, OpenAI, or local endpoint).
     """
     groq_key = os.getenv("GROQ_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -394,10 +280,10 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
 
 def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dict[str, Any]]:
     """
-    Intelligent dynamic NLP engine:
-    1. Reconstructs full grammatical sentences across broken subtitle lines.
-    2. Derives authentic, specific topic titles for each time segment.
-    3. Selects high-value, complete takeaway statements with exact clickable timestamps.
+    Deterministic NLP fallback when LLM is unavailable:
+    1. Reconstructs full grammatical sentences from caption cues.
+    2. Groups into chronological lecture phases.
+    3. Selects top substantive takeaway statements with exact timestamps.
     4. Extracts real student and instructor inquiry questions.
     """
     if not cues:
@@ -422,10 +308,8 @@ def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dic
 
     chunk_size = max(1, total_s // num_phases)
     sections = []
-    used_topics = set()
-    clean_title = re.sub(r"\s*Live\s*session.*", "", title, flags=re.IGNORECASE).strip()
 
-    # 1. Synthesize Executive Overview dynamically from genuine introductory lecture sentences
+    # 1. Executive Overview from introductory lecture sentences
     intro_slice = sentences[:max(chunk_size, 15)]
     intro_scored = sorted(intro_slice, key=lambda x: score_sentence(x["text"]), reverse=True)
     intro_points = []
@@ -443,7 +327,7 @@ def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dic
         "points": intro_points
     })
 
-    # 2. Generate Thematic Chapters
+    # 2. Chronological Lecture Chapters
     for i in range(num_phases):
         slice_s = sentences[i * chunk_size : min(total_s, (i + 1) * chunk_size)]
         if not slice_s:
@@ -451,8 +335,6 @@ def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dic
 
         t_start = slice_s[0]["time"]
         t_end = slice_s[-1]["time"]
-        topic = extract_dynamic_phase_topic(slice_s, title, used_topics)
-
         scored = sorted(slice_s, key=lambda x: score_sentence(x["text"]), reverse=True)
         picked = []
         for cand in scored:
@@ -466,11 +348,11 @@ def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dic
             picked = [f"[{t_start}] Key concepts and topics covered in this lecture segment."]
 
         sections.append({
-            "title": f"📑 {topic} [{t_start} - {t_end}]",
+            "title": f"📑 Lecture Discussion [{t_start} - {t_end}]",
             "points": picked
         })
 
-    # 3. Extract Substantive Lecture Questions & Inquiries
+    # 3. Substantive Questions Explored
     real_questions = extract_substantive_questions(sentences)
     if real_questions:
         q_points = [f"[{q['time']}] {q['text']}" for q in real_questions[:5]]
@@ -484,7 +366,7 @@ def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dic
 
 
 def generate_summary_sections(cues: List[Dict[str, str]], title: str) -> List[Dict[str, Any]]:
-    """Master summary function: Attempts LLM generation first, with intelligent dynamic NLP fallback."""
+    """Master summary function: Attempts LLM generation first, with clean dynamic fallback."""
     try:
         llm_res = generate_llm_summary(cues, title)
         if llm_res:

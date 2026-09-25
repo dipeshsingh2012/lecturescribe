@@ -244,15 +244,7 @@ export default function App() {
     }
   }, [googleUser?.email]);
 
-  // Load Google Drive Status on initial mount to get Client ID early for top-right sign-in
-  useEffect(() => {
-    fetch('/api/cloud/gdrive/status')
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (data) setGdriveStatus(data);
-      })
-      .catch(() => {});
-  }, []);
+
 
   // Client-side cache: In-memory & LocalStorage
   const [cachedVideos, setCachedVideos] = useState(() => {
@@ -285,8 +277,10 @@ export default function App() {
   const [copiedSubmissionId, setCopiedSubmissionId] = useState(null);
   const chatEndRef = useRef(null);
 
-  // Fetch available AI models
+  // Fetch available AI models only when active lecture/tutor is loaded, not on the landing page
   useEffect(() => {
+    if (!activeData || availableModels.length > 0) return;
+
     fetch('/api/ai/models')
       .then(res => res.json())
       .then(data => {
@@ -302,7 +296,7 @@ export default function App() {
         }
       })
       .catch(err => console.warn('Could not load AI models list:', err));
-  }, []);
+  }, [activeData, availableModels.length]);
 
   const iframeRef = useRef(null);
   const playerRef = useRef(null);
@@ -985,9 +979,22 @@ export default function App() {
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  const handleGoogleSignIn = (autoStartUpload = false) => {
+  const handleGoogleSignIn = async (autoStartUpload = false) => {
+    let currentStatus = gdriveStatus;
+    if (!currentStatus?.client_id) {
+      try {
+        const res = await fetch('/api/cloud/gdrive/status');
+        if (res.ok) {
+          currentStatus = await res.json();
+          setGdriveStatus(currentStatus);
+        }
+      } catch (err) {
+        console.warn("Could not fetch Google Drive status on sign-in:", err);
+      }
+    }
+
     const activeClientId = (
-      gdriveStatus?.client_id ||
+      currentStatus?.client_id ||
       googleClientIdInput ||
       (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_CLIENT_ID) ||
       ''

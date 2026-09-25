@@ -406,6 +406,49 @@ export default function App() {
     }
   };
 
+  // Parse inline timestamps in bot messages and make them clickable
+  const renderMessageWithTimestamps = (text) => {
+    if (!text) return null;
+    const parts = text.split(/(\[\d{1,2}:\d{2}(?::\d{2})?\])/g);
+    if (parts.length === 1) return text;
+    return parts.map((part, pIdx) => {
+      const match = part.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]$/);
+      if (match) {
+        const ts = match[1];
+        return (
+          <button
+            key={pIdx}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleCueClick(ts);
+            }}
+            title={`Jump video to ${ts}`}
+            style={{
+              background: 'var(--highlight-bg)',
+              color: 'var(--theme-primary)',
+              border: '1px solid rgba(0, 117, 237, 0.3)',
+              borderRadius: '4px',
+              padding: '1px 6px',
+              margin: '0 2px',
+              fontWeight: 700,
+              fontSize: '0.8rem',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '3px',
+              verticalAlign: 'baseline',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            ⏱️ {ts}
+          </button>
+        );
+      }
+      return part;
+    });
+  };
+
   const handleTranscribe = async (targetUrl = urlInput, pushRoute = true) => {
     const rawUrl = targetUrl || urlInput;
     if (!rawUrl.trim()) return;
@@ -2352,8 +2395,56 @@ export default function App() {
                         border: msg.sender === 'bot' ? '1px solid var(--border-color)' : 'none',
                         boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
                       }}>
-                        {msg.text}
+                        {renderMessageWithTimestamps(msg.text)}
                       </div>
+
+                      {/* Lecture Transcript Citations Pill Bar */}
+                      {msg.sender === 'bot' && msg.citations && msg.citations.length > 0 && (
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                          padding: '8px 12px',
+                          background: 'var(--panel-bg)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          fontSize: '0.75rem',
+                          marginTop: '2px'
+                        }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <Clock size={12} color="var(--theme-primary)" /> Lecture Citations (Click to jump):
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            {msg.citations.map((cite, cIdx) => (
+                              <button
+                                key={cIdx}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  handleCueClick(cite.timestamp);
+                                }}
+                                title={cite.text ? `Jump to ${cite.timestamp}: "${cite.text}"` : `Jump to ${cite.timestamp}`}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: 'var(--card-bg)',
+                                  border: '1px solid var(--border-color)',
+                                  color: 'var(--theme-primary)',
+                                  padding: '3px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease'
+                                }}
+                              >
+                                <Play size={10} style={{ fill: 'currentColor' }} />
+                                <span>{cite.timestamp}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Model & Web Source Badges */}
                       {msg.sender === 'bot' && (msg.model || (msg.web_sources && msg.web_sources.length > 0)) && (

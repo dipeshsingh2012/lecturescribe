@@ -2235,58 +2235,6 @@ export default function App() {
 
                 {/* Model Selector & View Mode Controls */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  {/* View Mode Segmented Control in Header */}
-                  <div style={{
-                    display: 'inline-flex',
-                    background: 'var(--panel-bg)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    padding: '2px',
-                    gap: '2px'
-                  }}>
-                    <button
-                      onClick={() => setViewMode('learning')}
-                      title="Comprehensive learning mode: formatted Markdown, clickable timestamps, and lecture citations"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '0.74rem',
-                        fontWeight: viewMode === 'learning' ? 700 : 500,
-                        cursor: 'pointer',
-                        border: 'none',
-                        background: viewMode === 'learning' ? 'var(--theme-primary)' : 'transparent',
-                        color: viewMode === 'learning' ? '#ffffff' : 'var(--text-secondary)',
-                        transition: 'all 0.15s ease'
-                      }}
-                    >
-                      <BookOpen size={12} />
-                      <span>Learning View</span>
-                    </button>
-                    <button
-                      onClick={() => setViewMode('submission')}
-                      title="Academic submission mode: 100-150 words, plain human style, no markdown or timestamps, 1-click copy"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '0.74rem',
-                        fontWeight: viewMode === 'submission' ? 700 : 500,
-                        cursor: 'pointer',
-                        border: 'none',
-                        background: viewMode === 'submission' ? 'var(--theme-primary)' : 'transparent',
-                        color: viewMode === 'submission' ? '#ffffff' : 'var(--text-secondary)',
-                        transition: 'all 0.15s ease'
-                      }}
-                    >
-                      <FileText size={12} />
-                      <span>Submission View</span>
-                    </button>
-                  </div>
 
                   {/* Web Grounding Toggle */}
                   <button

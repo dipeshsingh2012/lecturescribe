@@ -339,19 +339,14 @@ def rag_query(req: RAGQueryRequest):
             raise HTTPException(status_code=500, detail=f"{err_type}: {err_msg}")
 
     # Auto-generate academic submission version (~120 words, human graduate persona)
-    try:
-        sub_res = pinecone_rag_engine.generate_submission_version(
-            original_text=result.get("answer", ""),
-            video_id=req.video_id,
-            word_count=120,
-            model_id=req.model_id
-        )
-        result["submission_text"] = sub_res.get("submission_text", "")
-        result["submission_word_count"] = sub_res.get("word_count", 0)
-    except Exception as e:
-        print(f"⚠️ [Submission Gen Notice]: {e}")
-        result["submission_text"] = ""
-        result["submission_word_count"] = 0
+    sub_res = pinecone_rag_engine.generate_submission_version(
+        original_text=result.get("answer", ""),
+        video_id=req.video_id,
+        word_count=120,
+        model_id=req.model_id
+    )
+    result["submission_text"] = sub_res.get("submission_text", "")
+    result["submission_word_count"] = sub_res.get("word_count", 0)
 
     if req.video_id:
         try:
@@ -441,19 +436,14 @@ def chat_with_transcript(req: ChatRequest):
     citations = rag_res.get("citations", [])
 
     # Auto-generate academic submission version
-    sub_text = ""
-    sub_word_count = 0
-    try:
-        sub_res = pinecone_rag_engine.generate_submission_version(
-            original_text=reply,
-            video_id=video_id,
-            word_count=120,
-            model_id=req.model_id
-        )
-        sub_text = sub_res.get("submission_text", "")
-        sub_word_count = sub_res.get("word_count", 0)
-    except Exception as e:
-        print(f"⚠️ [Submission Gen Notice]: {e}")
+    sub_res = pinecone_rag_engine.generate_submission_version(
+        original_text=reply,
+        video_id=video_id,
+        word_count=120,
+        model_id=req.model_id
+    )
+    sub_text = sub_res.get("submission_text", "")
+    sub_word_count = sub_res.get("word_count", 0)
 
     # Save to Chat History DB
     try:

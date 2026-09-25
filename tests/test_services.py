@@ -119,5 +119,31 @@ class TestServices(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 pinecone_rag_engine.query_rag(query="test", video_id="vid")
 
+    def test_submission_fails_fast_on_unexecuted_function(self):
+        """Verify generate_submission_version raises ValueError when input is raw function call."""
+        with self.assertRaises(ValueError):
+            pinecone_rag_engine.generate_submission_version("<function=get_lecture_outline video_id=\"1228259148\"></function>")
+
+    def test_submission_fails_fast_on_empty_text(self):
+        """Verify generate_submission_version raises ValueError on empty text."""
+        with self.assertRaises(ValueError):
+            pinecone_rag_engine.generate_submission_version("")
+
+    def test_transcript_window_fails_fast_when_no_cues_in_window(self):
+        """Verify execute_tool raises ValueError if no cues match window (no fallback to cues[:8])."""
+        from unittest.mock import patch
+        mock_cues = [
+            {"time": "02:00", "text": "Early cue"},
+            {"time": "03:00", "text": "Another early cue"}
+        ]
+        with patch("backend.database.db_manager.get_saved_video", return_value={"cues": mock_cues}):
+            with self.assertRaises(ValueError):
+                pinecone_rag_engine.execute_tool(
+                    tool_name="get_transcript_window",
+                    arguments={"start_time": "50:00", "end_time": "55:00", "video_id": "test_cv"},
+                    target_video_id="test_cv",
+                    lecture_title="CV"
+                )
+
 if __name__ == "__main__":
     unittest.main()

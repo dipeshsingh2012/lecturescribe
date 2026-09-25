@@ -574,8 +574,8 @@ class Llama3PineconeRAGStore:
 
             cues = saved.get("cues", [])
             window = [c for c in cues if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec]
-            if not window and cues:
-                window = cues[:8]
+            if not window:
+                raise ValueError(f"No transcript cues found within time window [{st} - {et}] for lecture '{vid}'.")
 
             dialogue = " ".join([f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in window])
             citations.append({
@@ -777,19 +777,54 @@ class Llama3PineconeRAGStore:
                 tool_calls = msg.get("tool_calls", []) or []
                 content_str = msg.get("content", "") or ""
 
-            # Support Llama 3.1 text-based function invocation format (<function=name>{...}</function>)
+            # Support Llama 3.1 text-based function invocation format (<function=name ...>...</function> or <function=name .../>)
             if not tool_calls and "<function=" in content_str:
-                fn_matches = re.findall(r"<function=(\w+)>(.*?)(?:</function>|$)", content_str, re.DOTALL)
-                for fn_name, fn_args in fn_matches:
-                    clean_args = fn_args.strip()
-                    if clean_args.endswith("</function>"):
-                        clean_args = clean_args[:-11].strip()
+                pattern = re.compile(r"<function=([a-zA-Z0-9_]+)([^>/]*)(?:/>|>(.*?)(?:</function>|$))", re.DOTALL)
+                for match in pattern.finditer(content_str):
+                    fn_name = match.group(1).strip()
+                    raw_attrs = (match.group(2) or "").strip()
+                    body = (match.group(3) or "").strip()
+                    if body.endswith("</function>"):
+                        body = body[:-11].strip()
+
+                    args_dict = {}
+                    # 1. Parse tag attributes: key="value" or key='value' or key=123
+                    attr_matches = re.findall(r'([a-zA-Z0-9_]+)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))', raw_attrs)
+                    for k, v1, v2, v3 in attr_matches:
+                        val = v1 or v2 or v3
+                        try:
+                            val = json.loads(val)
+                        except Exception:
+                            pass
+                        args_dict[k] = val
+
+                    # 2. Parse body (JSON or key=val attributes)
+                    if body:
+                        try:
+                            body_json = json.loads(body)
+                            if isinstance(body_json, dict):
+                                args_dict.update(body_json)
+                            else:
+                                args_dict["content"] = body_json
+                        except Exception:
+                            body_attrs = re.findall(r'([a-zA-Z0-9_]+)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))', body)
+                            if body_attrs:
+                                for k, v1, v2, v3 in body_attrs:
+                                    val = v1 or v2 or v3
+                                    try:
+                                        val = json.loads(val)
+                                    except Exception:
+                                        pass
+                                    args_dict[k] = val
+                            else:
+                                args_dict["raw_body"] = body
+
                     tool_calls.append({
-                        "id": f"call_{fn_name}_{current_step}",
+                        "id": f"call_{fn_name}_{current_step}_{len(tool_calls)}",
                         "type": "function",
                         "function": {
-                            "name": fn_name.strip(),
-                            "arguments": clean_args
+                            "name": fn_name,
+                            "arguments": json.dumps(args_dict) if args_dict else "{}"
                         }
                     })
 
@@ -797,8 +832,15 @@ class Llama3PineconeRAGStore:
             print(f"🤖 [Agent Step {current_step}/{max_steps}] LLM responded in {step_duration:.2f}s | Tool calls requested: {len(tool_calls)}")
 
             if not tool_calls:
-                print(f"🎯 [Agent Step {current_step}] LLM provided direct final answer ({len(content_str)} chars). Exiting agent loop.")
-                final_answer = content_str.strip()
+                clean_answer = content_str.strip()
+                if "<function=" in clean_answer:
+                    raise RuntimeError(
+                        f"Agent LLM returned unexecuted function invocation instead of valid answer: {clean_answer}"
+                    )
+                if not clean_answer:
+                    raise RuntimeError(f"Agent LLM returned empty response at step {current_step}.")
+                print(f"🎯 [Agent Step {current_step}] LLM provided direct final answer ({len(clean_answer)} chars). Exiting agent loop.")
+                final_answer = clean_answer
                 break
 
             # Append assistant turn with tool calls
@@ -814,8 +856,8 @@ class Llama3PineconeRAGStore:
                 raw_args = func.get("arguments", "{}")
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except Exception:
-                    args = {}
+                except Exception as e:
+                    raise ValueError(f"Malformed tool call arguments for '{func_name}': {raw_args}. Error: {e}")
 
                 t_tool_start = time.time()
                 tool_result_str, tool_citations, tool_web = self.execute_tool(
@@ -866,6 +908,10 @@ class Llama3PineconeRAGStore:
                 else:
                     raise RuntimeError(f"Agent synthesis step failed ({resp.status_code}): {resp.text}")
             print(f"✅ [Agent Synthesis] Completed in {time.time() - t_synth:.2f}s ({len(final_answer)} chars)")
+            if not final_answer:
+                raise RuntimeError(f"Agent failed to synthesize final answer from {display_model}.")
+            if "<function=" in final_answer:
+                raise RuntimeError(f"Agent synthesis emitted unexecuted function invocation: {final_answer}")
 
         # Deduplicate citations by timestamp and prefix
         seen_ts = set()
@@ -1007,6 +1053,11 @@ class Llama3PineconeRAGStore:
         """
         import requests
 
+        if not original_text or not original_text.strip():
+            raise ValueError("original_text is required to generate academic submission.")
+        if "<function=" in original_text:
+            raise ValueError(f"Cannot generate academic submission from unexecuted tool call: {original_text}")
+
         clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
         keywords = self.extract_lecture_keywords(video_id=video_id or "", top_n=6)
         kw_str = ", ".join(keywords) if keywords else "the core lecture topics"
@@ -1015,11 +1066,19 @@ class Llama3PineconeRAGStore:
         groq_key = os.getenv("GROQ_API_KEY", "")
         hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
 
-        target_model = model_id or "gemini-2.0-flash" if gemini_key else ("llama-3.3-70b-versatile" if groq_key else "meta-llama/Llama-3.1-8B-Instruct")
-        if target_model.startswith("gemini") and not gemini_key:
-            target_model = "llama-3.3-70b-versatile" if groq_key else "meta-llama/Llama-3.1-8B-Instruct"
-        elif target_model.startswith("llama-3.3") and not groq_key:
-            target_model = "gemini-2.0-flash" if gemini_key else "meta-llama/Llama-3.1-8B-Instruct"
+        # Strict provider selection without cascading fallback
+        if model_id:
+            m_lower = model_id.lower()
+            if "gemini" in m_lower or "flash" in m_lower:
+                provider = "gemini"
+            elif "groq" in m_lower or "llama-3.3" in m_lower:
+                provider = "groq"
+            elif "llama-3.1" in m_lower or "huggingface" in m_lower:
+                provider = "huggingface"
+            else:
+                provider = "groq" if groq_key else ("huggingface" if hf_token else "gemini")
+        else:
+            provider = "groq" if groq_key else ("huggingface" if hf_token else "gemini")
 
         system_prompt = (
             "You are an Indian graduate student pursuing a Master's degree (M.Tech / M.S.) in Computer Science / Engineering, "
@@ -1041,8 +1100,9 @@ class Llama3PineconeRAGStore:
         raw_output = ""
         model_used = ""
 
-        # 1. Gemini
-        if (target_model.startswith("gemini") or "flash" in target_model) and gemini_key:
+        if provider == "gemini":
+            if not gemini_key:
+                raise RuntimeError("Gemini selected for submission synthesis, but GEMINI_API_KEY is not set.")
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
                 payload = {
@@ -1050,20 +1110,24 @@ class Llama3PineconeRAGStore:
                     "systemInstruction": {"parts": [{"text": system_prompt}]},
                     "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
                 }
-                r = requests.post(url, json=payload, timeout=12)
-                if r.status_code == 200:
-                    data = r.json()
-                    candidates = data.get("candidates", [])
-                    if candidates and "content" in candidates[0]:
-                        parts = candidates[0]["content"].get("parts", [])
-                        if parts:
-                            raw_output = parts[0].get("text", "").strip()
-                            model_used = "Gemini 2.0 Flash"
+                r = requests.post(url, json=payload, timeout=15)
+                if r.status_code != 200:
+                    raise RuntimeError(f"Gemini API returned HTTP {r.status_code}: {r.text}")
+                data = r.json()
+                candidates = data.get("candidates", [])
+                if not candidates or "content" not in candidates[0]:
+                    raise RuntimeError("Gemini returned empty candidates array.")
+                parts = candidates[0]["content"].get("parts", [])
+                if not parts:
+                    raise RuntimeError("Gemini returned empty parts in content.")
+                raw_output = parts[0].get("text", "").strip()
+                model_used = "Gemini 2.0 Flash"
             except Exception as e:
-                print(f"[Gemini Submission Inference Error]: {e}")
+                raise RuntimeError(f"Gemini submission synthesis failed: {e}")
 
-        # 2. Groq
-        if not raw_output and (target_model.startswith("llama-3.3") or "groq" in target_model.lower()) and groq_key:
+        elif provider == "groq":
+            if not groq_key:
+                raise RuntimeError("Groq selected for submission synthesis, but GROQ_API_KEY is not set.")
             try:
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
@@ -1076,18 +1140,21 @@ class Llama3PineconeRAGStore:
                     "temperature": 0.3,
                     "max_tokens": 300
                 }
-                r = requests.post(url, headers=headers, json=payload, timeout=10)
-                if r.status_code == 200:
-                    data = r.json()
-                    choices = data.get("choices", [])
-                    if choices and "message" in choices[0]:
-                        raw_output = choices[0]["message"].get("content", "").strip()
-                        model_used = "Groq Llama 3.3 70B"
+                r = requests.post(url, headers=headers, json=payload, timeout=15)
+                if r.status_code != 200:
+                    raise RuntimeError(f"Groq API returned HTTP {r.status_code}: {r.text}")
+                data = r.json()
+                choices = data.get("choices", [])
+                if not choices or "message" not in choices[0]:
+                    raise RuntimeError("Groq returned empty choices array.")
+                raw_output = choices[0]["message"].get("content", "").strip()
+                model_used = "Groq Llama 3.3 70B"
             except Exception as e:
-                print(f"[Groq Submission Inference Error]: {e}")
+                raise RuntimeError(f"Groq submission synthesis failed: {e}")
 
-        # 3. Hugging Face (InferenceClient / Router)
-        if not raw_output and hf_token:
+        elif provider == "huggingface":
+            if not hf_token:
+                raise RuntimeError("Hugging Face selected for submission synthesis, but HUGGINGFACE_TOKEN is not set.")
             try:
                 if HAS_HF and InferenceClient:
                     client = InferenceClient(api_key=hf_token)
@@ -1100,9 +1167,10 @@ class Llama3PineconeRAGStore:
                         temperature=0.25,
                         max_tokens=300
                     )
-                    if resp and resp.choices and resp.choices[0].message:
-                        raw_output = resp.choices[0].message.content.strip()
-                        model_used = "Hugging Face Llama 3.1 8B"
+                    if not resp or not resp.choices or not resp.choices[0].message:
+                        raise RuntimeError("Hugging Face InferenceClient returned empty response.")
+                    raw_output = resp.choices[0].message.content.strip()
+                    model_used = "Hugging Face Llama 3.1 8B"
                 else:
                     url = "https://router.huggingface.co/v1/chat/completions"
                     headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": "application/json"}
@@ -1116,20 +1184,20 @@ class Llama3PineconeRAGStore:
                         "max_tokens": 300
                     }
                     r = requests.post(url, headers=headers, json=payload, timeout=30)
-                    if r.status_code == 200:
-                        choices = r.json().get("choices", [])
-                        if choices and "message" in choices[0]:
-                            raw_output = choices[0]["message"].get("content", "").strip()
-                            model_used = "Hugging Face Llama 3.1 8B"
-                    else:
+                    if r.status_code != 200:
                         raise RuntimeError(f"Hugging Face Router returned HTTP {r.status_code}: {r.text}")
+                    choices = r.json().get("choices", [])
+                    if not choices or "message" not in choices[0]:
+                        raise RuntimeError("Hugging Face Router returned empty choices.")
+                    raw_output = choices[0]["message"].get("content", "").strip()
+                    model_used = "Hugging Face Llama 3.1 8B"
             except Exception as e:
-                print(f"[HF Submission Inference Error]: {e}")
                 raise RuntimeError(f"Hugging Face submission synthesis failed: {e}")
+        else:
+            raise RuntimeError(f"Unsupported LLM provider '{provider}' for submission synthesis.")
 
-        # FAIL FAST: Do not fallback to mock formatters
         if not raw_output:
-            raise RuntimeError(f"Submission generation failed: No response received from {target_model}.")
+            raise RuntimeError(f"Submission generation failed: Empty output received from {model_used or provider}.")
 
         final_submission = self._clean_for_submission(raw_output, target_words=word_count)
         words = final_submission.split()

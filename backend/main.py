@@ -9,9 +9,20 @@ Triad Architecture:
 import os
 import re
 import sys
+import time
+import traceback
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
+
+from dotenv import load_dotenv
+
+# Ensure .env is explicitly loaded from project root
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(dotenv_path=_env_path, override=True)
+else:
+    load_dotenv(override=True)
 
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -272,20 +283,47 @@ def get_ai_models():
 
 @app.post("/api/rag/query")
 def rag_query(req: RAGQueryRequest):
-    """Perform grounded retrieval + multi-model answer synthesis."""
+    """Perform grounded retrieval + multi-model answer synthesis with transparent logging."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty")
-    
-    result = pinecone_rag_engine.query_rag(
-        req.query,
-        video_id=req.video_id,
-        video_title=req.video_title,
-        cues=req.cues,
-        top_k=req.top_k or 10,
-        model_id=req.model_id,
-        enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
-    )
-    
+
+    t_start = time.time()
+    print("\n" + "=" * 60)
+    print(f"📥 [API /api/rag/query] === Incoming RAG Query ===")
+    print(f"   Query: '{req.query}'")
+    print(f"   Video ID: '{req.video_id}' | Title: '{req.video_title or 'Auto'}' | Model: '{req.model_id or 'auto'}'")
+    print(f"   Top K: {req.top_k} | Web Search Enabled: {req.enable_web_search}")
+
+    try:
+        result = pinecone_rag_engine.query_rag(
+            req.query,
+            video_id=req.video_id,
+            video_title=req.video_title,
+            cues=req.cues,
+            top_k=req.top_k or 10,
+            model_id=req.model_id,
+            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
+        )
+    except Exception as e:
+        elapsed = time.time() - t_start
+        print(f"\n❌ [API /api/rag/query Error] Failed after {elapsed:.2f}s:")
+        traceback.print_exc()
+        print("=" * 60 + "\n")
+        
+        # Fail-fast error propagation with explicit HTTP statuses
+        err_type = type(e).__name__
+        err_msg = str(e)
+        if "Timeout" in err_type or "timed out" in err_msg.lower():
+            raise HTTPException(status_code=504, detail=f"LLM upstream gateway timeout: {err_msg}")
+        elif "Connection" in err_type or "RequestException" in err_type:
+            raise HTTPException(status_code=502, detail=f"LLM upstream network connection error: {err_msg}")
+        elif isinstance(e, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid query parameter: {err_msg}")
+        elif isinstance(e, RuntimeError):
+            raise HTTPException(status_code=502, detail=f"Agent RAG execution error: {err_msg}")
+        else:
+            raise HTTPException(status_code=500, detail=f"{err_type}: {err_msg}")
+
     # Auto-generate academic submission version (~120 words, human graduate persona)
     try:
         sub_res = pinecone_rag_engine.generate_submission_version(
@@ -297,7 +335,7 @@ def rag_query(req: RAGQueryRequest):
         result["submission_text"] = sub_res.get("submission_text", "")
         result["submission_word_count"] = sub_res.get("word_count", 0)
     except Exception as e:
-        print(f"[Submission Gen Notice]: {e}")
+        print(f"⚠️ [Submission Gen Notice]: {e}")
         result["submission_text"] = ""
         result["submission_word_count"] = 0
 
@@ -311,30 +349,59 @@ def rag_query(req: RAGQueryRequest):
                 user_email=req.user_email
             )
         except Exception as e:
-            print(f"[Chat Log Notice]: {e}")
+            print(f"⚠️ [Chat Log Notice]: {e}")
+
+    elapsed = time.time() - t_start
+    print(f"✅ [API /api/rag/query] Completed in {elapsed:.2f}s | Citations: {len(result.get('citations', []))} | Model: {result.get('model')}")
+    print("=" * 60 + "\n")
     return result
 
 @app.post("/api/chat")
 def chat_with_transcript(req: ChatRequest):
     """Route chat queries through RAG engine and save to DB."""
     user_prompt = req.message.strip()
+    if not user_prompt:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
     cues = req.cues
     title = req.video_title or "Lecture"
     video_id = req.video_id or "active"
+
+    t_start = time.time()
+    print("\n" + "=" * 60)
+    print(f"📥 [API /api/chat] === Incoming Chat Query ===")
+    print(f"   Message: '{user_prompt}' | Video ID: '{video_id}' | Title: '{title}'")
 
     if req.cues is not None and len(req.cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
         pinecone_rag_engine.ingest_transcript(video_id, title, req.cues)
         algolia_service.ingest_cues(video_id, title, req.cues)
 
-    rag_res = pinecone_rag_engine.query_rag(
-        user_prompt,
-        video_id=video_id,
-        video_title=title,
-        cues=cues,
-        top_k=10,
-        model_id=req.model_id,
-        enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
-    )
+    try:
+        rag_res = pinecone_rag_engine.query_rag(
+            user_prompt,
+            video_id=video_id,
+            video_title=title,
+            cues=cues,
+            top_k=10,
+            model_id=req.model_id,
+            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True
+        )
+    except Exception as e:
+        elapsed = time.time() - t_start
+        print(f"\n❌ [API /api/chat Error] Failed after {elapsed:.2f}s:")
+        traceback.print_exc()
+        print("=" * 60 + "\n")
+        err_type = type(e).__name__
+        err_msg = str(e)
+        if "Timeout" in err_type or "timed out" in err_msg.lower():
+            raise HTTPException(status_code=504, detail=f"LLM upstream gateway timeout: {err_msg}")
+        elif "Connection" in err_type or "RequestException" in err_type:
+            raise HTTPException(status_code=502, detail=f"LLM upstream network connection error: {err_msg}")
+        elif isinstance(e, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid query parameter: {err_msg}")
+        else:
+            raise HTTPException(status_code=502, detail=f"Agent RAG execution error: {err_msg}")
+
     reply = rag_res.get("answer", "")
     citations = rag_res.get("citations", [])
 
@@ -351,10 +418,17 @@ def chat_with_transcript(req: ChatRequest):
         sub_text = sub_res.get("submission_text", "")
         sub_word_count = sub_res.get("word_count", 0)
     except Exception as e:
-        print(f"[Submission Gen Notice]: {e}")
+        print(f"⚠️ [Submission Gen Notice]: {e}")
 
     # Save to Chat History DB
-    db_manager.save_chat_log(video_id, user_prompt, reply, citations, user_email=req.user_email)
+    try:
+        db_manager.save_chat_log(video_id, user_prompt, reply, citations, user_email=req.user_email)
+    except Exception as e:
+        print(f"⚠️ [Chat Log Notice]: {e}")
+
+    elapsed = time.time() - t_start
+    print(f"✅ [API /api/chat] Completed in {elapsed:.2f}s | Citations: {len(citations)} | Model: {rag_res.get('model')}")
+    print("=" * 60 + "\n")
 
     return {
         "reply": reply,

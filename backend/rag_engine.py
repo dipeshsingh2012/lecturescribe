@@ -10,6 +10,7 @@ import os
 import re
 import json
 import math
+import time
 from typing import List, Dict, Any, Tuple, Optional
 from dotenv import load_dotenv
 try:
@@ -26,12 +27,16 @@ except ImportError:
 from pathlib import Path
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)
+    _env_file = Path(__file__).resolve().parent.parent / ".env"
+    if _env_file.exists():
+        load_dotenv(dotenv_path=_env_file, override=True)
+    else:
+        load_dotenv(override=True)
 except ImportError:
-    env_file = Path(__file__).parent.parent / ".env"
-    if env_file.exists():
+    _env_file = Path(__file__).resolve().parent.parent / ".env"
+    if _env_file.exists():
         try:
-            for line in env_file.read_text().splitlines():
+            for line in _env_file.read_text().splitlines():
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
@@ -430,9 +435,10 @@ class Llama3PineconeRAGStore:
         web_sources = []
 
         if tool_name == "get_lecture_outline":
-            vid = str(arguments.get("video_id") or target_video_id).strip()
+            vid = target_video_id or str(arguments.get("video_id", "")).strip()
             if not vid:
                 raise ValueError("get_lecture_outline requires a valid video_id.")
+            print(f"    🔧 [Tool: get_lecture_outline] Retrieving syllabus roadmap for video '{vid}'")
             from backend.database import db_manager
             saved = db_manager.get_saved_video(vid)
             if not saved:
@@ -470,7 +476,8 @@ class Llama3PineconeRAGStore:
             if not query:
                 raise ValueError("search_transcript requires a non-empty query.")
             top_k = int(arguments.get("top_k", 5))
-            vid = str(arguments.get("video_id") or target_video_id).strip()
+            vid = target_video_id or str(arguments.get("video_id", "")).strip()
+            print(f"    🔧 [Tool: search_transcript] Hybrid search for: '{query}' (video='{vid}', top_k={top_k})")
 
             pinecone_matches = []
             if self.index:
@@ -485,7 +492,7 @@ class Llama3PineconeRAGStore:
                             if m.metadata and (not vid or str(m.metadata.get("video_id", "")) == vid):
                                 pinecone_matches.append(m.metadata)
                 except Exception as e:
-                    print(f"[Agent Tool Warning] Pinecone search error: {e}")
+                    print(f"    ⚠️ [Pinecone Search Warning]: {e}")
 
             algolia_matches = []
             try:
@@ -499,7 +506,7 @@ class Llama3PineconeRAGStore:
                         "text": h.get("text", "")
                     })
             except Exception as e:
-                print(f"[Agent Tool Warning] Algolia search error: {e}")
+                print(f"    ⚠️ [Algolia Search Warning]: {e}")
 
             cue_matches = []
             from backend.database import db_manager
@@ -529,7 +536,8 @@ class Llama3PineconeRAGStore:
         elif tool_name == "get_transcript_window":
             st = str(arguments.get("start_time", "00:00")).strip()
             et = str(arguments.get("end_time", "00:00")).strip()
-            vid = str(arguments.get("video_id") or target_video_id).strip()
+            vid = target_video_id or str(arguments.get("video_id", "")).strip()
+            print(f"    🔧 [Tool: get_transcript_window] Fetching dialogue slice: [{st} - {et}] (video='{vid}')")
 
             st_sec = self._parse_timestamp(st)
             et_sec = self._parse_timestamp(et)
@@ -558,6 +566,7 @@ class Llama3PineconeRAGStore:
             sq = str(arguments.get("search_query", "")).strip()
             if not sq:
                 raise ValueError("search_web_context requires search_query.")
+            print(f"    🔧 [Tool: search_web_context] Academic web search for: '{sq}'")
             from backend.web_search import search_web_for_context
             hits = search_web_for_context(sq, max_results=3)
             for h in hits:
@@ -622,27 +631,39 @@ class Llama3PineconeRAGStore:
 
         # Select provider endpoint
         if groq_key and (not model_id or "groq" in model_id or "llama-3.3" in model_id):
+            provider = "groq"
             endpoint = "https://api.groq.com/openai/v1/chat/completions"
             auth_header = f"Bearer {groq_key}"
             model_name = "llama-3.3-70b-versatile"
             display_model = "Groq Llama 3.3 70B"
         elif hf_token and (not model_id or "llama-3.1" in model_id or "huggingface" in model_id or not groq_key):
+            provider = "huggingface"
             endpoint = "https://router.huggingface.co/v1/chat/completions"
             auth_header = f"Bearer {hf_token}"
             model_name = "meta-llama/Llama-3.1-8B-Instruct"
             display_model = "Hugging Face Llama 3.1 8B"
         elif gemini_key:
+            provider = "gemini"
             endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
             auth_header = f"Bearer {gemini_key}"
             model_name = "gemini-2.0-flash"
             display_model = "Gemini 2.0 Flash"
         elif openai_key:
+            provider = "openai"
             endpoint = "https://api.openai.com/v1/chat/completions"
             auth_header = f"Bearer {openai_key}"
             model_name = "gpt-4o-mini"
             display_model = "OpenAI GPT-4o-mini"
         else:
             raise RuntimeError("No suitable LLM provider could be resolved.")
+
+        t_rag_start = time.time()
+        print("\n" + "-" * 50)
+        print(f"🤖 [Agentic RAG Engine] Initializing query execution")
+        print(f"   Target Video: '{target_video_id}' | Title: '{lecture_title}'")
+        print(f"   User Query: \"{query}\"")
+        print(f"   Selected Provider: {display_model}")
+        print("-" * 50)
 
         system_prompt = (
             f"You are an encouraging, articulate Academic AI Tutor assisting a student learning from the lecture: '{lecture_title}'. "
@@ -674,29 +695,61 @@ class Llama3PineconeRAGStore:
 
         while current_step < max_steps:
             current_step += 1
-            payload = {
-                "model": model_name,
-                "messages": messages,
-                "tools": self.AGENT_TOOLS,
-                "tool_choice": "auto",
-                "max_tokens": 1024,
-                "temperature": 0.25
-            }
+            t_step_start = time.time()
+            print(f"🤖 [Agent Step {current_step}/{max_steps}] Invoking {display_model} (history: {len(messages)} turns)...")
 
-            resp = requests.post(endpoint, headers=headers, json=payload, timeout=50)
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"Agent LLM API invocation failed with HTTP {resp.status_code} ({display_model}): {resp.text}"
-                )
+            tool_calls = []
+            content_str = ""
 
-            data = resp.json()
-            choices = data.get("choices", [])
-            if not choices:
-                raise RuntimeError(f"Agent LLM returned empty choices array from {display_model}.")
-
-            msg = choices[0].get("message", {})
-            tool_calls = msg.get("tool_calls", []) or []
-            content_str = msg.get("content", "") or ""
+            if provider == "huggingface" and HAS_HF:
+                try:
+                    hf_client = InferenceClient(api_key=hf_token)
+                    resp = hf_client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        tools=self.AGENT_TOOLS,
+                        tool_choice="auto",
+                        max_tokens=1024,
+                        temperature=0.25
+                    )
+                    choice = resp.choices[0]
+                    msg_obj = choice.message
+                    content_str = msg_obj.content or ""
+                    if msg_obj.tool_calls:
+                        for tc in msg_obj.tool_calls:
+                            raw_args = tc.function.arguments
+                            tool_calls.append({
+                                "id": tc.id or f"call_{tc.function.name}_{current_step}",
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
+                                }
+                            })
+                except Exception as e:
+                    print(f"❌ [Agent Step {current_step} Error] Hugging Face InferenceClient error: {e}")
+                    raise RuntimeError(f"Hugging Face agent invocation failed: {e}")
+            else:
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "tools": self.AGENT_TOOLS,
+                    "tool_choice": "auto",
+                    "max_tokens": 1024,
+                    "temperature": 0.25
+                }
+                resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"Agent LLM API invocation failed with HTTP {resp.status_code} ({display_model}): {resp.text}"
+                    )
+                data = resp.json()
+                choices = data.get("choices", [])
+                if not choices:
+                    raise RuntimeError(f"Agent LLM returned empty choices array from {display_model}.")
+                msg = choices[0].get("message", {})
+                tool_calls = msg.get("tool_calls", []) or []
+                content_str = msg.get("content", "") or ""
 
             # Support Llama 3.1 text-based function invocation format (<function=name>{...}</function>)
             if not tool_calls and "<function=" in content_str:
@@ -714,19 +767,21 @@ class Llama3PineconeRAGStore:
                         }
                     })
 
+            step_duration = time.time() - t_step_start
+            print(f"🤖 [Agent Step {current_step}/{max_steps}] LLM responded in {step_duration:.2f}s | Tool calls requested: {len(tool_calls)}")
+
             if not tool_calls:
+                print(f"🎯 [Agent Step {current_step}] LLM provided direct final answer ({len(content_str)} chars). Exiting agent loop.")
                 final_answer = content_str.strip()
                 break
 
-            # If the model used text-based function syntax, sanitize content so the API accepts the tool turn
-            if "<function=" in content_str and not msg.get("tool_calls"):
-                msg = {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": tool_calls
-                }
+            # Append assistant turn with tool calls
+            messages.append({
+                "role": "assistant",
+                "content": content_str if content_str else None,
+                "tool_calls": tool_calls
+            })
 
-            messages.append(msg)
             for tc in tool_calls:
                 func = tc.get("function", {})
                 func_name = func.get("name", "")
@@ -736,12 +791,16 @@ class Llama3PineconeRAGStore:
                 except Exception:
                     args = {}
 
+                t_tool_start = time.time()
                 tool_result_str, tool_citations, tool_web = self.execute_tool(
                     tool_name=func_name,
                     arguments=args,
                     target_video_id=target_video_id,
                     lecture_title=lecture_title
                 )
+                tool_dur = time.time() - t_tool_start
+                print(f"  ✅ [Tool Done] {func_name} finished in {tool_dur:.2f}s | Output: {len(tool_result_str)} chars, {len(tool_citations)} citation(s)")
+
                 all_citations.extend(tool_citations)
                 all_web_sources.extend(tool_web)
 
@@ -753,17 +812,34 @@ class Llama3PineconeRAGStore:
                 })
 
         if not final_answer:
-            payload = {
-                "model": model_name,
-                "messages": messages,
-                "max_tokens": 1024,
-                "temperature": 0.25
-            }
-            resp = requests.post(endpoint, headers=headers, json=payload, timeout=50)
-            if resp.status_code == 200:
-                final_answer = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            print(f"🧠 [Agent Synthesis] Grounding final answer with {len(messages)} history turns using {display_model}...")
+            t_synth = time.time()
+            if provider == "huggingface" and HAS_HF:
+                try:
+                    hf_client = InferenceClient(api_key=hf_token)
+                    resp = hf_client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        max_tokens=1024,
+                        temperature=0.25
+                    )
+                    final_answer = resp.choices[0].message.content.strip()
+                except Exception as e:
+                    print(f"❌ [Agent Synthesis Error] Synthesis failed: {e}")
+                    raise RuntimeError(f"Agent synthesis step failed: {e}")
             else:
-                raise RuntimeError(f"Agent synthesis step failed ({resp.status_code}): {resp.text}")
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "max_tokens": 1024,
+                    "temperature": 0.25
+                }
+                resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
+                if resp.status_code == 200:
+                    final_answer = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                else:
+                    raise RuntimeError(f"Agent synthesis step failed ({resp.status_code}): {resp.text}")
+            print(f"✅ [Agent Synthesis] Completed in {time.time() - t_synth:.2f}s ({len(final_answer)} chars)")
 
         # Deduplicate citations by timestamp and prefix
         seen_ts = set()
@@ -773,6 +849,10 @@ class Llama3PineconeRAGStore:
             if k not in seen_ts:
                 seen_ts.add(k)
                 dedup_citations.append(c)
+
+        total_time = time.time() - t_rag_start
+        print(f"🏁 [Agentic RAG Engine] Finished in {total_time:.2f}s | Citations: {len(dedup_citations)} | Web: {len(all_web_sources)}")
+        print("-" * 50)
 
         return {
             "answer": final_answer,
@@ -980,28 +1060,43 @@ class Llama3PineconeRAGStore:
             except Exception as e:
                 print(f"[Groq Submission Inference Error]: {e}")
 
-        # 3. Hugging Face Router (Active Serverless Free)
+        # 3. Hugging Face (InferenceClient / Router)
         if not raw_output and hf_token:
             try:
-                url = "https://router.huggingface.co/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": "application/json"}
-                payload = {
-                    "model": "meta-llama/Llama-3.1-8B-Instruct",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content}
-                    ],
-                    "temperature": 0.25,
-                    "max_tokens": 300
-                }
-                r = requests.post(url, headers=headers, json=payload, timeout=15)
-                if r.status_code == 200:
-                    choices = r.json().get("choices", [])
-                    if choices and "message" in choices[0]:
-                        raw_output = choices[0]["message"].get("content", "").strip()
+                if HAS_HF and InferenceClient:
+                    client = InferenceClient(api_key=hf_token)
+                    resp = client.chat.completions.create(
+                        model="meta-llama/Llama-3.1-8B-Instruct",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content}
+                        ],
+                        temperature=0.25,
+                        max_tokens=300
+                    )
+                    if resp and resp.choices and resp.choices[0].message:
+                        raw_output = resp.choices[0].message.content.strip()
                         model_used = "Hugging Face Llama 3.1 8B"
                 else:
-                    raise RuntimeError(f"Hugging Face Router returned HTTP {r.status_code}: {r.text}")
+                    url = "https://router.huggingface.co/v1/chat/completions"
+                    headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": "application/json"}
+                    payload = {
+                        "model": "meta-llama/Llama-3.1-8B-Instruct",
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content}
+                        ],
+                        "temperature": 0.25,
+                        "max_tokens": 300
+                    }
+                    r = requests.post(url, headers=headers, json=payload, timeout=30)
+                    if r.status_code == 200:
+                        choices = r.json().get("choices", [])
+                        if choices and "message" in choices[0]:
+                            raw_output = choices[0]["message"].get("content", "").strip()
+                            model_used = "Hugging Face Llama 3.1 8B"
+                    else:
+                        raise RuntimeError(f"Hugging Face Router returned HTTP {r.status_code}: {r.text}")
             except Exception as e:
                 print(f"[HF Submission Inference Error]: {e}")
                 raise RuntimeError(f"Hugging Face submission synthesis failed: {e}")

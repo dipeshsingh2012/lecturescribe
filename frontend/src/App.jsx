@@ -988,7 +988,6 @@ export default function App() {
           boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.1rem' }}>
-            <span style={{ fontSize: '1.4rem', cursor: 'pointer' }} onClick={handleBackToHub}>{currentTheme.icon}</span>
             <span
               style={{ color: '#ffffff', fontWeight: 800, fontSize: '1.15rem', letterSpacing: '-0.3px', cursor: 'pointer' }}
               onClick={handleBackToHub}
@@ -2290,8 +2289,7 @@ export default function App() {
                       {(availableModels.length > 0 ? availableModels : [
                         { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', badge: '⚡ Free 1.5k/day' },
                         { id: 'llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B', badge: '🚀 Free 1k/day' },
-                        { id: 'meta-llama/Llama-3.1-8B-Instruct', name: 'HF Llama 3.1 8B', badge: '🤗 Active Free' },
-                        { id: 'ollama', name: 'Local Ollama', badge: '💻 Offline' }
+                        { id: 'meta-llama/Llama-3.1-8B-Instruct', name: 'HF Llama 3.1 8B', badge: '🤗 Active Free' }
                       ]).map(m => (
                         <option key={m.id} value={m.id}>
                           {m.badge ? `${m.name} (${m.badge})` : m.name}

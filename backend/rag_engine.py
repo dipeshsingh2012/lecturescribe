@@ -240,15 +240,6 @@ class Llama3PineconeRAGStore:
                 "is_configured": bool(hf_token),
                 "is_recommended": False,
                 "free_tier_info": "Active via HUGGINGFACE_TOKEN"
-            },
-            {
-                "id": "ollama",
-                "name": "Local Ollama",
-                "provider": "Self-Hosted Offline",
-                "badge": "💻 100% Offline • Free",
-                "is_configured": True,
-                "is_recommended": False,
-                "free_tier_info": "Runs locally on http://localhost:11434"
             }
         ]
 
@@ -416,30 +407,7 @@ class Llama3PineconeRAGStore:
             except Exception as e:
                 print(f"[Groq Inference Error]: {e}")
 
-        # 3. Local Ollama (100% Offline / Self-Hosted)
-        if target_model == "ollama":
-            try:
-                ollama_base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-                url = f"{ollama_base.rstrip('/')}/chat/completions"
-                payload = {
-                    "model": os.getenv("OLLAMA_MODEL", "llama3.2"),
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt_content}
-                    ],
-                    "temperature": 0.25,
-                    "max_tokens": 1024
-                }
-                r = requests.post(url, json=payload, timeout=15)
-                if r.status_code == 200:
-                    data = r.json()
-                    choices = data.get("choices", [])
-                    if choices and "message" in choices[0]:
-                        return choices[0]["message"].get("content", "").strip(), "Local Ollama"
-            except Exception as e:
-                print(f"[Ollama Inference Error]: {e}")
-
-        # 4. Hugging Face InferenceClient (Active Serverless Free)
+        # 3. Hugging Face InferenceClient (Active Serverless Free)
         if hf_token:
             try:
                 from huggingface_hub import InferenceClient

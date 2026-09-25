@@ -6,7 +6,7 @@ export const LMS_THEMES = {
     id: 'academic',
     name: 'Academic Classic Blue',
     shortName: 'Academic Portal',
-    icon: '🏛️',
+    icon: '📚',
     badge: 'Default • Clean Academic Portal',
     mode: 'light',
     palette: {

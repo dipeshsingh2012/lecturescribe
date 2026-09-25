@@ -26,7 +26,7 @@
 
 ---
 
-## 🏛️ Triad Architecture
+## 🏗️ Triad Architecture
 
 ```
                     ┌─────────────────────────┐

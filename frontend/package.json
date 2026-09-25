@@ -9,9 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dipesh.singh/proton": "^0.1.2",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@dipesh.singh/proton": "file:../../proton",
     "@mui/icons-material": "^9.4.0",
     "@mui/material": "^9.4.0",
     "@vimeo/player": "^2.30.4",

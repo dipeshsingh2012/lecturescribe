@@ -454,10 +454,14 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            user_email: googleUser.email,
             email: googleUser.email,
             video_id: vidId,
+            title: cached.title,
             video_title: cached.title,
+            source_url: cached.sourceUrl || rawUrl,
             video_url: cached.sourceUrl || rawUrl,
+            duration: cached.duration || '',
             duration_seconds: cached.duration || null
           })
         }).then(() => fetchUserLibrary(googleUser.email)).catch(() => {});

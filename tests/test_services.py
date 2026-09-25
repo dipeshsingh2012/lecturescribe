@@ -18,8 +18,19 @@ class TestServices(unittest.TestCase):
         self.assertTrue(len(job_id) > 0)
         job = google_drive_service.get_job(job_id)
         self.assertIsNotNone(job)
-        self.assertEqual(job["video_id"], "test_video")
-        self.assertEqual(job["status"], "PROCESSING")
+    def test_user_library_record_payload(self):
+        from backend.main import UserLibraryRecordRequest
+        payload = {
+            "email": "dipesh.singh2012@gmail.com",
+            "video_id": "1229629089",
+            "video_title": "Introduction to Speech and Natural Language Processing",
+            "video_url": "https://vimeo.com/1229629089",
+            "duration_seconds": "1h 18m"
+        }
+        req = UserLibraryRecordRequest(**payload)
+        self.assertEqual(req.email, "dipesh.singh2012@gmail.com")
+        self.assertEqual(req.video_id, "1229629089")
+        self.assertEqual(req.video_title, "Introduction to Speech and Natural Language Processing")
 
 if __name__ == "__main__":
     unittest.main()

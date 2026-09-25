@@ -344,11 +344,15 @@ def regenerate_summary(req: RegenerateSummaryRequest):
 # ==============================================================================
 
 class UserLibraryRecordRequest(BaseModel):
-    user_email: str
+    user_email: Optional[str] = None
+    email: Optional[str] = None
     video_id: str
-    title: str
+    title: Optional[str] = None
+    video_title: Optional[str] = None
     duration: Optional[str] = ""
+    duration_seconds: Optional[str] = None
     source_url: Optional[str] = ""
+    video_url: Optional[str] = None
     drive_folder_url: Optional[str] = None
 
 
@@ -364,14 +368,20 @@ def get_user_library(email: str = Query(..., description="User Google email")):
 @app.post("/api/user/library/record")
 def record_user_lecture(req: UserLibraryRecordRequest):
     """Add or update a lecture in the user's LMS library."""
-    if not req.user_email.strip() or not req.video_id.strip():
-        raise HTTPException(status_code=400, detail="user_email and video_id are required.")
+    target_email = (req.user_email or req.email or "").strip()
+    target_title = (req.title or req.video_title or f"Lecture {req.video_id}").strip()
+    target_duration = (req.duration or req.duration_seconds or "").strip()
+    target_url = (req.source_url or req.video_url or "").strip()
+
+    if not target_email or not req.video_id.strip():
+        raise HTTPException(status_code=400, detail="user_email (or email) and video_id are required.")
+
     success = db_manager.record_user_lecture(
-        user_email=req.user_email,
+        user_email=target_email,
         video_id=req.video_id,
-        title=req.title,
-        duration=req.duration or "",
-        source_url=req.source_url or "",
+        title=target_title,
+        duration=target_duration,
+        source_url=target_url,
         drive_folder_url=req.drive_folder_url
     )
     return {"status": "success" if success else "failed"}

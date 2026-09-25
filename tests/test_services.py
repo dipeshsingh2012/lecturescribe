@@ -76,5 +76,28 @@ class TestServices(unittest.TestCase):
         self.assertIn("model", result)
         self.assertIn("video_id", result)
 
+    def test_query_rag_summary_mode(self):
+        """Test query_rag accurately processes a 10 min read summary query using lecture cues."""
+        mock_cues = [
+            {"time": "00:00", "text": "Welcome to Computer Vision Live Session."},
+            {"time": "04:30", "text": "We first analyze camera models and perspective projection."},
+            {"time": "12:15", "text": "Digital images are represented as 2D matrix arrays with quantized intensity."},
+            {"time": "25:00", "text": "Edge detection relies on spatial gradient calculations."},
+            {"time": "45:00", "text": "Conclusion of session covering image filtering and convolution."}
+        ]
+        result = pinecone_rag_engine.query_rag(
+            query="create a summary for a 10 min read",
+            video_id="mock_cv_101",
+            video_title="Introduction to Computer Vision",
+            cues=mock_cues,
+            top_k=5,
+            enable_web_search=False
+        )
+        self.assertIn("answer", result)
+        self.assertTrue(len(result.get("citations", [])) > 0)
+        # Should have captured the mock cues across the timeline
+        timestamps = [c.get("timestamp") for c in result.get("citations", [])]
+        self.assertIn("00:00", timestamps)
+
 if __name__ == "__main__":
     unittest.main()

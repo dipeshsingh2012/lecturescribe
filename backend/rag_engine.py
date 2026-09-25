@@ -335,6 +335,112 @@ class Llama3PineconeRAGStore:
             return float(parts[0]) * 60 + float(parts[1])
         return 0.0
 
+    def _is_summary_query(self, query: str) -> bool:
+        """Detect if the student's question is requesting a whole-lecture summary, recap, or overview."""
+        if not query:
+            return False
+        q = query.lower().strip()
+        summary_patterns = [
+            r"\bsummar(y|ies|ize|ise|izing|ising|ization|isation)\b",
+            r"\boverview\b",
+            r"\brecap\b",
+            r"\breview\b",
+            r"\b10\s*min(ute)?\s*(read|summary)?\b",
+            r"\b5\s*min(ute)?\s*(read|summary)?\b",
+            r"\bkey\s+takeaways?\b",
+            r"\bmain\s+takeaways?\b",
+            r"\bcore\s+takeaways?\b",
+            r"\bwhat\s+did\s+the\s+professor\s+cover\b",
+            r"\bwhat\s+was\s+covered\b",
+            r"\bwhat\s+is\s+this\s+lecture\s+about\b",
+            r"\bexplain\s+(?:the\s+)?(?:whole|entire)\s+lecture\b",
+            r"\bwalkthrough\s+of\s+(?:the\s+)?lecture\b",
+            r"\bexecutive\s+summary\b",
+            r"\blecture\s+outline\b",
+            r"\btopics\s+covered\b"
+        ]
+        return any(re.search(pat, q) for pat in summary_patterns)
+
+    def _sample_chronological_cues(
+        self,
+        cues: List[Dict[str, str]],
+        video_id: str,
+        video_title: str,
+        num_samples: int = 15,
+        window_size: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Sample evenly spaced chronological windows across the entire lecture cues."""
+        if not cues:
+            return []
+        total = len(cues)
+        if total <= num_samples:
+            samples = []
+            for c in cues:
+                samples.append({
+                    "video_id": video_id,
+                    "video_title": video_title,
+                    "start_time": c.get("time", "00:00"),
+                    "end_time": c.get("time", "00:00"),
+                    "text": c.get("text", "")
+                })
+            return samples
+
+        step = max(1, total // num_samples)
+        samples = []
+        for i in range(0, total, step):
+            window = cues[i : min(i + window_size, total)]
+            if not window:
+                continue
+            start_t = window[0].get("time", "00:00")
+            end_t = window[-1].get("time", start_t)
+            w_text = " ".join([c.get("text", "") for c in window if c.get("text")])
+            if w_text.strip():
+                samples.append({
+                    "video_id": video_id,
+                    "video_title": video_title,
+                    "start_time": start_t,
+                    "end_time": end_t,
+                    "text": w_text[:600]
+                })
+            if len(samples) >= num_samples:
+                break
+        return samples
+
+    def _build_summary_sections_metadata(
+        self,
+        sections: List[Dict[str, Any]],
+        video_id: str,
+        video_title: str
+    ) -> List[Dict[str, Any]]:
+        """Convert stored executive summary sections into RAG metadata items."""
+        meta_items = []
+        for sec in sections:
+            title = sec.get("title", "")
+            ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
+            start_t = ts_match.group(1) if ts_match else "00:00"
+            end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
+
+            clean_title = re.sub(r"\[.*?\]", "", title).strip()
+            clean_title = re.sub(r"^[^\w\s]+\s*", "", clean_title).strip()
+
+            points = sec.get("points", [])
+            clean_points = []
+            for p in points:
+                if isinstance(p, str):
+                    clean_points.append(p.strip())
+                elif isinstance(p, dict):
+                    clean_points.append(p.get("text", "").strip())
+
+            txt = f"Topic: {clean_title}. " + " ".join(clean_points)
+            meta_items.append({
+                "video_id": video_id,
+                "video_title": video_title,
+                "start_time": start_t,
+                "end_time": end_t,
+                "text": txt[:1200]
+            })
+        return meta_items
+
     def query_rag(
         self,
         query: str,
@@ -349,9 +455,10 @@ class Llama3PineconeRAGStore:
         target_video_id = str(video_id).strip() if video_id else ""
         lecture_title = video_title or ""
         lecture_cues = cues or []
+        summary_sections = []
 
-        # Resolve lecture metadata & transcript cues from PostgreSQL if not passed
-        if target_video_id and (not lecture_cues or not lecture_title):
+        # Resolve lecture metadata, cues & summaries from PostgreSQL if not passed
+        if target_video_id:
             try:
                 from backend.database import db_manager
                 saved = db_manager.get_saved_video(target_video_id)
@@ -360,42 +467,71 @@ class Llama3PineconeRAGStore:
                         lecture_title = saved.get("title", "")
                     if not lecture_cues:
                         lecture_cues = saved.get("cues", [])
+                    summary_sections = saved.get("summarySections") or saved.get("summary_sections") or []
             except Exception as e:
                 print(f"[RAG Engine Warning] Could not fetch lecture {target_video_id} from DB: {e}")
 
         if not lecture_title:
             lecture_title = self.video_title or "Active Lecture"
 
-        query_embedding = self._generate_embedding(query)
+        is_summary = self._is_summary_query(query)
         retrieved_metadata = []
 
-        # 1. Pinecone Vector Search (Strictly filtered by video_id)
-        pinecone_matches = []
-        if self.index:
-            try:
-                query_kwargs = {
-                    "vector": query_embedding,
-                    "top_k": top_k,
-                    "namespace": self.namespace,
-                    "include_metadata": True
-                }
-                if target_video_id:
-                    query_kwargs["filter"] = {"video_id": {"$eq": target_video_id}}
+        if is_summary:
+            # 1. Whole Lecture Summarization Strategy
+            # Feed structured chapter summaries and evenly spaced timeline milestones
+            if summary_sections:
+                sec_meta = self._build_summary_sections_metadata(summary_sections, target_video_id, lecture_title)
+                retrieved_metadata.extend(sec_meta)
 
-                res = self.index.query(**query_kwargs)
-                if res and res.matches:
-                    for match in res.matches:
-                        if match.metadata:
-                            m_vid = str(match.metadata.get("video_id", ""))
-                            # Strictly filter out any match from a different lecture
-                            if not target_video_id or m_vid == target_video_id:
-                                pinecone_matches.append(match.metadata)
-            except Exception as e:
-                print(f"[RAG Engine Warning] Vector search error: {e}")
+            if lecture_cues:
+                sampled_cues = self._sample_chronological_cues(lecture_cues, target_video_id, lecture_title, num_samples=15)
+                retrieved_metadata.extend(sampled_cues)
 
-        # 2. Hybrid Retrieval: If cues not passed, use RRF fusion of Pinecone + Algolia
-        if not lecture_cues:
-            # Fetch Algolia hits for keyword matches
+            # If still empty (e.g. video not yet in DB), fallback to vector search with lecture title
+            if not retrieved_metadata and self.index:
+                try:
+                    query_kwargs = {
+                        "vector": self._generate_embedding(lecture_title or "lecture summary"),
+                        "top_k": top_k,
+                        "namespace": self.namespace,
+                        "include_metadata": True
+                    }
+                    if target_video_id:
+                        query_kwargs["filter"] = {"video_id": {"$eq": target_video_id}}
+                    res = self.index.query(**query_kwargs)
+                    if res and res.matches:
+                        for match in res.matches:
+                            if match.metadata and (not target_video_id or str(match.metadata.get("video_id", "")) == target_video_id):
+                                retrieved_metadata.append(match.metadata)
+                except Exception as e:
+                    print(f"[RAG Engine Warning] Summary vector fallback error: {e}")
+        else:
+            # 2. Targeted Concept Retrieval (Hybrid: Pinecone Vector + Algolia Keyword + DB Sliding-Window)
+            pinecone_matches = []
+            if self.index:
+                try:
+                    query_embedding = self._generate_embedding(query)
+                    query_kwargs = {
+                        "vector": query_embedding,
+                        "top_k": top_k,
+                        "namespace": self.namespace,
+                        "include_metadata": True
+                    }
+                    if target_video_id:
+                        query_kwargs["filter"] = {"video_id": {"$eq": target_video_id}}
+
+                    res = self.index.query(**query_kwargs)
+                    if res and res.matches:
+                        for match in res.matches:
+                            if match.metadata:
+                                m_vid = str(match.metadata.get("video_id", ""))
+                                if not target_video_id or m_vid == target_video_id:
+                                    pinecone_matches.append(match.metadata)
+                except Exception as e:
+                    print(f"[RAG Engine Warning] Vector search error: {e}")
+
+            # Algolia Keyword Search
             algolia_chunks = []
             try:
                 from backend.algolia_service import algolia_service
@@ -411,43 +547,39 @@ class Llama3PineconeRAGStore:
             except Exception as e:
                 print(f"[RAG Engine Warning] Algolia search error: {e}")
 
-            # Combine Pinecone and Algolia using RRF fusion
-            if pinecone_matches or algolia_chunks:
-                retrieved_metadata = self.reciprocal_rank_fusion([pinecone_matches, algolia_chunks], k=60)
-            else:
-                # Fallback: Load transcript from Postgres and score via sliding window
-                try:
-                    from backend.database import db_manager
-                    saved = db_manager.get_saved_video(target_video_id)
-                    if saved and saved.get("cues"):
-                        lecture_cues = saved.get("cues", [])
-                        retrieved_metadata = self._retrieve_relevant_lecture_cues(
-                            query=query,
-                            cues=lecture_cues,
-                            video_id=target_video_id,
-                            video_title=lecture_title,
-                            top_k=top_k
-                        )
-                except Exception as e:
-                    print(f"[RAG Engine Warning] Fallback DB retrieval error: {e}")
-        else:
-            # Use original logic if cues are provided
-            retrieved_metadata = pinecone_matches
-            if not retrieved_metadata:
-                retrieved_metadata = self._retrieve_relevant_lecture_cues(
+            # Postgres Transcript Sliding-Window Search
+            cue_matches = []
+            if lecture_cues:
+                cue_matches = self._retrieve_relevant_lecture_cues(
                     query=query,
                     cues=lecture_cues,
                     video_id=target_video_id,
                     video_title=lecture_title,
                     top_k=top_k
                 )
+
+            # Combine candidates using Reciprocal Rank Fusion
+            ranked_sources = []
+            if pinecone_matches:
+                ranked_sources.append(pinecone_matches)
+            if algolia_chunks:
+                ranked_sources.append(algolia_chunks)
+            if cue_matches:
+                ranked_sources.append(cue_matches)
+
+            if ranked_sources:
+                retrieved_metadata = self.reciprocal_rank_fusion(ranked_sources, k=60)[:top_k]
             elif self.local_chunks:
-                # If target_video_id is specified, only use local_chunks if they match target_video_id
                 matched_local = [
                     c["metadata"] for c in self.local_chunks
                     if not target_video_id or str(c.get("metadata", {}).get("video_id", "")) == target_video_id
                 ]
-                retrieved_metadata = matched_local[:top_k]
+                if matched_local:
+                    retrieved_metadata = matched_local[:top_k]
+
+            # If still empty, sample milestone cues so context is never blank
+            if not retrieved_metadata and lecture_cues:
+                retrieved_metadata = self._sample_chronological_cues(lecture_cues, target_video_id, lecture_title, num_samples=top_k)
 
         # 3. Chronological Sorting: Sort chunks by start_time before feeding into context_str
         retrieved_metadata.sort(key=lambda x: self._parse_timestamp(x.get("start_time", "00:00")))
@@ -468,7 +600,7 @@ class Llama3PineconeRAGStore:
         # Grounded Web Search (DuckDuckGo + Wikipedia, Free)
         web_sources = []
         web_context_str = ""
-        if enable_web_search:
+        if enable_web_search and not is_summary:
             try:
                 from backend.web_search import search_web_for_context
                 search_term = f"{lecture_title} {query}" if lecture_title and len(query.split()) < 5 else query
@@ -487,7 +619,8 @@ class Llama3PineconeRAGStore:
             lecture_title=lecture_title,
             context_str=context_str,
             web_context_str=web_context_str,
-            requested_model=model_id
+            requested_model=model_id,
+            is_summary_query=is_summary
         )
 
         return {
@@ -506,7 +639,8 @@ class Llama3PineconeRAGStore:
         lecture_title: str,
         context_str: str,
         web_context_str: str = "",
-        requested_model: Optional[str] = None
+        requested_model: Optional[str] = None,
+        is_summary_query: bool = False
     ) -> Tuple[str, str]:
         """
         Synthesize answer using selected or best available LLM provider.
@@ -541,12 +675,24 @@ class Llama3PineconeRAGStore:
             "4. Format: Structure your explanation with clear paragraphs, bullet points, or code snippets when helpful."
         )
 
+        if is_summary_query:
+            system_prompt += (
+                "\n\n5. SUMMARY MODE MANDATE: The student explicitly requested an overall summary, overview, or recap of this lecture. "
+                "Directly provide an authentic, comprehensive, and well-structured technical summary of the actual topics, concepts, mathematical foundations, and methodologies taught by the professor across the lecture timeline. "
+                "Synthesize the lecture progression chronologically using the provided transcript context and summary chapters. "
+                "MANDATORY: You MUST include inline timestamp citations [MM:SS] for each major section or concept so the student can jump to that part of the video. "
+                "ABSOLUTE PROHIBITION: Do NOT provide instructional guidance or a meta-tutorial on HOW to write a summary (e.g. NEVER say 'Here is how to create a summary', 'discretize into manageable chunks', 'concentrate on key regions', etc.). Output the substantive lecture summary itself!"
+            )
+
         prompt_content = f"--- CURRENT LECTURE: {lecture_title} ---\n\n"
         if context_str:
-            prompt_content += f"=== Professor's Lecture Transcript Context ===\n{context_str}\n\n"
+            prompt_content += f"=== Lecture Topics & Chronological Transcript Context ===\n{context_str}\n\n"
         if web_context_str:
             prompt_content += f"=== Supplementary Academic / Web Search Context ===\n{web_context_str}\n\n"
-        prompt_content += f"Student Question: {query}"
+        if is_summary_query:
+            prompt_content += f"Student Request: {query}\n\nDeliver the comprehensive technical summary of this lecture with inline timestamps [MM:SS]:"
+        else:
+            prompt_content += f"Student Question: {query}"
 
         # 1. Google Gemini (100% Free Developer Tier)
         if (target_model.startswith("gemini") or "flash" in target_model) and gemini_key:
@@ -630,11 +776,13 @@ class Llama3PineconeRAGStore:
                 saved = db_manager.get_saved_video(video_id)
                 if saved:
                     # 1. Use summary section headings / takeaways if present
-                    for sec in saved.get("summary_sections", []):
-                        if sec.get("heading"):
-                            h = sec["heading"].strip()
-                            if h and h not in keywords:
-                                keywords.append(h)
+                    summary_secs = saved.get("summarySections") or saved.get("summary_sections") or []
+                    for sec in summary_secs:
+                        title_val = sec.get("title") or sec.get("heading") or ""
+                        clean_t = re.sub(r"\[.*?\]", "", title_val).strip()
+                        clean_t = re.sub(r"^[^\w\s]+\s*", "", clean_t).strip()
+                        if clean_t and clean_t not in keywords:
+                            keywords.append(clean_t)
                     # 2. Add text from cues
                     cues = saved.get("cues", [])
                     text_corpus = " ".join([c.get("text", "") for c in cues[:150]])
@@ -676,8 +824,8 @@ class Llama3PineconeRAGStore:
 
     def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
         """Strip markdown syntax, timestamps, and AI boilerplate from text."""
-        # 1. Strip timestamp patterns like [01:23] or [01:23:45]
-        cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?\]", "", text)
+        # 1. Strip timestamp patterns like [01:23] or [01:23:45] or [00:00 - 15:20]
+        cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*\d{1,2}:\d{2}(?::\d{2})?)?\]", "", text)
         # 2. Strip Markdown headers, bold, italics, code fences, blockquotes, bullets
         cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
@@ -691,20 +839,24 @@ class Llama3PineconeRAGStore:
         cleaned = re.sub(r">\s*", "", cleaned)
         # 3. Strip AI cliches and intros
         ai_cliches = [
+            r"^here\s*(?:'s|\s+is)\s+(?:a\s+|an\s+)?(?:concise\s+)?(?:academic\s+)?(?:submission|summary|takeaway|answer|response|overview|explanation)[^:.\n]*?[:.]+\s*",
+            r"^here\s*(?:'s|\s+is)\s+[^:.\n]*?[:.]+\s*",
             r"^based on (the )?(professor's )?(lecture|transcript|video|explanation)[^:.\n]*?[,.:]+\s*",
             r"^(we can identify|we see that|we can observe|it can be seen that)\s+",
-            r"^here('s| is) (what|a summary|my takeaway|the answer).*?[:.,\n]+\s*",
             r"^in this lecture.*?,\s*",
             r"^as an ai language model.*?,\s*",
             r"💡\s*\*\*ai tutor connected\*\*.*",
             r"\*\(tip:.*?\)\*",
-            r"^in conclusion.*?,\s*"
+            r"^in conclusion.*?,\s*",
+            r"^(?:academic\s+)?submission(?:\s+of\s+around\s+\d+\s+words)?:\s*",
+            r"^technical takeaway:\s*"
         ]
         for pat in ai_cliches:
             cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
 
-        # 4. Collapse whitespace
+        # 4. Collapse whitespace and strip wrapping quotes
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = cleaned.strip('"\'')
 
         # 5. Trim to approximate target words at sentence boundary if too long
         words = cleaned.split()
@@ -753,7 +905,7 @@ class Llama3PineconeRAGStore:
             f"1. Target length: strictly around {word_count} words.\n"
             "2. Tone: Professional, practical, academically rigorous, and grounded. Reflect both real-world industrial insight and deep graduate-level theoretical understanding.\n"
             "3. Format: Clean plain text only. STRICTLY NO MARKDOWN: no asterisks, no bolding, no headers, no bullet points, and NO bracketed timestamps [MM:SS].\n"
-            "4. NO AI CLICHES: Never say 'Here is my summary', 'In conclusion', 'As an AI', 'In this lecture', or 'Based on the explanation'. Start directly with the substantive analysis.\n"
+            "4. NO AI CLICHES OR PREAMBLES: Never say 'Here is a concise academic submission...', 'Here is my summary', 'In conclusion', 'As an AI', 'In this lecture', or 'Based on the explanation'. Start IMMEDIATELY with the first sentence of technical analysis.\n"
             f"5. Domain Concepts: Seamlessly integrate relevant technical terminology: {kw_str}."
         )
 

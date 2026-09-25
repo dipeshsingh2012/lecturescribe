@@ -22,6 +22,28 @@ Here's what I found regarding machine learning paradigms."""
         # Must remove conversational cliches
         self.assertNotIn("Here's what I found", cleaned)
 
+    def test_clean_submission_academic_preamble(self):
+        """Verify removal of verbose LLM submission preambles."""
+        raw_preamble = (
+            "Here is a concise academic submission of around 120 words summarizing the technical "
+            "takeaway or solution for this topic: Computer vision has undergone significant "
+            "transformations [00:00 - 15:20], evolving from early machine learning to current deep learning techniques."
+        )
+        cleaned = pinecone_rag_engine._clean_for_submission(raw_preamble, target_words=100)
+        self.assertNotIn("Here is a concise academic submission", cleaned)
+        self.assertNotIn("[00:00 - 15:20]", cleaned)
+        self.assertTrue(cleaned.startswith("Computer vision has undergone"))
+
+    def test_summary_query_intent_detection(self):
+        """Verify accurate classification of summary vs targeted queries."""
+        self.assertTrue(pinecone_rag_engine._is_summary_query("create a summary for a 10 min read"))
+        self.assertTrue(pinecone_rag_engine._is_summary_query("summarize the lecture"))
+        self.assertTrue(pinecone_rag_engine._is_summary_query("give me an overview"))
+        self.assertTrue(pinecone_rag_engine._is_summary_query("recap of the session"))
+        self.assertTrue(pinecone_rag_engine._is_summary_query("what did the professor cover"))
+        self.assertFalse(pinecone_rag_engine._is_summary_query("what is convolution?"))
+        self.assertFalse(pinecone_rag_engine._is_summary_query("explain gradient descent with formula"))
+
     def test_generate_submission_version_fallback(self):
         sample_answer = """Supervised learning algorithms map inputs to known targets using ground truth labels. In industrial applications, this paradigm powers classification pipelines, regression forecasting, and recommendation systems."""
         
@@ -39,3 +61,4 @@ Here's what I found regarding machine learning paradigms."""
 
 if __name__ == "__main__":
     unittest.main()
+

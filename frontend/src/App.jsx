@@ -1192,29 +1192,13 @@ export default function App() {
           height: '62px',
           boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.15rem' }}>
             <span
               style={{ color: '#ffffff', fontWeight: 800, fontSize: '1.15rem', letterSpacing: '-0.3px', cursor: 'pointer' }}
               onClick={handleBackToHub}
             >
-              {currentTheme.shortName || 'Academic Portal'}
+              LearnScribe LMS
             </span>
-            <span style={{ color: 'rgba(255, 255, 255, 0.45)', fontWeight: 300, fontSize: '0.9rem' }}>|</span>
-            <span
-              style={{ cursor: 'pointer', color: 'rgba(255, 255, 255, 0.95)', fontWeight: 600, fontSize: '0.92rem' }}
-              onClick={handleBackToHub}
-            >
-              LectureScribe
-            </span>
-            <span style={{
-              background: 'rgba(255, 255, 255, 0.16)',
-              color: '#ffffff',
-              fontSize: '0.7rem',
-              padding: '2px 8px',
-              borderRadius: '12px',
-              fontWeight: 700,
-              letterSpacing: '0.3px'
-            }}>LMS Study Hub</span>
           </div>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -1310,14 +1294,16 @@ export default function App() {
               </>
             )}
 
-            {/* LMS Theme Selector from Proton */}
-            <ProtonThemeSelector
-              themes={LMS_THEMES}
-              currentThemeId={currentThemeId}
-              onSelectTheme={(themeId) => setTheme(themeId)}
-              title="LMS Theme Selector"
-              subtitle="Authentic campus & higher-ed LMS palettes"
-            />
+            {/* LMS Theme Selector from Proton (only for signed-in users) */}
+            {googleUser && (
+              <ProtonThemeSelector
+                themes={LMS_THEMES}
+                currentThemeId={currentThemeId}
+                onSelectTheme={(themeId) => setTheme(themeId)}
+                title="LMS Theme Selector"
+                subtitle="Authentic campus & higher-ed LMS palettes"
+              />
+            )}
 
 
             {/* Top-Right Google Sign-In or User Profile Menu */}
@@ -1888,42 +1874,25 @@ export default function App() {
               textAlign: 'center'
             }}>
               <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-                <div style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  background: currentTheme.palette.badgeBg,
-                  border: `1px solid ${currentTheme.palette.badgeBorder}`,
-                  padding: '6px 16px',
-                  borderRadius: '20px',
-                  color: currentTheme.palette.badgeColor,
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  marginBottom: '24px'
-                }}>
-                  <Zap size={16} /> AI Study Assistant: Transcript Search • Executive Summaries • AI Tutor
-                </div>
-
                 <h1 style={{
                   fontSize: '2.8rem',
                   fontWeight: 800,
                   lineHeight: 1.2,
                   letterSpacing: '-1px',
-                  marginBottom: '16px',
+                  marginBottom: '14px',
                   color: currentTheme.palette.textPrimary
                 }}>
-                  Lecture Transcripts & Video AI <br />
-                  <span style={{ color: currentTheme.palette.primary }}>Instant Search & Interactive AI Tutor</span>
+                  LearnScribe LMS
                 </h1>
 
                 <p style={{
                   color: currentTheme.palette.textSecondary,
-                  fontSize: '1.1rem',
-                  maxWidth: '600px',
+                  fontSize: '1.15rem',
+                  maxWidth: '620px',
                   margin: '0 auto 28px',
-                  lineHeight: 1.6
+                  lineHeight: 1.5
                 }}>
-                  Paste any lecture video link. Get instant typo-tolerant transcript search, structured executive summaries, and interactive AI Tutor Q&A.
+                  Instant transcript search, executive summaries, and interactive AI Tutor for your lectures.
                 </p>
 
                 {/* Google Sign-in Callout Box */}

@@ -12,7 +12,15 @@ import json
 import math
 import time
 from typing import List, Dict, Any, Tuple, Optional
+from pathlib import Path
 from dotenv import load_dotenv
+
+_env_file = Path(__file__).resolve().parent.parent / ".env"
+if _env_file.exists():
+    load_dotenv(dotenv_path=_env_file, override=True)
+else:
+    load_dotenv(override=True)
+
 try:
     from pinecone import Pinecone, ServerlessSpec
     HAS_SERVERLESS = True
@@ -23,26 +31,6 @@ except ImportError:
     except ImportError:
         Pinecone = None
         HAS_SERVERLESS = False
-
-from pathlib import Path
-try:
-    from dotenv import load_dotenv
-    _env_file = Path(__file__).resolve().parent.parent / ".env"
-    if _env_file.exists():
-        load_dotenv(dotenv_path=_env_file, override=True)
-    else:
-        load_dotenv(override=True)
-except ImportError:
-    _env_file = Path(__file__).resolve().parent.parent / ".env"
-    if _env_file.exists():
-        try:
-            for line in _env_file.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ[k.strip()] = v.strip().strip("'\"")
-        except Exception:
-            pass
 
 try:
     from huggingface_hub import InferenceClient
@@ -464,17 +452,12 @@ class Llama3PineconeRAGStore:
             sections = saved.get("summarySections") or saved.get("summary_sections") or []
             cues = saved.get("cues", [])
 
-            # Detect legacy hardcoded boilerplate or naive n-gram topics in cached summarySections
-            has_legacy_boilerplate = any(
-                any("invention, discovery, and innovation" in str(p).lower() or "literature review to patenting" in str(p).lower()
-                    for p in sec.get("points", []))
-                for sec in sections
-            )
+            # Ensure sections exist; regenerate if legacy naive n-gram titles are detected
             has_naive_topics = any(
                 any(bad in sec.get("title", "").lower() for bad in ["three comma", "comma", "step size", "data type"])
                 for sec in sections
             )
-            if (not sections or has_legacy_boilerplate or has_naive_topics) and cues:
+            if (not sections or has_naive_topics) and cues:
                 from backend.summary_generator import generate_summary_sections
                 sections = generate_summary_sections(cues, saved.get("title", lecture_title))
                 db_manager.update_summary_sections(vid, sections)
@@ -491,11 +474,7 @@ class Llama3PineconeRAGStore:
             formatted = []
             for sec in sections:
                 title = sec.get("title", "")
-                points = [
-                    p for p in sec.get("points", [])
-                    if "invention, discovery, and innovation" not in str(p).lower()
-                    and "literature review to patenting" not in str(p).lower()
-                ]
+                points = sec.get("points", [])
                 ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
                 start_t = ts_match.group(1) if ts_match else "00:00"
                 end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
@@ -520,20 +499,13 @@ class Llama3PineconeRAGStore:
                         def _rank_sentence(s):
                             sc = score_sentence(s.get("text", ""))
                             low = s.get("text", "").lower()
-                            if any(w in low for w in ["analogy", "curd", "butter", "manthan", "phonepe", "upi", "google pay", "utkarsh", "prasanna", "overfitting", "non-stationary", "for example", "suppose", "pipeline"]):
+                            if any(w in low for w in ["analogy", "for example", "in practice", "specifically", "real-world", "pipeline", "suppose", "implementation"]):
                                 sc += 5.0
                             return sc
 
                         ranked = sorted(cands, key=_rank_sentence, reverse=True)[:6]
                         ranked.sort(key=lambda s: self._parse_timestamp(s.get("time", "00:00")))
                         dialogue_samples = [f"[{s.get('time', '00:00')}] {s.get('text', '')}" for s in ranked]
-                elif cues:
-                    sec_cues = [
-                        c for c in cues
-                        if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec
-                        and len(c.get("text", "").split()) >= 4
-                    ]
-                    dialogue_samples = [f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in sec_cues[:5]]
 
                 citations.append({
                     "timestamp": start_t,
@@ -1177,8 +1149,6 @@ class Llama3PineconeRAGStore:
             r"^(we can identify|we see that|we can observe|it can be seen that)\s+",
             r"^in this lecture.*?,\s*",
             r"^as an ai language model.*?,\s*",
-            r"💡\s*\*\*ai tutor connected\*\*.*",
-            r"\*\(tip:.*?\)\*",
             r"^in conclusion.*?,\s*",
             r"^(?:academic\s+)?submission(?:\s+of\s+around\s+\d+\s+words)?:\s*",
             r"^technical takeaway:\s*"

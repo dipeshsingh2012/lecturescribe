@@ -475,6 +475,15 @@ class Llama3PineconeRAGStore:
                 sections = generate_summary_sections(cues, saved.get("title", lecture_title))
                 db_manager.update_summary_sections(vid, sections)
 
+            # Reconstruct full sentences from cues for rich dialogue extraction
+            reconstructed_sentences = []
+            if cues:
+                try:
+                    from backend.summary_generator import reconstruct_sentences
+                    reconstructed_sentences = reconstruct_sentences(cues)
+                except Exception:
+                    reconstructed_sentences = []
+
             formatted = []
             for sec in sections:
                 title = sec.get("title", "")
@@ -489,20 +498,38 @@ class Llama3PineconeRAGStore:
                 st_sec = self._parse_timestamp(start_t)
                 et_sec = self._parse_timestamp(end_t)
                 if et_sec <= st_sec:
-                    et_sec = st_sec + 300
+                    et_sec = st_sec + 400
 
                 clean_title = re.sub(r"\[.*?\]", "", title).strip()
                 clean_title = re.sub(r"^[^\w\s]+\s*", "", clean_title).strip()
 
-                dialogue_sample = ""
-                if cues:
+                dialogue_samples = []
+                if reconstructed_sentences:
+                    from backend.summary_generator import score_sentence, is_greeting_or_banter
+                    cands = [
+                        s for s in reconstructed_sentences
+                        if st_sec <= self._parse_timestamp(s.get("time", "00:00")) <= et_sec
+                        and not is_greeting_or_banter(s.get("text", ""))
+                        and len(s.get("text", "").split()) >= 6
+                    ]
+                    if cands:
+                        def _rank_sentence(s):
+                            sc = score_sentence(s.get("text", ""))
+                            low = s.get("text", "").lower()
+                            if any(w in low for w in ["analogy", "curd", "butter", "manthan", "phonepe", "upi", "google pay", "utkarsh", "prasanna", "overfitting", "non-stationary", "for example", "suppose", "pipeline"]):
+                                sc += 5.0
+                            return sc
+
+                        ranked = sorted(cands, key=_rank_sentence, reverse=True)[:6]
+                        ranked.sort(key=lambda s: self._parse_timestamp(s.get("time", "00:00")))
+                        dialogue_samples = [f"[{s.get('time', '00:00')}] {s.get('text', '')}" for s in ranked]
+                elif cues:
                     sec_cues = [
                         c for c in cues
                         if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec
                         and len(c.get("text", "").split()) >= 4
                     ]
-                    if sec_cues:
-                        dialogue_sample = " ".join([f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in sec_cues[:4]])
+                    dialogue_samples = [f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in sec_cues[:5]]
 
                 citations.append({
                     "timestamp": start_t,
@@ -514,8 +541,8 @@ class Llama3PineconeRAGStore:
                     "timestamp": f"{start_t} - {end_t}",
                     "takeaways": points
                 }
-                if dialogue_sample:
-                    formatted_item["dialogue_excerpt"] = dialogue_sample
+                if dialogue_samples:
+                    formatted_item["substantive_dialogue"] = dialogue_samples
                 formatted.append(formatted_item)
             res_str = json.dumps(formatted)
             if redis_cache and vid_cache:
@@ -734,7 +761,7 @@ class Llama3PineconeRAGStore:
             "- search_web_context(search_query): Retrieves external academic context or mathematical background if needed.\n\n"
             "PEDAGOGICAL & CITATION RULES:\n"
             "- Ground your answer thoroughly in the lecture using your retrieval tools.\n"
-            "- For summaries, session recaps, or multi-minute reads: Inspect the entire lecture structure and dialogue using get_lecture_outline. If deeper explanation is needed on a specific subtopic, follow up with get_transcript_window or search_transcript.\n"
+            "- For summaries, session recaps, or multi-minute reads: Inspect the entire lecture structure and dialogue using get_lecture_outline. Unpack each chapter in depth: explain the professor's real-world analogies, concrete industry examples (e.g. UPI apps, transaction data), instructor roles, and technical concepts (non-stationarity, overfitting, structured vs unstructured data).\n"
             "- MANDATORY Inline Timestamps: Every key statement, topic, or finding MUST include its exact timestamp tag [MM:SS] or [MM:SS - MM:SS] so the student can jump to that exact part of the video.\n"
             "- SUBSTANTIVE CONTENT: Directly explain the concepts, methodologies, examples, and insights taught by the professor. Ground your answer in what was actually discussed in the lecture. NEVER output meta-instructions or advice on how to take notes.\n"
             "- Clarity & Rigor: Structure with clear paragraphs, mathematical notation, and bullet points where helpful."

@@ -78,7 +78,6 @@ export default function App() {
   const [cacheNotice, setCacheNotice] = useState(null);
   const [activeData, setActiveData] = useState(null);
   const [activeTab, setActiveTab] = useState('transcript'); // 'transcript' | 'tutor'
-  const [summaryExpanded, setSummaryExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [activeCueIdx, setActiveCueIdx] = useState(0);
@@ -526,7 +525,7 @@ export default function App() {
     setChatMessages([
       {
         sender: 'bot',
-        text: `🤖 **AI Lecture Tutor Ready** for *${title}*!\n\nAsk any question to get explanations, clarity on concepts, or summaries based on this lecture:\n- *"What are the core objectives and themes covered in this lecture?"*\n- *"Explain the primary methodology and key concepts discussed"*\n- *"Summarize the main takeaways and conclusions"*\n- *"What specific questions or challenges were addressed?"*`,
+        text: `🤖 Hi! I'm your AI Tutor for *${title}*.\n\nAsk me anything about this lecture to help you understand and explore the material.`,
         citations: []
       }
     ]);
@@ -2187,169 +2186,21 @@ export default function App() {
               </div>
             </div>
           ) : (
-            /* COMBINED AI TUTOR VIEW (EXECUTIVE SUMMARY + AI TUTOR CHAT) */
+            /* SIMPLE AI CHAT BOT VIEW */
             <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
               
-              {/* Executive Summary Card at Top */}
+              {/* Chat Header */}
               <div style={{
-                background: 'var(--card-bg)',
-                borderBottom: '1px solid var(--border-color)',
-                display: 'flex',
-                flexDirection: 'column',
-                flexShrink: 0,
-                maxHeight: summaryExpanded ? '45%' : 'auto',
-                transition: 'max-height 0.3s ease'
-              }}>
-                {/* Summary Header Bar */}
-                <div style={{
-                  padding: '12px 18px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '12px',
-                  borderBottom: summaryExpanded ? '1px solid var(--border-color)' : 'none'
-                }}>
-                  <div
-                    onClick={() => setSummaryExpanded(!summaryExpanded)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      cursor: 'pointer',
-                      userSelect: 'none'
-                    }}
-                  >
-                    <FileText size={18} color="var(--theme-primary)" />
-                    <span style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      Executive Summary
-                    </span>
-                    <span style={{
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      background: 'var(--highlight-bg)',
-                      color: 'var(--theme-primary)',
-                      padding: '2px 8px',
-                      borderRadius: '10px'
-                    }}>
-                      {(activeData.summarySections || []).length} sections
-                    </span>
-                    {summaryExpanded ? <ChevronUp size={16} color="var(--text-secondary)" /> : <ChevronDown size={16} color="var(--text-secondary)" />}
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <button
-                      onClick={handleRegenerateSummary}
-                      disabled={regeneratingSummary}
-                      title="Regenerate dynamic summary"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        background: 'transparent',
-                        border: '1px solid var(--border-color)',
-                        color: 'var(--text-secondary)',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '0.76rem',
-                        fontWeight: 600,
-                        cursor: regeneratingSummary ? 'not-allowed' : 'pointer',
-                        transition: 'all 0.2s ease'
-                      }}
-                    >
-                      <RefreshCw size={12} className={regeneratingSummary ? 'loading-pulse' : ''} />
-                      {regeneratingSummary ? 'Refreshing...' : 'Regenerate'}
-                    </button>
-                    {activeData.cached && (
-                      <span style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        background: 'rgba(16, 185, 129, 0.15)',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
-                        color: '#34d399',
-                        padding: '2px 8px',
-                        borderRadius: '10px',
-                        fontSize: '0.72rem',
-                        fontWeight: 600
-                      }}>
-                        <Check size={12} /> Cached
-                      </span>
-                    )}
-                    <button
-                      onClick={() => setSummaryExpanded(!summaryExpanded)}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--theme-primary)',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        padding: '4px 6px'
-                      }}
-                    >
-                      {summaryExpanded ? 'Collapse' : 'Expand'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Summary Expandable Content */}
-                {summaryExpanded && (
-                  <div style={{
-                    overflowY: 'auto',
-                    padding: '14px 18px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '12px'
-                  }}>
-                    {(activeData.summarySections || []).length > 0 ? (
-                      activeData.summarySections.map((sec, sIdx) => (
-                        <div
-                          key={sIdx}
-                          style={{
-                            background: 'var(--panel-bg)',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: '8px',
-                            padding: '12px 16px'
-                          }}
-                        >
-                          <h4 style={{
-                            fontSize: '0.9rem',
-                            fontWeight: 700,
-                            color: 'var(--theme-primary)',
-                            margin: '0 0 8px 0'
-                          }}>
-                            {sec.title}
-                          </h4>
-                          <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            {(sec.points || []).map((pt, pIdx) => (
-                              <li key={pIdx} style={{ fontSize: '0.82rem', color: 'var(--text-primary)', lineHeight: 1.45 }}>
-                                {renderSummaryPoint(pt)}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ))
-                    ) : (
-                      <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: 0 }}>
-                        No structured summary sections available for this lecture.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* AI Tutor Chat Subheader */}
-              <div style={{
-                padding: '12px 18px',
+                padding: '14px 20px',
                 borderBottom: '1px solid var(--border-color)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '10px',
-                background: 'var(--panel-bg)'
+                background: 'var(--card-bg)'
               }}>
                 <div style={{
-                  width: '30px',
-                  height: '30px',
+                  width: '32px',
+                  height: '32px',
                   borderRadius: '50%',
                   background: 'var(--highlight-bg)',
                   display: 'flex',
@@ -2357,23 +2208,23 @@ export default function App() {
                   justifyContent: 'center',
                   flexShrink: 0
                 }}>
-                  <Bot size={17} color="var(--theme-primary)" />
+                  <Bot size={18} color="var(--theme-primary)" />
                 </div>
                 <div>
-                  <h3 style={{ fontSize: '0.92rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-                    AI Lecture Tutor
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+                    AI Tutor
                   </h3>
-                  <p style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', margin: 0 }}>
-                    Interactive Q&amp;A and concept explanations based on this lecture
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
+                    Ask questions and chat about this lecture
                   </p>
                 </div>
               </div>
 
-              {/* Chat Messages */}
+              {/* Chat Messages Container */}
               <div style={{
                 flex: 1,
                 overflowY: 'auto',
-                padding: '16px 18px',
+                padding: '18px 20px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '14px'
@@ -2466,101 +2317,27 @@ export default function App() {
                       gap: '8px',
                       border: '1px solid var(--border-color)'
                     }}>
-                      <RefreshCw className="loading-pulse" size={14} /> Thinking &amp; preparing answer...
+                      <RefreshCw className="loading-pulse" size={14} /> Thinking...
                     </div>
                   </div>
                 )}
                 <div ref={chatEndRef} />
               </div>
 
-              {/* Quick Suggestion Chips */}
-              <div style={{
-                padding: '8px 18px',
-                display: 'flex',
-                gap: '8px',
-                overflowX: 'auto',
-                borderTop: '1px solid var(--border-color)',
-                background: 'var(--bg-dark)'
-              }}>
-                <button
-                  onClick={() => handleSendMessage("What are the main objectives and scope covered in this lecture?")}
-                  style={{
-                    whiteSpace: 'nowrap',
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    color: 'var(--theme-primary)',
-                    padding: '5px 12px',
-                    borderRadius: '14px',
-                    fontSize: '0.76rem',
-                    cursor: 'pointer',
-                    fontWeight: 600
-                  }}
-                >
-                  🎯 Main Objectives
-                </button>
-                <button
-                  onClick={() => handleSendMessage("Explain the core concepts and methodologies discussed in this session")}
-                  style={{
-                    whiteSpace: 'nowrap',
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    color: 'var(--theme-primary)',
-                    padding: '5px 12px',
-                    borderRadius: '14px',
-                    fontSize: '0.76rem',
-                    cursor: 'pointer',
-                    fontWeight: 600
-                  }}
-                >
-                  💡 Core Methodology
-                </button>
-                <button
-                  onClick={() => handleSendMessage("Summarize the key takeaways, action items, and conclusions")}
-                  style={{
-                    whiteSpace: 'nowrap',
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    color: 'var(--theme-primary)',
-                    padding: '5px 12px',
-                    borderRadius: '14px',
-                    fontSize: '0.76rem',
-                    cursor: 'pointer',
-                    fontWeight: 600
-                  }}
-                >
-                  📜 Key Takeaways
-                </button>
-                <button
-                  onClick={() => handleSendMessage("What specific questions or challenges were discussed in this video?")}
-                  style={{
-                    whiteSpace: 'nowrap',
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    color: 'var(--theme-primary)',
-                    padding: '5px 12px',
-                    borderRadius: '14px',
-                    fontSize: '0.76rem',
-                    cursor: 'pointer',
-                    fontWeight: 600
-                  }}
-                >
-                  ❓ Key Questions
-                </button>
-              </div>
-
-              {/* Chat Input Bar */}
-              <div style={{ padding: '14px 18px', background: 'var(--panel-bg)', borderTop: '1px solid var(--border-color)' }}>
+              {/* Simple Input Text Box */}
+              <div style={{ padding: '14px 20px', background: 'var(--panel-bg)', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{
                   display: 'flex',
                   gap: '8px',
                   background: 'var(--card-bg)',
                   border: '1px solid var(--border-color)',
                   borderRadius: '10px',
-                  padding: '6px 6px 6px 14px'
+                  padding: '6px 6px 6px 14px',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.04)'
                 }}>
                   <input
                     type="text"
-                    placeholder="Ask AI tutor about key concepts, methodology, or questions..."
+                    placeholder="Ask AI tutor anything about this lecture..."
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
@@ -2570,7 +2347,7 @@ export default function App() {
                       border: 'none',
                       outline: 'none',
                       color: 'var(--text-primary)',
-                      fontSize: '0.88rem'
+                      fontSize: '0.9rem'
                     }}
                   />
                   <button
@@ -2587,7 +2364,8 @@ export default function App() {
                       alignItems: 'center',
                       justifyContent: 'center',
                       cursor: !chatInput.trim() || chatLoading ? 'not-allowed' : 'pointer',
-                      opacity: !chatInput.trim() || chatLoading ? 0.5 : 1
+                      opacity: !chatInput.trim() || chatLoading ? 0.4 : 1,
+                      transition: 'all 0.2s ease'
                     }}
                   >
                     <Send size={16} />

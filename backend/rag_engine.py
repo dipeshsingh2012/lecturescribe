@@ -452,23 +452,7 @@ class Llama3PineconeRAGStore:
             sections = saved.get("summarySections") or saved.get("summary_sections") or []
             cues = saved.get("cues", [])
 
-            # Ensure sections exist; regenerate if legacy fallback, uninformative, or duplicate titles are detected
-            def _needs_summary_regeneration(secs: List[Dict[str, Any]]) -> bool:
-                if not secs or len(secs) < 2:
-                    return True
-                titles = [s.get("title", "").lower() for s in secs]
-                legacy_patterns = [
-                    "lecture discussion", "executive overview", "key concepts & questions",
-                    "three comma", "comma", "step size", "data type"
-                ]
-                if any(any(pat in t for pat in legacy_patterns) for t in titles):
-                    return True
-                cleaned = [re.sub(r"\[.*?\]", "", t).strip() for t in titles]
-                if len(cleaned) != len(set(cleaned)):
-                    return True
-                return False
-
-            if _needs_summary_regeneration(sections) and cues:
+            if not sections and cues:
                 from backend.summary_generator import generate_summary_sections
                 sections = generate_summary_sections(cues, saved.get("title", lecture_title))
                 if sections:
@@ -797,11 +781,6 @@ class Llama3PineconeRAGStore:
             for m in (db_history or [])[-6:]:
                 role = "user" if m.get("sender") == "user" or m.get("role") == "user" else "assistant"
                 txt = (m.get("text") or m.get("content") or "").strip()
-                # Skip legacy poisoned boilerplate or hallucinations from prior messages
-                if "invention, discovery, and innovation" in txt.lower() or "literature review to patenting" in txt.lower():
-                    continue
-                if "based on the lecture outline" in txt.lower() or "these takeaways are based on the chapters" in txt.lower() or "comprehensive walkthrough of the lecture" in txt.lower():
-                    continue
                 if txt and not txt.startswith("<function="):
                     if role == "assistant" and len(txt) > 800:
                         txt = txt[:800] + "..."
@@ -1080,35 +1059,6 @@ class Llama3PineconeRAGStore:
                 seen_ts.add(k)
                 dedup_citations.append(c)
 
-        # Strip conversational AI preambles and meta pleasantries from final answer
-        final_answer = re.sub(
-            r"^(?:Based on (?:the )?(?:lecture outline|transcript|video|chapters)[^.\n]*?[.:]+\s*)+",
-            "",
-            final_answer,
-            flags=re.IGNORECASE
-        )
-        final_answer = re.sub(
-            r"^(?:Here is a (?:comprehensive walkthrough|summary|detailed overview)[^.\n]*?[.:]+\s*)+",
-            "",
-            final_answer,
-            flags=re.IGNORECASE
-        )
-        final_answer = re.sub(
-            r"\n*(?:I hope this (?:comprehensive walkthrough|summary|guide|breakdown)[^.\n]*?[.!]?)\s*$",
-            "",
-            final_answer,
-            flags=re.IGNORECASE
-        )
-        final_answer = re.sub(
-            r"\n+(?:This (?:comprehensive )?(?:study guide|summary|overview|walkthrough) (?:provides|covers|summarizes|delivers|gives)[\s\S]*?[.!]?)\s*$",
-            "",
-            final_answer,
-            flags=re.IGNORECASE
-        ).strip()
-
-        # Deduplicate repetitive looping sentences and duplicate paragraphs
-        final_answer = self._deduplicate_repetitive_text(final_answer)
-
         total_time = time.time() - t_rag_start
         print(f"🏁 [Agentic RAG Engine] Finished in {total_time:.2f}s | Citations: {len(dedup_citations)} | Web: {len(all_web_sources)}")
         print("-" * 50)
@@ -1122,50 +1072,6 @@ class Llama3PineconeRAGStore:
             "lecture_title": lecture_title,
             "video_id": target_video_id
         }
-
-    def _deduplicate_repetitive_text(self, text: str) -> str:
-        """
-        Detect and prune repetitive looping sentences or repeated paragraphs across sections.
-        Preserves Markdown headers, code blocks, and distinct substantive sentences.
-        """
-        if not text:
-            return ""
-        sections = text.split("\n\n")
-        cleaned_sections = []
-        for sec in sections:
-            lines = sec.strip().split("\n")
-            new_lines = []
-            seen_in_section = []
-            for line in lines:
-                if line.startswith("#"):
-                    new_lines.append(line)
-                    seen_in_section.clear()
-                    continue
-                raw_sents = re.split(r"(?<=[.!?])\s+", line)
-                clean_sents = []
-                for s in raw_sents:
-                    s_strip = s.strip()
-                    if not s_strip:
-                        continue
-                    norm = re.sub(r"[^\w\s]", "", s_strip.lower()).split()
-                    sig_words = frozenset(w for w in norm if len(w) > 3)
-                    if len(sig_words) >= 3:
-                        is_dup = False
-                        for seen in seen_in_section:
-                            overlap = len(sig_words & seen)
-                            union = len(sig_words | seen)
-                            if union > 0 and (overlap / union) >= 0.65:
-                                is_dup = True
-                                break
-                        if is_dup:
-                            continue
-                        seen_in_section.append(sig_words)
-                    clean_sents.append(s_strip)
-                if clean_sents:
-                    new_lines.append(" ".join(clean_sents))
-            if new_lines:
-                cleaned_sections.append("\n".join(new_lines))
-        return "\n\n".join(cleaned_sections)
 
     def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
         """Strip markdown syntax, timestamps, and AI boilerplate from text."""

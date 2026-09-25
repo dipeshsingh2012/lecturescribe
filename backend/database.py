@@ -330,18 +330,11 @@ class RelationalDBManager:
                         raw = s_row["sections_json"]
                         summary_sections = raw if isinstance(raw, list) else json.loads(raw)
 
-                    # Auto-upgrade legacy summaries
-                    s_str = json.dumps(summary_sections)
-                    if (
-                        not summary_sections
-                        or "Session Introduction & Core Scope" in s_str
-                        or "Course Structure & Evaluation Framework" in s_str
-                        or ": Seen [" in s_str
-                        or ": Question [" in s_str
-                    ):
+                    if not summary_sections and cues:
                         from backend.summary_generator import generate_summary_sections
                         summary_sections = generate_summary_sections([dict(c) for c in cues], v_row["title"])
-                        self.update_summary_sections(video_id, summary_sections)
+                        if summary_sections:
+                            self.update_summary_sections(video_id, summary_sections)
 
                     record = {
                         "videoId": v_row["video_id"],

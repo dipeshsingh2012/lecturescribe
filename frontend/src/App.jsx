@@ -32,6 +32,8 @@ import InputBase from '@mui/material/InputBase';
 import { ProtonThemeSelector } from '@dipesh.singh/proton';
 import { useThemeStore, LMS_THEMES, applyThemeCssVariables } from './store/themeStore';
 
+const API_BASE = (import.meta.env.VITE_API_URL || (import.meta.env.DEV ? '' : 'https://lecturescribe-api-4hysn7vtva-uc.a.run.app')).replace(/\/+$/, '');
+
 const formatRelativeTime = (dateStr) => {
   if (!dateStr) return 'Recently';
   try {
@@ -207,7 +209,7 @@ export default function App() {
     }
     setLibraryLoading(true);
     try {
-      const res = await fetch(`/api/user/library?email=${encodeURIComponent(email)}`);
+      const res = await fetch(`${API_BASE}/api/user/library?email=${encodeURIComponent(email)}`);
       if (res.ok) {
         const data = await res.json();
         const list = data.library || data.lectures || [];
@@ -224,7 +226,7 @@ export default function App() {
     if (!videoId) return;
     try {
       const emailParam = googleUser?.email ? `?email=${encodeURIComponent(googleUser.email)}` : '';
-      const res = await fetch(`/api/user/library/${videoId}${emailParam}`, {
+      const res = await fetch(`${API_BASE}/api/user/library/${videoId}${emailParam}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -279,7 +281,7 @@ export default function App() {
   useEffect(() => {
     if (!activeData || availableModels.length > 0) return;
 
-    fetch('/api/ai/models')
+    fetch(`${API_BASE}/api/ai/models`)
       .then(res => res.json())
       .then(data => {
         if (data && data.models && data.models.length > 0) {
@@ -325,7 +327,7 @@ export default function App() {
 
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch('/api/search', {
+        const res = await fetch(`${API_BASE}/api/search`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -556,7 +558,7 @@ export default function App() {
       initChatMessages(cached.title);
       setCacheNotice("⚡ Loaded instantly from browser cache — Transcripts and summary were reused!");
       if (googleUser?.email) {
-        fetch('/api/user/library/record', {
+        fetch(`${API_BASE}/api/user/library/record`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -581,7 +583,7 @@ export default function App() {
 
     try {
       const userParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
-      const res = await fetch(`/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}`);
+      const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}`);
       if (res.ok) {
         const data = await res.json();
         setActiveData(data);
@@ -689,7 +691,7 @@ export default function App() {
     setChatLoading(true);
 
     try {
-      const res = await fetch('/api/rag/query', {
+      const res = await fetch(`${API_BASE}/api/rag/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -748,7 +750,7 @@ export default function App() {
 
   const generateSubmissionVersion = async (originalText, videoId, messageId) => {
     try {
-      const res = await fetch('/api/rag/query/submission', {
+      const res = await fetch(`${API_BASE}/api/rag/query/submission`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -866,7 +868,7 @@ export default function App() {
     setRegeneratingSummary(true);
     setCacheNotice(null);
     try {
-      const res = await fetch('/api/summary/regenerate', {
+      const res = await fetch(`${API_BASE}/api/summary/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ video_id: activeData.videoId })
@@ -938,8 +940,8 @@ export default function App() {
 
     try {
       const [streamsRes, gdriveRes] = await Promise.all([
-        fetch(`/api/video/download-options?url=${encodeURIComponent(activeData.videoId)}`),
-        fetch('/api/cloud/gdrive/status')
+        fetch(`${API_BASE}/api/video/download-options?url=${encodeURIComponent(activeData.videoId)}`),
+        fetch(`${API_BASE}/api/cloud/gdrive/status`)
       ]);
 
       if (streamsRes.ok) {
@@ -981,7 +983,7 @@ export default function App() {
     let currentStatus = gdriveStatus;
     if (!currentStatus?.client_id) {
       try {
-        const res = await fetch('/api/cloud/gdrive/status');
+        const res = await fetch(`${API_BASE}/api/cloud/gdrive/status`);
         if (res.ok) {
           currentStatus = await res.json();
           setGdriveStatus(currentStatus);
@@ -1092,7 +1094,7 @@ export default function App() {
     });
 
     try {
-      const res = await fetch('/api/cloud/gdrive/upload-bundle', {
+      const res = await fetch(`${API_BASE}/api/cloud/gdrive/upload-bundle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1118,7 +1120,7 @@ export default function App() {
 
       pollIntervalRef.current = setInterval(async () => {
         try {
-          const pollRes = await fetch(`/api/cloud/jobs/${jobId}`);
+          const pollRes = await fetch(`${API_BASE}/api/cloud/jobs/${jobId}`);
           if (pollRes.ok) {
             const currentJob = await pollRes.json();
             setGdriveJob(currentJob);

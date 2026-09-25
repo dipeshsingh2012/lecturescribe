@@ -221,5 +221,50 @@ class TestServices(unittest.TestCase):
             data = resp.json()
             self.assertEqual(data["status"], "success")
 
+    def test_extract_course_name(self):
+        from backend.database import extract_course_name
+        self.assertEqual(
+            extract_course_name("Introduction to Financial Analytics Live session -1 (18 / 9 / 2026)"),
+            "Introduction to Financial Analytics"
+        )
+        self.assertEqual(
+            extract_course_name("Introduction to Financial Analytics Live session -2 (25 / 9 / 2026)"),
+            "Introduction to Financial Analytics"
+        )
+        self.assertEqual(
+            extract_course_name("Computer Vision Live Session - 1"),
+            "Computer Vision"
+        )
+        self.assertEqual(
+            extract_course_name("Introduction to Speech and Natural Language Processing"),
+            "Introduction to Speech and Natural Language Processing"
+        )
+
+    def test_api_user_courses_endpoint(self):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        client = TestClient(app)
+        with patch("backend.main.db_manager.get_user_courses") as mock_courses:
+            mock_courses.return_value = [
+                {
+                    "course_name": "Introduction to Financial Analytics",
+                    "lecture_count": 2,
+                    "lectures": [
+                        {"video_id": "1228259148", "title": "Session 1"},
+                        {"video_id": "1230314346", "title": "Session 2"}
+                    ]
+                }
+            ]
+            resp = client.get("/api/user/courses?email=test@example.com")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["count"], 1)
+            self.assertEqual(data["courses"][0]["course_name"], "Introduction to Financial Analytics")
+            self.assertEqual(data["courses"][0]["lecture_count"], 2)
+
 if __name__ == "__main__":
     unittest.main()
+

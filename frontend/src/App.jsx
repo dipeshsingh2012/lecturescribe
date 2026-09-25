@@ -164,8 +164,10 @@ export default function App() {
   const [gdriveError, setGdriveError] = useState(null);
   const pollIntervalRef = useRef(null);
 
-  // LMS User Library State
+  // LMS User Library & Course Grouping State
   const [userLibrary, setUserLibrary] = useState([]);
+  const [userCourses, setUserCourses] = useState([]);
+  const [selectedCourse, setSelectedCourse] = useState(null);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [librarySearch, setLibrarySearch] = useState('');
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
@@ -205,18 +207,26 @@ export default function App() {
   const fetchUserLibrary = async (email) => {
     if (!email) {
       setUserLibrary([]);
+      setUserCourses([]);
       return;
     }
     setLibraryLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/user/library?email=${encodeURIComponent(email)}`);
-      if (res.ok) {
-        const data = await res.json();
+      const [libRes, coursesRes] = await Promise.all([
+        fetch(`${API_BASE}/api/user/library?email=${encodeURIComponent(email)}`),
+        fetch(`${API_BASE}/api/user/courses?email=${encodeURIComponent(email)}`)
+      ]);
+      if (libRes.ok) {
+        const data = await libRes.json();
         const list = data.library || data.lectures || [];
         setUserLibrary(list);
       }
+      if (coursesRes.ok) {
+        const cData = await coursesRes.json();
+        setUserCourses(cData.courses || []);
+      }
     } catch (err) {
-      console.warn("Failed to fetch user library:", err);
+      console.warn("Failed to fetch user library/courses:", err);
     } finally {
       setLibraryLoading(false);
     }
@@ -1241,9 +1251,69 @@ export default function App() {
     const q = librarySearch.toLowerCase();
     return (
       (item.video_title && item.video_title.toLowerCase().includes(q)) ||
+      (item.title && item.title.toLowerCase().includes(q)) ||
       (item.video_id && String(item.video_id).toLowerCase().includes(q))
     );
   });
+
+  const effectiveCourses = useMemo(() => {
+    if (userCourses && userCourses.length > 0) {
+      return userCourses;
+    }
+    // Fallback client-side grouping by course_name from userLibrary
+    const map = {};
+    (userLibrary || []).forEach(item => {
+      let cName = item.course_name;
+      if (!cName) {
+        const raw = (item.title || item.video_title || "General Lectures").trim();
+        const withoutDate = raw.replace(/[\(\[\{]\s*\d{1,2}[\s/.\-]+\d{1,2}[\s/.\-]+\d{2,4}\s*[\)\]\}]/g, '');
+        cName = withoutDate.replace(/\b(?:Live\s+Session|Session|Lecture|Module|Class|Week|Part|Episode)\b.*$/i, '').trim();
+        cName = cName.replace(/[\s\-_:\|\/]+$/, '').trim();
+        if (!cName || cName.length < 3) cName = raw;
+      }
+      if (!map[cName]) {
+        map[cName] = {
+          course_name: cName,
+          lecture_count: 0,
+          latest_viewed_at: item.last_viewed_at || item.created_at,
+          thumbnail_video_id: item.video_id,
+          lectures: []
+        };
+      }
+      map[cName].lecture_count += 1;
+      map[cName].lectures.push(item);
+    });
+    return Object.values(map);
+  }, [userCourses, userLibrary]);
+
+  const filteredCourses = useMemo(() => {
+    if (!librarySearch.trim()) return effectiveCourses;
+    const q = librarySearch.toLowerCase();
+    return effectiveCourses.filter(c => 
+      c.course_name.toLowerCase().includes(q) ||
+      (c.lectures && c.lectures.some(l => 
+        (l.video_title && l.video_title.toLowerCase().includes(q)) ||
+        (l.title && l.title.toLowerCase().includes(q)) ||
+        (l.video_id && String(l.video_id).toLowerCase().includes(q))
+      ))
+    );
+  }, [effectiveCourses, librarySearch]);
+
+  const activeCourseData = useMemo(() => {
+    if (!selectedCourse) return null;
+    return effectiveCourses.find(c => c.course_name === selectedCourse) || null;
+  }, [effectiveCourses, selectedCourse]);
+
+  const filteredCourseLectures = useMemo(() => {
+    if (!activeCourseData) return [];
+    if (!librarySearch.trim()) return activeCourseData.lectures;
+    const q = librarySearch.toLowerCase();
+    return activeCourseData.lectures.filter(item => 
+      (item.video_title && item.video_title.toLowerCase().includes(q)) ||
+      (item.title && item.title.toLowerCase().includes(q)) ||
+      (item.video_id && String(item.video_id).toLowerCase().includes(q))
+    );
+  }, [activeCourseData, librarySearch]);
 
   return (
     <ThemeProvider theme={muiTheme}>
@@ -1678,15 +1748,48 @@ export default function App() {
 
               {/* Library Header & Search Bar */}
               <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
-                    My Lecture Library
-                  </Typography>
-                  <Chip
-                    label={`${filteredLibrary.length} ${filteredLibrary.length === 1 ? 'lecture' : 'lectures'}`}
-                    size="small"
-                    sx={{ bgcolor: currentTheme.palette.badgeBg, color: currentTheme.palette.badgeColor, fontWeight: 700, border: `1px solid ${currentTheme.palette.badgeBorder}` }}
-                  />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                  {selectedCourse ? (
+                    <>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<ArrowLeft size={16} />}
+                        onClick={() => setSelectedCourse(null)}
+                        sx={{
+                          textTransform: 'none',
+                          fontWeight: 700,
+                          fontSize: '0.82rem',
+                          borderRadius: 2,
+                          color: currentTheme.palette.primary,
+                          borderColor: currentTheme.palette.cardBorder,
+                          bgcolor: currentTheme.palette.cardBg,
+                          '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary }
+                        }}
+                      >
+                        All Courses
+                      </Button>
+                      <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
+                        {selectedCourse}
+                      </Typography>
+                      <Chip
+                        label={`${filteredCourseLectures.length} ${filteredCourseLectures.length === 1 ? 'lecture' : 'lectures'}`}
+                        size="small"
+                        sx={{ bgcolor: currentTheme.palette.badgeBg, color: currentTheme.palette.badgeColor, fontWeight: 700, border: `1px solid ${currentTheme.palette.badgeBorder}` }}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
+                        My Courses & Subjects
+                      </Typography>
+                      <Chip
+                        label={`${filteredCourses.length} ${filteredCourses.length === 1 ? 'course' : 'courses'}`}
+                        size="small"
+                        sx={{ bgcolor: currentTheme.palette.badgeBg, color: currentTheme.palette.badgeColor, fontWeight: 700, border: `1px solid ${currentTheme.palette.badgeBorder}` }}
+                      />
+                    </>
+                  )}
                   <Tooltip title="Refresh Library">
                     <IconButton
                       size="small"
@@ -1700,7 +1803,7 @@ export default function App() {
 
                 <TextField
                   size="small"
-                  placeholder="Search by title or video ID..."
+                  placeholder={selectedCourse ? "Search lectures in this course..." : "Search courses or lectures..."}
                   value={librarySearch}
                   onChange={(e) => setLibrarySearch(e.target.value)}
                   InputProps={{
@@ -1722,214 +1825,386 @@ export default function App() {
                 />
               </Box>
 
-              {/* Cards Grid */}
-              {filteredLibrary.length > 0 ? (
-                <Box
-                  sx={{
-                    display: 'grid',
-                    gridTemplateColumns: {
-                      xs: '1fr',
-                      sm: 'repeat(2, minmax(0, 1fr))',
-                      md: 'repeat(3, minmax(0, 1fr))'
-                    },
-                    gap: 3,
-                    width: '100%',
-                    alignItems: 'stretch'
-                  }}
-                >
-                  {filteredLibrary.map((item) => (
-                    <Card
-                      key={item.video_id}
-                      sx={{
-                        width: '100%',
-                        height: '100%',
-                        minWidth: 0,
-                        boxSizing: 'border-box',
-                        bgcolor: currentTheme.palette.cardBg,
-                        border: `1px solid ${currentTheme.palette.cardBorder}`,
-                        borderRadius: 3,
-                        boxShadow: currentTheme.palette.cardShadow,
-                        transition: 'all 0.2s ease-in-out',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        '&:hover': {
-                          transform: 'translateY(-4px)',
-                          borderColor: currentTheme.palette.primary,
-                          boxShadow: currentTheme.palette.cardHoverShadow
-                        }
-                      }}
-                    >
-                      <CardContent sx={{ flex: 1, p: 2.5, display: 'flex', flexDirection: 'column' }}>
+              {/* LEVEL 1: COURSE CARDS VIEW */}
+              {!selectedCourse ? (
+                filteredCourses.length > 0 ? (
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: {
+                        xs: '1fr',
+                        sm: 'repeat(2, minmax(0, 1fr))',
+                        md: 'repeat(3, minmax(0, 1fr))'
+                      },
+                      gap: 3,
+                      width: '100%',
+                      alignItems: 'stretch'
+                    }}
+                  >
+                    {filteredCourses.map((course) => (
+                      <Card
+                        key={course.course_name}
+                        onClick={() => setSelectedCourse(course.course_name)}
+                        sx={{
+                          width: '100%',
+                          height: '100%',
+                          minWidth: 0,
+                          boxSizing: 'border-box',
+                          cursor: 'pointer',
+                          bgcolor: currentTheme.palette.cardBg,
+                          border: `1px solid ${currentTheme.palette.cardBorder}`,
+                          borderRadius: 3,
+                          boxShadow: currentTheme.palette.cardShadow,
+                          transition: 'all 0.2s ease-in-out',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          p: 2.5,
+                          '&:hover': {
+                            transform: 'translateY(-4px)',
+                            borderColor: currentTheme.palette.primary,
+                            boxShadow: currentTheme.palette.cardHoverShadow
+                          }
+                        }}
+                      >
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Chip
-                              label={`/lecture/${item.video_id}`}
-                              size="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleTranscribe(item.video_url || item.video_id);
-                              }}
-                              title="Open dedicated lecture route"
-                              sx={{
-                                fontFamily: 'monospace',
-                                fontWeight: 700,
-                                fontSize: '0.72rem',
-                                bgcolor: currentTheme.palette.badgeBg,
-                                color: currentTheme.palette.badgeColor,
-                                border: `1px solid ${currentTheme.palette.badgeBorder}`,
-                                cursor: 'pointer',
-                                '&:hover': { opacity: 0.85 }
-                              }}
-                            />
+                          <Box sx={{
+                            width: 44,
+                            height: 44,
+                            borderRadius: '12px',
+                            bgcolor: 'var(--highlight-bg)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            border: '1px solid rgba(0, 117, 237, 0.2)'
+                          }}>
+                            <BookOpen size={22} color={currentTheme.palette.primary} />
                           </Box>
-                          <Typography variant="caption" sx={{ color: '#64748b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            <Clock size={12} /> {formatRelativeTime(item.last_accessed_at || item.created_at)}
-                          </Typography>
+                          <Chip
+                            label={`${course.lecture_count} ${course.lecture_count === 1 ? 'lecture' : 'lectures'}`}
+                            size="small"
+                            sx={{
+                              fontWeight: 700,
+                              fontSize: '0.74rem',
+                              bgcolor: currentTheme.palette.badgeBg,
+                              color: currentTheme.palette.badgeColor,
+                              border: `1px solid ${currentTheme.palette.badgeBorder}`
+                            }}
+                          />
                         </Box>
 
                         <Typography
-                          variant="subtitle1"
+                          variant="h6"
                           sx={{
-                            fontWeight: 700,
+                            fontWeight: 800,
                             color: currentTheme.palette.textPrimary,
-                            lineHeight: 1.4,
-                            mb: 1.5,
-                            minHeight: '2.8em',
+                            lineHeight: 1.35,
+                            mb: 1,
+                            minHeight: '2.7em',
                             display: '-webkit-box',
                             WebkitLineClamp: 2,
                             WebkitBoxOrient: 'vertical',
-                            overflow: 'hidden',
-                            cursor: 'pointer',
-                            '&:hover': { color: currentTheme.palette.primary }
+                            overflow: 'hidden'
                           }}
-                          onClick={() => handleTranscribe(item.video_url || item.video_id)}
                         >
-                          {item.video_title || `Lecture ${item.video_id}`}
+                          {course.course_name}
                         </Typography>
 
-                        <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 'auto' }}>
-                          {item.drive_folder_url ? (
-                            <Chip
-                              icon={<Folder size={13} color="#10b981" />}
-                              label="In Google Drive"
-                              size="small"
-                              component="a"
-                              href={item.drive_folder_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              clickable
-                              sx={{
-                                bgcolor: 'rgba(16, 185, 129, 0.15)',
-                                color: '#34d399',
-                                border: '1px solid rgba(16, 185, 129, 0.3)',
-                                fontWeight: 600,
-                                fontSize: '0.7rem'
-                              }}
-                            />
-                          ) : (
-                            <Chip
-                              label="Local / Database"
-                              size="small"
-                              sx={{
-                                bgcolor: 'rgba(255, 255, 255, 0.05)',
-                                color: '#94a3b8',
-                                fontSize: '0.7rem'
-                              }}
-                            />
+                        <Typography variant="caption" sx={{ color: '#64748b', mb: 2, display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                          <Clock size={12} /> Last active: {formatRelativeTime(course.latest_viewed_at)}
+                        </Typography>
+
+                        {/* Recent Sessions Preview */}
+                        <Box sx={{
+                          bgcolor: 'var(--panel-bg)',
+                          p: 1.5,
+                          borderRadius: 2,
+                          mb: 2.5,
+                          border: '1px solid var(--border-color)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 0.8
+                        }}>
+                          {course.lectures.slice(0, 2).map((l, i) => (
+                            <Box key={l.video_id || i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Play size={11} color="var(--theme-primary)" style={{ flexShrink: 0 }} />
+                              <Typography variant="caption" sx={{
+                                color: 'var(--text-primary)',
+                                fontWeight: 500,
+                                fontSize: '0.78rem',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {l.title || `Lecture ${l.video_id}`}
+                              </Typography>
+                            </Box>
+                          ))}
+                          {course.lecture_count > 2 && (
+                            <Typography variant="caption" sx={{ color: 'var(--theme-primary)', fontWeight: 600, fontSize: '0.72rem', mt: 0.2 }}>
+                              + {course.lecture_count - 2} more {course.lecture_count - 2 === 1 ? 'lecture' : 'lectures'}
+                            </Typography>
                           )}
-                          <Chip
-                            label="Transcript Search"
-                            size="small"
-                            sx={{
-                              bgcolor: currentTheme.palette.badgeBg,
-                              color: currentTheme.palette.badgeColor,
-                              fontSize: '0.7rem',
-                              fontWeight: 600
-                            }}
-                          />
-                          <Chip
-                            label="AI Tutor"
-                            size="small"
-                            sx={{
-                              bgcolor: 'rgba(139, 92, 246, 0.1)',
-                              color: '#8b5cf6',
-                              fontSize: '0.7rem',
-                              fontWeight: 600
-                            }}
-                          />
                         </Box>
-                      </CardContent>
 
-                      <Divider sx={{ borderColor: currentTheme.palette.cardBorder }} />
-
-                      <CardActions sx={{ p: 1.5, justifyContent: 'space-between' }}>
                         <Button
                           variant="contained"
-                          size="small"
-                          onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                          fullWidth
+                          endIcon={<Play size={14} />}
                           sx={{
-                            textTransform: 'none',
+                            mt: 'auto',
+                            bgcolor: currentTheme.palette.primary,
+                            color: '#ffffff',
                             fontWeight: 700,
-                            fontSize: '0.82rem',
-                            bgcolor: currentTheme.palette.accentCta,
+                            textTransform: 'none',
+                            py: 1,
+                            borderRadius: 2,
                             '&:hover': { bgcolor: currentTheme.palette.primaryHover }
                           }}
                         >
-                          Study Lecture →
+                          View Lectures ({course.lecture_count}) →
                         </Button>
+                      </Card>
+                    ))}
+                  </Box>
+                ) : (
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 6,
+                      textAlign: 'center',
+                      bgcolor: currentTheme.palette.cardBg,
+                      border: `1px dashed ${currentTheme.palette.cardBorder}`,
+                      borderRadius: 3,
+                      boxShadow: currentTheme.palette.cardShadow
+                    }}
+                  >
+                    <BookOpen size={48} color={currentTheme.palette.primary} style={{ margin: '0 auto 16px', opacity: 0.85 }} />
+                    <Typography variant="h6" sx={{ color: currentTheme.palette.textPrimary, fontWeight: 700, mb: 1 }}>
+                      {librarySearch ? 'No matching courses found' : 'Your Course Library is Empty'}
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 460, mx: 'auto', mb: 1 }}>
+                      {librarySearch
+                        ? `No courses or lectures matched "${librarySearch}". Try a different keyword.`
+                        : 'Paste any lecture link in the quick-add bar above to transcribe, index into search and AI tutor, and start studying!'}
+                    </Typography>
+                  </Paper>
+                )
+              ) : (
+                /* LEVEL 2: INDIVIDUAL LECTURES IN SELECTED COURSE */
+                filteredCourseLectures.length > 0 ? (
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: {
+                        xs: '1fr',
+                        sm: 'repeat(2, minmax(0, 1fr))',
+                        md: 'repeat(3, minmax(0, 1fr))'
+                      },
+                      gap: 3,
+                      width: '100%',
+                      alignItems: 'stretch'
+                    }}
+                  >
+                    {filteredCourseLectures.map((item) => (
+                      <Card
+                        key={item.video_id}
+                        sx={{
+                          width: '100%',
+                          height: '100%',
+                          minWidth: 0,
+                          boxSizing: 'border-box',
+                          bgcolor: currentTheme.palette.cardBg,
+                          border: `1px solid ${currentTheme.palette.cardBorder}`,
+                          borderRadius: 3,
+                          boxShadow: currentTheme.palette.cardShadow,
+                          transition: 'all 0.2s ease-in-out',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          '&:hover': {
+                            transform: 'translateY(-4px)',
+                            borderColor: currentTheme.palette.primary,
+                            boxShadow: currentTheme.palette.cardHoverShadow
+                          }
+                        }}
+                      >
+                        <CardContent sx={{ flex: 1, p: 2.5, display: 'flex', flexDirection: 'column' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Chip
+                                label={`/lecture/${item.video_id}`}
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleTranscribe(item.video_url || item.video_id);
+                                }}
+                                title="Open dedicated lecture route"
+                                sx={{
+                                  fontFamily: 'monospace',
+                                  fontWeight: 700,
+                                  fontSize: '0.72rem',
+                                  bgcolor: currentTheme.palette.badgeBg,
+                                  color: currentTheme.palette.badgeColor,
+                                  border: `1px solid ${currentTheme.palette.badgeBorder}`,
+                                  cursor: 'pointer',
+                                  '&:hover': { opacity: 0.85 }
+                                }}
+                              />
+                            </Box>
+                            <Typography variant="caption" sx={{ color: '#64748b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Clock size={12} /> {formatRelativeTime(item.last_accessed_at || item.created_at)}
+                            </Typography>
+                          </Box>
 
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          {item.drive_folder_url && (
-                            <Tooltip title="Open in Google Drive">
-                              <IconButton
+                          <Typography
+                            variant="subtitle1"
+                            sx={{
+                              fontWeight: 700,
+                              color: currentTheme.palette.textPrimary,
+                              lineHeight: 1.4,
+                              mb: 1.5,
+                              minHeight: '2.8em',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                              cursor: 'pointer',
+                              '&:hover': { color: currentTheme.palette.primary }
+                            }}
+                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                          >
+                            {item.video_title || `Lecture ${item.video_id}`}
+                          </Typography>
+
+                          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 'auto' }}>
+                            {item.drive_folder_url ? (
+                              <Chip
+                                icon={<Folder size={13} color="#10b981" />}
+                                label="In Google Drive"
                                 size="small"
                                 component="a"
                                 href={item.drive_folder_url}
                                 target="_blank"
                                 rel="noreferrer"
-                                sx={{ color: '#10b981', '&:hover': { bgcolor: 'rgba(16, 185, 129, 0.1)' } }}
+                                clickable
+                                sx={{
+                                  bgcolor: 'rgba(16, 185, 129, 0.15)',
+                                  color: '#34d399',
+                                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                                  fontWeight: 600,
+                                  fontSize: '0.7rem'
+                                }}
+                              />
+                            ) : (
+                              <Chip
+                                label="Local / Database"
+                                size="small"
+                                sx={{
+                                  bgcolor: 'rgba(255, 255, 255, 0.05)',
+                                  color: '#94a3b8',
+                                  fontSize: '0.7rem'
+                                }}
+                              />
+                            )}
+                            <Chip
+                              label="Transcript Search"
+                              size="small"
+                              sx={{
+                                bgcolor: currentTheme.palette.badgeBg,
+                                color: currentTheme.palette.badgeColor,
+                                fontSize: '0.7rem',
+                                fontWeight: 600
+                              }}
+                            />
+                            <Chip
+                              label="AI Tutor"
+                              size="small"
+                              sx={{
+                                bgcolor: 'rgba(139, 92, 246, 0.1)',
+                                color: '#8b5cf6',
+                                fontSize: '0.7rem',
+                                fontWeight: 600
+                              }}
+                            />
+                          </Box>
+                        </CardContent>
+
+                        <Divider sx={{ borderColor: currentTheme.palette.cardBorder }} />
+
+                        <CardActions sx={{ p: 1.5, justifyContent: 'space-between' }}>
+                          <Button
+                            variant="contained"
+                            size="small"
+                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                            sx={{
+                              textTransform: 'none',
+                              fontWeight: 700,
+                              fontSize: '0.82rem',
+                              bgcolor: currentTheme.palette.accentCta,
+                              '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                            }}
+                          >
+                            Study Lecture →
+                          </Button>
+
+                          <Box sx={{ display: 'flex', gap: 0.5 }}>
+                            {item.drive_folder_url && (
+                              <Tooltip title="Open in Google Drive">
+                                <IconButton
+                                  size="small"
+                                  component="a"
+                                  href={item.drive_folder_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  sx={{ color: '#10b981', '&:hover': { bgcolor: 'rgba(16, 185, 129, 0.1)' } }}
+                                >
+                                  <ExternalLink size={16} />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                            <Tooltip title="Remove from My Library">
+                              <IconButton
+                                size="small"
+                                onClick={() => handleDeleteFromLibrary(item.video_id)}
+                                sx={{ color: '#64748b', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
                               >
-                                <ExternalLink size={16} />
+                                <Trash2 size={16} />
                               </IconButton>
                             </Tooltip>
-                          )}
-                          <Tooltip title="Remove from My Library">
-                            <IconButton
-                              size="small"
-                              onClick={() => handleDeleteFromLibrary(item.video_id)}
-                              sx={{ color: '#64748b', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
-                            >
-                              <Trash2 size={16} />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      </CardActions>
-                    </Card>
-                  ))}
-                </Box>
-
-              ) : (
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: 6,
-                    textAlign: 'center',
-                    bgcolor: currentTheme.palette.cardBg,
-                    border: `1px dashed ${currentTheme.palette.cardBorder}`,
-                    borderRadius: 3,
-                    boxShadow: currentTheme.palette.cardShadow
-                  }}
-                >
-                  <BookOpen size={48} color={currentTheme.palette.primary} style={{ margin: '0 auto 16px', opacity: 0.85 }} />
-                  <Typography variant="h6" sx={{ color: currentTheme.palette.textPrimary, fontWeight: 700, mb: 1 }}>
-                    {librarySearch ? 'No matching lectures found' : 'Your Lecture Library is Empty'}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 460, mx: 'auto', mb: 1 }}>
-                    {librarySearch
-                      ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new lecture URL above.`
-                      : 'Paste any lecture link in the quick-add bar above to transcribe, index into search and AI tutor, and start studying!'}
-                  </Typography>
-                </Paper>
+                          </Box>
+                        </CardActions>
+                      </Card>
+                    ))}
+                  </Box>
+                ) : (
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 6,
+                      textAlign: 'center',
+                      bgcolor: currentTheme.palette.cardBg,
+                      border: `1px dashed ${currentTheme.palette.cardBorder}`,
+                      borderRadius: 3,
+                      boxShadow: currentTheme.palette.cardShadow
+                    }}
+                  >
+                    <BookOpen size={48} color={currentTheme.palette.primary} style={{ margin: '0 auto 16px', opacity: 0.85 }} />
+                    <Typography variant="h6" sx={{ color: currentTheme.palette.textPrimary, fontWeight: 700, mb: 1 }}>
+                      No matching lectures in this course
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 460, mx: 'auto', mb: 2 }}>
+                      {librarySearch ? `No lectures matched "${librarySearch}".` : 'No lectures in this course yet.'}
+                    </Typography>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<ArrowLeft size={16} />}
+                      onClick={() => setSelectedCourse(null)}
+                      sx={{ textTransform: 'none', fontWeight: 600 }}
+                    >
+                      Back to All Courses
+                    </Button>
+                  </Paper>
+                )
               )}
             </Box>
           ) : (

@@ -8,9 +8,30 @@ No SQLite. No fallbacks.
 from __future__ import annotations
 
 import os
+import re
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from collections import OrderedDict
+
+def extract_course_name(title: str) -> str:
+    """Extract canonical course name from lecture title."""
+    if not title:
+        return "General Lectures"
+    t = title.strip()
+    # Remove dates in parentheses/brackets e.g. (18 / 9 / 2026), (18-09-2026), [25/09/2026]
+    t = re.sub(r'[\(\[\{]\s*\d{1,2}[\s/.\-]+\d{1,2}[\s/.\-]+\d{2,4}\s*[\)\]\}]', '', t)
+    # Match session, lecture, module, class, week dividers
+    pattern = r'(?i)\b(?:Live\s+Session|Session|Lecture|Module|Class|Week|Part|Episode)\b.*$'
+    match = re.search(pattern, t)
+    if match:
+        course_part = t[:match.start()].strip()
+    else:
+        course_part = re.sub(r'[\s\-:]+\d+\s*$', '', t).strip()
+    course_part = re.sub(r'[\s\-_:\|\/]+$', '', course_part).strip()
+    if len(course_part) >= 3:
+        return course_part
+    return title.strip()
 
 # Load environment variables
 try:
@@ -158,12 +179,23 @@ class RelationalDBManager:
                             EXCEPTION
                                 WHEN duplicate_column THEN RAISE NOTICE 'column web_sources_json already exists in lecturescribe_chat_logs.';
                             END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_user_library ADD COLUMN course_name VARCHAR(255);
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column course_name already exists in lecturescribe_user_library.';
+                            END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_videos ADD COLUMN course_name VARCHAR(255);
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column course_name already exists in lecturescribe_videos.';
+                            END;
                         END $$;
 
                         CREATE INDEX IF NOT EXISTS idx_pg_cues_vid ON lecturescribe_transcript_cues(video_id);
                         CREATE INDEX IF NOT EXISTS idx_pg_sum_vid ON lecturescribe_summaries(video_id);
                         CREATE INDEX IF NOT EXISTS idx_pg_chat_vid ON lecturescribe_chat_logs(video_id);
                         CREATE INDEX IF NOT EXISTS idx_pg_user_lib_email ON lecturescribe_user_library(user_email);
+                        CREATE INDEX IF NOT EXISTS idx_pg_user_lib_course ON lecturescribe_user_library(user_email, course_name);
                     """)
                     conn.commit()
             print("[PostgreSQL] Connection verified and schema initialized successfully.")
@@ -464,27 +496,30 @@ class RelationalDBManager:
         title: str,
         duration: str = "",
         source_url: str = "",
-        drive_folder_url: Optional[str] = None
+        drive_folder_url: Optional[str] = None,
+        course_name: Optional[str] = None
     ) -> bool:
-        """Upsert a lecture into the user's LMS library in PostgreSQL."""
+        """Upsert a lecture into the user's LMS library in PostgreSQL with course grouping."""
         if not user_email or not video_id:
             return False
 
         clean_email = user_email.strip().lower()
+        derived_course = (course_name or extract_course_name(title)).strip()
         conn = self._get_connection()
         try:
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, drive_folder_url, last_viewed_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        INSERT INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, drive_folder_url, course_name, last_viewed_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                         ON CONFLICT(user_email, video_id) DO UPDATE SET
                             title = EXCLUDED.title,
                             duration = COALESCE(NULLIF(EXCLUDED.duration, ''), lecturescribe_user_library.duration),
                             source_url = COALESCE(NULLIF(EXCLUDED.source_url, ''), lecturescribe_user_library.source_url),
                             drive_folder_url = COALESCE(EXCLUDED.drive_folder_url, lecturescribe_user_library.drive_folder_url),
+                            course_name = COALESCE(NULLIF(EXCLUDED.course_name, ''), lecturescribe_user_library.course_name),
                             last_viewed_at = NOW();
-                    """, (clean_email, video_id, title, duration, source_url, drive_folder_url))
+                    """, (clean_email, video_id, title, duration, source_url, drive_folder_url, derived_course))
                     conn.commit()
             return True
         finally:
@@ -506,12 +541,97 @@ class RelationalDBManager:
                         WHERE user_email IS NULL OR user_email = '';
                     """, (clean_email,))
                     cursor.execute("""
-                        INSERT INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, last_viewed_at)
-                        SELECT %s, video_id, title, duration, source_url, created_at
+                        INSERT INTO lecturescribe_user_library (user_email, video_id, title, duration, source_url, course_name, last_viewed_at)
+                        SELECT %s, video_id, title, duration, source_url, course_name, created_at
                         FROM lecturescribe_videos
                         ON CONFLICT (user_email, video_id) DO NOTHING;
                     """, (clean_email,))
                     conn.commit()
+        finally:
+            conn.close()
+
+    def backfill_missing_course_names(self):
+        """Backfill course_name for any library records or videos where course_name is NULL."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, title FROM lecturescribe_user_library WHERE course_name IS NULL OR course_name = '';
+                    """)
+                    lib_rows = cursor.fetchall() or []
+                    for r in lib_rows:
+                        c_name = extract_course_name(r["title"])
+                        cursor.execute("UPDATE lecturescribe_user_library SET course_name = %s WHERE id = %s;", (c_name, r["id"]))
+
+                    cursor.execute("""
+                        SELECT video_id, title FROM lecturescribe_videos WHERE course_name IS NULL OR course_name = '';
+                    """)
+                    vid_rows = cursor.fetchall() or []
+                    for r in vid_rows:
+                        c_name = extract_course_name(r["title"])
+                        cursor.execute("UPDATE lecturescribe_videos SET course_name = %s WHERE video_id = %s;", (c_name, r["video_id"]))
+                    conn.commit()
+        finally:
+            conn.close()
+
+    def get_user_courses(self, user_email: str) -> List[Dict[str, Any]]:
+        """
+        Group user library lectures by course_name.
+        Returns a list of course objects, each containing its aggregated lecture list.
+        """
+        if not user_email:
+            return []
+
+        clean_email = user_email.strip().lower()
+        self.auto_map_videos_to_user(clean_email)
+        self.backfill_missing_course_names()
+
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at, course_name
+                        FROM lecturescribe_user_library
+                        WHERE user_email = %s
+                        ORDER BY last_viewed_at DESC;
+                    """, (clean_email,))
+                    rows = cursor.fetchall() or []
+
+                    courses_map = OrderedDict()
+                    for r in rows:
+                        c_name = (r.get("course_name") or extract_course_name(r.get("title", ""))).strip()
+                        if not c_name:
+                            c_name = "General Lectures"
+
+                        if c_name not in courses_map:
+                            courses_map[c_name] = {
+                                "course_name": c_name,
+                                "lecture_count": 0,
+                                "latest_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                                "thumbnail_video_id": r["video_id"],
+                                "lectures": []
+                            }
+
+                        courses_map[c_name]["lecture_count"] += 1
+                        courses_map[c_name]["lectures"].append({
+                            "videoId": r["video_id"],
+                            "video_id": r["video_id"],
+                            "title": r["title"],
+                            "video_title": r["title"],
+                            "duration": r["duration"] or "Unknown",
+                            "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "driveFolderUrl": r["drive_folder_url"],
+                            "drive_folder_url": r["drive_folder_url"],
+                            "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                            "last_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                            "created_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                            "course_name": c_name
+                        })
+
+                    return list(courses_map.values())
         finally:
             conn.close()
 
@@ -522,13 +642,14 @@ class RelationalDBManager:
 
         clean_email = user_email.strip().lower()
         self.auto_map_videos_to_user(clean_email)
+        self.backfill_missing_course_names()
 
         conn = self._get_connection()
         try:
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at
+                        SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at, course_name
                         FROM lecturescribe_user_library
                         WHERE user_email = %s
                         ORDER BY last_viewed_at DESC;
@@ -548,6 +669,7 @@ class RelationalDBManager:
                             "lastViewedAt": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
                             "last_viewed_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
                             "created_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                            "course_name": r.get("course_name") or extract_course_name(r.get("title", "")),
                         }
                         for r in rows
                     ]

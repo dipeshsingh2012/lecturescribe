@@ -597,6 +597,7 @@ class UserLibraryRecordRequest(BaseModel):
     source_url: Optional[str] = ""
     video_url: Optional[str] = None
     drive_folder_url: Optional[str] = None
+    course_name: Optional[str] = None
 
 
 @app.get("/api/user/library")
@@ -606,6 +607,19 @@ def get_user_library(email: str = Query(..., description="User Google email")):
         raise HTTPException(status_code=400, detail="User email is required.")
     lectures = db_manager.get_user_library(email.strip())
     return {"status": "success", "lectures": lectures, "library": lectures, "count": len(lectures)}
+
+
+@app.get("/api/user/courses")
+def get_user_courses(
+    email: Optional[str] = Query(None, description="User Google email"),
+    user_email: Optional[str] = Query(None, description="User Google email alias")
+):
+    """Fetch user's saved LMS lectures grouped into Courses."""
+    target_email = (email or user_email or "").strip().lower()
+    if not target_email:
+        raise HTTPException(status_code=400, detail="email query parameter is required.")
+    courses = db_manager.get_user_courses(target_email)
+    return {"status": "success", "email": target_email, "count": len(courses), "courses": courses}
 
 
 @app.post("/api/user/library/record")
@@ -625,7 +639,8 @@ def record_user_lecture(req: UserLibraryRecordRequest):
         title=target_title,
         duration=target_duration,
         source_url=target_url,
-        drive_folder_url=req.drive_folder_url
+        drive_folder_url=req.drive_folder_url,
+        course_name=req.course_name
     )
     return {"status": "success" if success else "failed"}
 

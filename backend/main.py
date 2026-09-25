@@ -46,6 +46,7 @@ from backend.algolia_service import algolia_service
 from backend.database import db_manager
 from backend.google_drive_service import google_drive_service
 from backend.summary_generator import generate_summary_sections
+from backend.redis_service import redis_cache
 
 
 
@@ -124,6 +125,7 @@ class ChatRequest(BaseModel):
     user_email: Optional[str] = None
     model_id: Optional[str] = None
     enable_web_search: Optional[bool] = True
+    bypass_cache: Optional[bool] = False
 
 class RAGQueryRequest(BaseModel):
     query: str
@@ -134,6 +136,7 @@ class RAGQueryRequest(BaseModel):
     user_email: Optional[str] = None
     model_id: Optional[str] = None
     enable_web_search: Optional[bool] = True
+    bypass_cache: Optional[bool] = False
 
 class SubmissionRequest(BaseModel):
     original_text: str
@@ -158,13 +161,15 @@ def health_check():
     algolia_idx = getattr(algolia_service, "index_name", "lecturescribe_transcripts_v1")
     pinecone_idx = getattr(pinecone_rag_engine, "index_name", "lecturescribe-rag-index")
     pinecone_ns = getattr(pinecone_rag_engine, "namespace", "lecturescribe_v1")
+    redis_info = redis_cache.get_status() if redis_cache else {"status": "Not configured"}
     return {
         "status": "ok",
         "service": "lecturescribe-triad-api",
         "database": db_status,
         "algolia_index": algolia_idx,
         "pinecone_index": pinecone_idx,
-        "pinecone_namespace": pinecone_ns
+        "pinecone_namespace": pinecone_ns,
+        "redis_cache": redis_info
     }
 
 @app.get("/api/lecture/{video_id}")
@@ -292,7 +297,16 @@ def rag_query(req: RAGQueryRequest):
     print(f"📥 [API /api/rag/query] === Incoming RAG Query ===")
     print(f"   Query: '{req.query}'")
     print(f"   Video ID: '{req.video_id}' | Title: '{req.video_title or 'Auto'}' | Model: '{req.model_id or 'auto'}'")
-    print(f"   Top K: {req.top_k} | Web Search Enabled: {req.enable_web_search}")
+    print(f"   Top K: {req.top_k} | Web Search Enabled: {req.enable_web_search} | Bypass Cache: {req.bypass_cache}")
+
+    # 1. Check Hosted Redis Cache First
+    if not req.bypass_cache and req.video_id and redis_cache:
+        cached_result = redis_cache.get_query(req.video_id, req.query, req.model_id or "")
+        if cached_result:
+            elapsed = time.time() - t_start
+            print(f"⚡ [API /api/rag/query Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
+            print("=" * 60 + "\n")
+            return cached_result
 
     try:
         result = pinecone_rag_engine.query_rag(
@@ -351,6 +365,10 @@ def rag_query(req: RAGQueryRequest):
         except Exception as e:
             print(f"⚠️ [Chat Log Notice]: {e}")
 
+    # 2. Store in Hosted Redis Cache
+    if req.video_id and redis_cache:
+        redis_cache.set_query(req.video_id, req.query, req.model_id or "", result)
+
     elapsed = time.time() - t_start
     print(f"✅ [API /api/rag/query] Completed in {elapsed:.2f}s | Citations: {len(result.get('citations', []))} | Model: {result.get('model')}")
     print("=" * 60 + "\n")
@@ -370,7 +388,24 @@ def chat_with_transcript(req: ChatRequest):
     t_start = time.time()
     print("\n" + "=" * 60)
     print(f"📥 [API /api/chat] === Incoming Chat Query ===")
-    print(f"   Message: '{user_prompt}' | Video ID: '{video_id}' | Title: '{title}'")
+    print(f"   Message: '{user_prompt}' | Video ID: '{video_id}' | Title: '{title}' | Bypass Cache: {req.bypass_cache}")
+
+    # 1. Check Hosted Redis Cache First
+    if not req.bypass_cache and video_id and video_id != "active" and redis_cache:
+        cached_result = redis_cache.get_query(video_id, user_prompt, req.model_id or "")
+        if cached_result:
+            elapsed = time.time() - t_start
+            print(f"⚡ [API /api/chat Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
+            print("=" * 60 + "\n")
+            return {
+                "reply": cached_result.get("answer", ""),
+                "citations": cached_result.get("citations", []),
+                "web_sources": cached_result.get("web_sources", []),
+                "model": cached_result.get("model", ""),
+                "submission_text": cached_result.get("submission_text", ""),
+                "submission_word_count": cached_result.get("submission_word_count", 0),
+                "cached": True
+            }
 
     if req.cues is not None and len(req.cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
         pinecone_rag_engine.ingest_transcript(video_id, title, req.cues)
@@ -426,6 +461,20 @@ def chat_with_transcript(req: ChatRequest):
     except Exception as e:
         print(f"⚠️ [Chat Log Notice]: {e}")
 
+    # 2. Store in Hosted Redis Cache
+    if video_id and video_id != "active" and redis_cache:
+        cache_data = {
+            "answer": reply,
+            "citations": citations,
+            "web_sources": rag_res.get("web_sources", []),
+            "model": rag_res.get("model", ""),
+            "submission_text": sub_text,
+            "submission_word_count": sub_word_count,
+            "lecture_title": title,
+            "video_id": video_id
+        }
+        redis_cache.set_query(video_id, user_prompt, req.model_id or "", cache_data)
+
     elapsed = time.time() - t_start
     print(f"✅ [API /api/chat] Completed in {elapsed:.2f}s | Citations: {len(citations)} | Model: {rag_res.get('model')}")
     print("=" * 60 + "\n")
@@ -472,6 +521,10 @@ def regenerate_summary(req: RegenerateSummaryRequest):
 
     # Persist updated dynamic summary to PostgreSQL
     db_manager.update_summary_sections(video_id, new_summary)
+
+    # Invalidate Redis cache for this video
+    if redis_cache:
+        redis_cache.invalidate_video(video_id)
 
     return {
         "status": "success",

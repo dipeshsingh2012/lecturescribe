@@ -12,6 +12,9 @@ requests>=2.31.0
 # Relational Database (Cloud PostgreSQL / Neon DB)
 psycopg2-binary>=2.9.9
 
+# Distributed Caching (Hosted Redis Cloud / Upstash)
+redis>=5.0.0
+
 # Search & Vector RAG Triad Services
 algoliasearch>=4.0.0,<5.0.0
 pinecone>=3.0.0

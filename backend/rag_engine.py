@@ -56,6 +56,11 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
+try:
+    from backend.redis_service import redis_cache
+except ImportError:
+    redis_cache = None
+
 
 class Llama3PineconeRAGStore:
     """RAG Engine powered by Llama-3.2-3B-Instruct + Pinecone Vector Database."""
@@ -433,9 +438,21 @@ class Llama3PineconeRAGStore:
         """
         citations = []
         web_sources = []
+        vid_cache = target_video_id or str(arguments.get("video_id", "")).strip()
+
+        # Check Redis tool cache for deterministic transcript tools
+        if redis_cache and vid_cache and tool_name in ("get_lecture_outline", "get_transcript_window", "search_transcript"):
+            cached_pkg_str = redis_cache.get_tool(vid_cache, tool_name, arguments)
+            if cached_pkg_str:
+                try:
+                    pkg = json.loads(cached_pkg_str)
+                    print(f"    ⚡ [Tool Cache HIT] '{tool_name}' returned from Hosted Redis in 0ms")
+                    return pkg.get("result", ""), pkg.get("citations", []), pkg.get("web_sources", [])
+                except Exception:
+                    pass
 
         if tool_name == "get_lecture_outline":
-            vid = target_video_id or str(arguments.get("video_id", "")).strip()
+            vid = vid_cache
             if not vid:
                 raise ValueError("get_lecture_outline requires a valid video_id.")
             print(f"    🔧 [Tool: get_lecture_outline] Retrieving syllabus roadmap for video '{vid}'")
@@ -469,14 +486,17 @@ class Llama3PineconeRAGStore:
                     "timestamp": f"{start_t} - {end_t}",
                     "takeaways": points
                 })
-            return json.dumps(formatted), citations, web_sources
+            res_str = json.dumps(formatted)
+            if redis_cache and vid_cache:
+                redis_cache.set_tool(vid_cache, tool_name, arguments, json.dumps({"result": res_str, "citations": citations, "web_sources": web_sources}))
+            return res_str, citations, web_sources
 
         elif tool_name == "search_transcript":
             query = str(arguments.get("query", "")).strip()
             if not query:
                 raise ValueError("search_transcript requires a non-empty query.")
             top_k = int(arguments.get("top_k", 5))
-            vid = target_video_id or str(arguments.get("video_id", "")).strip()
+            vid = vid_cache
             print(f"    🔧 [Tool: search_transcript] Hybrid search for: '{query}' (video='{vid}', top_k={top_k})")
 
             pinecone_matches = []
@@ -531,12 +551,15 @@ class Llama3PineconeRAGStore:
                     "text": txt[:120] + "..."
                 })
                 out.append({"timestamp": f"[{st} - {et}]", "text": txt})
-            return json.dumps(out), citations, web_sources
+            res_str = json.dumps(out)
+            if redis_cache and vid_cache:
+                redis_cache.set_tool(vid_cache, tool_name, arguments, json.dumps({"result": res_str, "citations": citations, "web_sources": web_sources}))
+            return res_str, citations, web_sources
 
         elif tool_name == "get_transcript_window":
             st = str(arguments.get("start_time", "00:00")).strip()
             et = str(arguments.get("end_time", "00:00")).strip()
-            vid = target_video_id or str(arguments.get("video_id", "")).strip()
+            vid = vid_cache
             print(f"    🔧 [Tool: get_transcript_window] Fetching dialogue slice: [{st} - {et}] (video='{vid}')")
 
             st_sec = self._parse_timestamp(st)
@@ -560,7 +583,10 @@ class Llama3PineconeRAGStore:
                 "end_time": et,
                 "text": dialogue[:120] + "..."
             })
-            return json.dumps({"start_time": st, "end_time": et, "transcript": dialogue}), citations, web_sources
+            res_str = json.dumps({"start_time": st, "end_time": et, "transcript": dialogue})
+            if redis_cache and vid_cache:
+                redis_cache.set_tool(vid_cache, tool_name, arguments, json.dumps({"result": res_str, "citations": citations, "web_sources": web_sources}))
+            return res_str, citations, web_sources
 
         elif tool_name == "search_web_context":
             sq = str(arguments.get("search_query", "")).strip()

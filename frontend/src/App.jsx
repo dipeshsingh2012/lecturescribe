@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Player from '@vimeo/player';
 import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
   Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut,
-  Trash2, Clock, BookOpen
+  Trash2, Clock, BookOpen, Palette
 } from 'lucide-react';
 
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -29,27 +29,158 @@ import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
 import InputBase from '@mui/material/InputBase';
 
-const darkTheme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: { main: '#00adef' },
-    secondary: { main: '#8b5cf6' },
-    background: {
-      default: '#0b1120',
-      paper: '#1e293b',
-    },
-    text: {
-      primary: '#f8fafc',
-      secondary: '#94a3b8',
-    },
+export const LMS_THEMES = {
+  iiitdwd: {
+    id: 'iiitdwd',
+    name: 'IIIT Dharwad BAZ',
+    icon: '🏛️',
+    badge: 'Default • Official IIITD Portal',
+    palette: {
+      primary: '#0075ED',
+      primaryHover: '#005ec0',
+      primaryNavy: '#022758',
+      secondary: '#027654',
+      accentCta: '#0642CD',
+      background: '#070c18',
+      panelBg: '#0e172a',
+      cardBg: '#131e36',
+      cardBorder: 'rgba(0, 117, 237, 0.28)',
+      cardShadow: '0 1px 3px rgba(2, 39, 88, 0.08), 0 8px 24px rgba(2, 39, 88, 0.06)',
+      cardHoverShadow: '0 8px 28px rgba(2, 39, 88, 0.55), 0 16px 36px rgba(0, 117, 237, 0.25)',
+      headerGradient: 'linear-gradient(120deg, #022758 0%, #011b3e 55%, #0642CD 130%)',
+      textPrimary: '#f8fafc',
+      textSecondary: '#94a3b8',
+      badgeBg: 'rgba(2, 39, 88, 0.85)',
+      badgeBorder: 'rgba(0, 117, 237, 0.4)',
+      badgeColor: '#99CBFF'
+    }
   },
-  typography: {
-    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  canvas: {
+    id: 'canvas',
+    name: 'Canvas LMS',
+    icon: '🎓',
+    badge: 'Instructure • Higher-Ed',
+    palette: {
+      primary: '#E02424',
+      primaryHover: '#b91c1c',
+      primaryNavy: '#821313',
+      secondary: '#008EE2',
+      accentCta: '#E02424',
+      background: '#0b0f14',
+      panelBg: '#161c24',
+      cardBg: '#1e2530',
+      cardBorder: 'rgba(224, 36, 36, 0.28)',
+      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
+      cardHoverShadow: '0 8px 30px rgba(224, 36, 36, 0.35)',
+      headerGradient: 'linear-gradient(120deg, #821313 0%, #4c0b0b 55%, #1F2937 130%)',
+      textPrimary: '#f9fafb',
+      textSecondary: '#9ca3af',
+      badgeBg: 'rgba(224, 36, 36, 0.18)',
+      badgeBorder: 'rgba(224, 36, 36, 0.4)',
+      badgeColor: '#fca5a5'
+    }
   },
-  shape: {
-    borderRadius: 10,
+  moodle_boost: {
+    id: 'moodle_boost',
+    name: 'Moodle Classic',
+    icon: '🧡',
+    badge: 'Open-Source • Boost',
+    palette: {
+      primary: '#F98012',
+      primaryHover: '#ea6d00',
+      primaryNavy: '#0F6CBF',
+      secondary: '#10b981',
+      accentCta: '#F98012',
+      background: '#0b1016',
+      panelBg: '#121922',
+      cardBg: '#172230',
+      cardBorder: 'rgba(249, 128, 18, 0.28)',
+      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
+      cardHoverShadow: '0 8px 30px rgba(249, 128, 18, 0.3)',
+      headerGradient: 'linear-gradient(120deg, #0F6CBF 0%, #083c6c 55%, #F98012 135%)',
+      textPrimary: '#f8fafc',
+      textSecondary: '#94a3b8',
+      badgeBg: 'rgba(249, 128, 18, 0.18)',
+      badgeBorder: 'rgba(249, 128, 18, 0.4)',
+      badgeColor: '#fdba74'
+    }
   },
-});
+  blackboard: {
+    id: 'blackboard',
+    name: 'Blackboard Ultra',
+    icon: '⚡',
+    badge: 'Blackboard • Enterprise',
+    palette: {
+      primary: '#EAB308',
+      primaryHover: '#ca8a04',
+      primaryNavy: '#27272A',
+      secondary: '#06B6D4',
+      accentCta: '#CA8A04',
+      background: '#09090b',
+      panelBg: '#141416',
+      cardBg: '#1f1f23',
+      cardBorder: 'rgba(234, 179, 8, 0.28)',
+      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.5)',
+      cardHoverShadow: '0 8px 30px rgba(234, 179, 8, 0.3)',
+      headerGradient: 'linear-gradient(120deg, #27272A 0%, #18181B 60%, #854D0E 130%)',
+      textPrimary: '#fafafa',
+      textSecondary: '#a1a1aa',
+      badgeBg: 'rgba(234, 179, 8, 0.15)',
+      badgeBorder: 'rgba(234, 179, 8, 0.4)',
+      badgeColor: '#fef08a'
+    }
+  },
+  coursera: {
+    id: 'coursera',
+    name: 'Coursera / edX',
+    icon: '🌐',
+    badge: 'MOOC • Modern Learning',
+    palette: {
+      primary: '#0056D2',
+      primaryHover: '#0042a3',
+      primaryNavy: '#002f6c',
+      secondary: '#00875A',
+      accentCta: '#0056D2',
+      background: '#070d17',
+      panelBg: '#0e1624',
+      cardBg: '#141d2d',
+      cardBorder: 'rgba(0, 86, 210, 0.28)',
+      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
+      cardHoverShadow: '0 8px 30px rgba(0, 86, 210, 0.35)',
+      headerGradient: 'linear-gradient(120deg, #002f6c 0%, #001f48 55%, #0056D2 130%)',
+      textPrimary: '#f8fafc',
+      textSecondary: '#94a3b8',
+      badgeBg: 'rgba(0, 86, 210, 0.18)',
+      badgeBorder: 'rgba(0, 86, 210, 0.4)',
+      badgeColor: '#93c5fd'
+    }
+  },
+  vimeo_dark: {
+    id: 'vimeo_dark',
+    name: 'Vimeo Studio AI',
+    icon: '🌌',
+    badge: 'LectureScribe • Midnight',
+    palette: {
+      primary: '#00adef',
+      primaryHover: '#0095ce',
+      primaryNavy: '#005b82',
+      secondary: '#8b5cf6',
+      accentCta: '#00adef',
+      background: '#0b1120',
+      panelBg: '#181920',
+      cardBg: '#1e293b',
+      cardBorder: 'rgba(0, 173, 239, 0.25)',
+      cardShadow: '0 4px 18px rgba(0, 0, 0, 0.45)',
+      cardHoverShadow: '0 8px 30px rgba(0, 173, 239, 0.35)',
+      headerGradient: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%)',
+      textPrimary: '#f8fafc',
+      textSecondary: '#94a3b8',
+      badgeBg: 'rgba(0, 173, 239, 0.15)',
+      badgeBorder: 'rgba(0, 173, 239, 0.35)',
+      badgeColor: '#00adef'
+    }
+  }
+};
 
 const formatRelativeTime = (dateStr) => {
   if (!dateStr) return 'Recently';
@@ -187,11 +318,60 @@ export default function App() {
   const [librarySearch, setLibrarySearch] = useState('');
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
 
+  // LMS Theme State (Default: IIIT Dharwad BAZ Theme)
+  const [currentThemeId, setCurrentThemeId] = useState(() => {
+    try {
+      return localStorage.getItem('lecturescribe_theme') || 'iiitdwd';
+    } catch {
+      return 'iiitdwd';
+    }
+  });
+  const [themeMenuAnchor, setThemeMenuAnchor] = useState(null);
+
+  const currentTheme = LMS_THEMES[currentThemeId] || LMS_THEMES.iiitdwd;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('lecturescribe_theme', currentThemeId);
+    } catch {}
+    const p = currentTheme.palette;
+    document.documentElement.style.setProperty('--vimeo-blue', p.primary);
+    document.documentElement.style.setProperty('--vimeo-hover', p.primaryHover || p.primary);
+    document.documentElement.style.setProperty('--bg-dark', p.background);
+    document.documentElement.style.setProperty('--panel-bg', p.panelBg);
+    document.documentElement.style.setProperty('--card-bg', p.cardBg);
+    document.documentElement.style.setProperty('--border-color', p.cardBorder);
+    document.documentElement.style.setProperty('--text-primary', p.textPrimary);
+    document.documentElement.style.setProperty('--text-secondary', p.textSecondary);
+  }, [currentThemeId, currentTheme]);
+
+  const muiTheme = useMemo(() => createTheme({
+    palette: {
+      mode: 'dark',
+      primary: { main: currentTheme.palette.primary },
+      secondary: { main: currentTheme.palette.secondary },
+      background: {
+        default: currentTheme.palette.background,
+        paper: currentTheme.palette.cardBg,
+      },
+      text: {
+        primary: currentTheme.palette.textPrimary,
+        secondary: currentTheme.palette.textSecondary,
+      },
+    },
+    typography: {
+      fontFamily: '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    },
+    shape: {
+      borderRadius: 12,
+    },
+  }), [currentTheme]);
+
   const fetchUserLibrary = async (email) => {
-    if (!email) return;
     setLibraryLoading(true);
     try {
-      const res = await fetch(`/api/user/library?email=${encodeURIComponent(email)}`);
+      const url = email ? `/api/user/library?email=${encodeURIComponent(email)}` : '/api/user/library';
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         const list = data.library || data.lectures || [];
@@ -205,9 +385,10 @@ export default function App() {
   };
 
   const handleDeleteFromLibrary = async (videoId) => {
-    if (!googleUser?.email || !videoId) return;
+    if (!videoId) return;
     try {
-      const res = await fetch(`/api/user/library/${videoId}?email=${encodeURIComponent(googleUser.email)}`, {
+      const emailParam = googleUser?.email ? `?email=${encodeURIComponent(googleUser.email)}` : '';
+      const res = await fetch(`/api/user/library/${videoId}${emailParam}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -218,13 +399,9 @@ export default function App() {
     }
   };
 
-  // Automatically fetch library when signed in
+  // Automatically fetch library on mount and when signed in
   useEffect(() => {
-    if (googleUser?.email) {
-      fetchUserLibrary(googleUser.email);
-    } else {
-      setUserLibrary([]);
-    }
+    fetchUserLibrary(googleUser?.email);
   }, [googleUser?.email]);
 
   // Load Google Drive Status on initial mount to get Client ID early for top-right sign-in
@@ -935,7 +1112,7 @@ export default function App() {
   });
 
   return (
-    <ThemeProvider theme={darkTheme}>
+    <ThemeProvider theme={muiTheme}>
       <CssBaseline />
       <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg-dark)', color: 'var(--text-primary)' }}>
         
@@ -1071,6 +1248,110 @@ export default function App() {
                 </Button>
               </>
             )}
+
+            {/* LMS Theme Selector */}
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Palette size={15} color={currentTheme.palette.primary} />}
+              onClick={(e) => setThemeMenuAnchor(e.currentTarget)}
+              sx={{
+                textTransform: 'none',
+                borderColor: currentTheme.palette.cardBorder,
+                bgcolor: 'rgba(255, 255, 255, 0.05)',
+                color: currentTheme.palette.textPrimary,
+                fontWeight: 600,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                px: 1.4,
+                py: 0.5,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.6,
+                '&:hover': {
+                  borderColor: currentTheme.palette.primary,
+                  bgcolor: 'rgba(255, 255, 255, 0.1)'
+                }
+              }}
+            >
+              <span>{currentTheme.icon}</span>
+              <Typography variant="caption" sx={{ fontWeight: 700, display: { xs: 'none', sm: 'inline' } }}>
+                {currentTheme.name}
+              </Typography>
+            </Button>
+
+            <Menu
+              anchorEl={themeMenuAnchor}
+              open={Boolean(themeMenuAnchor)}
+              onClose={() => setThemeMenuAnchor(null)}
+              PaperProps={{
+                sx: {
+                  bgcolor: currentTheme.palette.panelBg,
+                  border: `1px solid ${currentTheme.palette.cardBorder}`,
+                  borderRadius: 3,
+                  boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+                  minWidth: 270,
+                  p: 0.5
+                }
+              }}
+            >
+              <Box sx={{ px: 2, py: 1.2, borderBottom: '1px solid rgba(255, 255, 255, 0.08)', mb: 0.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Palette size={16} color={currentTheme.palette.primary} /> LMS Theme Selector
+                </Typography>
+                <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
+                  Standard LMS palettes & campus themes
+                </Typography>
+              </Box>
+
+              {Object.values(LMS_THEMES).map((thm) => {
+                const isSelected = thm.id === currentThemeId;
+                return (
+                  <MenuItem
+                    key={thm.id}
+                    onClick={() => {
+                      setCurrentThemeId(thm.id);
+                      setThemeMenuAnchor(null);
+                    }}
+                    selected={isSelected}
+                    sx={{
+                      borderRadius: 2,
+                      mx: 0.5,
+                      my: 0.3,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      bgcolor: isSelected ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+                      '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.12)' }
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                      <span style={{ fontSize: '1.2rem' }}>{thm.icon}</span>
+                      <Box>
+                        <Typography variant="body2" sx={{ fontWeight: isSelected ? 800 : 600, color: '#f8fafc' }}>
+                          {thm.name}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', fontSize: '0.72rem' }}>
+                          {thm.badge}
+                        </Typography>
+                      </Box>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                      <Box
+                        sx={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: '50%',
+                          bgcolor: thm.palette.primary,
+                          border: '2px solid rgba(255, 255, 255, 0.4)'
+                        }}
+                      />
+                      {isSelected && <Check size={16} color={thm.palette.primary} />}
+                    </Box>
+                  </MenuItem>
+                );
+              })}
+            </Menu>
 
             {/* Top-Right Google Sign-In or User Profile Menu */}
             {!googleUser ? (
@@ -1231,29 +1512,30 @@ export default function App() {
                   p: { xs: 2.5, md: 3 },
                   mb: 4,
                   borderRadius: 3,
-                  background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  background: currentTheme.palette.headerGradient,
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
                   display: 'flex',
                   flexDirection: { xs: 'column', md: 'row' },
                   alignItems: { xs: 'flex-start', md: 'center' },
                   justifyContent: 'space-between',
-                  gap: 2
+                  gap: 2,
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.25)'
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                   <Avatar
                     src={googleUser.picture}
                     alt={googleUser.name}
-                    sx={{ width: 56, height: 56, bgcolor: '#00adef', fontWeight: 800, fontSize: '1.4rem' }}
+                    sx={{ width: 56, height: 56, bgcolor: currentTheme.palette.primary, fontWeight: 800, fontSize: '1.4rem' }}
                   >
                     {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
                   </Avatar>
                   <Box>
-                    <Typography variant="h5" sx={{ fontWeight: 800, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
                       Welcome back, {googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')}! 🎓
                     </Typography>
-                    <Typography variant="body2" sx={{ color: '#94a3b8', mt: 0.5 }}>
-                      Personal Learning Management System • Verified Study History & Cloud Backups
+                    <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.78)', mt: 0.5 }}>
+                      {currentTheme.name} • Verified Study History & Cloud Backups
                     </Typography>
                   </Box>
                 </Box>
@@ -1264,28 +1546,30 @@ export default function App() {
                     sx={{
                       px: 2.5,
                       py: 1.2,
-                      borderRadius: 2,
-                      bgcolor: 'rgba(0, 173, 239, 0.1)',
-                      border: '1px solid rgba(0, 173, 239, 0.25)',
+                      borderRadius: 2.5,
+                      bgcolor: 'rgba(255, 255, 255, 0.12)',
+                      backdropFilter: 'blur(8px)',
+                      border: '1px solid rgba(255, 255, 255, 0.18)',
                       textAlign: 'center'
                     }}
                   >
-                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
-                    <Typography variant="h6" sx={{ color: '#00adef', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
+                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.8)', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
+                    <Typography variant="h6" sx={{ color: '#ffffff', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
                   </Paper>
                   <Paper
                     elevation={0}
                     sx={{
                       px: 2.5,
                       py: 1.2,
-                      borderRadius: 2,
-                      bgcolor: 'rgba(16, 185, 129, 0.1)',
-                      border: '1px solid rgba(16, 185, 129, 0.25)',
+                      borderRadius: 2.5,
+                      bgcolor: 'rgba(255, 255, 255, 0.12)',
+                      backdropFilter: 'blur(8px)',
+                      border: '1px solid rgba(255, 255, 255, 0.18)',
                       textAlign: 'center'
                     }}
                   >
-                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
-                    <Typography variant="h6" sx={{ color: '#10b981', fontWeight: 800, lineHeight: 1 }}>
+                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.8)', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
+                    <Typography variant="h6" sx={{ color: '#34d399', fontWeight: 800, lineHeight: 1 }}>
                       {userLibrary.filter(x => x.drive_folder_url).length}
                     </Typography>
                   </Paper>
@@ -1420,26 +1704,504 @@ export default function App() {
 
               {/* Cards Grid */}
               {filteredLibrary.length > 0 ? (
-                <Grid container spacing={2.5}>
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: {
+                      xs: '1fr',
+                      sm: 'repeat(2, minmax(0, 1fr))',
+                      md: 'repeat(3, minmax(0, 1fr))'
+                    },
+                    gap: 3,
+                    width: '100%',
+                    alignItems: 'stretch'
+                  }}
+                >
                   {filteredLibrary.map((item) => (
-                    <Grid item xs={12} sm={6} md={4} key={item.video_id}>
+                    <Card
+                      key={item.video_id}
+                      sx={{
+                        width: '100%',
+                        height: '100%',
+                        minWidth: 0,
+                        boxSizing: 'border-box',
+                        bgcolor: currentTheme.palette.cardBg,
+                        border: `1px solid ${currentTheme.palette.cardBorder}`,
+                        borderRadius: 3,
+                        boxShadow: currentTheme.palette.cardShadow,
+                        transition: 'all 0.2s ease-in-out',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        '&:hover': {
+                          transform: 'translateY(-4px)',
+                          borderColor: currentTheme.palette.primary,
+                          boxShadow: currentTheme.palette.cardHoverShadow
+                        }
+                      }}
+                    >
+                      <CardContent sx={{ flex: 1, p: 2.5, display: 'flex', flexDirection: 'column' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Chip
+                              label={`/lecture/${item.video_id}`}
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleTranscribe(item.video_url || item.video_id);
+                              }}
+                              title="Open dedicated lecture route"
+                              sx={{
+                                fontFamily: 'monospace',
+                                fontWeight: 700,
+                                fontSize: '0.72rem',
+                                bgcolor: currentTheme.palette.badgeBg,
+                                color: currentTheme.palette.badgeColor,
+                                border: `1px solid ${currentTheme.palette.badgeBorder}`,
+                                cursor: 'pointer',
+                                '&:hover': { opacity: 0.85 }
+                              }}
+                            />
+                          </Box>
+                          <Typography variant="caption" sx={{ color: '#64748b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Clock size={12} /> {formatRelativeTime(item.last_accessed_at || item.created_at)}
+                          </Typography>
+                        </Box>
+
+                        <Typography
+                          variant="subtitle1"
+                          sx={{
+                            fontWeight: 700,
+                            color: currentTheme.palette.textPrimary,
+                            lineHeight: 1.4,
+                            mb: 1.5,
+                            minHeight: '2.8em',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                            cursor: 'pointer',
+                            '&:hover': { color: currentTheme.palette.primary }
+                          }}
+                          onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                        >
+                          {item.video_title || `Vimeo Lecture ${item.video_id}`}
+                        </Typography>
+
+                        <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 'auto' }}>
+                          {item.drive_folder_url ? (
+                            <Chip
+                              icon={<Folder size={13} color="#10b981" />}
+                              label="In Google Drive"
+                              size="small"
+                              component="a"
+                              href={item.drive_folder_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              clickable
+                              sx={{
+                                bgcolor: 'rgba(16, 185, 129, 0.15)',
+                                color: '#34d399',
+                                border: '1px solid rgba(16, 185, 129, 0.3)',
+                                fontWeight: 600,
+                                fontSize: '0.7rem'
+                              }}
+                            />
+                          ) : (
+                            <Chip
+                              label="Local / Database"
+                              size="small"
+                              sx={{
+                                bgcolor: 'rgba(255, 255, 255, 0.05)',
+                                color: '#94a3b8',
+                                fontSize: '0.7rem'
+                              }}
+                            />
+                          )}
+                          <Chip
+                            label="Algolia Search"
+                            size="small"
+                            sx={{
+                              bgcolor: 'rgba(0, 173, 239, 0.1)',
+                              color: '#00adef',
+                              fontSize: '0.7rem'
+                            }}
+                          />
+                          <Chip
+                            label="Pinecone RAG"
+                            size="small"
+                            sx={{
+                              bgcolor: 'rgba(139, 92, 246, 0.1)',
+                              color: '#a78bfa',
+                              fontSize: '0.7rem'
+                            }}
+                          />
+                        </Box>
+                      </CardContent>
+
+                      <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.06)' }} />
+
+                      <CardActions sx={{ p: 1.5, justifyContent: 'space-between' }}>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                          sx={{
+                            textTransform: 'none',
+                            fontWeight: 700,
+                            fontSize: '0.82rem',
+                            bgcolor: currentTheme.palette.accentCta,
+                            '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                          }}
+                        >
+                          Study Lecture →
+                        </Button>
+
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                          {item.drive_folder_url && (
+                            <Tooltip title="Open in Google Drive">
+                              <IconButton
+                                size="small"
+                                component="a"
+                                href={item.drive_folder_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                sx={{ color: '#10b981', '&:hover': { bgcolor: 'rgba(16, 185, 129, 0.1)' } }}
+                              >
+                                <ExternalLink size={16} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          <Tooltip title="Remove from My Library">
+                            <IconButton
+                              size="small"
+                              onClick={() => handleDeleteFromLibrary(item.video_id)}
+                              sx={{ color: '#64748b', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
+                            >
+                              <Trash2 size={16} />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      </CardActions>
+                    </Card>
+                  ))}
+                </Box>
+
+              ) : (
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 6,
+                    textAlign: 'center',
+                    bgcolor: '#1e293b',
+                    border: '1px dashed rgba(255, 255, 255, 0.15)',
+                    borderRadius: 3
+                  }}
+                >
+                  <BookOpen size={48} color="#00adef" style={{ margin: '0 auto 16px', opacity: 0.8 }} />
+                  <Typography variant="h6" sx={{ color: '#f8fafc', fontWeight: 700, mb: 1 }}>
+                    {librarySearch ? 'No matching lectures found' : 'Your Lecture Library is Empty'}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: '#94a3b8', maxWidth: 460, mx: 'auto', mb: 3 }}>
+                    {librarySearch
+                      ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new Vimeo URL above.`
+                      : 'Paste any Vimeo lecture link in the quick-add bar above to transcribe, index into Algolia and Pinecone, and start studying!'}
+                  </Typography>
+                  {!librarySearch && (
+                    <Button
+                      variant="outlined"
+                      onClick={() => {
+                        setUrlInput('https://vimeo.com/1229247139');
+                        handleTranscribe('https://vimeo.com/1229247139');
+                      }}
+                      sx={{
+                        textTransform: 'none',
+                        borderColor: '#00adef',
+                        color: '#00adef',
+                        fontWeight: 600,
+                        borderRadius: 2
+                      }}
+                    >
+                      Load Sample Lecture (#1229247139)
+                    </Button>
+                  )}
+                </Paper>
+              )}
+            </Box>
+          ) : (
+            /* ================= FLOW 2: GUEST / NON-SIGNED-IN SCREEN ================= */
+            <div className="fade-in" style={{
+              maxWidth: '1200px',
+              margin: '40px auto 60px',
+              padding: '0 24px',
+              textAlign: 'center'
+            }}>
+              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  background: 'rgba(0, 173, 239, 0.1)',
+                  border: '1px solid rgba(0, 173, 239, 0.3)',
+                  padding: '6px 16px',
+                  borderRadius: '20px',
+                  color: 'var(--vimeo-blue)',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  marginBottom: '24px'
+                }}>
+                  <Zap size={16} /> Triad Engine: Postgres + Algolia Instant Search + Pinecone RAG
+                </div>
+
+                <h1 style={{
+                  fontSize: '2.8rem',
+                  fontWeight: 800,
+                  lineHeight: 1.2,
+                  letterSpacing: '-1px',
+                  marginBottom: '16px'
+                }}>
+                  Vimeo Transcripts & Video AI <br />
+                  <span style={{ color: 'var(--vimeo-blue)' }}>Algolia Search + Pinecone RAG</span>
+                </h1>
+
+                <p style={{
+                  color: 'var(--text-secondary)',
+                  fontSize: '1.1rem',
+                  maxWidth: '600px',
+                  margin: '0 auto 28px',
+                  lineHeight: 1.6
+                }}>
+                  Paste any Vimeo video link. Algolia provides sub-10ms instant typo-tolerant search while Pinecone vector search powers grounded AI Chatbot answers.
+                </p>
+
+                {/* Google Sign-in Callout Box */}
+                <Paper
+                  elevation={0}
+                  sx={{
+                    maxWidth: '640px',
+                    mx: 'auto',
+                    mb: 4,
+                    p: 2,
+                    borderRadius: 2.5,
+                    bgcolor: 'rgba(0, 173, 239, 0.08)',
+                    border: '1px solid rgba(0, 173, 239, 0.25)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 2,
+                    textAlign: 'left'
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <GoogleIcon />
+                    <Box>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#f8fafc' }}>
+                        Sign in for your LMS Study Library
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>
+                        Keep a persistent history of all your lectures and backup full video bundles to Google Drive.
+                      </Typography>
+                    </Box>
+                  </Box>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={() => handleGoogleSignIn(false)}
+                    sx={{
+                      bgcolor: '#ffffff',
+                      color: '#1f2937',
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.8rem',
+                      borderRadius: 2,
+                      whiteSpace: 'nowrap',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+                      '&:hover': { bgcolor: '#f3f4f6' }
+                    }}
+                  >
+                    Sign In
+                  </Button>
+                </Paper>
+
+                {/* Error Banner */}
+                {error && (
+                  <div style={{
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid #ef4444',
+                    color: '#f87171',
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    marginBottom: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    fontSize: '0.9rem'
+                  }}>
+                    <AlertCircle size={18} /> {error}
+                  </div>
+                )}
+
+                {/* Cache Notice Banner */}
+                {cacheNotice && (
+                  <div style={{
+                    background: 'rgba(16, 185, 129, 0.15)',
+                    border: '1px solid #10b981',
+                    color: '#34d399',
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    marginBottom: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    fontSize: '0.9rem',
+                    fontWeight: 500
+                  }}>
+                    <Check size={18} /> {cacheNotice}
+                  </div>
+                )}
+
+                {/* Input Form */}
+                <div style={{
+                  background: 'var(--panel-bg)',
+                  border: '1px solid var(--border-color)',
+                  padding: '8px',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  gap: '8px',
+                  boxShadow: '0 12px 32px rgba(0,0,0,0.4)'
+                }}>
+                  <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <Video size={20} style={{ position: 'absolute', left: '14px', color: 'var(--text-secondary)' }} />
+                    <input
+                      type="text"
+                      placeholder="Paste Vimeo link or ID (e.g. https://vimeo.com/1229247139)..."
+                      value={urlInput}
+                      onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
+                      onPaste={handlePasteUrl}
+                      onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
+                      style={{
+                        width: '100%',
+                        background: 'transparent',
+                        border: 'none',
+                        outline: 'none',
+                        color: 'var(--text-primary)',
+                        fontSize: '1rem',
+                        paddingLeft: '44px',
+                        paddingRight: '14px'
+                      }}
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => handleTranscribe()}
+                    disabled={loading || !urlInput.trim()}
+                    style={{
+                      background: 'var(--vimeo-blue)',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '12px 28px',
+                      borderRadius: '8px',
+                      fontWeight: 700,
+                      fontSize: '0.95rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      transition: 'all 0.2s ease',
+                      opacity: loading || !urlInput.trim() ? 0.6 : 1
+                    }}
+                  >
+                    {loading ? (
+                      <>
+                        <RefreshCw className="loading-pulse" size={18} /> Ingesting Data...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={18} /> Ingest & Transcribe
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Quick Preset Buttons */}
+                <div style={{ marginTop: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Try example:</span>
+                  <button
+                    onClick={() => {
+                      setUrlInput('https://vimeo.com/1229247139');
+                      handleTranscribe('https://vimeo.com/1229247139');
+                    }}
+                    style={{
+                      background: 'var(--card-bg)',
+                      border: '1px solid var(--border-color)',
+                      color: 'var(--vimeo-blue)',
+                      padding: '6px 14px',
+                      borderRadius: '20px',
+                      fontSize: '0.85rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    📹 Introduction to Research (#1229247139)
+                  </button>
+                </div>
+              </div>
+
+              {/* Available / Sample Lectures Grid for Guests */}
+              {userLibrary.length > 0 && (
+                <div style={{ marginTop: '56px', textAlign: 'left' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#f8fafc', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <BookOpen size={20} color="#00adef" /> Available Lectures in Library
+                      </h2>
+                      <Chip
+                        label={`${userLibrary.length} ${userLibrary.length === 1 ? 'lecture' : 'lectures'}`}
+                        size="small"
+                        sx={{ bgcolor: 'rgba(0, 173, 239, 0.15)', color: '#00adef', fontWeight: 700 }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
+                      Click any lecture below to study with Algolia Search & Pinecone RAG
+                    </span>
+                  </div>
+
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: {
+                        xs: '1fr',
+                        sm: 'repeat(2, minmax(0, 1fr))',
+                        md: 'repeat(3, minmax(0, 1fr))'
+                      },
+                      gap: 3,
+                      width: '100%',
+                      alignItems: 'stretch'
+                    }}
+                  >
+                    {userLibrary.map((item) => (
                       <Card
+                        key={item.video_id}
                         sx={{
-                          bgcolor: '#1e293b',
-                          border: '1px solid rgba(255, 255, 255, 0.08)',
-                          borderRadius: 2.5,
-                          transition: 'all 0.2s ease-in-out',
+                          width: '100%',
                           height: '100%',
+                          minWidth: 0,
+                          boxSizing: 'border-box',
+                          bgcolor: currentTheme.palette.cardBg,
+                          border: `1px solid ${currentTheme.palette.cardBorder}`,
+                          borderRadius: 3,
+                          boxShadow: currentTheme.palette.cardShadow,
+                          transition: 'all 0.2s ease-in-out',
                           display: 'flex',
                           flexDirection: 'column',
                           '&:hover': {
-                            transform: 'translateY(-3px)',
-                            borderColor: 'rgba(0, 173, 239, 0.4)',
-                            boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
+                            transform: 'translateY(-4px)',
+                            borderColor: currentTheme.palette.primary,
+                            boxShadow: currentTheme.palette.cardHoverShadow
                           }
                         }}
                       >
-                        <CardContent sx={{ flex: 1, p: 2.5 }}>
+                        <CardContent sx={{ flex: 1, p: 2.5, display: 'flex', flexDirection: 'column' }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                               <Chip
@@ -1454,11 +2216,11 @@ export default function App() {
                                   fontFamily: 'monospace',
                                   fontWeight: 700,
                                   fontSize: '0.72rem',
-                                  bgcolor: 'rgba(0, 173, 239, 0.12)',
-                                  color: '#00adef',
-                                  border: '1px solid rgba(0, 173, 239, 0.3)',
+                                  bgcolor: currentTheme.palette.badgeBg,
+                                  color: currentTheme.palette.badgeColor,
+                                  border: `1px solid ${currentTheme.palette.badgeBorder}`,
                                   cursor: 'pointer',
-                                  '&:hover': { bgcolor: 'rgba(0, 173, 239, 0.25)' }
+                                  '&:hover': { opacity: 0.85 }
                                 }}
                               />
                             </Box>
@@ -1471,22 +2233,23 @@ export default function App() {
                             variant="subtitle1"
                             sx={{
                               fontWeight: 700,
-                              color: '#f8fafc',
+                              color: currentTheme.palette.textPrimary,
                               lineHeight: 1.4,
                               mb: 1.5,
+                              minHeight: '2.8em',
                               display: '-webkit-box',
                               WebkitLineClamp: 2,
                               WebkitBoxOrient: 'vertical',
                               overflow: 'hidden',
                               cursor: 'pointer',
-                              '&:hover': { color: '#00adef' }
+                              '&:hover': { color: currentTheme.palette.primary }
                             }}
                             onClick={() => handleTranscribe(item.video_url || item.video_id)}
                           >
                             {item.video_title || `Vimeo Lecture ${item.video_id}`}
                           </Typography>
 
-                          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap' }}>
+                          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 'auto' }}>
                             {item.drive_folder_url ? (
                               <Chip
                                 icon={<Folder size={13} color="#10b981" />}
@@ -1548,8 +2311,8 @@ export default function App() {
                               textTransform: 'none',
                               fontWeight: 700,
                               fontSize: '0.82rem',
-                              bgcolor: '#00adef',
-                              '&:hover': { bgcolor: '#0095ce' }
+                              bgcolor: currentTheme.palette.accentCta,
+                              '&:hover': { bgcolor: currentTheme.palette.primaryHover }
                             }}
                           >
                             Study Lecture →
@@ -1570,279 +2333,13 @@ export default function App() {
                                 </IconButton>
                               </Tooltip>
                             )}
-                            <Tooltip title="Remove from My Library">
-                              <IconButton
-                                size="small"
-                                onClick={() => handleDeleteFromLibrary(item.video_id)}
-                                sx={{ color: '#64748b', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
-                              >
-                                <Trash2 size={16} />
-                              </IconButton>
-                            </Tooltip>
                           </Box>
                         </CardActions>
                       </Card>
-                    </Grid>
-                  ))}
-                </Grid>
-              ) : (
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: 6,
-                    textAlign: 'center',
-                    bgcolor: '#1e293b',
-                    border: '1px dashed rgba(255, 255, 255, 0.15)',
-                    borderRadius: 3
-                  }}
-                >
-                  <BookOpen size={48} color="#00adef" style={{ margin: '0 auto 16px', opacity: 0.8 }} />
-                  <Typography variant="h6" sx={{ color: '#f8fafc', fontWeight: 700, mb: 1 }}>
-                    {librarySearch ? 'No matching lectures found' : 'Your Lecture Library is Empty'}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: '#94a3b8', maxWidth: 460, mx: 'auto', mb: 3 }}>
-                    {librarySearch
-                      ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new Vimeo URL above.`
-                      : 'Paste any Vimeo lecture link in the quick-add bar above to transcribe, index into Algolia and Pinecone, and start studying!'}
-                  </Typography>
-                  {!librarySearch && (
-                    <Button
-                      variant="outlined"
-                      onClick={() => {
-                        setUrlInput('https://vimeo.com/1229247139');
-                        handleTranscribe('https://vimeo.com/1229247139');
-                      }}
-                      sx={{
-                        textTransform: 'none',
-                        borderColor: '#00adef',
-                        color: '#00adef',
-                        fontWeight: 600,
-                        borderRadius: 2
-                      }}
-                    >
-                      Load Sample Lecture (#1229247139)
-                    </Button>
-                  )}
-                </Paper>
-              )}
-            </Box>
-          ) : (
-            /* ================= FLOW 2: GUEST / NON-SIGNED-IN SCREEN ================= */
-            <div className="fade-in" style={{
-              maxWidth: '800px',
-              margin: '60px auto',
-              padding: '0 24px',
-              textAlign: 'center'
-            }}>
-              <div style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                background: 'rgba(0, 173, 239, 0.1)',
-                border: '1px solid rgba(0, 173, 239, 0.3)',
-                padding: '6px 16px',
-                borderRadius: '20px',
-                color: 'var(--vimeo-blue)',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-                marginBottom: '24px'
-              }}>
-                <Zap size={16} /> Triad Engine: Postgres + Algolia Instant Search + Pinecone RAG
-              </div>
-
-              <h1 style={{
-                fontSize: '2.8rem',
-                fontWeight: 800,
-                lineHeight: 1.2,
-                letterSpacing: '-1px',
-                marginBottom: '16px'
-              }}>
-                Vimeo Transcripts & Video AI <br />
-                <span style={{ color: 'var(--vimeo-blue)' }}>Algolia Search + Pinecone RAG</span>
-              </h1>
-
-              <p style={{
-                color: 'var(--text-secondary)',
-                fontSize: '1.1rem',
-                maxWidth: '600px',
-                margin: '0 auto 28px',
-                lineHeight: 1.6
-              }}>
-                Paste any Vimeo video link. Algolia provides sub-10ms instant typo-tolerant search while Pinecone vector search powers grounded AI Chatbot answers.
-              </p>
-
-              {/* Google Sign-in Callout Box */}
-              <Paper
-                elevation={0}
-                sx={{
-                  maxWidth: '640px',
-                  mx: 'auto',
-                  mb: 4,
-                  p: 2,
-                  borderRadius: 2.5,
-                  bgcolor: 'rgba(0, 173, 239, 0.08)',
-                  border: '1px solid rgba(0, 173, 239, 0.25)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 2,
-                  textAlign: 'left'
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <GoogleIcon />
-                  <Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#f8fafc' }}>
-                      Sign in for your LMS Study Library
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>
-                      Keep a persistent history of all your lectures and backup full video bundles to Google Drive.
-                    </Typography>
+                    ))}
                   </Box>
-                </Box>
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={() => handleGoogleSignIn(false)}
-                  sx={{
-                    bgcolor: '#ffffff',
-                    color: '#1f2937',
-                    textTransform: 'none',
-                    fontWeight: 700,
-                    fontSize: '0.8rem',
-                    borderRadius: 2,
-                    whiteSpace: 'nowrap',
-                    boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
-                    '&:hover': { bgcolor: '#f3f4f6' }
-                  }}
-                >
-                  Sign In
-                </Button>
-              </Paper>
-
-              {/* Error Banner */}
-              {error && (
-                <div style={{
-                  background: 'rgba(239, 68, 68, 0.15)',
-                  border: '1px solid #ef4444',
-                  color: '#f87171',
-                  padding: '12px 16px',
-                  borderRadius: '8px',
-                  marginBottom: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  fontSize: '0.9rem'
-                }}>
-                  <AlertCircle size={18} /> {error}
                 </div>
               )}
-
-              {/* Cache Notice Banner */}
-              {cacheNotice && (
-                <div style={{
-                  background: 'rgba(16, 185, 129, 0.15)',
-                  border: '1px solid #10b981',
-                  color: '#34d399',
-                  padding: '12px 16px',
-                  borderRadius: '8px',
-                  marginBottom: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  fontSize: '0.9rem',
-                  fontWeight: 500
-                }}>
-                  <Check size={18} /> {cacheNotice}
-                </div>
-              )}
-
-              {/* Input Form */}
-              <div style={{
-                background: 'var(--panel-bg)',
-                border: '1px solid var(--border-color)',
-                padding: '8px',
-                borderRadius: '12px',
-                display: 'flex',
-                gap: '8px',
-                boxShadow: '0 12px 32px rgba(0,0,0,0.4)'
-              }}>
-                <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
-                  <Video size={20} style={{ position: 'absolute', left: '14px', color: 'var(--text-secondary)' }} />
-                  <input
-                    type="text"
-                    placeholder="Paste Vimeo link or ID (e.g. https://vimeo.com/1229247139)..."
-                    value={urlInput}
-                    onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
-                    onPaste={handlePasteUrl}
-                    onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
-                    style={{
-                      width: '100%',
-                      background: 'transparent',
-                      border: 'none',
-                      outline: 'none',
-                      color: 'var(--text-primary)',
-                      fontSize: '1rem',
-                      paddingLeft: '44px',
-                      paddingRight: '14px'
-                    }}
-                  />
-                </div>
-
-                <button
-                  onClick={() => handleTranscribe()}
-                  disabled={loading || !urlInput.trim()}
-                  style={{
-                    background: 'var(--vimeo-blue)',
-                    color: '#ffffff',
-                    border: 'none',
-                    padding: '12px 28px',
-                    borderRadius: '8px',
-                    fontWeight: 700,
-                    fontSize: '0.95rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    transition: 'all 0.2s ease',
-                    opacity: loading || !urlInput.trim() ? 0.6 : 1
-                  }}
-                >
-                  {loading ? (
-                    <>
-                      <RefreshCw className="loading-pulse" size={18} /> Ingesting Data...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={18} /> Ingest & Transcribe
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* Quick Preset Buttons */}
-              <div style={{ marginTop: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Try example:</span>
-                <button
-                  onClick={() => {
-                    setUrlInput('https://vimeo.com/1229247139');
-                    handleTranscribe('https://vimeo.com/1229247139');
-                  }}
-                  style={{
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    color: 'var(--vimeo-blue)',
-                    padding: '6px 14px',
-                    borderRadius: '20px',
-                    fontSize: '0.85rem',
-                    cursor: 'pointer'
-                  }}
-                >
-                  📹 Introduction to Research (#1229247139)
-                </button>
-              </div>
             </div>
           )
         ) : (

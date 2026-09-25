@@ -325,11 +325,12 @@ class UserLibraryRecordRequest(BaseModel):
 
 
 @app.get("/api/user/library")
-def get_user_library(email: str = Query(..., description="User Google email")):
-    """Fetch user's saved LMS library of lectures."""
-    if not email.strip():
-        raise HTTPException(status_code=400, detail="User email is required.")
-    lectures = db_manager.get_user_library(email)
+def get_user_library(email: Optional[str] = Query(None, description="User Google email")):
+    """Fetch user's saved LMS library of lectures, or recent lectures across the database."""
+    if email and email.strip():
+        lectures = db_manager.get_user_library(email.strip())
+    else:
+        lectures = db_manager.get_recent_lectures(limit=12)
     return {"status": "success", "lectures": lectures, "library": lectures, "count": len(lectures)}
 
 

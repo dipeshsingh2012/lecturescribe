@@ -788,6 +788,84 @@ class RelationalDBManager:
 
         return []
 
+    def get_recent_lectures(self, limit: int = 12) -> List[Dict[str, Any]]:
+        """Retrieve recent or sample lectures available across the system for library overview and guest explore."""
+        # Try SQLite
+        try:
+            with self._get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT v.video_id, v.title, v.duration, v.source_url, v.created_at,
+                           u.drive_folder_url
+                    FROM lecturescribe_videos v
+                    LEFT JOIN lecturescribe_user_library u ON v.video_id = u.video_id
+                    GROUP BY v.video_id
+                    ORDER BY v.created_at DESC
+                    LIMIT ?;
+                """, (limit,))
+                rows = cursor.fetchall()
+                if rows:
+                    return [
+                        {
+                            "videoId": r["video_id"],
+                            "video_id": r["video_id"],
+                            "title": r["title"],
+                            "video_title": r["title"],
+                            "duration": r["duration"] or "Unknown",
+                            "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "driveFolderUrl": r["drive_folder_url"],
+                            "drive_folder_url": r["drive_folder_url"],
+                            "lastViewedAt": str(r["created_at"]) if r["created_at"] else None,
+                            "last_viewed_at": str(r["created_at"]) if r["created_at"] else None,
+                            "created_at": str(r["created_at"]) if r["created_at"] else None,
+                        }
+                        for r in rows
+                    ]
+        except Exception as e:
+            print(f"[SQLite DB Error] Failed fetching recent lectures: {e}")
+
+        # Fallback to PostgreSQL
+        if self.use_postgres:
+            try:
+                conn = self._get_postgres_connection()
+                if conn:
+                    with conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                SELECT v.video_id, v.title, v.duration, v.source_url, v.created_at,
+                                       MAX(u.drive_folder_url) as drive_folder_url
+                                FROM lecturescribe_videos v
+                                LEFT JOIN lecturescribe_user_library u ON v.video_id = u.video_id
+                                GROUP BY v.video_id, v.title, v.duration, v.source_url, v.created_at
+                                ORDER BY v.created_at DESC
+                                LIMIT %s;
+                            """, (limit,))
+                            rows = cursor.fetchall()
+                            if rows:
+                                return [
+                                    {
+                                        "videoId": r["video_id"],
+                                        "video_id": r["video_id"],
+                                        "title": r["title"],
+                                        "video_title": r["title"],
+                                        "duration": r["duration"] or "Unknown",
+                                        "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                                        "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                                        "driveFolderUrl": r["drive_folder_url"],
+                                        "drive_folder_url": r["drive_folder_url"],
+                                        "lastViewedAt": str(r["created_at"]) if r["created_at"] else None,
+                                        "last_viewed_at": str(r["created_at"]) if r["created_at"] else None,
+                                        "created_at": str(r["created_at"]) if r["created_at"] else None,
+                                    }
+                                    for r in rows
+                                ]
+                    conn.close()
+            except Exception as e:
+                print(f"[Cloud PostgreSQL Error] Failed fetching recent lectures: {e}")
+
+        return []
+
     def remove_user_lecture(self, user_email: str, video_id: str) -> bool:
         """Remove a lecture from the user's LMS library."""
         if not user_email or not video_id:

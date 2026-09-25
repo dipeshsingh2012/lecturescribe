@@ -34,30 +34,20 @@ Here's what I found regarding machine learning paradigms."""
         self.assertNotIn("[00:00 - 15:20]", cleaned)
         self.assertTrue(cleaned.startswith("Computer vision has undergone"))
 
-    def test_summary_query_intent_detection(self):
-        """Verify accurate classification of summary vs targeted queries."""
-        self.assertTrue(pinecone_rag_engine._is_summary_query("create a summary for a 10 min read"))
-        self.assertTrue(pinecone_rag_engine._is_summary_query("summarize the lecture"))
-        self.assertTrue(pinecone_rag_engine._is_summary_query("give me an overview"))
-        self.assertTrue(pinecone_rag_engine._is_summary_query("recap of the session"))
-        self.assertTrue(pinecone_rag_engine._is_summary_query("what did the professor cover"))
-        self.assertFalse(pinecone_rag_engine._is_summary_query("what is convolution?"))
-        self.assertFalse(pinecone_rag_engine._is_summary_query("explain gradient descent with formula"))
+    def test_clean_submission_timestamp_ranges(self):
+        """Verify bracketed timestamp ranges are removed."""
+        text = "Neural networks were introduced [00:00 - 15:30] and convolutional layers [15:30 - 30:00] process features."
+        cleaned = pinecone_rag_engine._clean_for_submission(text, target_words=50)
+        self.assertNotIn("[00:00 - 15:30]", cleaned)
+        self.assertNotIn("[15:30 - 30:00]", cleaned)
 
-    def test_generate_submission_version_fallback(self):
-        sample_answer = """Supervised learning algorithms map inputs to known targets using ground truth labels. In industrial applications, this paradigm powers classification pipelines, regression forecasting, and recommendation systems."""
-        
-        result = pinecone_rag_engine.generate_submission_version(
-            original_text=sample_answer,
-            video_id="dummy_video",
-            word_count=120
-        )
-        
-        self.assertEqual(result.get("status"), "success")
-        self.assertTrue(result.get("submission_text"))
-        self.assertGreater(result.get("word_count", 0), 0)
-        self.assertNotIn("[", result.get("submission_text"))
-        self.assertNotIn("]", result.get("submission_text"))
+    def test_generate_submission_fail_fast_no_keys(self):
+        """Verify fail-fast exception when no LLM keys are configured."""
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"HUGGINGFACE_TOKEN": "", "GROQ_API_KEY": "", "GEMINI_API_KEY": "", "OPENAI_API_KEY": ""}):
+            with self.assertRaises(RuntimeError):
+                pinecone_rag_engine.generate_submission_version("Sample text", "dummy_video")
 
 if __name__ == "__main__":
     unittest.main()

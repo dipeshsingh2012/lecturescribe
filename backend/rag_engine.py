@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import math
 from typing import List, Dict, Any, Tuple, Optional
 from dotenv import load_dotenv
@@ -335,111 +336,241 @@ class Llama3PineconeRAGStore:
             return float(parts[0]) * 60 + float(parts[1])
         return 0.0
 
-    def _is_summary_query(self, query: str) -> bool:
-        """Detect if the student's question is requesting a whole-lecture summary, recap, or overview."""
-        if not query:
-            return False
-        q = query.lower().strip()
-        summary_patterns = [
-            r"\bsummar(y|ies|ize|ise|izing|ising|ization|isation)\b",
-            r"\boverview\b",
-            r"\brecap\b",
-            r"\breview\b",
-            r"\b10\s*min(ute)?\s*(read|summary)?\b",
-            r"\b5\s*min(ute)?\s*(read|summary)?\b",
-            r"\bkey\s+takeaways?\b",
-            r"\bmain\s+takeaways?\b",
-            r"\bcore\s+takeaways?\b",
-            r"\bwhat\s+did\s+the\s+professor\s+cover\b",
-            r"\bwhat\s+was\s+covered\b",
-            r"\bwhat\s+is\s+this\s+lecture\s+about\b",
-            r"\bexplain\s+(?:the\s+)?(?:whole|entire)\s+lecture\b",
-            r"\bwalkthrough\s+of\s+(?:the\s+)?lecture\b",
-            r"\bexecutive\s+summary\b",
-            r"\blecture\s+outline\b",
-            r"\btopics\s+covered\b"
-        ]
-        return any(re.search(pat, q) for pat in summary_patterns)
+    AGENT_TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_lecture_outline",
+                "description": "Fetch structured chapter outlines, topics, and key takeaways across the lecture with timestamps. Call this when asked for an overview, summary, outline, 10 min read, syllabus, or to discover what topics were covered across the session.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "video_id": {
+                            "type": "string",
+                            "description": "The video ID of the lecture"
+                        }
+                    },
+                    "required": ["video_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_transcript",
+                "description": "Search the lecture transcript using hybrid vector and keyword search for specific technical concepts, definitions, formulas, or questions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The technical concept, keyword, or question to search"
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of transcript chunks to return (default 5)"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_transcript_window",
+                "description": "Fetch the verbatim spoken dialogue from the lecture between two timestamps (e.g. start_time='04:30', end_time='09:15'). Call this when you need verbatim dialogue spoken by the professor for a specific segment.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {
+                            "type": "string",
+                            "description": "Starting timestamp in MM:SS or HH:MM:SS"
+                        },
+                        "end_time": {
+                            "type": "string",
+                            "description": "Ending timestamp in MM:SS or HH:MM:SS"
+                        }
+                    },
+                    "required": ["start_time", "end_time"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_web_context",
+                "description": "Search DuckDuckGo and Wikipedia for external academic context, mathematical derivations, or industry standards not fully explained in the lecture.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "search_query": {
+                            "type": "string",
+                            "description": "The search query to look up on the web"
+                        }
+                    },
+                    "required": ["search_query"]
+                }
+            }
+        }
+    ]
 
-    def _sample_chronological_cues(
+    def execute_tool(
         self,
-        cues: List[Dict[str, str]],
-        video_id: str,
-        video_title: str,
-        num_samples: int = 15,
-        window_size: int = 3
-    ) -> List[Dict[str, Any]]:
-        """Sample evenly spaced chronological windows across the entire lecture cues."""
-        if not cues:
-            return []
-        total = len(cues)
-        if total <= num_samples:
-            samples = []
-            for c in cues:
-                samples.append({
-                    "video_id": video_id,
-                    "video_title": video_title,
-                    "start_time": c.get("time", "00:00"),
-                    "end_time": c.get("time", "00:00"),
-                    "text": c.get("text", "")
-                })
-            return samples
+        tool_name: str,
+        arguments: Dict[str, Any],
+        target_video_id: str,
+        lecture_title: str
+    ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Execute an agent tool and return (json_result_str, citations_list, web_sources_list).
+        Fails fast if tool arguments are invalid.
+        """
+        citations = []
+        web_sources = []
 
-        step = max(1, total // num_samples)
-        samples = []
-        for i in range(0, total, step):
-            window = cues[i : min(i + window_size, total)]
-            if not window:
-                continue
-            start_t = window[0].get("time", "00:00")
-            end_t = window[-1].get("time", start_t)
-            w_text = " ".join([c.get("text", "") for c in window if c.get("text")])
-            if w_text.strip():
-                samples.append({
-                    "video_id": video_id,
-                    "video_title": video_title,
-                    "start_time": start_t,
+        if tool_name == "get_lecture_outline":
+            vid = str(arguments.get("video_id") or target_video_id).strip()
+            if not vid:
+                raise ValueError("get_lecture_outline requires a valid video_id.")
+            from backend.database import db_manager
+            saved = db_manager.get_saved_video(vid)
+            if not saved:
+                raise ValueError(f"Lecture '{vid}' not found in database.")
+
+            sections = saved.get("summarySections") or saved.get("summary_sections") or []
+            if not sections and saved.get("cues"):
+                from backend.summary_generator import generate_summary_sections
+                sections = generate_summary_sections(saved["cues"], saved.get("title", lecture_title))
+                db_manager.update_summary_sections(vid, sections)
+
+            formatted = []
+            for sec in sections:
+                title = sec.get("title", "")
+                points = sec.get("points", [])
+                ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
+                start_t = ts_match.group(1) if ts_match else "00:00"
+                end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
+                clean_title = re.sub(r"\[.*?\]", "", title).strip()
+                clean_title = re.sub(r"^[^\w\s]+\s*", "", clean_title).strip()
+                citations.append({
+                    "timestamp": start_t,
                     "end_time": end_t,
-                    "text": w_text[:600]
+                    "text": f"Topic: {clean_title}"
                 })
-            if len(samples) >= num_samples:
-                break
-        return samples
+                formatted.append({
+                    "chapter": clean_title,
+                    "timestamp": f"{start_t} - {end_t}",
+                    "takeaways": points
+                })
+            return json.dumps(formatted), citations, web_sources
 
-    def _build_summary_sections_metadata(
-        self,
-        sections: List[Dict[str, Any]],
-        video_id: str,
-        video_title: str
-    ) -> List[Dict[str, Any]]:
-        """Convert stored executive summary sections into RAG metadata items."""
-        meta_items = []
-        for sec in sections:
-            title = sec.get("title", "")
-            ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
-            start_t = ts_match.group(1) if ts_match else "00:00"
-            end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
+        elif tool_name == "search_transcript":
+            query = str(arguments.get("query", "")).strip()
+            if not query:
+                raise ValueError("search_transcript requires a non-empty query.")
+            top_k = int(arguments.get("top_k", 5))
+            vid = str(arguments.get("video_id") or target_video_id).strip()
 
-            clean_title = re.sub(r"\[.*?\]", "", title).strip()
-            clean_title = re.sub(r"^[^\w\s]+\s*", "", clean_title).strip()
+            pinecone_matches = []
+            if self.index:
+                try:
+                    emb = self._generate_embedding(query)
+                    kwargs = {"vector": emb, "top_k": top_k, "namespace": self.namespace, "include_metadata": True}
+                    if vid:
+                        kwargs["filter"] = {"video_id": {"$eq": vid}}
+                    res = self.index.query(**kwargs)
+                    if res and res.matches:
+                        for m in res.matches:
+                            if m.metadata and (not vid or str(m.metadata.get("video_id", "")) == vid):
+                                pinecone_matches.append(m.metadata)
+                except Exception as e:
+                    print(f"[Agent Tool Warning] Pinecone search error: {e}")
 
-            points = sec.get("points", [])
-            clean_points = []
-            for p in points:
-                if isinstance(p, str):
-                    clean_points.append(p.strip())
-                elif isinstance(p, dict):
-                    clean_points.append(p.get("text", "").strip())
+            algolia_matches = []
+            try:
+                from backend.algolia_service import algolia_service
+                hits = algolia_service.search(query, video_id=vid, limit=top_k)
+                for h in hits:
+                    algolia_matches.append({
+                        "video_id": vid,
+                        "start_time": h.get("timestamp", "00:00"),
+                        "end_time": h.get("timestamp", "00:00"),
+                        "text": h.get("text", "")
+                    })
+            except Exception as e:
+                print(f"[Agent Tool Warning] Algolia search error: {e}")
 
-            txt = f"Topic: {clean_title}. " + " ".join(clean_points)
-            meta_items.append({
-                "video_id": video_id,
-                "video_title": video_title,
-                "start_time": start_t,
-                "end_time": end_t,
-                "text": txt[:1200]
+            cue_matches = []
+            from backend.database import db_manager
+            saved = db_manager.get_saved_video(vid) if vid else None
+            cues = saved.get("cues", []) if saved else []
+            if cues and not pinecone_matches and not algolia_matches:
+                cue_matches = self._retrieve_relevant_lecture_cues(
+                    query=query, cues=cues, video_id=vid, video_title=lecture_title, top_k=top_k
+                )
+
+            ranked = [s for s in [pinecone_matches, algolia_matches, cue_matches] if s]
+            combined = self.reciprocal_rank_fusion(ranked, k=60)[:top_k] if ranked else []
+
+            out = []
+            for item in combined:
+                st = item.get("start_time", "00:00")
+                et = item.get("end_time", st)
+                txt = item.get("text", "")
+                citations.append({
+                    "timestamp": st,
+                    "end_time": et,
+                    "text": txt[:120] + "..."
+                })
+                out.append({"timestamp": f"[{st} - {et}]", "text": txt})
+            return json.dumps(out), citations, web_sources
+
+        elif tool_name == "get_transcript_window":
+            st = str(arguments.get("start_time", "00:00")).strip()
+            et = str(arguments.get("end_time", "00:00")).strip()
+            vid = str(arguments.get("video_id") or target_video_id).strip()
+
+            st_sec = self._parse_timestamp(st)
+            et_sec = self._parse_timestamp(et)
+            if et_sec <= st_sec:
+                et_sec = st_sec + 300
+
+            from backend.database import db_manager
+            saved = db_manager.get_saved_video(vid) if vid else None
+            if not saved:
+                raise ValueError(f"Lecture '{vid}' not found in database.")
+
+            cues = saved.get("cues", [])
+            window = [c for c in cues if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec]
+            if not window and cues:
+                window = cues[:8]
+
+            dialogue = " ".join([f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in window])
+            citations.append({
+                "timestamp": st,
+                "end_time": et,
+                "text": dialogue[:120] + "..."
             })
-        return meta_items
+            return json.dumps({"start_time": st, "end_time": et, "transcript": dialogue}), citations, web_sources
+
+        elif tool_name == "search_web_context":
+            sq = str(arguments.get("search_query", "")).strip()
+            if not sq:
+                raise ValueError("search_web_context requires search_query.")
+            from backend.web_search import search_web_for_context
+            hits = search_web_for_context(sq, max_results=3)
+            for h in hits:
+                citations.append({
+                    "timestamp": "Web",
+                    "end_time": "Web",
+                    "text": f"{h.get('title')}: {h.get('snippet', '')[:100]}"
+                })
+                web_sources.append(h)
+            return json.dumps(hits), citations, web_sources
+
+        else:
+            raise ValueError(f"Unknown tool '{tool_name}' requested by agent.")
 
     def query_rag(
         self,
@@ -451,319 +582,207 @@ class Llama3PineconeRAGStore:
         model_id: Optional[str] = None,
         enable_web_search: bool = True
     ) -> Dict[str, Any]:
-        """Perform grounded retrieval strictly tied to the current lecture + Multi-Model Synthesis."""
+        """
+        Agentic RAG Engine:
+        Empowers the LLM to autonomously reason and invoke specialized tools:
+        - get_lecture_outline: Fetches high-level roadmap and chapter summaries
+        - search_transcript: Performs hybrid semantic vector + keyword search
+        - get_transcript_window: Fetches verbatim spoken dialogue for a time slice
+        - search_web_context: Searches external academic literature/proofs if needed
+        FAILS FAST if LLM credentials are missing or API encounters an unrecoverable error.
+        """
+        import requests
+
         target_video_id = str(video_id).strip() if video_id else ""
         lecture_title = video_title or ""
-        lecture_cues = cues or []
-        summary_sections = []
 
-        # Resolve lecture metadata, cues & summaries from PostgreSQL if not passed
-        if target_video_id:
+        if target_video_id and not lecture_title:
             try:
                 from backend.database import db_manager
                 saved = db_manager.get_saved_video(target_video_id)
                 if saved:
-                    if not lecture_title:
-                        lecture_title = saved.get("title", "")
-                    if not lecture_cues:
-                        lecture_cues = saved.get("cues", [])
-                    summary_sections = saved.get("summarySections") or saved.get("summary_sections") or []
+                    lecture_title = saved.get("title", "")
             except Exception as e:
-                print(f"[RAG Engine Warning] Could not fetch lecture {target_video_id} from DB: {e}")
+                print(f"[RAG Engine Warning] Could not fetch lecture title: {e}")
 
         if not lecture_title:
             lecture_title = self.video_title or "Active Lecture"
 
-        is_summary = self._is_summary_query(query)
-        retrieved_metadata = []
-
-        if is_summary:
-            # 1. Whole Lecture Summarization Strategy
-            # Feed structured chapter summaries and evenly spaced timeline milestones
-            if summary_sections:
-                sec_meta = self._build_summary_sections_metadata(summary_sections, target_video_id, lecture_title)
-                retrieved_metadata.extend(sec_meta)
-
-            if lecture_cues:
-                sampled_cues = self._sample_chronological_cues(lecture_cues, target_video_id, lecture_title, num_samples=15)
-                retrieved_metadata.extend(sampled_cues)
-
-            # If still empty (e.g. video not yet in DB), fallback to vector search with lecture title
-            if not retrieved_metadata and self.index:
-                try:
-                    query_kwargs = {
-                        "vector": self._generate_embedding(lecture_title or "lecture summary"),
-                        "top_k": top_k,
-                        "namespace": self.namespace,
-                        "include_metadata": True
-                    }
-                    if target_video_id:
-                        query_kwargs["filter"] = {"video_id": {"$eq": target_video_id}}
-                    res = self.index.query(**query_kwargs)
-                    if res and res.matches:
-                        for match in res.matches:
-                            if match.metadata and (not target_video_id or str(match.metadata.get("video_id", "")) == target_video_id):
-                                retrieved_metadata.append(match.metadata)
-                except Exception as e:
-                    print(f"[RAG Engine Warning] Summary vector fallback error: {e}")
-        else:
-            # 2. Targeted Concept Retrieval (Hybrid: Pinecone Vector + Algolia Keyword + DB Sliding-Window)
-            pinecone_matches = []
-            if self.index:
-                try:
-                    query_embedding = self._generate_embedding(query)
-                    query_kwargs = {
-                        "vector": query_embedding,
-                        "top_k": top_k,
-                        "namespace": self.namespace,
-                        "include_metadata": True
-                    }
-                    if target_video_id:
-                        query_kwargs["filter"] = {"video_id": {"$eq": target_video_id}}
-
-                    res = self.index.query(**query_kwargs)
-                    if res and res.matches:
-                        for match in res.matches:
-                            if match.metadata:
-                                m_vid = str(match.metadata.get("video_id", ""))
-                                if not target_video_id or m_vid == target_video_id:
-                                    pinecone_matches.append(match.metadata)
-                except Exception as e:
-                    print(f"[RAG Engine Warning] Vector search error: {e}")
-
-            # Algolia Keyword Search
-            algolia_chunks = []
-            try:
-                from backend.algolia_service import algolia_service
-                algolia_hits = algolia_service.search(query, video_id=target_video_id, limit=top_k * 2)
-                for h in algolia_hits:
-                    algolia_chunks.append({
-                        "video_id": target_video_id,
-                        "video_title": lecture_title,
-                        "start_time": h.get("timestamp", "00:00"),
-                        "end_time": h.get("timestamp", "00:00"),
-                        "text": h.get("text", "")
-                    })
-            except Exception as e:
-                print(f"[RAG Engine Warning] Algolia search error: {e}")
-
-            # Postgres Transcript Sliding-Window Search
-            cue_matches = []
-            if lecture_cues:
-                cue_matches = self._retrieve_relevant_lecture_cues(
-                    query=query,
-                    cues=lecture_cues,
-                    video_id=target_video_id,
-                    video_title=lecture_title,
-                    top_k=top_k
-                )
-
-            # Combine candidates using Reciprocal Rank Fusion
-            ranked_sources = []
-            if pinecone_matches:
-                ranked_sources.append(pinecone_matches)
-            if algolia_chunks:
-                ranked_sources.append(algolia_chunks)
-            if cue_matches:
-                ranked_sources.append(cue_matches)
-
-            if ranked_sources:
-                retrieved_metadata = self.reciprocal_rank_fusion(ranked_sources, k=60)[:top_k]
-            elif self.local_chunks:
-                matched_local = [
-                    c["metadata"] for c in self.local_chunks
-                    if not target_video_id or str(c.get("metadata", {}).get("video_id", "")) == target_video_id
-                ]
-                if matched_local:
-                    retrieved_metadata = matched_local[:top_k]
-
-            # If still empty, sample milestone cues so context is never blank
-            if not retrieved_metadata and lecture_cues:
-                retrieved_metadata = self._sample_chronological_cues(lecture_cues, target_video_id, lecture_title, num_samples=top_k)
-
-        # 3. Chronological Sorting: Sort chunks by start_time before feeding into context_str
-        retrieved_metadata.sort(key=lambda x: self._parse_timestamp(x.get("start_time", "00:00")))
-
-        context_str = ""
-        citations = []
-        for meta in retrieved_metadata:
-            start_t = meta.get("start_time", "00:00")
-            end_t = meta.get("end_time", start_t)
-            txt = meta.get("text", "")
-            context_str += f"[{start_t} - {end_t}] {txt}\n"
-            citations.append({
-                "timestamp": start_t,
-                "end_time": end_t,
-                "text": txt[:120] + "..."
-            })
-
-        # Grounded Web Search (DuckDuckGo + Wikipedia, Free)
-        web_sources = []
-        web_context_str = ""
-        if enable_web_search and not is_summary:
-            try:
-                from backend.web_search import search_web_for_context
-                search_term = f"{lecture_title} {query}" if lecture_title and len(query.split()) < 5 else query
-                web_sources = search_web_for_context(search_term, max_results=3)
-                if web_sources:
-                    web_context_str = "\n".join([
-                        f"• Source: {s.get('title')} ({s.get('url')})\n  Snippet: {s.get('snippet')}"
-                        for s in web_sources
-                    ])
-            except Exception as e:
-                print(f"[Web Search Warning]: {e}")
-
-        # Choose model & synthesize with unchained Socratic tutor prompt
-        answer, model_used = self._generate_llm_response(
-            query=query,
-            lecture_title=lecture_title,
-            context_str=context_str,
-            web_context_str=web_context_str,
-            requested_model=model_id,
-            is_summary_query=is_summary
-        )
-
-        return {
-            "answer": answer,
-            "citations": citations,
-            "web_sources": web_sources,
-            "model": model_used,
-            "pinecone_vector_matches": len(retrieved_metadata),
-            "lecture_title": lecture_title,
-            "video_id": target_video_id
-        }
-
-    def _generate_llm_response(
-        self,
-        query: str,
-        lecture_title: str,
-        context_str: str,
-        web_context_str: str = "",
-        requested_model: Optional[str] = None,
-        is_summary_query: bool = False
-    ) -> Tuple[str, str]:
-        """
-        Synthesize answer using selected or best available LLM provider.
-        Unchained Socratic tutor prompt: grounds strictly in current lecture transcript, enriches with academic knowledge & web context.
-        """
-        import requests
-
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
         hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
+        openai_key = os.getenv("OPENAI_API_KEY", "")
 
-        target_model = requested_model or "gemini-2.0-flash" if gemini_key else ("llama-3.3-70b-versatile" if groq_key else "meta-llama/Llama-3.1-8B-Instruct")
-
-        # Fallback if selected model lacks key
-        if target_model.startswith("gemini") and not gemini_key:
-            if groq_key:
-                target_model = "llama-3.3-70b-versatile"
-            elif hf_token:
-                target_model = "meta-llama/Llama-3.1-8B-Instruct"
-        elif target_model.startswith("llama-3.3") and not groq_key:
-            if gemini_key:
-                target_model = "gemini-2.0-flash"
-            elif hf_token:
-                target_model = "meta-llama/Llama-3.1-8B-Instruct"
-
-        system_prompt = (
-            f"You are an encouraging, articulate Academic AI Tutor helping a student learn from the lecture: '{lecture_title}'.\n\n"
-            "PEDAGOGICAL INSTRUCTIONS:\n"
-            "1. Grounding in Lecture: Anchor your answer strictly in the professor's explanations from this lecture's transcript context.\n"
-            "2. Mandatory Inline Timestamp Citations: Whenever referencing, summarizing, or attributing facts, concepts, or statements to the professor, you MUST append the exact timestamp from the transcript context in brackets, e.g. [14:25] or [01:12:40]. Every key point about the lecture MUST include its timestamp tag [MM:SS] so the student can jump to that exact moment in the video.\n"
-            "3. Conceptual Depth & Distinction: If the student asks for deeper explanations, step-by-step proofs, intuitive analogies, practical code examples, or concepts only briefly introduced by the professor, use your broad academic knowledge and any supplementary web search results below to explain them thoroughly. Clearly differentiate what the professor stated vs. supplementary knowledge, and do NOT redundantly repeat items.\n"
-            "4. Format: Structure your explanation with clear paragraphs, bullet points, or code snippets when helpful."
-        )
-
-        if is_summary_query:
-            system_prompt += (
-                "\n\n5. SUMMARY MODE MANDATE: The student explicitly requested an overall summary, overview, or recap of this lecture. "
-                "Directly provide an authentic, comprehensive, and well-structured technical summary of the actual topics, concepts, mathematical foundations, and methodologies taught by the professor across the lecture timeline. "
-                "Synthesize the lecture progression chronologically using the provided transcript context and summary chapters. "
-                "MANDATORY: You MUST include inline timestamp citations [MM:SS] for each major section or concept so the student can jump to that part of the video. "
-                "ABSOLUTE PROHIBITION: Do NOT provide instructional guidance or a meta-tutorial on HOW to write a summary (e.g. NEVER say 'Here is how to create a summary', 'discretize into manageable chunks', 'concentrate on key regions', etc.). Output the substantive lecture summary itself!"
+        # FAIL FAST: Require valid LLM configuration
+        if not (gemini_key or groq_key or hf_token or openai_key):
+            raise RuntimeError(
+                "Agentic RAG configuration error: No active LLM credentials found. "
+                "Configure HUGGINGFACE_TOKEN, GROQ_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY in environment."
             )
 
-        prompt_content = f"--- CURRENT LECTURE: {lecture_title} ---\n\n"
-        if context_str:
-            prompt_content += f"=== Lecture Topics & Chronological Transcript Context ===\n{context_str}\n\n"
-        if web_context_str:
-            prompt_content += f"=== Supplementary Academic / Web Search Context ===\n{web_context_str}\n\n"
-        if is_summary_query:
-            prompt_content += f"Student Request: {query}\n\nDeliver the comprehensive technical summary of this lecture with inline timestamps [MM:SS]:"
+        # Select provider endpoint
+        if groq_key and (not model_id or "groq" in model_id or "llama-3.3" in model_id):
+            endpoint = "https://api.groq.com/openai/v1/chat/completions"
+            auth_header = f"Bearer {groq_key}"
+            model_name = "llama-3.3-70b-versatile"
+            display_model = "Groq Llama 3.3 70B"
+        elif hf_token and (not model_id or "llama-3.1" in model_id or "huggingface" in model_id or not groq_key):
+            endpoint = "https://router.huggingface.co/v1/chat/completions"
+            auth_header = f"Bearer {hf_token}"
+            model_name = "meta-llama/Llama-3.1-8B-Instruct"
+            display_model = "Hugging Face Llama 3.1 8B"
+        elif gemini_key:
+            endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+            auth_header = f"Bearer {gemini_key}"
+            model_name = "gemini-2.0-flash"
+            display_model = "Gemini 2.0 Flash"
+        elif openai_key:
+            endpoint = "https://api.openai.com/v1/chat/completions"
+            auth_header = f"Bearer {openai_key}"
+            model_name = "gpt-4o-mini"
+            display_model = "OpenAI GPT-4o-mini"
         else:
-            prompt_content += f"Student Question: {query}"
+            raise RuntimeError("No suitable LLM provider could be resolved.")
 
-        # 1. Google Gemini (100% Free Developer Tier)
-        if (target_model.startswith("gemini") or "flash" in target_model) and gemini_key:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-                payload = {
-                    "contents": [{"role": "user", "parts": [{"text": prompt_content}]}],
-                    "systemInstruction": {"parts": [{"text": system_prompt}]},
-                    "generationConfig": {"temperature": 0.25, "maxOutputTokens": 1024}
-                }
-                r = requests.post(url, json=payload, timeout=15)
-                if r.status_code == 200:
-                    data = r.json()
-                    candidates = data.get("candidates", [])
-                    if candidates and "content" in candidates[0]:
-                        parts = candidates[0]["content"].get("parts", [])
-                        if parts:
-                            return parts[0].get("text", "").strip(), "Gemini 2.0 Flash"
-            except Exception as e:
-                print(f"[Gemini Inference Error]: {e}")
-
-        # 2. Groq Cloud (Llama 3.3 70B - 100% Free Developer Tier)
-        if (target_model.startswith("llama-3.3") or "groq" in target_model.lower()) and groq_key:
-            try:
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt_content}
-                    ],
-                    "temperature": 0.25,
-                    "max_tokens": 1024
-                }
-                r = requests.post(url, headers=headers, json=payload, timeout=12)
-                if r.status_code == 200:
-                    data = r.json()
-                    choices = data.get("choices", [])
-                    if choices and "message" in choices[0]:
-                        return choices[0]["message"].get("content", "").strip(), "Groq Llama 3.3 70B"
-            except Exception as e:
-                print(f"[Groq Inference Error]: {e}")
-
-        # 3. Hugging Face InferenceClient (Active Serverless Free)
-        if hf_token:
-            try:
-                from huggingface_hub import InferenceClient
-                client = InferenceClient(api_key=hf_token)
-                resp = client.chat.completions.create(
-                    model="meta-llama/Llama-3.1-8B-Instruct",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt_content}
-                    ],
-                    max_tokens=800,
-                    temperature=0.25
-                )
-                if resp and resp.choices and resp.choices[0].message:
-                    return resp.choices[0].message.content.strip(), "Hugging Face Llama 3.1 8B"
-            except Exception as e:
-                print(f"[HuggingFace InferenceClient Error]: {e}")
-
-        # 5. Informative setup tip if no cloud LLM key is configured
-        tip = (
-            "💡 **AI Tutor Connected**\n\n"
-            f"Here is what was found in the lecture for your question: *\"{query}\"*\n\n"
-            f"{context_str[:600] if context_str else 'No direct transcript cues matched, but web search was performed.'}\n\n"
-            "*(Tip: To enable full intelligent conversational explanations, add a free API key to `.env` from [Google AI Studio](https://aistudio.google.com) `GEMINI_API_KEY=` or [Groq Console](https://console.groq.com) `GROQ_API_KEY=`)*"
+        system_prompt = (
+            f"You are an encouraging, articulate Academic AI Tutor assisting a student learning from the lecture: '{lecture_title}'. "
+            f"The video ID is '{target_video_id}'.\n\n"
+            "YOU HAVE ACCESS TO SPECIALIZED RETRIEVAL TOOLS:\n"
+            "1. get_lecture_outline(video_id): Call this when asked for an overview, summary, recap, 10-minute read, syllabus, or chapter breakdown.\n"
+            "2. search_transcript(query, top_k): Call this when asked about specific technical concepts, definitions, equations, or questions.\n"
+            "3. get_transcript_window(start_time, end_time): Call this when you need verbatim dialogue from the professor for a specific segment.\n"
+            "4. search_web_context(search_query): Call this ONLY if external academic context or mathematical background is needed.\n\n"
+            "PEDAGOGICAL & CITATION RULES:\n"
+            "- Always invoke the appropriate tool(s) to ground your answer in the lecture.\n"
+            "- MANDATORY Inline Timestamps: Every key statement, topic, or finding MUST include its exact timestamp tag [MM:SS] or [MM:SS - MM:SS] so the student can jump to that exact part of the video.\n"
+            "- SUBSTANTIVE CONTENT: Directly explain the concepts and insights taught by the professor. NEVER output meta-instructions or advice on how to write a summary or take notes.\n"
+            "- Clarity & Rigor: Structure with clear paragraphs, mathematical notation, and bullet points where helpful."
         )
-        return tip, "Transcript Retrieval"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Student Request: {query} (Lecture: '{lecture_title}', Video ID: '{target_video_id}')"}
+        ]
+
+        all_citations = []
+        all_web_sources = []
+        max_steps = 3
+        current_step = 0
+        final_answer = ""
+
+        headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+
+        while current_step < max_steps:
+            current_step += 1
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "tools": self.AGENT_TOOLS,
+                "tool_choice": "auto",
+                "max_tokens": 1024,
+                "temperature": 0.25
+            }
+
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=50)
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"Agent LLM API invocation failed with HTTP {resp.status_code} ({display_model}): {resp.text}"
+                )
+
+            data = resp.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise RuntimeError(f"Agent LLM returned empty choices array from {display_model}.")
+
+            msg = choices[0].get("message", {})
+            tool_calls = msg.get("tool_calls", []) or []
+            content_str = msg.get("content", "") or ""
+
+            # Support Llama 3.1 text-based function invocation format (<function=name>{...}</function>)
+            if not tool_calls and "<function=" in content_str:
+                fn_matches = re.findall(r"<function=(\w+)>(.*?)(?:</function>|$)", content_str, re.DOTALL)
+                for fn_name, fn_args in fn_matches:
+                    clean_args = fn_args.strip()
+                    if clean_args.endswith("</function>"):
+                        clean_args = clean_args[:-11].strip()
+                    tool_calls.append({
+                        "id": f"call_{fn_name}_{current_step}",
+                        "type": "function",
+                        "function": {
+                            "name": fn_name.strip(),
+                            "arguments": clean_args
+                        }
+                    })
+
+            if not tool_calls:
+                final_answer = content_str.strip()
+                break
+
+            # If the model used text-based function syntax, sanitize content so the API accepts the tool turn
+            if "<function=" in content_str and not msg.get("tool_calls"):
+                msg = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls
+                }
+
+            messages.append(msg)
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                func_name = func.get("name", "")
+                raw_args = func.get("arguments", "{}")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except Exception:
+                    args = {}
+
+                tool_result_str, tool_citations, tool_web = self.execute_tool(
+                    tool_name=func_name,
+                    arguments=args,
+                    target_video_id=target_video_id,
+                    lecture_title=lecture_title
+                )
+                all_citations.extend(tool_citations)
+                all_web_sources.extend(tool_web)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", "call_default"),
+                    "name": func_name,
+                    "content": tool_result_str
+                })
+
+        if not final_answer:
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "max_tokens": 1024,
+                "temperature": 0.25
+            }
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=50)
+            if resp.status_code == 200:
+                final_answer = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            else:
+                raise RuntimeError(f"Agent synthesis step failed ({resp.status_code}): {resp.text}")
+
+        # Deduplicate citations by timestamp and prefix
+        seen_ts = set()
+        dedup_citations = []
+        for c in all_citations:
+            k = (c.get("timestamp"), c.get("text", "")[:40])
+            if k not in seen_ts:
+                seen_ts.add(k)
+                dedup_citations.append(c)
+
+        return {
+            "answer": final_answer,
+            "citations": dedup_citations,
+            "web_sources": all_web_sources,
+            "model": display_model,
+            "pinecone_vector_matches": len(dedup_citations),
+            "lecture_title": lecture_title,
+            "video_id": target_video_id
+        }
 
     def extract_lecture_keywords(self, video_id: str = "", title: str = "", top_n: int = 8) -> List[str]:
         """Extract domain keywords/keyphrases from the lecture transcript & summaries."""
@@ -961,30 +980,35 @@ class Llama3PineconeRAGStore:
             except Exception as e:
                 print(f"[Groq Submission Inference Error]: {e}")
 
-        # 3. Hugging Face
+        # 3. Hugging Face Router (Active Serverless Free)
         if not raw_output and hf_token:
             try:
-                from huggingface_hub import InferenceClient
-                client = InferenceClient(api_key=hf_token)
-                resp = client.chat.completions.create(
-                    model="meta-llama/Llama-3.1-8B-Instruct",
-                    messages=[
+                url = "https://router.huggingface.co/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "meta-llama/Llama-3.1-8B-Instruct",
+                    "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content}
                     ],
-                    max_tokens=300,
-                    temperature=0.3
-                )
-                if resp and resp.choices and resp.choices[0].message:
-                    raw_output = resp.choices[0].message.content.strip()
-                    model_used = "Hugging Face Llama 3.1 8B"
+                    "temperature": 0.25,
+                    "max_tokens": 300
+                }
+                r = requests.post(url, headers=headers, json=payload, timeout=15)
+                if r.status_code == 200:
+                    choices = r.json().get("choices", [])
+                    if choices and "message" in choices[0]:
+                        raw_output = choices[0]["message"].get("content", "").strip()
+                        model_used = "Hugging Face Llama 3.1 8B"
+                else:
+                    raise RuntimeError(f"Hugging Face Router returned HTTP {r.status_code}: {r.text}")
             except Exception as e:
                 print(f"[HF Submission Inference Error]: {e}")
+                raise RuntimeError(f"Hugging Face submission synthesis failed: {e}")
 
-        # 4. Fallback if no LLM responded or keys are missing
+        # FAIL FAST: Do not fallback to mock formatters
         if not raw_output:
-            raw_output = clean_base
-            model_used = "Rule-based Student Formatter"
+            raise RuntimeError(f"Submission generation failed: No response received from {target_model}.")
 
         final_submission = self._clean_for_submission(raw_output, target_words=word_count)
         words = final_submission.split()

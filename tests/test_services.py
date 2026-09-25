@@ -58,46 +58,66 @@ class TestServices(unittest.TestCase):
         self.assertIn("01:00", start_times)
         self.assertIn("02:00", start_times)
 
-    def test_query_rag_without_cues(self):
-        """Test query_rag executes successfully without cues passed in request payload."""
-        # Test with video_id but no cues - should use hybrid retrieval
-        result = pinecone_rag_engine.query_rag(
-            query="test query",
-            video_id="test_video_123",
-            video_title="Test Lecture",
-            cues=None,
-            top_k=5,
-            enable_web_search=False
-        )
-        
-        # Should return a result with expected structure
-        self.assertIn("answer", result)
-        self.assertIn("citations", result)
-        self.assertIn("model", result)
-        self.assertIn("video_id", result)
+    def test_agent_tools_declarations(self):
+        """Verify the 4 agent tools are declared with valid function schemas."""
+        tool_names = [t["function"]["name"] for t in pinecone_rag_engine.AGENT_TOOLS]
+        self.assertIn("get_lecture_outline", tool_names)
+        self.assertIn("search_transcript", tool_names)
+        self.assertIn("get_transcript_window", tool_names)
+        self.assertIn("search_web_context", tool_names)
 
-    def test_query_rag_summary_mode(self):
-        """Test query_rag accurately processes a 10 min read summary query using lecture cues."""
+    def test_agent_execute_tool_outline(self):
+        """Verify execute_tool correctly executes get_lecture_outline."""
+        from unittest.mock import patch
+        mock_video = {
+            "title": "Computer Vision 101",
+            "summarySections": [
+                {"title": "Intro [00:00 - 10:00]", "points": ["Cameras capture light"]}
+            ],
+            "cues": []
+        }
+        with patch("backend.database.db_manager.get_saved_video", return_value=mock_video):
+            res_str, citations, web = pinecone_rag_engine.execute_tool(
+                tool_name="get_lecture_outline",
+                arguments={"video_id": "cv_test"},
+                target_video_id="cv_test",
+                lecture_title="Computer Vision 101"
+            )
+            self.assertIn("Cameras capture light", res_str)
+            self.assertEqual(len(citations), 1)
+            self.assertEqual(citations[0]["timestamp"], "00:00")
+
+    def test_agent_execute_tool_transcript_window(self):
+        """Verify execute_tool correctly fetches transcript cues for a time window."""
+        from unittest.mock import patch
         mock_cues = [
-            {"time": "00:00", "text": "Welcome to Computer Vision Live Session."},
-            {"time": "04:30", "text": "We first analyze camera models and perspective projection."},
-            {"time": "12:15", "text": "Digital images are represented as 2D matrix arrays with quantized intensity."},
-            {"time": "25:00", "text": "Edge detection relies on spatial gradient calculations."},
-            {"time": "45:00", "text": "Conclusion of session covering image filtering and convolution."}
+            {"time": "02:00", "text": "Starting discussion on convolution filters."},
+            {"time": "04:00", "text": "Filters slide across the spatial grid."},
+            {"time": "12:00", "text": "Much later in the lecture."}
         ]
-        result = pinecone_rag_engine.query_rag(
-            query="create a summary for a 10 min read",
-            video_id="mock_cv_101",
-            video_title="Introduction to Computer Vision",
-            cues=mock_cues,
-            top_k=5,
-            enable_web_search=False
-        )
-        self.assertIn("answer", result)
-        self.assertTrue(len(result.get("citations", [])) > 0)
-        # Should have captured the mock cues across the timeline
-        timestamps = [c.get("timestamp") for c in result.get("citations", [])]
-        self.assertIn("00:00", timestamps)
+        with patch("backend.database.db_manager.get_saved_video", return_value={"cues": mock_cues}):
+            res_str, citations, web = pinecone_rag_engine.execute_tool(
+                tool_name="get_transcript_window",
+                arguments={"start_time": "01:00", "end_time": "05:00", "video_id": "test_cv"},
+                target_video_id="test_cv",
+                lecture_title="CV"
+            )
+            self.assertIn("convolution filters", res_str)
+            self.assertIn("Filters slide", res_str)
+            self.assertNotIn("Much later", res_str)
+
+    def test_agent_unknown_tool_fails_fast(self):
+        """Verify unknown tool request raises an immediate ValueError."""
+        with self.assertRaises(ValueError):
+            pinecone_rag_engine.execute_tool("non_existent_tool", {}, "vid", "title")
+
+    def test_agent_fail_fast_missing_credentials(self):
+        """Verify query_rag raises RuntimeError when no LLM credentials exist."""
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"HUGGINGFACE_TOKEN": "", "GROQ_API_KEY": "", "GEMINI_API_KEY": "", "OPENAI_API_KEY": ""}):
+            with self.assertRaises(RuntimeError):
+                pinecone_rag_engine.query_rag(query="test", video_id="vid")
 
 if __name__ == "__main__":
     unittest.main()

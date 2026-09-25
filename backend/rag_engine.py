@@ -351,7 +351,7 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "get_lecture_outline",
-                "description": "Fetch structured chapter outlines, topics, and key takeaways across the lecture with timestamps. Call this when asked for an overview, summary, outline, 10 min read, syllabus, or to discover what topics were covered across the session.",
+                "description": "Fetch structured chapter outlines, syllabus topics, key takeaways, and spoken transcript excerpts across the lecture with timestamps.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -462,30 +462,61 @@ class Llama3PineconeRAGStore:
                 raise ValueError(f"Lecture '{vid}' not found in database.")
 
             sections = saved.get("summarySections") or saved.get("summary_sections") or []
-            if not sections and saved.get("cues"):
+            cues = saved.get("cues", [])
+
+            # Detect legacy hardcoded boilerplate in cached summarySections
+            has_legacy_boilerplate = any(
+                any("invention, discovery, and innovation" in str(p).lower() or "literature review to patenting" in str(p).lower()
+                    for p in sec.get("points", []))
+                for sec in sections
+            )
+            if (not sections or has_legacy_boilerplate) and cues:
                 from backend.summary_generator import generate_summary_sections
-                sections = generate_summary_sections(saved["cues"], saved.get("title", lecture_title))
+                sections = generate_summary_sections(cues, saved.get("title", lecture_title))
                 db_manager.update_summary_sections(vid, sections)
 
             formatted = []
             for sec in sections:
                 title = sec.get("title", "")
-                points = sec.get("points", [])
+                points = [
+                    p for p in sec.get("points", [])
+                    if "invention, discovery, and innovation" not in str(p).lower()
+                    and "literature review to patenting" not in str(p).lower()
+                ]
                 ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
                 start_t = ts_match.group(1) if ts_match else "00:00"
                 end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
+                st_sec = self._parse_timestamp(start_t)
+                et_sec = self._parse_timestamp(end_t)
+                if et_sec <= st_sec:
+                    et_sec = st_sec + 300
+
                 clean_title = re.sub(r"\[.*?\]", "", title).strip()
                 clean_title = re.sub(r"^[^\w\s]+\s*", "", clean_title).strip()
+
+                dialogue_sample = ""
+                if cues:
+                    sec_cues = [
+                        c for c in cues
+                        if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec
+                        and len(c.get("text", "").split()) >= 4
+                    ]
+                    if sec_cues:
+                        dialogue_sample = " ".join([f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in sec_cues[:4]])
+
                 citations.append({
                     "timestamp": start_t,
                     "end_time": end_t,
                     "text": f"Topic: {clean_title}"
                 })
-                formatted.append({
+                formatted_item = {
                     "chapter": clean_title,
                     "timestamp": f"{start_t} - {end_t}",
                     "takeaways": points
-                })
+                }
+                if dialogue_sample:
+                    formatted_item["dialogue_excerpt"] = dialogue_sample
+                formatted.append(formatted_item)
             res_str = json.dumps(formatted)
             if redis_cache and vid_cache:
                 redis_cache.set_tool(vid_cache, tool_name, arguments, json.dumps({"result": res_str, "citations": citations, "web_sources": web_sources}))
@@ -697,14 +728,14 @@ class Llama3PineconeRAGStore:
             f"You are an encouraging, articulate Academic AI Tutor assisting a student learning from the lecture: '{lecture_title}'. "
             f"The video ID is '{target_video_id}'.\n\n"
             "YOU HAVE ACCESS TO SPECIALIZED RETRIEVAL TOOLS:\n"
-            "1. get_lecture_outline(video_id): Call this when asked for an overview, summary, recap, 10-minute read, syllabus, or chapter breakdown.\n"
-            "2. search_transcript(query, top_k): Call this when asked about specific technical concepts, definitions, equations, or questions.\n"
-            "3. get_transcript_window(start_time, end_time): Call this when you need verbatim dialogue from the professor for a specific segment.\n"
-            "4. search_web_context(search_query): Call this ONLY if external academic context or mathematical background is needed.\n\n"
+            "- get_lecture_outline(video_id): Retrieves the structured chapter syllabus, timestamps, key takeaways, and spoken dialogue excerpts across the session.\n"
+            "- search_transcript(query, top_k): Searches the lecture transcript using hybrid vector and keyword search for specific concepts, terms, discussions, or questions.\n"
+            "- get_transcript_window(start_time, end_time): Retrieves verbatim dialogue from the professor for a specific timestamp range.\n"
+            "- search_web_context(search_query): Retrieves external academic context or mathematical background if needed.\n\n"
             "PEDAGOGICAL & CITATION RULES:\n"
-            "- Always invoke the appropriate tool(s) to ground your answer in the lecture.\n"
+            "- Ground your answer thoroughly in the lecture using your retrieval tools.\n"
             "- MANDATORY Inline Timestamps: Every key statement, topic, or finding MUST include its exact timestamp tag [MM:SS] or [MM:SS - MM:SS] so the student can jump to that exact part of the video.\n"
-            "- SUBSTANTIVE CONTENT: Directly explain the concepts and insights taught by the professor. NEVER output meta-instructions or advice on how to write a summary or take notes.\n"
+            "- SUBSTANTIVE CONTENT: Directly explain the concepts, methodologies, examples, and insights taught by the professor. Ground your answer in what was actually discussed in the lecture. NEVER output meta-instructions or advice on how to take notes.\n"
             "- Clarity & Rigor: Structure with clear paragraphs, mathematical notation, and bullet points where helpful."
         )
 

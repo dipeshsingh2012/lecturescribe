@@ -230,28 +230,30 @@ def extract_substantive_questions(sentences: List[Dict[str, Any]]) -> List[Dict[
 
 def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[List[Dict[str, Any]]]:
     """
-    Optional LLM generation: If Hugging Face, OpenAI, or Ollama credentials are configured,
-    generates structured summary using an instruction-tuned small language model (e.g. Phi-3.5 / Llama-3.2).
+    Optional LLM generation: If Groq, Gemini, Hugging Face, OpenAI, or Ollama credentials are configured,
+    generates structured summary using an instruction-tuned language model.
     """
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
     hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
     openai_key = os.getenv("OPENAI_API_KEY", "")
-    openai_base = os.getenv("LLAMA_OPENAI_BASE", "")
+    openai_base = os.getenv("LLAMA_OPENAI_BASE", os.getenv("LLAMA_API_BASE", ""))
     model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
-    if not (hf_token or openai_key or openai_base):
+    if not (groq_key or gemini_key or hf_token or openai_key or openai_base):
         return None
 
     sentences = reconstruct_sentences(cues)
     if not sentences:
         return None
 
-    sample_size = min(len(sentences), 45)
+    sample_size = min(len(sentences), 50)
     step = max(1, len(sentences) // sample_size)
     sampled = sentences[::step][:sample_size]
     sample_text = "\n".join([f"[{s['time']}] {s['text']}" for s in sampled])
 
     system_prompt = (
-        f"You are LectureScribe AI powered by {model_id}. Summarize the provided video lecture transcript into 4 to 6 structured sections. "
+        "You are LectureScribe AI. Summarize the provided video lecture transcript into 4 to 6 structured sections. "
         "Every section must have an informative, topical title (including the approximate timestamp range like [00:00 - 15:30]) "
         "and 3-5 clear, complete bullet points explaining what was taught. "
         "Each bullet point MUST start with its exact video timestamp in brackets, e.g., '[12:34] Sentence here.' "
@@ -259,7 +261,53 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
     )
     user_prompt = f"Video Title: {title}\n\nTranscript Excerpt:\n{sample_text}\n\nJSON output:"
 
-    # 1. HuggingFace Inference Client
+    # 1. Groq (High speed, reliable)
+    if groq_key:
+        try:
+            from openai import OpenAI
+            client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+            resp = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.2
+            )
+            raw = resp.choices[0].message.content.strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            data = json.loads(raw)
+            if isinstance(data, list) and len(data) >= 2:
+                return data
+        except Exception as e:
+            print(f"[LLM Groq Notice] Skipped: {e}")
+
+    # 2. Google Gemini
+    if gemini_key:
+        try:
+            from openai import OpenAI
+            client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
+            resp = client.chat.completions.create(
+                model="gemini-2.0-flash",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.2
+            )
+            raw = resp.choices[0].message.content.strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            data = json.loads(raw)
+            if isinstance(data, list) and len(data) >= 2:
+                return data
+        except Exception as e:
+            print(f"[LLM Gemini Notice] Skipped: {e}")
+
+    # 3. HuggingFace Inference Client
     if hf_token:
         try:
             from huggingface_hub import InferenceClient
@@ -281,7 +329,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
         except Exception as e:
             print(f"[LLM HF Notice] Skipped: {e}")
 
-    # 2. OpenAI / Ollama compatible endpoint
+    # 4. OpenAI / Ollama compatible endpoint
     if openai_key or openai_base:
         try:
             from openai import OpenAI
@@ -343,14 +391,22 @@ def generate_dynamic_summary(cues: List[Dict[str, str]], title: str) -> List[Dic
     used_topics = set()
     clean_title = re.sub(r"\s*Live\s*session.*", "", title, flags=re.IGNORECASE).strip()
 
-    # 1. Synthesize Executive Overview
+    # 1. Synthesize Executive Overview dynamically from genuine introductory lecture sentences
+    intro_slice = sentences[:max(chunk_size, 15)]
+    intro_scored = sorted(intro_slice, key=lambda x: score_sentence(x["text"]), reverse=True)
+    intro_points = []
+    for cand in intro_scored:
+        if len(intro_points) >= 3:
+            break
+        if not any(cand["text"][:30].lower() == p[:30].lower() for p in intro_points):
+            intro_points.append(f"[{cand['time']}] {cand['text']}")
+
+    if not intro_points and sentences:
+        intro_points = [f"[{sentences[0]['time']}] {sentences[0]['text']}"]
+
     sections.append({
         "title": "🎯 Executive Overview & Session Scope",
-        "points": [
-            f"Comprehensive academic session exploring {clean_title}, focusing on structural methodologies, literature evaluation, and scholar independence.",
-            "Synthesizes critical distinctions between invention, discovery, and innovation, providing frameworks for framing viable research questions and testable hypotheses.",
-            "Outlines the end-to-end research lifecycle from initial problem identification and literature review to patenting, scientific publication, and degree completion."
-        ]
+        "points": intro_points
     })
 
     # 2. Generate Thematic Chapters

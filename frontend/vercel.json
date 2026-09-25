@@ -5,11 +5,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://lecturescribe-api-508208.a.run.app/api/:path*"
+      "destination": "https://lecturescribe-api-4hysn7vtva-uc.a.run.app/api/:path*"
     },
     {
       "source": "/health",
-      "destination": "https://lecturescribe-api-508208.a.run.app/health"
+      "destination": "https://lecturescribe-api-4hysn7vtva-uc.a.run.app/health"
     },
     {
       "source": "/(.*)",

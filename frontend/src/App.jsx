@@ -275,7 +275,9 @@ export default function App() {
   const [viewMode, setViewMode] = useState('learning'); // 'learning' or 'submission'
   const [submissionSummaries, setSubmissionSummaries] = useState({}); // Store submission versions
   const [copiedSubmissionId, setCopiedSubmissionId] = useState(null);
+  const [copiedPromptId, setCopiedPromptId] = useState(null);
   const chatEndRef = useRef(null);
+  const chatInputRef = useRef(null);
 
   // Fetch available AI models only when active lecture/tutor is loaded, not on the landing page
   useEffect(() => {
@@ -793,6 +795,13 @@ export default function App() {
     navigator.clipboard.writeText(text);
     setCopiedSubmissionId(messageId);
     setTimeout(() => setCopiedSubmissionId(null), 2000);
+  };
+
+  const copyUserPrompt = (text, messageId) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedPromptId(messageId);
+    setTimeout(() => setCopiedPromptId(null), 2000);
   };
 
   const displayCues = searchQuery.trim() && searchResults.length > 0
@@ -2301,6 +2310,75 @@ export default function App() {
                 flexDirection: 'column',
                 gap: '14px'
               }}>
+                {chatMessages.length === 0 && (
+                  <div style={{
+                    margin: 'auto',
+                    textAlign: 'center',
+                    maxWidth: '460px',
+                    padding: '24px 16px',
+                    color: 'var(--text-secondary)'
+                  }}>
+                    <div style={{
+                      width: '42px',
+                      height: '42px',
+                      borderRadius: '50%',
+                      background: 'var(--highlight-bg)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: '12px'
+                    }}>
+                      <Sparkles size={20} color="var(--theme-primary)" />
+                    </div>
+                    <h4 style={{ margin: '0 0 6px', color: 'var(--text-primary)', fontSize: '0.96rem', fontWeight: 700 }}>
+                      AI Tutor Ready
+                    </h4>
+                    <p style={{ margin: '0 0 16px', fontSize: '0.8rem', lineHeight: '1.5' }}>
+                      Ask questions grounded in the lecture transcript, or click a quick prompt below:
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {[
+                        "Generate Summary for 30 mins read",
+                        "Create a summary for a 15 min read",
+                        "Explain key concepts and definitions",
+                        "Summarize main takeaways for an assignment"
+                      ].map((promptText) => (
+                        <button
+                          key={promptText}
+                          onClick={() => {
+                            setChatInput(promptText);
+                            chatInputRef.current?.focus();
+                          }}
+                          style={{
+                            background: 'var(--card-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            padding: '10px 14px',
+                            textAlign: 'left',
+                            fontSize: '0.82rem',
+                            color: 'var(--text-primary)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            transition: 'all 0.15s ease'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--theme-primary)';
+                            e.currentTarget.style.background = 'var(--panel-bg)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--border-color)';
+                            e.currentTarget.style.background = 'var(--card-bg)';
+                          }}
+                        >
+                          <span>{promptText}</span>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--theme-primary)', fontWeight: 600 }}>Use prompt →</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {chatMessages.map((msg, idx) => {
                   const currentMsgMode = msg.viewOverride || viewMode;
                   const submissionText = submissionSummaries[msg.id] || msg.submission_text || cleanSubmissionFallback(msg.text);
@@ -2458,6 +2536,72 @@ export default function App() {
                             </div>
                           )}
                         </div>
+
+                        {/* User Prompt Action Bar: Copy & Reuse */}
+                        {msg.sender === 'user' && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'flex-end',
+                            gap: '6px',
+                            marginTop: '2px'
+                          }}>
+                            <button
+                              onClick={() => copyUserPrompt(msg.text, msg.id || idx)}
+                              title="Copy prompt text to clipboard"
+                              style={{
+                                background: copiedPromptId === (msg.id || idx) ? 'rgba(16, 185, 129, 0.15)' : 'var(--card-bg)',
+                                color: copiedPromptId === (msg.id || idx) ? '#10b981' : 'var(--text-secondary)',
+                                border: '1px solid ' + (copiedPromptId === (msg.id || idx) ? '#10b981' : 'var(--border-color)'),
+                                borderRadius: '6px',
+                                padding: '2px 8px',
+                                fontSize: '0.72rem',
+                                fontWeight: 600,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              {copiedPromptId === (msg.id || idx) ? <Check size={11} /> : <Copy size={11} />}
+                              <span>{copiedPromptId === (msg.id || idx) ? 'Copied!' : 'Copy'}</span>
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setChatInput(msg.text);
+                                chatInputRef.current?.focus();
+                              }}
+                              title="Insert prompt back into input box"
+                              style={{
+                                background: 'var(--card-bg)',
+                                color: 'var(--text-secondary)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '6px',
+                                padding: '2px 8px',
+                                fontSize: '0.72rem',
+                                fontWeight: 600,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.color = 'var(--theme-primary)';
+                                e.currentTarget.style.borderColor = 'var(--theme-primary)';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.color = 'var(--text-secondary)';
+                                e.currentTarget.style.borderColor = 'var(--border-color)';
+                              }}
+                            >
+                              <RefreshCw size={10} />
+                              <span>Reuse</span>
+                            </button>
+                          </div>
+                        )}
 
                         {/* Submission Mode Footer Bar: Word Count & 1-Click Copy */}
                         {msg.sender === 'bot' && currentMsgMode === 'submission' && (
@@ -2689,7 +2833,59 @@ export default function App() {
               </div>
 
               {/* Simple Input Text Box */}
-              <div style={{ padding: '14px 20px', background: 'var(--panel-bg)', borderTop: '1px solid var(--border-color)' }}>
+              <div style={{ padding: '12px 20px', background: 'var(--panel-bg)', borderTop: '1px solid var(--border-color)' }}>
+                {/* Quick Prompt Suggestions Row */}
+                <div style={{
+                  display: 'flex',
+                  gap: '6px',
+                  overflowX: 'auto',
+                  paddingBottom: '8px',
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none'
+                }}>
+                  {[
+                    "Generate Summary for 30 mins read",
+                    "Create a summary for a 15 min read",
+                    "Explain key concepts and definitions",
+                    "Summarize core takeaways"
+                  ].map((pText) => (
+                    <button
+                      key={pText}
+                      onClick={() => {
+                        setChatInput(pText);
+                        chatInputRef.current?.focus();
+                      }}
+                      title="Click to insert this prompt"
+                      style={{
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '16px',
+                        padding: '3px 10px',
+                        fontSize: '0.73rem',
+                        fontWeight: 500,
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        transition: 'all 0.15s ease',
+                        flexShrink: 0
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--theme-primary)';
+                        e.currentTarget.style.color = 'var(--theme-primary)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border-color)';
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                      }}
+                    >
+                      <span>{pText}</span>
+                    </button>
+                  ))}
+                </div>
+
                 <div style={{
                   display: 'flex',
                   gap: '8px',
@@ -2700,6 +2896,7 @@ export default function App() {
                   boxShadow: '0 1px 4px rgba(0,0,0,0.04)'
                 }}>
                   <input
+                    ref={chatInputRef}
                     type="text"
                     placeholder="Ask AI tutor anything about this lecture..."
                     value={chatInput}

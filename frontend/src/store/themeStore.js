@@ -170,6 +170,8 @@ export const applyThemeCssVariables = (theme) => {
   root.style.setProperty('--header-bg', p.headerBg);
   root.style.setProperty('--header-gradient', p.headerGradient);
   root.style.setProperty('--header-text', p.headerText);
+  root.style.setProperty('--theme-primary', p.primary);
+  root.style.setProperty('--theme-hover', p.primaryHover || p.primary);
   root.style.setProperty('--vimeo-blue', p.primary);
   root.style.setProperty('--vimeo-hover', p.primaryHover || p.primary);
   root.style.setProperty('--bg-dark', p.background);

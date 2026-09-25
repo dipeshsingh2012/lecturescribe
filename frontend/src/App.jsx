@@ -4,7 +4,7 @@ import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
   Zap, Cloud, HardDrive, Terminal, X, Folder, FileCode, CheckCircle2, LogOut,
-  Trash2, Clock, BookOpen, Palette
+  Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -77,7 +77,8 @@ export default function App() {
   const [error, setError] = useState(null);
   const [cacheNotice, setCacheNotice] = useState(null);
   const [activeData, setActiveData] = useState(null);
-  const [activeTab, setActiveTab] = useState('transcript'); // 'transcript' | 'summary' | 'chat'
+  const [activeTab, setActiveTab] = useState('transcript'); // 'transcript' | 'tutor'
+  const [summaryExpanded, setSummaryExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [activeCueIdx, setActiveCueIdx] = useState(0);
@@ -320,7 +321,7 @@ export default function App() {
     return 0;
   };
 
-  // Algolia Instant Search Handler
+  // Instant Search Handler
   useEffect(() => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
@@ -344,7 +345,7 @@ export default function App() {
           setSearchResults(data.hits || []);
         }
       } catch (err) {
-        console.warn("Algolia instant search warning:", err);
+        console.warn("Instant search warning:", err);
       }
     }, 150);
 
@@ -459,7 +460,7 @@ export default function App() {
       }
     } catch (err) {
       console.error("API Call Error:", err);
-      setError(err.message || "Failed to fetch Vimeo transcript. Please check the backend connection and URL.");
+      setError(err.message || "Failed to fetch lecture transcript. Please check the backend connection and URL.");
     } finally {
       setLoading(false);
     }
@@ -505,7 +506,7 @@ export default function App() {
     if (activeData?.title) {
       document.title = `${activeData.title} | LectureScribe`;
     } else {
-      document.title = 'LectureScribe - LMS & Vimeo AI Workspace';
+      document.title = 'LectureScribe - LMS & Lecture AI Workspace';
     }
   }, [activeData]);
 
@@ -525,7 +526,7 @@ export default function App() {
     setChatMessages([
       {
         sender: 'bot',
-        text: `🔍 **Pinecone Vector RAG Ready** for *${title}*!\n\nAsk any question to retrieve grounded answers with exact video timestamp citations:\n- *"What are the core objectives and themes covered in this lecture?"*\n- *"Explain the primary methodology and key concepts discussed"*\n- *"Summarize the main takeaways and conclusions"*\n- *"What specific questions or challenges were addressed?"*`,
+        text: `🤖 **AI Lecture Tutor Ready** for *${title}*!\n\nAsk any question to get explanations, clarity on concepts, or summaries based on this lecture:\n- *"What are the core objectives and themes covered in this lecture?"*\n- *"Explain the primary methodology and key concepts discussed"*\n- *"Summarize the main takeaways and conclusions"*\n- *"What specific questions or challenges were addressed?"*`,
         citations: []
       }
     ]);
@@ -690,7 +691,7 @@ export default function App() {
             style={{
               background: 'rgba(0, 173, 239, 0.15)',
               border: '1px solid rgba(0, 173, 239, 0.4)',
-              color: 'var(--vimeo-blue)',
+              color: 'var(--theme-primary)',
               padding: '1px 6px',
               borderRadius: '4px',
               fontSize: '0.75rem',
@@ -1015,16 +1016,19 @@ export default function App() {
                       cursor: 'pointer',
                       fontSize: '0.85rem',
                       fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
                       transition: 'all 0.2s ease'
                     }}
                   >
-                    🔍 Algolia Search
+                    <Search size={15} /> Search Transcript
                   </button>
                   <button
-                    onClick={() => setActiveTab('summary')}
+                    onClick={() => setActiveTab('tutor')}
                     style={{
-                      background: activeTab === 'summary' ? '#ffffff' : 'transparent',
-                      color: activeTab === 'summary' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
+                      background: activeTab === 'tutor' ? '#ffffff' : 'transparent',
+                      color: activeTab === 'tutor' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                       border: 'none',
                       padding: '6px 14px',
                       borderRadius: '6px',
@@ -1037,26 +1041,7 @@ export default function App() {
                       transition: 'all 0.2s ease'
                     }}
                   >
-                    <FileText size={16} /> AI Summary
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('chat')}
-                    style={{
-                      background: activeTab === 'chat' ? '#ffffff' : 'transparent',
-                      color: activeTab === 'chat' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
-                      border: 'none',
-                      padding: '6px 14px',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem',
-                      fontWeight: 700,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      transition: 'all 0.2s ease'
-                    }}
-                  >
-                    <Bot size={16} /> Pinecone Tutor
+                    <Bot size={16} /> AI Tutor
                   </button>
                 </div>
 
@@ -1330,7 +1315,7 @@ export default function App() {
                 Loading Lecture {getLectureIdFromPath(currentPath) ? `#${getLectureIdFromPath(currentPath)}` : ''}...
               </Typography>
               <Typography variant="body2" sx={{ mt: 1, color: currentTheme.palette.textSecondary }}>
-                Fetching video config, transcript cues, Algolia search indexes, and Pinecone RAG vectors...
+                Fetching video config, transcript cues, search index, and AI tutor knowledge base...
               </Typography>
             </Paper>
           </Box>
@@ -1445,7 +1430,7 @@ export default function App() {
               >
                 <Video size={22} color={currentTheme.palette.textSecondary} style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
                 <InputBase
-                  placeholder="Paste any Vimeo video URL or ID to study & save (e.g. https://vimeo.com/1229247139)..."
+                  placeholder="Paste any lecture video URL or ID to study & save (e.g. 1229247139)..."
                   value={urlInput}
                   onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
                   onPaste={handlePasteUrl}
@@ -1637,7 +1622,7 @@ export default function App() {
                           }}
                           onClick={() => handleTranscribe(item.video_url || item.video_id)}
                         >
-                          {item.video_title || `Vimeo Lecture ${item.video_id}`}
+                          {item.video_title || `Lecture ${item.video_id}`}
                         </Typography>
 
                         <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 'auto' }}>
@@ -1671,7 +1656,7 @@ export default function App() {
                             />
                           )}
                           <Chip
-                            label="Algolia Search"
+                            label="Transcript Search"
                             size="small"
                             sx={{
                               bgcolor: currentTheme.palette.badgeBg,
@@ -1681,7 +1666,7 @@ export default function App() {
                             }}
                           />
                           <Chip
-                            label="Pinecone RAG"
+                            label="AI Tutor"
                             size="small"
                             sx={{
                               bgcolor: 'rgba(139, 92, 246, 0.1)',
@@ -1759,8 +1744,8 @@ export default function App() {
                   </Typography>
                   <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 460, mx: 'auto', mb: 3 }}>
                     {librarySearch
-                      ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new Vimeo URL above.`
-                      : 'Paste any Vimeo lecture link in the quick-add bar above to transcribe, index into Algolia and Pinecone, and start studying!'}
+                      ? `No lectures matched "${librarySearch}". Try a different keyword or paste a new lecture URL above.`
+                      : 'Paste any lecture link in the quick-add bar above to transcribe, index into search and AI tutor, and start studying!'}
                   </Typography>
                   {!librarySearch && (
                     <Button
@@ -1806,7 +1791,7 @@ export default function App() {
                   fontWeight: 700,
                   marginBottom: '24px'
                 }}>
-                  <Zap size={16} /> Triad Engine: Postgres + Algolia Instant Search + Pinecone RAG
+                  <Zap size={16} /> AI Study Assistant: Transcript Search • Executive Summaries • AI Tutor
                 </div>
 
                 <h1 style={{
@@ -1817,8 +1802,8 @@ export default function App() {
                   marginBottom: '16px',
                   color: currentTheme.palette.textPrimary
                 }}>
-                  Vimeo Transcripts & Video AI <br />
-                  <span style={{ color: currentTheme.palette.primary }}>Algolia Search + Pinecone RAG</span>
+                  Lecture Transcripts & Video AI <br />
+                  <span style={{ color: currentTheme.palette.primary }}>Instant Search & Interactive AI Tutor</span>
                 </h1>
 
                 <p style={{
@@ -1828,7 +1813,7 @@ export default function App() {
                   margin: '0 auto 28px',
                   lineHeight: 1.6
                 }}>
-                  Paste any Vimeo video link. Algolia provides sub-10ms instant typo-tolerant search while Pinecone vector search powers grounded AI Chatbot answers.
+                  Paste any lecture video link. Get instant typo-tolerant transcript search, structured executive summaries, and interactive AI Tutor Q&A.
                 </p>
 
                 {/* Google Sign-in Callout Box */}
@@ -1935,7 +1920,7 @@ export default function App() {
                     <Video size={20} style={{ position: 'absolute', left: '14px', color: currentTheme.palette.textSecondary }} />
                     <input
                       type="text"
-                      placeholder="Paste Vimeo link or ID (e.g. https://vimeo.com/1229247139)..."
+                      placeholder="Paste lecture video link or ID (e.g. 1229247139)..."
                       value={urlInput}
                       onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
                       onPaste={handlePasteUrl}
@@ -2092,9 +2077,9 @@ export default function App() {
                 )}
               </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '8px', flexWrap: 'wrap' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Database size={12} color="var(--vimeo-blue)" /> {activeData.cached ? 'Database Cache (Reused)' : 'Postgres/SQLite'}</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Zap size={12} color="#10b981" /> Algolia Instant Search</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Bot size={12} color="#8b5cf6" /> Pinecone Vector RAG</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Database size={12} color="var(--theme-primary)" /> {activeData.cached ? 'Database Cache (Reused)' : 'Cloud Database'}</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Zap size={12} color="#10b981" /> Instant Search</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Bot size={12} color="#8b5cf6" /> AI Tutor</span>
               </div>
             </div>
 
@@ -2117,13 +2102,13 @@ export default function App() {
                   fontSize: '0.85rem'
                 }}
               >
-                {copied ? <Check size={16} color="var(--vimeo-blue)" /> : <Copy size={16} />}
+                {copied ? <Check size={16} color="var(--theme-primary)" /> : <Copy size={16} />}
                 {copied ? 'Copied Transcript!' : 'Copy Transcript'}
               </button>
             </div>
           </div>
 
-          {/* Right Panel: Algolia Search Drawer (.css-1xdwfcd) or RAG AI Tutor */}
+          {/* Right Panel: Instant Search Drawer or AI Tutor */}
           {activeTab === 'transcript' ? (
             <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column' }}>
               <div className="css-1xdwfcd" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -2136,7 +2121,7 @@ export default function App() {
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontWeight: 600, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Zap size={16} color="var(--vimeo-blue)" /> Algolia Instant Search
+                      <Search size={16} color="var(--theme-primary)" /> Instant Transcript Search
                     </span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Showing {displayCues.length} hits</span>
                   </div>
@@ -2145,7 +2130,7 @@ export default function App() {
                     <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
                     <input
                       type="text"
-                      placeholder="Typo-tolerant instant search (e.g. 'semico', 'covid')..."
+                      placeholder="Search transcript by keywords or topics..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       style={{
@@ -2175,14 +2160,14 @@ export default function App() {
                         cursor: 'pointer',
                         marginBottom: '4px',
                         backgroundColor: activeCueIdx === idx ? 'var(--highlight-bg)' : 'transparent',
-                        borderLeft: activeCueIdx === idx ? '3px solid var(--vimeo-blue)' : '3px solid transparent',
+                        borderLeft: activeCueIdx === idx ? '3px solid var(--theme-primary)' : '3px solid transparent',
                         transition: 'background 0.15s ease'
                       }}
                     >
                       <span style={{
                         fontFamily: 'monospace',
                         fontSize: '0.8rem',
-                        color: 'var(--vimeo-blue)',
+                        color: 'var(--theme-primary)',
                         fontWeight: 600,
                         whiteSpace: 'nowrap',
                         paddingTop: '2px'
@@ -2201,108 +2186,204 @@ export default function App() {
                 </div>
               </div>
             </div>
-          ) : activeTab === 'summary' ? (
-            /* EXECUTIVE AI SUMMARY VIEW */
-            <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', padding: '24px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <div>
-                  <h2 style={{ fontSize: '1.3rem', fontWeight: 700, color: 'var(--text-primary)' }}>🎓 Executive AI Summary</h2>
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                    Structured executive insights extracted directly from lecture captions
-                  </p>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <button
-                    onClick={handleRegenerateSummary}
-                    disabled={regeneratingSummary}
+          ) : (
+            /* COMBINED AI TUTOR VIEW (EXECUTIVE SUMMARY + AI TUTOR CHAT) */
+            <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+              
+              {/* Executive Summary Card at Top */}
+              <div style={{
+                background: 'var(--card-bg)',
+                borderBottom: '1px solid var(--border-color)',
+                display: 'flex',
+                flexDirection: 'column',
+                flexShrink: 0,
+                maxHeight: summaryExpanded ? '45%' : 'auto',
+                transition: 'max-height 0.3s ease'
+              }}>
+                {/* Summary Header Bar */}
+                <div style={{
+                  padding: '12px 18px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  borderBottom: summaryExpanded ? '1px solid var(--border-color)' : 'none'
+                }}>
+                  <div
+                    onClick={() => setSummaryExpanded(!summaryExpanded)}
                     style={{
-                      display: 'inline-flex',
+                      display: 'flex',
                       alignItems: 'center',
-                      gap: '6px',
-                      background: 'var(--card-bg)',
-                      border: '1px solid var(--border-color)',
-                      color: 'var(--vimeo-blue)',
-                      padding: '6px 12px',
-                      borderRadius: '8px',
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      cursor: regeneratingSummary ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.2s ease'
+                      gap: '8px',
+                      cursor: 'pointer',
+                      userSelect: 'none'
                     }}
                   >
-                    <RefreshCw size={13} className={regeneratingSummary ? 'loading-pulse' : ''} />
-                    {regeneratingSummary ? 'Extracting Dynamic Summary...' : 'Regenerate Dynamic Summary'}
-                  </button>
-                  {activeData.cached && (
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      background: 'rgba(16, 185, 129, 0.15)',
-                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                      color: '#34d399',
-                      padding: '4px 10px',
-                      borderRadius: '12px',
-                      fontSize: '0.78rem',
-                      fontWeight: 600
-                    }}>
-                      <Check size={14} /> Reused from Cache
+                    <FileText size={18} color="var(--theme-primary)" />
+                    <span style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Executive Summary
                     </span>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {(activeData.summarySections || []).map((sec, sIdx) => (
-                  <div key={sIdx} style={{
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '10px',
-                    padding: '16px 20px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
-                  }}>
-                    <h3 style={{ fontSize: '1.02rem', fontWeight: 700, color: 'var(--vimeo-blue)', marginBottom: '10px' }}>
-                      {sec.title}
-                    </h3>
-                    <ul style={{ paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {(sec.points || []).map((pt, pIdx) => (
-                        <li key={pIdx} style={{ fontSize: '0.88rem', color: 'var(--text-primary)', lineHeight: 1.5 }}>
-                          {renderSummaryPoint(pt)}
-                        </li>
-                      ))}
-                    </ul>
+                    <span style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      background: 'var(--highlight-bg)',
+                      color: 'var(--theme-primary)',
+                      padding: '2px 8px',
+                      borderRadius: '10px'
+                    }}>
+                      {(activeData.summarySections || []).length} sections
+                    </span>
+                    {summaryExpanded ? <ChevronUp size={16} color="var(--text-secondary)" /> : <ChevronDown size={16} color="var(--text-secondary)" />}
                   </div>
-                ))}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      onClick={handleRegenerateSummary}
+                      disabled={regeneratingSummary}
+                      title="Regenerate dynamic summary"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        background: 'transparent',
+                        border: '1px solid var(--border-color)',
+                        color: 'var(--text-secondary)',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '0.76rem',
+                        fontWeight: 600,
+                        cursor: regeneratingSummary ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <RefreshCw size={12} className={regeneratingSummary ? 'loading-pulse' : ''} />
+                      {regeneratingSummary ? 'Refreshing...' : 'Regenerate'}
+                    </button>
+                    {activeData.cached && (
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        background: 'rgba(16, 185, 129, 0.15)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        color: '#34d399',
+                        padding: '2px 8px',
+                        borderRadius: '10px',
+                        fontSize: '0.72rem',
+                        fontWeight: 600
+                      }}>
+                        <Check size={12} /> Cached
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setSummaryExpanded(!summaryExpanded)}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--theme-primary)',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        padding: '4px 6px'
+                      }}
+                    >
+                      {summaryExpanded ? 'Collapse' : 'Expand'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Summary Expandable Content */}
+                {summaryExpanded && (
+                  <div style={{
+                    overflowY: 'auto',
+                    padding: '14px 18px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}>
+                    {(activeData.summarySections || []).length > 0 ? (
+                      activeData.summarySections.map((sec, sIdx) => (
+                        <div
+                          key={sIdx}
+                          style={{
+                            background: 'var(--panel-bg)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            padding: '12px 16px'
+                          }}
+                        >
+                          <h4 style={{
+                            fontSize: '0.9rem',
+                            fontWeight: 700,
+                            color: 'var(--theme-primary)',
+                            margin: '0 0 8px 0'
+                          }}>
+                            {sec.title}
+                          </h4>
+                          <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {(sec.points || []).map((pt, pIdx) => (
+                              <li key={pIdx} style={{ fontSize: '0.82rem', color: 'var(--text-primary)', lineHeight: 1.45 }}>
+                                {renderSummaryPoint(pt)}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))
+                    ) : (
+                      <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: 0 }}>
+                        No structured summary sections available for this lecture.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
-            </div>
-          ) : (
-            /* PINECONE RAG AI TUTOR VIEW */
-            <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column', height: '100%' }}>
-              
-              {/* Chat Header */}
+              {/* AI Tutor Chat Subheader */}
               <div style={{
-                padding: '16px 20px',
+                padding: '12px 18px',
                 borderBottom: '1px solid var(--border-color)',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '10px'
+                gap: '10px',
+                background: 'var(--panel-bg)'
               }}>
-                <Bot size={20} color="var(--vimeo-blue)" />
+                <div style={{
+                  width: '30px',
+                  height: '30px',
+                  borderRadius: '50%',
+                  background: 'var(--highlight-bg)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  <Bot size={17} color="var(--theme-primary)" />
+                </div>
                 <div>
-                  <h3 style={{ fontSize: '0.95rem', fontWeight: 700 }}>Pinecone Vector RAG AI Tutor</h3>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Semantic search & answers grounded in video timestamps</p>
+                  <h3 style={{ fontSize: '0.92rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+                    AI Lecture Tutor
+                  </h3>
+                  <p style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', margin: 0 }}>
+                    Interactive Q&amp;A and concept explanations based on this lecture
+                  </p>
                 </div>
               </div>
 
-              {/* Chat Messages Container */}
-              <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Chat Messages */}
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '16px 18px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '14px'
+              }}>
                 {chatMessages.map((msg, idx) => (
                   <div
                     key={idx}
                     style={{
                       display: 'flex',
-                      gap: '12px',
+                      gap: '10px',
                       alignItems: 'flex-start',
                       alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
                       maxWidth: '85%'
@@ -2310,117 +2391,91 @@ export default function App() {
                   >
                     {msg.sender === 'bot' && (
                       <div style={{
-                        width: '32px',
-                        height: '32px',
+                        width: '28px',
+                        height: '28px',
                         borderRadius: '50%',
-                        background: 'rgba(0, 173, 239, 0.2)',
+                        background: 'var(--highlight-bg)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        flexShrink: 0
+                        flexShrink: 0,
+                        marginTop: '2px'
                       }}>
-                        <Bot size={18} color="var(--vimeo-blue)" />
+                        <Bot size={16} color="var(--theme-primary)" />
                       </div>
                     )}
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <div style={{
-                        background: msg.sender === 'user' ? 'var(--vimeo-blue)' : 'var(--card-bg)',
-                        color: '#ffffff',
-                        padding: '12px 16px',
+                        background: msg.sender === 'user' ? 'var(--theme-primary)' : 'var(--card-bg)',
+                        color: msg.sender === 'user' ? '#ffffff' : 'var(--text-primary)',
+                        padding: '10px 14px',
                         borderRadius: '12px',
                         borderTopLeftRadius: msg.sender === 'bot' ? '2px' : '12px',
                         borderTopRightRadius: msg.sender === 'user' ? '2px' : '12px',
-                        fontSize: '0.9rem',
+                        fontSize: '0.88rem',
                         lineHeight: '1.5',
                         whiteSpace: 'pre-wrap',
-                        border: msg.sender === 'bot' ? '1px solid var(--border-color)' : 'none'
+                        border: msg.sender === 'bot' ? '1px solid var(--border-color)' : 'none',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
                       }}>
                         {msg.text}
                       </div>
-
-                      {/* RAG Timestamp Citation Badges */}
-                      {msg.citations && msg.citations.length > 0 && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '2px' }}>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', items: 'center', gap: '4px' }}>
-                            <Bookmark size={12} color="var(--vimeo-blue)" /> Grounded Citations:
-                          </span>
-                          {msg.citations.map((cit, cIdx) => (
-                            <button
-                              key={cIdx}
-                              onClick={() => handleCueClick(cit.timestamp)}
-                              style={{
-                                background: 'rgba(0, 173, 239, 0.15)',
-                                border: '1px solid rgba(0, 173, 239, 0.4)',
-                                color: 'var(--vimeo-blue)',
-                                padding: '2px 8px',
-                                borderRadius: '12px',
-                                fontSize: '0.75rem',
-                                cursor: 'pointer',
-                                fontWeight: 700,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px'
-                              }}
-                            >
-                              ▶ [{cit.timestamp}] <ExternalLink size={10} />
-                            </button>
-                          ))}
-                        </div>
-                      )}
                     </div>
 
                     {msg.sender === 'user' && (
                       <div style={{
-                        width: '32px',
-                        height: '32px',
+                        width: '28px',
+                        height: '28px',
                         borderRadius: '50%',
                         background: 'var(--card-bg)',
                         border: '1px solid var(--border-color)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        flexShrink: 0
+                        flexShrink: 0,
+                        marginTop: '2px'
                       }}>
-                        <User size={16} color="var(--text-secondary)" />
+                        <User size={15} color="var(--text-secondary)" />
                       </div>
                     )}
                   </div>
                 ))}
 
                 {chatLoading && (
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <div style={{
-                      width: '32px',
-                      height: '32px',
+                      width: '28px',
+                      height: '28px',
                       borderRadius: '50%',
-                      background: 'rgba(0, 173, 239, 0.2)',
+                      background: 'var(--highlight-bg)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center'
                     }}>
-                      <Bot size={18} color="var(--vimeo-blue)" />
+                      <Bot size={16} color="var(--theme-primary)" />
                     </div>
                     <div style={{
                       background: 'var(--card-bg)',
-                      padding: '10px 16px',
+                      padding: '8px 14px',
                       borderRadius: '12px',
-                      fontSize: '0.85rem',
+                      fontSize: '0.82rem',
                       color: 'var(--text-secondary)',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '8px'
+                      gap: '8px',
+                      border: '1px solid var(--border-color)'
                     }}>
-                      <RefreshCw className="loading-pulse" size={16} /> Retrieving Pinecone vector embeddings...
+                      <RefreshCw className="loading-pulse" size={14} /> Thinking &amp; preparing answer...
                     </div>
                   </div>
                 )}
                 <div ref={chatEndRef} />
               </div>
 
-              {/* Quick RAG Suggestion Chips */}
+              {/* Quick Suggestion Chips */}
               <div style={{
-                padding: '8px 20px',
+                padding: '8px 18px',
                 display: 'flex',
                 gap: '8px',
                 overflowX: 'auto',
@@ -2433,10 +2488,10 @@ export default function App() {
                     whiteSpace: 'nowrap',
                     background: 'var(--card-bg)',
                     border: '1px solid var(--border-color)',
-                    color: 'var(--vimeo-blue)',
-                    padding: '6px 12px',
-                    borderRadius: '16px',
-                    fontSize: '0.78rem',
+                    color: 'var(--theme-primary)',
+                    padding: '5px 12px',
+                    borderRadius: '14px',
+                    fontSize: '0.76rem',
                     cursor: 'pointer',
                     fontWeight: 600
                   }}
@@ -2449,10 +2504,10 @@ export default function App() {
                     whiteSpace: 'nowrap',
                     background: 'var(--card-bg)',
                     border: '1px solid var(--border-color)',
-                    color: 'var(--vimeo-blue)',
-                    padding: '6px 12px',
-                    borderRadius: '16px',
-                    fontSize: '0.78rem',
+                    color: 'var(--theme-primary)',
+                    padding: '5px 12px',
+                    borderRadius: '14px',
+                    fontSize: '0.76rem',
                     cursor: 'pointer',
                     fontWeight: 600
                   }}
@@ -2465,10 +2520,10 @@ export default function App() {
                     whiteSpace: 'nowrap',
                     background: 'var(--card-bg)',
                     border: '1px solid var(--border-color)',
-                    color: 'var(--vimeo-blue)',
-                    padding: '6px 12px',
-                    borderRadius: '16px',
-                    fontSize: '0.78rem',
+                    color: 'var(--theme-primary)',
+                    padding: '5px 12px',
+                    borderRadius: '14px',
+                    fontSize: '0.76rem',
                     cursor: 'pointer',
                     fontWeight: 600
                   }}
@@ -2481,20 +2536,20 @@ export default function App() {
                     whiteSpace: 'nowrap',
                     background: 'var(--card-bg)',
                     border: '1px solid var(--border-color)',
-                    color: 'var(--vimeo-blue)',
-                    padding: '6px 12px',
-                    borderRadius: '16px',
-                    fontSize: '0.78rem',
+                    color: 'var(--theme-primary)',
+                    padding: '5px 12px',
+                    borderRadius: '14px',
+                    fontSize: '0.76rem',
                     cursor: 'pointer',
                     fontWeight: 600
                   }}
                 >
-                  ❓ Key Questions & Discussion
+                  ❓ Key Questions
                 </button>
               </div>
 
               {/* Chat Input Bar */}
-              <div style={{ padding: '16px 20px', background: 'var(--panel-bg)', borderTop: '1px solid var(--border-color)' }}>
+              <div style={{ padding: '14px 18px', background: 'var(--panel-bg)', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{
                   display: 'flex',
                   gap: '8px',
@@ -2505,7 +2560,7 @@ export default function App() {
                 }}>
                   <input
                     type="text"
-                    placeholder="Ask RAG tutor about key concepts, methodology, or questions..."
+                    placeholder="Ask AI tutor about key concepts, methodology, or questions..."
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
@@ -2515,14 +2570,14 @@ export default function App() {
                       border: 'none',
                       outline: 'none',
                       color: 'var(--text-primary)',
-                      fontSize: '0.9rem'
+                      fontSize: '0.88rem'
                     }}
                   />
                   <button
                     onClick={() => handleSendMessage()}
                     disabled={!chatInput.trim() || chatLoading}
                     style={{
-                      background: 'var(--vimeo-blue)',
+                      background: 'var(--theme-primary)',
                       color: '#ffffff',
                       border: 'none',
                       width: '36px',
@@ -2531,7 +2586,7 @@ export default function App() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      cursor: 'pointer',
+                      cursor: !chatInput.trim() || chatLoading ? 'not-allowed' : 'pointer',
                       opacity: !chatInput.trim() || chatLoading ? 0.5 : 1
                     }}
                   >
@@ -2586,7 +2641,7 @@ export default function App() {
               background: 'var(--card-bg)'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Download size={20} color="var(--vimeo-blue)" />
+                <Download size={20} color="var(--theme-primary)" />
                 <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                   Export & Download Lecture Package
                 </h3>
@@ -2624,8 +2679,8 @@ export default function App() {
                   padding: '12px',
                   background: downloadModalTab === 'device' ? 'var(--panel-bg)' : 'transparent',
                   border: 'none',
-                  borderBottom: downloadModalTab === 'device' ? '2px solid var(--vimeo-blue)' : '2px solid transparent',
-                  color: downloadModalTab === 'device' ? 'var(--vimeo-blue)' : 'var(--text-secondary)',
+                  borderBottom: downloadModalTab === 'device' ? '2px solid var(--theme-primary)' : '2px solid transparent',
+                  color: downloadModalTab === 'device' ? 'var(--theme-primary)' : 'var(--text-secondary)',
                   fontWeight: 600,
                   fontSize: '0.9rem',
                   cursor: 'pointer'
@@ -2645,8 +2700,8 @@ export default function App() {
                   padding: '12px',
                   background: downloadModalTab === 'cloud' ? 'var(--panel-bg)' : 'transparent',
                   border: 'none',
-                  borderBottom: downloadModalTab === 'cloud' ? '2px solid var(--vimeo-blue)' : '2px solid transparent',
-                  color: downloadModalTab === 'cloud' ? 'var(--vimeo-blue)' : 'var(--text-secondary)',
+                  borderBottom: downloadModalTab === 'cloud' ? '2px solid var(--theme-primary)' : '2px solid transparent',
+                  color: downloadModalTab === 'cloud' ? 'var(--theme-primary)' : 'var(--text-secondary)',
                   fontWeight: 600,
                   fontSize: '0.9rem',
                   cursor: 'pointer'
@@ -2687,7 +2742,7 @@ export default function App() {
                   {/* Document Assets */}
                   <div>
                     <h4 style={{ margin: '0 0 10px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <FileText size={16} color="var(--vimeo-blue)" />
+                      <FileText size={16} color="var(--theme-primary)" />
                       Lecture Documents & Subtitles
                     </h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
@@ -2707,7 +2762,7 @@ export default function App() {
                           fontWeight: 600
                         }}
                       >
-                        <Download size={14} color="var(--vimeo-blue)" />
+                        <Download size={14} color="var(--theme-primary)" />
                         Summary (summary.md)
                       </button>
                       <button
@@ -2726,7 +2781,7 @@ export default function App() {
                           fontWeight: 600
                         }}
                       >
-                        <Download size={14} color="var(--vimeo-blue)" />
+                        <Download size={14} color="var(--theme-primary)" />
                         Transcript (transcript.md)
                       </button>
                       <button
@@ -2745,7 +2800,7 @@ export default function App() {
                           fontWeight: 600
                         }}
                       >
-                        <Download size={14} color="var(--vimeo-blue)" />
+                        <Download size={14} color="var(--theme-primary)" />
                         Subtitles (captions.vtt)
                       </button>
                     </div>
@@ -2755,7 +2810,7 @@ export default function App() {
                   {streamData?.progressive_mp4s && streamData.progressive_mp4s.length > 0 && (
                     <div>
                       <h4 style={{ margin: '0 0 10px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Video size={16} color="var(--vimeo-blue)" />
+                        <Video size={16} color="var(--theme-primary)" />
                         Direct MP4 Video Downloads
                       </h4>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -2773,7 +2828,7 @@ export default function App() {
                             }}
                           >
                             <div>
-                              <span style={{ fontWeight: 700, color: 'var(--vimeo-blue)', fontSize: '0.88rem' }}>
+                              <span style={{ fontWeight: 700, color: 'var(--theme-primary)', fontSize: '0.88rem' }}>
                                 {mp4.quality || 'Standard'} ({mp4.width}x{mp4.height})
                               </span>
                               {mp4.fps && <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginLeft: '8px' }}>{mp4.fps} fps</span>}
@@ -2788,7 +2843,7 @@ export default function App() {
                                 alignItems: 'center',
                                 gap: '6px',
                                 padding: '6px 12px',
-                                background: 'var(--vimeo-blue)',
+                                background: 'var(--theme-primary)',
                                 color: '#ffffff',
                                 borderRadius: '6px',
                                 textDecoration: 'none',
@@ -2808,11 +2863,11 @@ export default function App() {
                   {/* Adaptive HLS Stream Capture Guide */}
                   <div>
                     <h4 style={{ margin: '0 0 8px 0', fontSize: '0.92rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Terminal size={16} color="var(--vimeo-blue)" />
+                      <Terminal size={16} color="var(--theme-primary)" />
                       Download Video Stream via CLI (yt-dlp / ffmpeg)
                     </h4>
                     <p style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      Vimeo protects high-definition video using multi-bitrate Adaptive HLS (<code style={{ color: 'var(--vimeo-blue)' }}>.m3u8</code>). Use these 1-click commands to download the full HD video directly onto your machine:
+                      High-definition lecture video is streamed using multi-bitrate Adaptive HLS (<code style={{ color: 'var(--theme-primary)' }}>.m3u8</code>). Use these 1-click commands to download the full HD video directly onto your machine:
                     </p>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -2896,14 +2951,14 @@ export default function App() {
                     flexDirection: 'column',
                     gap: '6px'
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: 'var(--vimeo-blue)', fontSize: '0.9rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: 'var(--theme-primary)', fontSize: '0.9rem' }}>
                       <Folder size={18} />
                       Dedicated Cloud Folder: LectureScribe - {activeData?.title} ({activeData?.videoId})
                     </div>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
                       Exports the complete lecture bundle into Google Drive:
                       <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
-                        <li><strong style={{ color: 'var(--vimeo-blue)' }}><code>{(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim()}.mp4</code></strong> — Full lecture video recording</li>
+                        <li><strong style={{ color: 'var(--theme-primary)' }}><code>{(activeData?.title || 'lecture').replace(/[^a-zA-Z0-9_\- ]/g, '_').trim()}.mp4</code></strong> — Full lecture video recording</li>
                         <li><code>summary.md</code> — Executive dynamic AI summary & key questions</li>
                         <li><code>transcript.md</code> — Chronological verbatim lecture transcript</li>
                         <li><code>captions.vtt</code> — Complete WebVTT subtitle track</li>
@@ -3044,7 +3099,7 @@ export default function App() {
                         Set Up 1-Click Google Sign-In
                       </div>
                       <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                        To enable 1-click Google Sign-In, enter your Google OAuth <strong>Client ID</strong> below (or add <code style={{ color: 'var(--vimeo-blue)' }}>GOOGLE_CLIENT_ID</code> to your project's <code style={{ color: 'var(--vimeo-blue)' }}>.env</code> file):
+                        To enable 1-click Google Sign-In, enter your Google OAuth <strong>Client ID</strong> below (or add <code style={{ color: 'var(--theme-primary)' }}>GOOGLE_CLIENT_ID</code> to your project's <code style={{ color: 'var(--theme-primary)' }}>.env</code> file):
                       </p>
                       <div style={{ display: 'flex', gap: '8px' }}>
                         <input
@@ -3105,7 +3160,7 @@ export default function App() {
                         <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                           {gdriveJob.status === 'COMPLETED' ? '✅ Upload Complete!' : gdriveJob.status === 'FAILED' ? '❌ Upload Failed' : '⏳ Uploading in Background...'}
                         </span>
-                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--vimeo-blue)' }}>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--theme-primary)' }}>
                           {gdriveJob.progress}%
                         </span>
                       </div>
@@ -3115,7 +3170,7 @@ export default function App() {
                         <div style={{
                           width: `${gdriveJob.progress}%`,
                           height: '100%',
-                          background: gdriveJob.status === 'FAILED' ? '#ef4444' : gdriveJob.status === 'COMPLETED' ? '#10b981' : 'var(--vimeo-blue)',
+                          background: gdriveJob.status === 'FAILED' ? '#ef4444' : gdriveJob.status === 'COMPLETED' ? '#10b981' : 'var(--theme-primary)',
                           transition: 'width 0.4s ease'
                         }} />
                       </div>
@@ -3205,10 +3260,10 @@ export default function App() {
                                   }}
                                 >
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    {file.is_video ? <Video size={14} color="var(--vimeo-blue)" /> : <FileText size={14} color="var(--text-secondary)" />}
-                                    <strong style={{ color: file.is_video ? 'var(--vimeo-blue)' : 'inherit' }}>{file.name}</strong>
+                                    {file.is_video ? <Video size={14} color="var(--theme-primary)" /> : <FileText size={14} color="var(--text-secondary)" />}
+                                    <strong style={{ color: file.is_video ? 'var(--theme-primary)' : 'inherit' }}>{file.name}</strong>
                                     {file.is_video && (
-                                      <span style={{ fontSize: '0.7rem', background: 'var(--highlight-bg)', color: 'var(--vimeo-blue)', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                      <span style={{ fontSize: '0.7rem', background: 'var(--highlight-bg)', color: 'var(--theme-primary)', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
                                         Video MP4
                                       </span>
                                     )}
@@ -3237,7 +3292,7 @@ export default function App() {
                       disabled={gdriveUploading}
                       style={{
                         padding: '12px 20px',
-                        background: 'var(--vimeo-blue)',
+                        background: 'var(--theme-primary)',
                         color: '#ffffff',
                         border: 'none',
                         borderRadius: '8px',

@@ -762,18 +762,6 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Synchronize document title with currently active lecture or course route
-  useEffect(() => {
-    const courseTitle = activeCourseData?.course_name || selectedCourse;
-    if (activeData?.title) {
-      document.title = `${activeData.title} | LectureScribe`;
-    } else if (courseTitle) {
-      document.title = `${courseTitle} | Course | LectureScribe`;
-    } else {
-      document.title = 'LectureScribe - LMS & Lecture AI Workspace';
-    }
-  }, [activeData, selectedCourse, activeCourseData]);
-
   // Synchronize persisted conversation history when lecture opens or changes
   useEffect(() => {
     if (activeData?.videoId) {
@@ -1439,6 +1427,18 @@ export default function App() {
       (item.video_id && String(item.video_id).toLowerCase().includes(q))
     );
   }, [activeCourseData, librarySearch]);
+
+  // Synchronize document title with currently active lecture or course route
+  useEffect(() => {
+    const courseTitle = activeCourseData?.course_name || selectedCourse;
+    if (activeData?.title) {
+      document.title = `${activeData.title} | LectureScribe`;
+    } else if (courseTitle) {
+      document.title = `${courseTitle} | Course | LectureScribe`;
+    } else {
+      document.title = 'LectureScribe - LMS & Lecture AI Workspace';
+    }
+  }, [activeData, selectedCourse, activeCourseData]);
 
   return (
     <ThemeProvider theme={muiTheme}>

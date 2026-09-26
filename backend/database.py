@@ -644,12 +644,19 @@ class RelationalDBManager:
 
         clean_name = course_name.strip()
         clean_lower = clean_name.lower()
+        slug_as_space = clean_name.replace("-", " ")
+        slug_as_wildcard = clean_name.replace("-", "%")
 
         # Check in-memory cache first if available
         mem_lectures = []
         for vid_id, v in self._memory_cache.items():
             c_name = v.get("course_name") or extract_course_name(v.get("title", ""))
-            if c_name.lower() == clean_lower or clean_lower in c_name.lower() or clean_lower in v.get("title", "").lower():
+            c_slug = re.sub(r'[^a-z0-9]+', '-', c_name.lower()).strip('-')
+            if (clean_lower in (c_name.lower(), c_slug)
+                or slug_as_space.lower() == c_name.lower()
+                or clean_lower in c_name.lower()
+                or slug_as_space.lower() in c_name.lower()
+                or clean_lower in v.get("title", "").lower()):
                 mem_lectures.append({
                     "videoId": vid_id,
                     "video_id": vid_id,
@@ -685,9 +692,11 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at, course_name
                             FROM lecturescribe_user_library
-                            WHERE user_email = %s AND (course_name ILIKE %s OR course_name ILIKE %s)
+                            WHERE user_email = %s AND (
+                                course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s
+                            )
                             ORDER BY last_viewed_at DESC;
-                        """, (user_email.strip().lower(), clean_name, f"%{clean_name}%"))
+                        """, (user_email.strip().lower(), clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%"))
                         rows = cursor.fetchall() or []
                         if rows:
                             canonical_name = rows[0].get("course_name") or clean_name
@@ -718,9 +727,9 @@ class RelationalDBManager:
                     cursor.execute("""
                         SELECT video_id, title, duration, source_url, course_name, created_at
                         FROM lecturescribe_videos
-                        WHERE course_name ILIKE %s OR course_name ILIKE %s OR title ILIKE %s
+                        WHERE course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR title ILIKE %s
                         ORDER BY created_at DESC;
-                    """, (clean_name, f"%{clean_name}%", f"%{clean_name}%"))
+                    """, (clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%"))
                     vid_rows = cursor.fetchall() or []
                     if not vid_rows:
                         return None

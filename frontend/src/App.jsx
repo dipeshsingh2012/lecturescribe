@@ -157,7 +157,7 @@ export default function App() {
 
   const handleBackToHub = () => {
     if (selectedCourse) {
-      navigateTo(`/course/${encodeURIComponent(selectedCourse)}`);
+      navigateTo(`/course/${normalizeCourseSlug(selectedCourse)}`);
     } else {
       navigateTo('/');
     }
@@ -169,7 +169,7 @@ export default function App() {
   const handleSelectCourse = (courseName) => {
     if (!courseName) return;
     setSelectedCourse(courseName);
-    navigateTo(`/course/${encodeURIComponent(courseName)}`);
+    navigateTo(`/course/${normalizeCourseSlug(courseName)}`);
   };
 
   const handleClearCourse = () => {
@@ -620,7 +620,7 @@ export default function App() {
     if (pushRoute && vidId) {
       if (effectiveCourse) {
         setSelectedCourse(effectiveCourse);
-        navigateTo(`/course/${encodeURIComponent(effectiveCourse)}/lecture/${vidId}`);
+        navigateTo(`/course/${normalizeCourseSlug(effectiveCourse)}/lecture/${vidId}`);
       } else {
         navigateTo(`/lecture/${vidId}`);
       }
@@ -638,8 +638,8 @@ export default function App() {
       const finalCourse = cached.course_name || effectiveCourse;
       if (finalCourse) {
         setSelectedCourse(finalCourse);
-        if (typeof window !== 'undefined' && window.location.pathname.startsWith('/lecture/')) {
-          navigateTo(`/course/${encodeURIComponent(finalCourse)}/lecture/${vidId}`, true);
+        if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/lecture/') || window.location.pathname.includes('%20') || window.location.pathname.includes(' '))) {
+          navigateTo(`/course/${normalizeCourseSlug(finalCourse)}/lecture/${vidId}`, true);
         }
       }
       setActiveData({ ...cached, cached: true });
@@ -680,8 +680,8 @@ export default function App() {
         const finalCourse = data.course_name || effectiveCourse;
         if (finalCourse) {
           setSelectedCourse(finalCourse);
-          if (typeof window !== 'undefined' && window.location.pathname.startsWith('/lecture/')) {
-            navigateTo(`/course/${encodeURIComponent(finalCourse)}/lecture/${data.videoId}`, true);
+          if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/lecture/') || window.location.pathname.includes('%20') || window.location.pathname.includes(' '))) {
+            navigateTo(`/course/${normalizeCourseSlug(finalCourse)}/lecture/${data.videoId}`, true);
           }
         }
         setActiveData(data);
@@ -764,14 +764,15 @@ export default function App() {
 
   // Synchronize document title with currently active lecture or course route
   useEffect(() => {
+    const courseTitle = activeCourseData?.course_name || selectedCourse;
     if (activeData?.title) {
       document.title = `${activeData.title} | LectureScribe`;
-    } else if (selectedCourse) {
-      document.title = `${selectedCourse} | Course | LectureScribe`;
+    } else if (courseTitle) {
+      document.title = `${courseTitle} | Course | LectureScribe`;
     } else {
       document.title = 'LectureScribe - LMS & Lecture AI Workspace';
     }
-  }, [activeData, selectedCourse]);
+  }, [activeData, selectedCourse, activeCourseData]);
 
   // Synchronize persisted conversation history when lecture opens or changes
   useEffect(() => {
@@ -1833,48 +1834,50 @@ export default function App() {
                 </Paper>
               )}
 
-              {/* Quick-Add Lecture Bar */}
-              <Paper
-                elevation={0}
-                sx={{
-                  p: '6px 12px',
-                  mb: 3,
-                  borderRadius: 3,
-                  display: 'flex',
-                  alignItems: 'center',
-                  bgcolor: currentTheme.palette.cardBg,
-                  border: `1px solid ${currentTheme.palette.cardBorder}`,
-                  boxShadow: currentTheme.palette.cardShadow
-                }}
-              >
-                <Video size={22} color={currentTheme.palette.textSecondary} style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
-                <InputBase
-                  placeholder={selectedCourse ? `Add video ID or URL to ${selectedCourse}...` : "Paste any lecture video URL or ID to study & save..."}
-                  value={urlInput}
-                  onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
-                  onPaste={handlePasteUrl}
-                  onKeyDown={(e) => e.key === 'Enter' && handleTranscribe(urlInput, true, selectedCourse)}
-                  sx={{ flex: 1, color: currentTheme.palette.textPrimary, fontSize: '0.95rem' }}
-                />
-                <Button
-                  variant="contained"
-                  onClick={() => handleTranscribe(urlInput, true, selectedCourse)}
-                  disabled={loading || !urlInput.trim()}
-                  startIcon={loading ? <RefreshCw className="loading-pulse" size={16} /> : <Sparkles size={16} />}
+              {/* Quick-Add Lecture Bar - Only on All Courses / Landing Screen */}
+              {!selectedCourse && (
+                <Paper
+                  elevation={0}
                   sx={{
-                    bgcolor: currentTheme.palette.primary,
-                    color: '#ffffff',
-                    fontWeight: 700,
-                    textTransform: 'none',
-                    px: 3,
-                    py: 1,
-                    borderRadius: 2,
-                    '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                    p: '6px 12px',
+                    mb: 3,
+                    borderRadius: 3,
+                    display: 'flex',
+                    alignItems: 'center',
+                    bgcolor: currentTheme.palette.cardBg,
+                    border: `1px solid ${currentTheme.palette.cardBorder}`,
+                    boxShadow: currentTheme.palette.cardShadow
                   }}
                 >
-                  {loading ? 'Ingesting...' : (selectedCourse ? `Add to ${selectedCourse}` : 'Transcribe & Study')}
-                </Button>
-              </Paper>
+                  <Video size={22} color={currentTheme.palette.textSecondary} style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
+                  <InputBase
+                    placeholder="Paste any lecture video URL or ID to study & save..."
+                    value={urlInput}
+                    onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
+                    onPaste={handlePasteUrl}
+                    onKeyDown={(e) => e.key === 'Enter' && handleTranscribe(urlInput, true)}
+                    sx={{ flex: 1, color: currentTheme.palette.textPrimary, fontSize: '0.95rem' }}
+                  />
+                  <Button
+                    variant="contained"
+                    onClick={() => handleTranscribe(urlInput, true)}
+                    disabled={loading || !urlInput.trim()}
+                    startIcon={loading ? <RefreshCw className="loading-pulse" size={16} /> : <Sparkles size={16} />}
+                    sx={{
+                      bgcolor: currentTheme.palette.primary,
+                      color: '#ffffff',
+                      fontWeight: 700,
+                      textTransform: 'none',
+                      px: 3,
+                      py: 1,
+                      borderRadius: 2,
+                      '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                    }}
+                  >
+                    {loading ? 'Ingesting...' : 'Transcribe & Study'}
+                  </Button>
+                </Paper>
+              )}
 
               {/* Error Banner */}
               {error && (
@@ -2433,7 +2436,7 @@ export default function App() {
                     onClick={() => {
                       setSelectedCourse(effectiveCourse);
                       setActiveData(null);
-                      navigateTo(`/course/${encodeURIComponent(effectiveCourse)}`);
+                      navigateTo(`/course/${normalizeCourseSlug(effectiveCourse)}`);
                     }}
                     sx={{
                       p: 0,

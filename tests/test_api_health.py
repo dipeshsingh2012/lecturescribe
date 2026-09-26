@@ -13,5 +13,9 @@ class TestAPIHealth(unittest.TestCase):
         self.assertEqual(data.get("status"), "ok")
         self.assertEqual(data.get("service"), "lecturescribe-triad-api")
 
+    def test_course_route_not_found(self):
+        response = self.client.get("/api/course/nonexistent_course_test_123")
+        self.assertEqual(response.status_code, 404)
+
 if __name__ == "__main__":
     unittest.main()

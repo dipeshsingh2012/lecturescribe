@@ -29,6 +29,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
 import InputBase from '@mui/material/InputBase';
+import CircularProgress from '@mui/material/CircularProgress';
 import { ProtonThemeSelector } from '@dipesh.singh/proton';
 import { useThemeStore, LMS_THEMES, applyThemeCssVariables } from './store/themeStore';
 
@@ -103,6 +104,22 @@ export default function App() {
     return match ? match[1] : null;
   };
 
+  const getCourseNameFromPath = (path = (typeof window !== 'undefined' ? window.location.pathname : '/')) => {
+    if (!path) return null;
+    const match = path.match(/^\/(?:course|courses)\/([^/?#]+)/i);
+    if (!match) return null;
+    try {
+      return decodeURIComponent(match[1].replace(/\+/g, ' '));
+    } catch {
+      return match[1];
+    }
+  };
+
+  const normalizeCourseSlug = (str) => {
+    if (!str) return '';
+    return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  };
+
   const navigateTo = (path, replace = false) => {
     try {
       if (typeof window !== 'undefined' && window.location.pathname !== path) {
@@ -119,10 +136,26 @@ export default function App() {
   };
 
   const handleBackToHub = () => {
-    navigateTo('/');
+    if (selectedCourse) {
+      navigateTo(`/course/${encodeURIComponent(selectedCourse)}`);
+    } else {
+      navigateTo('/');
+    }
     setActiveData(null);
     setError(null);
     setCacheNotice(null);
+  };
+
+  const handleSelectCourse = (courseName) => {
+    if (!courseName) return;
+    setSelectedCourse(courseName);
+    navigateTo(`/course/${encodeURIComponent(courseName)}`);
+  };
+
+  const handleClearCourse = () => {
+    setSelectedCourse(null);
+    setDirectCourseData(null);
+    navigateTo('/');
   };
 
   // Cloud Export Modal State
@@ -168,7 +201,16 @@ export default function App() {
   // LMS User Library & Course Grouping State
   const [userLibrary, setUserLibrary] = useState([]);
   const [userCourses, setUserCourses] = useState([]);
-  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [selectedCourse, setSelectedCourse] = useState(() => {
+    try {
+      const initial = typeof window !== 'undefined' ? window.location.pathname : '/';
+      return getCourseNameFromPath(initial);
+    } catch {
+      return null;
+    }
+  });
+  const [courseLoading, setCourseLoading] = useState(false);
+  const [directCourseData, setDirectCourseData] = useState(null);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [librarySearch, setLibrarySearch] = useState('');
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
@@ -644,8 +686,11 @@ export default function App() {
     // 1. Initial page load check
     const initialPath = window.location.pathname || '/';
     const initialVidId = getLectureIdFromPath(initialPath);
+    const initialCourse = getCourseNameFromPath(initialPath);
     if (initialVidId) {
       handleTranscribe(initialVidId, false);
+    } else if (initialCourse) {
+      setSelectedCourse(initialCourse);
     }
 
     // 2. Browser Back / Forward navigation listener
@@ -653,6 +698,7 @@ export default function App() {
       const current = window.location.pathname || '/';
       setCurrentPath(current);
       const vidId = getLectureIdFromPath(current);
+      const courseName = getCourseNameFromPath(current);
       if (vidId) {
         if (!activeDataRef.current || activeDataRef.current.videoId !== vidId) {
           handleTranscribe(vidId, false);
@@ -661,6 +707,7 @@ export default function App() {
         setActiveData(null);
         setError(null);
         setCacheNotice(null);
+        setSelectedCourse(courseName || null);
       }
     };
 
@@ -668,14 +715,16 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Synchronize document title with currently active lecture route
+  // Synchronize document title with currently active lecture or course route
   useEffect(() => {
     if (activeData?.title) {
       document.title = `${activeData.title} | LectureScribe`;
+    } else if (selectedCourse) {
+      document.title = `${selectedCourse} | Course | LectureScribe`;
     } else {
       document.title = 'LectureScribe - LMS & Lecture AI Workspace';
     }
-  }, [activeData]);
+  }, [activeData, selectedCourse]);
 
   // Synchronize persisted conversation history when lecture opens or changes
   useEffect(() => {
@@ -1275,10 +1324,62 @@ export default function App() {
     );
   }, [effectiveCourses, librarySearch]);
 
+  // Direct course fetching when navigated to /course/:courseName directly
+  useEffect(() => {
+    if (!selectedCourse) {
+      setDirectCourseData(null);
+      return;
+    }
+    const clean = selectedCourse.trim().toLowerCase();
+    const slug = normalizeCourseSlug(selectedCourse);
+    const alreadyFound = effectiveCourses.some(c => 
+      c.course_name === selectedCourse || 
+      c.course_name.toLowerCase() === clean ||
+      normalizeCourseSlug(c.course_name) === slug
+    );
+    if (alreadyFound) return;
+
+    let isMounted = true;
+    const fetchDirectCourse = async () => {
+      setCourseLoading(true);
+      try {
+        const emailParam = googleUser?.email ? `?email=${encodeURIComponent(googleUser.email)}` : '';
+        const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(selectedCourse)}${emailParam}`);
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          if (data.course) {
+            setDirectCourseData(data.course);
+          }
+        }
+      } catch (e) {
+        console.warn("Direct course lookup error:", e);
+      } finally {
+        if (isMounted) setCourseLoading(false);
+      }
+    };
+    fetchDirectCourse();
+    return () => { isMounted = false; };
+  }, [selectedCourse, effectiveCourses, googleUser]);
+
   const activeCourseData = useMemo(() => {
     if (!selectedCourse) return null;
-    return effectiveCourses.find(c => c.course_name === selectedCourse) || null;
-  }, [effectiveCourses, selectedCourse]);
+    const clean = selectedCourse.trim().toLowerCase();
+    const slug = normalizeCourseSlug(selectedCourse);
+    const found = (
+      effectiveCourses.find(c => c.course_name === selectedCourse) ||
+      effectiveCourses.find(c => c.course_name.toLowerCase() === clean) ||
+      effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === slug)
+    );
+    if (found) return found;
+    if (directCourseData && (
+      directCourseData.course_name === selectedCourse ||
+      directCourseData.course_name.toLowerCase() === clean ||
+      normalizeCourseSlug(directCourseData.course_name) === slug
+    )) {
+      return directCourseData;
+    }
+    return null;
+  }, [effectiveCourses, selectedCourse, directCourseData]);
 
   const filteredCourseLectures = useMemo(() => {
     if (!activeCourseData) return [];
@@ -1405,7 +1506,7 @@ export default function App() {
                     '&:hover': { borderColor: '#ffffff', bgcolor: 'rgba(255, 255, 255, 0.1)' }
                   }}
                 >
-                  {googleUser ? 'My Library' : 'New Video'}
+                  {selectedCourse ? selectedCourse : (googleUser ? 'My Library' : 'New Video')}
                 </Button>
               </>
             )}
@@ -1571,76 +1672,140 @@ export default function App() {
             </Paper>
           </Box>
         ) : !activeData ? (
-          googleUser ? (
-            /* ================= FLOW 1: SIGNED-IN LMS DASHBOARD ================= */
+          (googleUser || selectedCourse) ? (
+            /* ================= FLOW 1: SIGNED-IN LMS DASHBOARD OR COURSE ROUTE ================= */
             <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>
-              {/* Scholar Greeting & Stats Banner */}
-              <Paper
-                elevation={0}
-                sx={{
-                  p: { xs: 2.5, md: 3 },
-                  mb: 4,
-                  borderRadius: 3,
-                  background: currentTheme.palette.headerGradient,
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
-                  display: 'flex',
-                  flexDirection: { xs: 'column', md: 'row' },
-                  alignItems: { xs: 'flex-start', md: 'center' },
-                  justifyContent: 'space-between',
-                  gap: 2,
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.15)'
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Avatar
-                    src={googleUser.picture}
-                    alt={googleUser.name}
-                    sx={{ width: 56, height: 56, bgcolor: currentTheme.palette.primary, fontWeight: 800, fontSize: '1.4rem' }}
-                  >
-                    {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
-                  </Avatar>
-                  <Box>
-                    <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
-                      Welcome back, {googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')}! 🎓
-                    </Typography>
+              {/* Scholar Greeting & Stats Banner (for signed-in users) */}
+              {googleUser && (
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: { xs: 2.5, md: 3 },
+                    mb: 4,
+                    borderRadius: 3,
+                    background: currentTheme.palette.headerGradient,
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    display: 'flex',
+                    flexDirection: { xs: 'column', md: 'row' },
+                    alignItems: { xs: 'flex-start', md: 'center' },
+                    justifyContent: 'space-between',
+                    gap: 2,
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.15)'
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Avatar
+                      src={googleUser.picture}
+                      alt={googleUser.name}
+                      sx={{ width: 56, height: 56, bgcolor: currentTheme.palette.primary, fontWeight: 800, fontSize: '1.4rem' }}
+                    >
+                      {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
+                    </Avatar>
+                    <Box>
+                      <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
+                        Welcome back, {googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')}! 🎓
+                      </Typography>
+                    </Box>
                   </Box>
-                </Box>
 
-                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-                  <Paper
-                    elevation={0}
-                    sx={{
-                      px: 2.5,
-                      py: 1.2,
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                    <Paper
+                      elevation={0}
+                      sx={{
+                        px: 2.5,
+                        py: 1.2,
+                        borderRadius: 2.5,
+                        bgcolor: 'rgba(255, 255, 255, 0.15)',
+                        backdropFilter: 'blur(8px)',
+                        border: '1px solid rgba(255, 255, 255, 0.22)',
+                        textAlign: 'center'
+                      }}
+                    >
+                      <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
+                      <Typography variant="h6" sx={{ color: '#ffffff', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
+                    </Paper>
+                    <Paper
+                      elevation={0}
+                      sx={{
+                        px: 2.5,
+                        py: 1.2,
+                        borderRadius: 2.5,
+                        bgcolor: 'rgba(255, 255, 255, 0.15)',
+                        backdropFilter: 'blur(8px)',
+                        border: '1px solid rgba(255, 255, 255, 0.22)',
+                        textAlign: 'center'
+                      }}
+                    >
+                      <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
+                      <Typography variant="h6" sx={{ color: '#a7f3d0', fontWeight: 800, lineHeight: 1 }}>
+                        {userLibrary.filter(x => x.drive_folder_url).length}
+                      </Typography>
+                    </Paper>
+                  </Box>
+                </Paper>
+              )}
+
+              {/* Guest Course Header Banner (when visiting a course without being logged in) */}
+              {!googleUser && selectedCourse && (
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: { xs: 2.5, md: 3 },
+                    mb: 3,
+                    borderRadius: 3,
+                    background: currentTheme.palette.headerGradient,
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    display: 'flex',
+                    flexDirection: { xs: 'column', sm: 'row' },
+                    alignItems: { xs: 'flex-start', sm: 'center' },
+                    justifyContent: 'space-between',
+                    gap: 2,
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.15)'
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Box sx={{
+                      width: 48,
+                      height: 48,
                       borderRadius: 2.5,
-                      bgcolor: 'rgba(255, 255, 255, 0.15)',
-                      backdropFilter: 'blur(8px)',
-                      border: '1px solid rgba(255, 255, 255, 0.22)',
-                      textAlign: 'center'
+                      bgcolor: 'rgba(255, 255, 255, 0.2)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}>
+                      <BookOpen size={26} color="#ffffff" />
+                    </Box>
+                    <Box>
+                      <Typography variant="h6" sx={{ fontWeight: 800, color: '#ffffff' }}>
+                        Course: {activeCourseData?.course_name || selectedCourse}
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', fontSize: '0.85rem' }}>
+                        Public Course Syllabus & Lecture Catalog
+                      </Typography>
+                    </Box>
+                  </Box>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={() => handleGoogleSignIn(false)}
+                    startIcon={<GoogleIcon />}
+                    sx={{
+                      background: '#ffffff',
+                      color: '#1f2937',
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.84rem',
+                      borderRadius: '20px',
+                      px: 2,
+                      py: 0.8,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+                      '&:hover': { background: '#f3f4f6' }
                     }}
                   >
-                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
-                    <Typography variant="h6" sx={{ color: '#ffffff', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
-                  </Paper>
-                  <Paper
-                    elevation={0}
-                    sx={{
-                      px: 2.5,
-                      py: 1.2,
-                      borderRadius: 2.5,
-                      bgcolor: 'rgba(255, 255, 255, 0.15)',
-                      backdropFilter: 'blur(8px)',
-                      border: '1px solid rgba(255, 255, 255, 0.22)',
-                      textAlign: 'center'
-                    }}
-                  >
-                    <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
-                    <Typography variant="h6" sx={{ color: '#a7f3d0', fontWeight: 800, lineHeight: 1 }}>
-                      {userLibrary.filter(x => x.drive_folder_url).length}
-                    </Typography>
-                  </Paper>
-                </Box>
-              </Paper>
+                    Sign in to Save
+                  </Button>
+                </Paper>
+              )}
 
               {/* Quick-Add Lecture Bar */}
               <Paper
@@ -1731,7 +1896,7 @@ export default function App() {
                         variant="outlined"
                         size="small"
                         startIcon={<ArrowLeft size={16} />}
-                        onClick={() => setSelectedCourse(null)}
+                        onClick={handleClearCourse}
                         sx={{
                           textTransform: 'none',
                           fontWeight: 700,
@@ -1746,8 +1911,30 @@ export default function App() {
                         All Courses
                       </Button>
                       <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
-                        {selectedCourse}
+                        {activeCourseData?.course_name || selectedCourse}
                       </Typography>
+                      <Chip
+                        icon={<Bookmark size={13} color={currentTheme.palette.primary} />}
+                        label={`/course/${encodeURIComponent(selectedCourse)}`}
+                        size="small"
+                        onClick={() => {
+                          const fullUrl = `${window.location.origin}/course/${encodeURIComponent(selectedCourse)}`;
+                          navigator.clipboard.writeText(fullUrl);
+                          setCacheNotice(`🔗 Copied course URL: ${fullUrl}`);
+                          setTimeout(() => setCacheNotice(null), 3000);
+                        }}
+                        title="Click to copy permanent course URL"
+                        sx={{
+                          fontFamily: 'monospace',
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          bgcolor: currentTheme.palette.badgeBg,
+                          color: currentTheme.palette.badgeColor,
+                          border: `1px solid ${currentTheme.palette.badgeBorder}`,
+                          cursor: 'pointer',
+                          '&:hover': { opacity: 0.85 }
+                        }}
+                      />
                       <Chip
                         label={`${filteredCourseLectures.length} ${filteredCourseLectures.length === 1 ? 'lecture' : 'lectures'}`}
                         size="small"
@@ -1757,7 +1944,7 @@ export default function App() {
                   ) : (
                     <>
                       <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
-                        My Courses & Subjects
+                        My Courses
                       </Typography>
                       <Chip
                         label={`${filteredCourses.length} ${filteredCourses.length === 1 ? 'course' : 'courses'}`}
@@ -1820,7 +2007,7 @@ export default function App() {
                     {filteredCourses.map((course) => (
                       <Card
                         key={course.course_name}
-                        onClick={() => setSelectedCourse(course.course_name)}
+                        onClick={() => handleSelectCourse(course.course_name)}
                         sx={{
                           width: '100%',
                           height: '100%',
@@ -1855,17 +2042,31 @@ export default function App() {
                           }}>
                             <BookOpen size={22} color={currentTheme.palette.primary} />
                           </Box>
-                          <Chip
-                            label={`${course.lecture_count} ${course.lecture_count === 1 ? 'lecture' : 'lectures'}`}
-                            size="small"
-                            sx={{
-                              fontWeight: 700,
-                              fontSize: '0.74rem',
-                              bgcolor: currentTheme.palette.badgeBg,
-                              color: currentTheme.palette.badgeColor,
-                              border: `1px solid ${currentTheme.palette.badgeBorder}`
-                            }}
-                          />
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                            <Chip
+                              label={`/course/${encodeURIComponent(course.course_name)}`}
+                              size="small"
+                              sx={{
+                                fontFamily: 'monospace',
+                                fontWeight: 600,
+                                fontSize: '0.68rem',
+                                bgcolor: currentTheme.palette.badgeBg,
+                                color: currentTheme.palette.badgeColor,
+                                border: `1px solid ${currentTheme.palette.badgeBorder}`
+                              }}
+                            />
+                            <Chip
+                              label={`${course.lecture_count} ${course.lecture_count === 1 ? 'lecture' : 'lectures'}`}
+                              size="small"
+                              sx={{
+                                fontWeight: 700,
+                                fontSize: '0.74rem',
+                                bgcolor: currentTheme.palette.badgeBg,
+                                color: currentTheme.palette.badgeColor,
+                                border: `1px solid ${currentTheme.palette.badgeBorder}`
+                              }}
+                            />
+                          </Box>
                         </Box>
 
                         <Typography
@@ -1967,7 +2168,14 @@ export default function App() {
                 )
               ) : (
                 /* LEVEL 2: INDIVIDUAL LECTURES IN SELECTED COURSE */
-                filteredCourseLectures.length > 0 ? (
+                courseLoading ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 8 }}>
+                    <CircularProgress size={36} sx={{ color: currentTheme.palette.primary, mb: 2 }} />
+                    <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary }}>
+                      Loading course lectures...
+                    </Typography>
+                  </Box>
+                ) : filteredCourseLectures.length > 0 ? (
                   <Box
                     sx={{
                       display: 'grid',
@@ -2174,7 +2382,7 @@ export default function App() {
                       variant="outlined"
                       size="small"
                       startIcon={<ArrowLeft size={16} />}
-                      onClick={() => setSelectedCourse(null)}
+                      onClick={handleClearCourse}
                       sx={{ textTransform: 'none', fontWeight: 600 }}
                     >
                       Back to All Courses
@@ -2358,6 +2566,28 @@ export default function App() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3 }}>{activeData.title}</h1>
+                {(() => {
+                  const cName = activeData.course_name || selectedCourse || (userLibrary.find(l => l.video_id === activeData.videoId)?.course_name) || null;
+                  if (!cName) return null;
+                  return (
+                    <Chip
+                      icon={<BookOpen size={13} color={currentTheme.palette.primary} />}
+                      label={cName}
+                      size="small"
+                      onClick={() => handleSelectCourse(cName)}
+                      title={`Back to course: ${cName}`}
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.74rem',
+                        bgcolor: currentTheme.palette.badgeBg,
+                        color: currentTheme.palette.primary,
+                        cursor: 'pointer',
+                        border: `1px solid ${currentTheme.palette.badgeBorder}`,
+                        '&:hover': { bgcolor: 'var(--highlight-bg)' }
+                      }}
+                    />
+                  );
+                })()}
                 <Chip
                   icon={<Bookmark size={13} color={currentTheme.palette.primary} />}
                   label={`/lecture/${activeData.videoId}`}

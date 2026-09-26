@@ -622,6 +622,21 @@ def get_user_courses(
     return {"status": "success", "email": target_email, "count": len(courses), "courses": courses}
 
 
+@app.get("/api/course/{course_name}")
+def get_course_details(
+    course_name: str,
+    email: Optional[str] = Query(None, description="User Google email")
+):
+    """Fetch details and aggregated lectures for a specific course by name."""
+    clean_name = course_name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="course_name parameter is required.")
+    course = db_manager.get_course_details(clean_name, user_email=email)
+    if not course:
+        raise HTTPException(status_code=404, detail=f"Course '{clean_name}' not found.")
+    return {"status": "success", "course": course}
+
+
 @app.post("/api/user/library/record")
 def record_user_lecture(req: UserLibraryRecordRequest):
     """Add or update a lecture in the user's LMS library."""

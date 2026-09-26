@@ -1672,11 +1672,10 @@ export default function App() {
             </Paper>
           </Box>
         ) : !activeData ? (
-          (googleUser || selectedCourse) ? (
-            /* ================= FLOW 1: SIGNED-IN LMS DASHBOARD OR COURSE ROUTE ================= */
+            /* ================= UNIFIED LMS DASHBOARD & COURSE ROUTE ================= */
             <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>
-              {/* Scholar Greeting & Stats Banner (for signed-in users) */}
-              {googleUser && (
+              {/* "Welcome back" Hero Banner - Always on Home Page / Landing Screen */}
+              {!selectedCourse && (
                 <Paper
                   elevation={0}
                   sx={{
@@ -1694,116 +1693,96 @@ export default function App() {
                   }}
                 >
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Avatar
-                      src={googleUser.picture}
-                      alt={googleUser.name}
-                      sx={{ width: 56, height: 56, bgcolor: currentTheme.palette.primary, fontWeight: 800, fontSize: '1.4rem' }}
-                    >
-                      {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
-                    </Avatar>
+                    {googleUser?.picture ? (
+                      <Avatar
+                        src={googleUser.picture}
+                        alt={googleUser.name}
+                        sx={{ width: 56, height: 56, bgcolor: currentTheme.palette.primary, fontWeight: 800, fontSize: '1.4rem' }}
+                      >
+                        {(googleUser.name || googleUser.email || 'U').charAt(0).toUpperCase()}
+                      </Avatar>
+                    ) : (
+                      <Box sx={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: 3,
+                        bgcolor: 'rgba(255, 255, 255, 0.2)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1.8rem'
+                      }}>
+                        🎓
+                      </Box>
+                    )}
                     <Box>
                       <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
-                        Welcome back, {googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')}! 🎓
+                        Welcome back, {googleUser ? (googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')) : 'Scholar'}! 🎓
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', mt: 0.5, fontSize: '0.88rem' }}>
+                        {googleUser
+                          ? 'Personal Learning Management System • Verified Study History & Cloud Backups'
+                          : 'Personal Learning Management System • Instant transcript search, summaries & interactive AI Tutor'}
                       </Typography>
                     </Box>
                   </Box>
 
-                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-                    <Paper
-                      elevation={0}
+                  {googleUser ? (
+                    <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                      <Paper
+                        elevation={0}
+                        sx={{
+                          px: 2.5,
+                          py: 1.2,
+                          borderRadius: 2.5,
+                          bgcolor: 'rgba(255, 255, 255, 0.15)',
+                          backdropFilter: 'blur(8px)',
+                          border: '1px solid rgba(255, 255, 255, 0.22)',
+                          textAlign: 'center'
+                        }}
+                      >
+                        <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
+                        <Typography variant="h6" sx={{ color: '#ffffff', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
+                      </Paper>
+                      <Paper
+                        elevation={0}
+                        sx={{
+                          px: 2.5,
+                          py: 1.2,
+                          borderRadius: 2.5,
+                          bgcolor: 'rgba(255, 255, 255, 0.15)',
+                          backdropFilter: 'blur(8px)',
+                          border: '1px solid rgba(255, 255, 255, 0.22)',
+                          textAlign: 'center'
+                        }}
+                      >
+                        <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
+                        <Typography variant="h6" sx={{ color: '#a7f3d0', fontWeight: 800, lineHeight: 1 }}>
+                          {userLibrary.filter(x => x.drive_folder_url).length}
+                        </Typography>
+                      </Paper>
+                    </Box>
+                  ) : (
+                    <Button
+                      variant="contained"
+                      onClick={() => handleGoogleSignIn(false)}
+                      startIcon={<GoogleIcon />}
                       sx={{
+                        background: '#ffffff',
+                        color: '#1f2937',
+                        textTransform: 'none',
+                        fontWeight: 700,
+                        fontSize: '0.86rem',
+                        borderRadius: '20px',
                         px: 2.5,
-                        py: 1.2,
-                        borderRadius: 2.5,
-                        bgcolor: 'rgba(255, 255, 255, 0.15)',
-                        backdropFilter: 'blur(8px)',
-                        border: '1px solid rgba(255, 255, 255, 0.22)',
-                        textAlign: 'center'
+                        py: 1,
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+                        '&:hover': { background: '#f3f4f6' }
                       }}
                     >
-                      <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Total Lectures</Typography>
-                      <Typography variant="h6" sx={{ color: '#ffffff', fontWeight: 800, lineHeight: 1 }}>{userLibrary.length}</Typography>
-                    </Paper>
-                    <Paper
-                      elevation={0}
-                      sx={{
-                        px: 2.5,
-                        py: 1.2,
-                        borderRadius: 2.5,
-                        bgcolor: 'rgba(255, 255, 255, 0.15)',
-                        backdropFilter: 'blur(8px)',
-                        border: '1px solid rgba(255, 255, 255, 0.22)',
-                        textAlign: 'center'
-                      }}
-                    >
-                      <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.9)', display: 'block', fontWeight: 600 }}>Google Drive Synced</Typography>
-                      <Typography variant="h6" sx={{ color: '#a7f3d0', fontWeight: 800, lineHeight: 1 }}>
-                        {userLibrary.filter(x => x.drive_folder_url).length}
-                      </Typography>
-                    </Paper>
-                  </Box>
-                </Paper>
-              )}
-
-              {/* Guest Course Header Banner (when visiting a course without being logged in) */}
-              {!googleUser && selectedCourse && (
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: { xs: 2.5, md: 3 },
-                    mb: 3,
-                    borderRadius: 3,
-                    background: currentTheme.palette.headerGradient,
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    display: 'flex',
-                    flexDirection: { xs: 'column', sm: 'row' },
-                    alignItems: { xs: 'flex-start', sm: 'center' },
-                    justifyContent: 'space-between',
-                    gap: 2,
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.15)'
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Box sx={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 2.5,
-                      bgcolor: 'rgba(255, 255, 255, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}>
-                      <BookOpen size={26} color="#ffffff" />
-                    </Box>
-                    <Box>
-                      <Typography variant="h6" sx={{ fontWeight: 800, color: '#ffffff' }}>
-                        Course: {activeCourseData?.course_name || selectedCourse}
-                      </Typography>
-                      <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', fontSize: '0.85rem' }}>
-                        Public Course Syllabus & Lecture Catalog
-                      </Typography>
-                    </Box>
-                  </Box>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    onClick={() => handleGoogleSignIn(false)}
-                    startIcon={<GoogleIcon />}
-                    sx={{
-                      background: '#ffffff',
-                      color: '#1f2937',
-                      textTransform: 'none',
-                      fontWeight: 700,
-                      fontSize: '0.84rem',
-                      borderRadius: '20px',
-                      px: 2,
-                      py: 0.8,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
-                      '&:hover': { background: '#f3f4f6' }
-                    }}
-                  >
-                    Sign in to Save
-                  </Button>
+                      Sign in with Google
+                    </Button>
+                  )}
                 </Paper>
               )}
 
@@ -2391,141 +2370,6 @@ export default function App() {
                 )
               )}
             </Box>
-          ) : (
-            /* ================= FLOW 2: GUEST / NON-SIGNED-IN SCREEN ================= */
-            <div className="fade-in" style={{
-              maxWidth: '1200px',
-              margin: '40px auto 60px',
-              padding: '0 24px',
-              textAlign: 'center'
-            }}>
-              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-                <h1 style={{
-                  fontSize: '2.8rem',
-                  fontWeight: 800,
-                  lineHeight: 1.2,
-                  letterSpacing: '-1px',
-                  marginBottom: '14px',
-                  color: currentTheme.palette.textPrimary
-                }}>
-                  LearnScribe LMS
-                </h1>
-
-                <p style={{
-                  color: currentTheme.palette.textSecondary,
-                  fontSize: '1.15rem',
-                  maxWidth: '620px',
-                  margin: '0 auto 32px',
-                  lineHeight: 1.5
-                }}>
-                  Instant transcript search, executive summaries, and interactive AI Tutor for your lectures.
-                </p>
-
-                {/* Error Banner */}
-                {error && (
-                  <div style={{
-                    background: 'rgba(239, 68, 68, 0.12)',
-                    border: '1px solid #ef4444',
-                    color: '#dc2626',
-                    padding: '12px 16px',
-                    borderRadius: '8px',
-                    marginBottom: '20px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    fontSize: '0.9rem',
-                    fontWeight: 600
-                  }}>
-                    <AlertCircle size={18} /> {error}
-                  </div>
-                )}
-
-                {/* Cache Notice Banner */}
-                {cacheNotice && (
-                  <div style={{
-                    background: 'rgba(16, 185, 129, 0.12)',
-                    border: '1px solid #10b981',
-                    color: '#059669',
-                    padding: '12px 16px',
-                    borderRadius: '8px',
-                    marginBottom: '20px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    fontSize: '0.9rem',
-                    fontWeight: 600
-                  }}>
-                    <Check size={18} /> {cacheNotice}
-                  </div>
-                )}
-
-                {/* Input Form */}
-                <div style={{
-                  background: currentTheme.palette.cardBg,
-                  border: `1px solid ${currentTheme.palette.cardBorder}`,
-                  padding: '8px',
-                  borderRadius: '12px',
-                  display: 'flex',
-                  gap: '8px',
-                  boxShadow: currentTheme.palette.cardShadow
-                }}>
-                  <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    <Video size={20} style={{ position: 'absolute', left: '14px', color: currentTheme.palette.textSecondary }} />
-                    <input
-                      type="text"
-                      placeholder="Paste lecture video link or ID..."
-                      value={urlInput}
-                      onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
-                      onPaste={handlePasteUrl}
-                      onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
-                      style={{
-                        width: '100%',
-                        background: 'transparent',
-                        border: 'none',
-                        outline: 'none',
-                        color: currentTheme.palette.textPrimary,
-                        fontSize: '1rem',
-                        paddingLeft: '44px',
-                        paddingRight: '14px'
-                      }}
-                    />
-                  </div>
-
-                  <button
-                    onClick={() => handleTranscribe()}
-                    disabled={loading || !urlInput.trim()}
-                    style={{
-                      background: currentTheme.palette.primary,
-                      color: '#ffffff',
-                      border: 'none',
-                      padding: '12px 28px',
-                      borderRadius: '8px',
-                      fontWeight: 700,
-                      fontSize: '0.95rem',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      transition: 'all 0.2s ease',
-                      opacity: loading || !urlInput.trim() ? 0.6 : 1
-                    }}
-                  >
-                    {loading ? (
-                      <>
-                        <RefreshCw className="loading-pulse" size={18} /> Ingesting Data...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles size={18} /> Ingest & Transcribe
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )
         ) : (
           /* TRANSCRIPT & TRIAD WORKSPACE */
         <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden' }}>

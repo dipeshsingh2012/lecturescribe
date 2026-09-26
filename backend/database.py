@@ -523,7 +523,18 @@ class RelationalDBManager:
             return False
 
         clean_email = user_email.strip().lower()
-        derived_course = (course_name or extract_course_name(title)).strip()
+        # Resolve slug to canonical course name if caller passed a slug
+        derived_course = (course_name or "").strip()
+        is_slug = bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', derived_course))
+        if not derived_course or is_slug:
+            extracted = extract_course_name(title)
+            if extracted and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', extracted):
+                derived_course = extracted
+            elif derived_course:
+                derived_course = derived_course.replace("-", " ").title()
+            else:
+                derived_course = "General Lectures"
+
         conn = self._get_connection()
         try:
             with conn:
@@ -570,7 +581,7 @@ class RelationalDBManager:
             conn.close()
 
     def backfill_missing_course_names(self):
-        """Backfill course_name for any library records or videos where course_name is NULL."""
+        """Backfill and repair course_name for library records or videos (including repairing slug names)."""
         conn = self._get_connection()
         try:
             with conn:
@@ -590,13 +601,28 @@ class RelationalDBManager:
                     for r in vid_rows:
                         c_name = extract_course_name(r["title"])
                         cursor.execute("UPDATE lecturescribe_videos SET course_name = %s WHERE video_id = %s;", (c_name, r["video_id"]))
+
+                    # Repair any slug-formatted course_names in lecturescribe_user_library
+                    cursor.execute("""
+                        SELECT id, video_id, title, course_name FROM lecturescribe_user_library
+                        WHERE course_name ~ '^[a-z0-9]+(-[a-z0-9]+)+$';
+                    """)
+                    slug_rows = cursor.fetchall() or []
+                    for sr in slug_rows:
+                        canonical = extract_course_name(sr.get("title", ""))
+                        if not canonical or re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', canonical):
+                            canonical = sr["course_name"].replace("-", " ").title()
+                        cursor.execute("""
+                            UPDATE lecturescribe_user_library SET course_name = %s WHERE id = %s;
+                        """, (canonical, sr["id"]))
+
                     conn.commit()
         finally:
             conn.close()
 
     def get_user_courses(self, user_email: str) -> List[Dict[str, Any]]:
         """
-        Group user library lectures by course_name.
+        Group user library lectures by course_name, canonicalizing slugs to avoid duplicates.
         Returns a list of course objects, each containing its aggregated lecture list.
         """
         if not user_email:
@@ -624,17 +650,35 @@ class RelationalDBManager:
                         if not c_name:
                             c_name = "General Lectures"
 
-                        if c_name not in courses_map:
-                            courses_map[c_name] = {
-                                "course_name": c_name,
+                        # Canonical key grouped by hyphenated slug
+                        c_slug = re.sub(r'[^a-z0-9]+', '-', c_name.lower()).strip('-') or "general"
+                        is_slug = bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', c_name))
+
+                        if c_slug not in courses_map:
+                            display_title = c_name
+                            if is_slug:
+                                extracted = extract_course_name(r.get("title", ""))
+                                if extracted and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', extracted):
+                                    display_title = extracted
+                                else:
+                                    display_title = c_name.replace("-", " ").title()
+
+                            courses_map[c_slug] = {
+                                "course_name": display_title,
+                                "course_slug": c_slug,
                                 "lecture_count": 0,
                                 "latest_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
                                 "thumbnail_video_id": r["video_id"],
                                 "lectures": []
                             }
+                        else:
+                            # Upgrade slug display name to proper capitalized course title if available
+                            if bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', courses_map[c_slug]["course_name"])) and not is_slug:
+                                courses_map[c_slug]["course_name"] = c_name
 
-                        courses_map[c_name]["lecture_count"] += 1
-                        courses_map[c_name]["lectures"].append({
+                        canonical_course_title = courses_map[c_slug]["course_name"]
+                        courses_map[c_slug]["lecture_count"] += 1
+                        courses_map[c_slug]["lectures"].append({
                             "videoId": r["video_id"],
                             "video_id": r["video_id"],
                             "title": r["title"],
@@ -647,7 +691,7 @@ class RelationalDBManager:
                             "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
                             "last_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
                             "created_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                            "course_name": c_name
+                            "course_name": canonical_course_title
                         })
 
                     return list(courses_map.values())

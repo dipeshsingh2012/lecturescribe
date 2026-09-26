@@ -869,7 +869,15 @@ export default function App() {
     if (!rawUrl.trim()) return;
     const vidId = extractVideoId(rawUrl);
 
-    const effectiveCourse = targetCourse || selectedCourse || (userLibrary.find(l => l.video_id === vidId)?.course_name) || null;
+    let effectiveCourse = targetCourse || activeCourseData?.course_name || selectedCourse || (userLibrary.find(l => l.video_id === vidId)?.course_name) || null;
+    if (effectiveCourse) {
+      const match = effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === normalizeCourseSlug(effectiveCourse));
+      if (match) {
+        effectiveCourse = match.course_name;
+      } else if (effectiveCourse.includes('-') && effectiveCourse === effectiveCourse.toLowerCase()) {
+        effectiveCourse = effectiveCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      }
+    }
 
     if (pushRoute && vidId) {
       if (effectiveCourse) {
@@ -889,8 +897,10 @@ export default function App() {
     // 2. If present in client cache, load immediately (0ms delay, no re-generation)
     if (cachedVideos[vidId]) {
       const cached = cachedVideos[vidId];
-      const finalCourse = cached.course_name || effectiveCourse;
+      let finalCourse = cached.course_name || effectiveCourse;
       if (finalCourse) {
+        const match = effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === normalizeCourseSlug(finalCourse));
+        if (match) finalCourse = match.course_name;
         setSelectedCourse(finalCourse);
         if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/lecture/') || window.location.pathname.includes('%20') || window.location.pathname.includes(' '))) {
           navigateTo(`/course/${normalizeCourseSlug(finalCourse)}/lecture/${vidId}`, true);
@@ -931,8 +941,10 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}${courseParam}`);
       if (res.ok) {
         const data = await res.json();
-        const finalCourse = data.course_name || effectiveCourse;
+        let finalCourse = data.course_name || effectiveCourse;
         if (finalCourse) {
+          const match = effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === normalizeCourseSlug(finalCourse));
+          if (match) finalCourse = match.course_name;
           setSelectedCourse(finalCourse);
           if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/lecture/') || window.location.pathname.includes('%20') || window.location.pathname.includes(' '))) {
             navigateTo(`/course/${normalizeCourseSlug(finalCourse)}/lecture/${data.videoId}`, true);
@@ -1586,17 +1598,42 @@ export default function App() {
         cName = cName.replace(/[\s\-_:\|\/]+$/, '').trim();
         if (!cName || cName.length < 3) cName = raw;
       }
-      if (!map[cName]) {
-        map[cName] = {
-          course_name: cName,
+
+      // Canonical group key by normalized slug to prevent duplicate courses
+      const slug = normalizeCourseSlug(cName) || 'general';
+      const isSlugFormat = cName === slug || (cName.includes('-') && cName === cName.toLowerCase());
+
+      if (!map[slug]) {
+        let displayTitle = cName;
+        if (isSlugFormat) {
+          const raw = (item.title || item.video_title || '').trim();
+          const withoutDate = raw.replace(/[\(\[\{]\s*\d{1,2}[\s/.\-]+\d{1,2}[\s/.\-]+\d{2,4}\s*[\)\]\}]/g, '');
+          const extracted = withoutDate.replace(/\b(?:Live\s+Session|Session|Lecture|Module|Class|Week|Part|Episode)\b.*$/i, '').trim().replace(/[\s\-_:\|\/]+$/, '');
+          displayTitle = (extracted && extracted.length >= 3 && !extracted.includes('-')) 
+            ? extracted 
+            : cName.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+
+        map[slug] = {
+          course_name: displayTitle,
+          course_slug: slug,
           lecture_count: 0,
           latest_viewed_at: item.last_viewed_at || item.created_at,
           thumbnail_video_id: item.video_id,
           lectures: []
         };
+      } else {
+        // If current display title is slug-like, upgrade it to canonical title
+        if (map[slug].course_name.includes('-') && map[slug].course_name === map[slug].course_name.toLowerCase() && !isSlugFormat) {
+          map[slug].course_name = cName;
+        }
       }
-      map[cName].lecture_count += 1;
-      map[cName].lectures.push(item);
+
+      map[slug].lecture_count += 1;
+      map[slug].lectures.push({
+        ...item,
+        course_name: map[slug].course_name
+      });
     });
     return Object.values(map);
   }, [userCourses, userLibrary]);
@@ -1670,6 +1707,15 @@ export default function App() {
     }
     return null;
   }, [effectiveCourses, selectedCourse, directCourseData]);
+
+  // Automatically upgrade selectedCourse from a URL slug to its human-readable title
+  useEffect(() => {
+    if (activeCourseData?.course_name && selectedCourse) {
+      if (selectedCourse !== activeCourseData.course_name && normalizeCourseSlug(selectedCourse) === normalizeCourseSlug(activeCourseData.course_name)) {
+        setSelectedCourse(activeCourseData.course_name);
+      }
+    }
+  }, [activeCourseData, selectedCourse]);
 
   const filteredCourseLectures = useMemo(() => {
     if (!activeCourseData) return [];
@@ -2174,7 +2220,7 @@ export default function App() {
                         All Courses
                       </Button>
                       <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
-                        {activeCourseData?.course_name || selectedCourse}
+                        {activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
                       </Typography>
                       <Chip
                         label={`${filteredCourseLectures.length} ${filteredCourseLectures.length === 1 ? 'lecture' : 'lectures'}`}
@@ -2878,15 +2924,23 @@ export default function App() {
               <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
 
               {(() => {
-                const effectiveCourse = activeData.course_name || selectedCourse || (userLibrary.find(l => l.video_id === activeData.videoId)?.course_name) || 'General Lectures';
+                const effectiveCourse = activeCourseData?.course_name || activeData.course_name || selectedCourse || (userLibrary.find(l => l.video_id === activeData.videoId)?.course_name) || 'General Lectures';
+                const courseSlug = normalizeCourseSlug(effectiveCourse);
+                const displayCourseName = (
+                  activeCourseData?.course_name ||
+                  effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === courseSlug)?.course_name ||
+                  (effectiveCourse.includes('-') && effectiveCourse === effectiveCourse.toLowerCase()
+                    ? effectiveCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+                    : effectiveCourse)
+                );
                 return (
                   <Button
                     variant="text"
                     size="small"
                     onClick={() => {
-                      setSelectedCourse(effectiveCourse);
+                      setSelectedCourse(displayCourseName);
                       setActiveData(null);
-                      navigateTo(`/course/${normalizeCourseSlug(effectiveCourse)}`);
+                      navigateTo(`/course/${courseSlug}`);
                     }}
                     sx={{
                       p: 0,
@@ -2901,9 +2955,9 @@ export default function App() {
                       whiteSpace: 'nowrap',
                       '&:hover': { textDecoration: 'underline', bgcolor: 'transparent' }
                     }}
-                    title={`Back to course: ${effectiveCourse}`}
+                    title={`Back to course: ${displayCourseName}`}
                   >
-                    {effectiveCourse}
+                    {displayCourseName}
                   </Button>
                 );
               })()}

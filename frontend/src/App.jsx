@@ -135,14 +135,21 @@ export default function App() {
   const [gdriveUploading, setGdriveUploading] = useState(false);
   const [gdriveAccessToken, setGdriveAccessToken] = useState(() => {
     try {
-      return sessionStorage.getItem('lecturescribe_gdrive_token') || '';
+      const token = localStorage.getItem('lecturescribe_gdrive_token') || '';
+      const expiresAt = Number(localStorage.getItem('lecturescribe_gdrive_token_expires') || '0');
+      if (expiresAt > 0 && Date.now() > expiresAt) {
+        localStorage.removeItem('lecturescribe_gdrive_token');
+        localStorage.removeItem('lecturescribe_gdrive_token_expires');
+        return '';
+      }
+      return token;
     } catch {
       return '';
     }
   });
   const [googleUser, setGoogleUser] = useState(() => {
     try {
-      const saved = sessionStorage.getItem('lecturescribe_google_user');
+      const saved = localStorage.getItem('lecturescribe_google_user');
       return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
@@ -1068,8 +1075,8 @@ export default function App() {
             const expiresIn = tokenResponse.expires_in ? Number(tokenResponse.expires_in) : 3599;
             const expiresAt = Date.now() + (expiresIn * 1000);
             try {
-              sessionStorage.setItem('lecturescribe_gdrive_token', token);
-              sessionStorage.setItem('lecturescribe_gdrive_token_expires', expiresAt.toString());
+              localStorage.setItem('lecturescribe_gdrive_token', token);
+              localStorage.setItem('lecturescribe_gdrive_token_expires', expiresAt.toString());
             } catch {}
             setGdriveError(null);
 
@@ -1081,7 +1088,7 @@ export default function App() {
               if (uRes.ok) {
                 const uData = await uRes.json();
                 setGoogleUser(uData);
-                try { sessionStorage.setItem('lecturescribe_google_user', JSON.stringify(uData)); } catch {}
+                try { localStorage.setItem('lecturescribe_google_user', JSON.stringify(uData)); } catch {}
                 if (uData.email) fetchUserLibrary(uData.email);
               } else {
                 setGoogleUser({ email: 'Google User' });
@@ -1114,9 +1121,9 @@ export default function App() {
     setGdriveAccessToken('');
     setGoogleUser(null);
     try {
-      sessionStorage.removeItem('lecturescribe_gdrive_token');
-      sessionStorage.removeItem('lecturescribe_gdrive_token_expires');
-      sessionStorage.removeItem('lecturescribe_google_user');
+      localStorage.removeItem('lecturescribe_gdrive_token');
+      localStorage.removeItem('lecturescribe_gdrive_token_expires');
+      localStorage.removeItem('lecturescribe_google_user');
     } catch {}
   };
 
@@ -1195,7 +1202,7 @@ export default function App() {
     if (!activeData) return;
 
     // Check if token is expired or expires in less than 2 minutes
-    const tokenExpiresAt = Number(sessionStorage.getItem('lecturescribe_gdrive_token_expires') || '0');
+    const tokenExpiresAt = Number(localStorage.getItem('lecturescribe_gdrive_token_expires') || '0');
     const isTokenExpired = tokenExpiresAt > 0 && Date.now() > (tokenExpiresAt - 120000);
 
     if (gdriveAccessToken && isTokenExpired) {

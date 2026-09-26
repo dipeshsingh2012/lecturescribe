@@ -211,23 +211,26 @@ class RelationalDBManager:
         caption_label: str,
         cues: List[Dict[str, str]],
         summary_sections: List[Dict[str, Any]],
-        user_email: Optional[str] = None
+        user_email: Optional[str] = None,
+        course_name: Optional[str] = None
     ):
         """Save video, transcript cues, and AI summaries directly to PostgreSQL."""
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        derived_course = (course_name or extract_course_name(title)).strip()
 
         conn = self._get_connection()
         try:
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label, user_email)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label, user_email, course_name)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (video_id) 
                         DO UPDATE SET title = EXCLUDED.title, duration = EXCLUDED.duration, 
                                       source_url = EXCLUDED.source_url, caption_label = EXCLUDED.caption_label,
-                                      user_email = COALESCE(EXCLUDED.user_email, lecturescribe_videos.user_email);
-                    """, (video_id, title, duration, source_url, caption_label, clean_email))
+                                      user_email = COALESCE(EXCLUDED.user_email, lecturescribe_videos.user_email),
+                                      course_name = COALESCE(NULLIF(EXCLUDED.course_name, ''), lecturescribe_videos.course_name);
+                    """, (video_id, title, duration, source_url, caption_label, clean_email, derived_course))
 
                     cursor.execute("DELETE FROM lecturescribe_transcript_cues WHERE video_id = %s;", (video_id,))
                     cue_tuples = [
@@ -261,7 +264,8 @@ class RelationalDBManager:
                 video_id=video_id,
                 title=title,
                 duration=duration,
-                source_url=source_url
+                source_url=source_url,
+                course_name=derived_course
             )
 
         # Update In-Memory L1 Cache
@@ -273,6 +277,7 @@ class RelationalDBManager:
             "captionLabel": caption_label,
             "cues": cues,
             "summarySections": summary_sections,
+            "course_name": derived_course,
             "cached": True
         }
 

@@ -174,19 +174,31 @@ def health_check():
         "redis_cache": redis_info
     }
 
-@app.get("/api/lecture/{video_id}")
-def get_lecture_by_id(
+@app.get("/api/course/{course_name}/lecture/{video_id}")
+def get_course_lecture_by_id(
+    course_name: str,
     video_id: str,
     email: Optional[str] = Query(None, description="Signed-in user email for LMS library")
 ):
+    """Dedicated nested API endpoint for fetching a lecture within a course."""
+    return get_transcript(url=video_id, email=email, course_name=course_name)
+
+
+@app.get("/api/lecture/{video_id}")
+def get_lecture_by_id(
+    video_id: str,
+    email: Optional[str] = Query(None, description="Signed-in user email for LMS library"),
+    course_name: Optional[str] = Query(None, description="Optional course name to associate video with")
+):
     """Dedicated API endpoint for fetching a lecture workspace by Vimeo video ID."""
-    return get_transcript(url=video_id, email=email)
+    return get_transcript(url=video_id, email=email, course_name=course_name)
 
 
 @app.get("/api/transcript")
 def get_transcript(
     url: str = Query(..., description="Vimeo URL or Video ID"),
-    email: Optional[str] = Query(None, description="Signed-in user email for LMS library")
+    email: Optional[str] = Query(None, description="Signed-in user email for LMS library"),
+    course_name: Optional[str] = Query(None, description="Optional course name to associate video with")
 ):
     try:
         video_id = extract_video_id(url)
@@ -196,6 +208,8 @@ def get_transcript(
         if saved:
             print(f"[DB Cache Hit] Video '{video_id}' found in database. Skipping transcript and summary re-generation.")
             saved["cached"] = True
+            effective_course = (course_name or saved.get("course_name") or "General Lectures").strip()
+            saved["course_name"] = effective_course
             # Ingest into Algolia & Pinecone (safe/idempotent, skips if already active)
             algolia_service.ingest_cues(video_id, saved["title"], saved["cues"])
             pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved["cues"])
@@ -205,7 +219,8 @@ def get_transcript(
                     video_id=video_id,
                     title=saved["title"],
                     duration=saved.get("duration", "Unknown"),
-                    source_url=saved.get("sourceUrl", f"https://vimeo.com/{video_id}")
+                    source_url=saved.get("sourceUrl", f"https://vimeo.com/{video_id}"),
+                    course_name=effective_course
                 )
             return saved
 
@@ -240,9 +255,10 @@ def get_transcript(
         summary_sections = generate_summary_sections(cues, title)
         source_url = f"https://vimeo.com/{video_id}"
         caption_label = track.get("label", "English")
+        derived_course = (course_name or extract_course_name(title)).strip()
 
         # 3. Save to Relational DB (PostgreSQL)
-        db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email)
+        db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
 
         # 4. Ingest into Algolia Search Engine
         algolia_service.ingest_cues(video_id, title, cues)
@@ -257,7 +273,8 @@ def get_transcript(
                 video_id=video_id,
                 title=title,
                 duration=duration,
-                source_url=source_url
+                source_url=source_url,
+                course_name=derived_course
             )
 
         return {
@@ -268,6 +285,7 @@ def get_transcript(
             "captionLabel": caption_label,
             "cues": cues,
             "summarySections": summary_sections,
+            "course_name": derived_course,
             "pineconeIndexedChunks": pinecone_chunks,
             "cached": False
         }

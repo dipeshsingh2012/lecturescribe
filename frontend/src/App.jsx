@@ -5,7 +5,8 @@ import {
   Play, Search, Video, Sparkles, FileText, ArrowLeft, Download, Check, Copy,
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
   Zap, Cloud, X, Folder, FileCode, CheckCircle2, LogOut,
-  Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp, Globe, Book
+  Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp, Globe, Book,
+  ChevronRight
 } from 'lucide-react';
 
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -89,7 +90,7 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [regeneratingSummary, setRegeneratingSummary] = useState(false);
 
-  // Dedicated Lecture Routing & History State
+  // Dedicated Course & Lecture Routing & History State
   const [currentPath, setCurrentPath] = useState(() => {
     try {
       return typeof window !== 'undefined' ? window.location.pathname || '/' : '/';
@@ -98,21 +99,40 @@ export default function App() {
     }
   });
 
+  const parsePathRoute = (path = (typeof window !== 'undefined' ? window.location.pathname : '/')) => {
+    if (!path) return { courseName: null, videoId: null };
+    // 1. Nested course lecture: /course/:courseName/lecture/:videoId
+    const nestedMatch = path.match(/^\/(?:course|courses)\/([^/?#]+)\/(?:lecture|video)\/([a-zA-Z0-9_\-]+)/i);
+    if (nestedMatch) {
+      let courseName = nestedMatch[1];
+      try {
+        courseName = decodeURIComponent(courseName.replace(/\+/g, ' '));
+      } catch {}
+      return { courseName, videoId: nestedMatch[2] };
+    }
+    // 2. Standalone course: /course/:courseName
+    const courseMatch = path.match(/^\/(?:course|courses)\/([^/?#]+)/i);
+    if (courseMatch) {
+      let courseName = courseMatch[1];
+      try {
+        courseName = decodeURIComponent(courseName.replace(/\+/g, ' '));
+      } catch {}
+      return { courseName, videoId: null };
+    }
+    // 3. Standalone / legacy lecture: /lecture/:videoId
+    const lectureMatch = path.match(/^\/(?:lecture|lectures|video|watch)\/([a-zA-Z0-9_\-]+)/i);
+    if (lectureMatch) {
+      return { courseName: null, videoId: lectureMatch[1] };
+    }
+    return { courseName: null, videoId: null };
+  };
+
   const getLectureIdFromPath = (path = (typeof window !== 'undefined' ? window.location.pathname : '/')) => {
-    if (!path) return null;
-    const match = path.match(/^\/(?:lecture|lectures|video|watch)\/([a-zA-Z0-9_\-]+)/i);
-    return match ? match[1] : null;
+    return parsePathRoute(path).videoId;
   };
 
   const getCourseNameFromPath = (path = (typeof window !== 'undefined' ? window.location.pathname : '/')) => {
-    if (!path) return null;
-    const match = path.match(/^\/(?:course|courses)\/([^/?#]+)/i);
-    if (!match) return null;
-    try {
-      return decodeURIComponent(match[1].replace(/\+/g, ' '));
-    } catch {
-      return match[1];
-    }
+    return parsePathRoute(path).courseName;
   };
 
   const normalizeCourseSlug = (str) => {
@@ -590,13 +610,20 @@ export default function App() {
     );
   };
 
-  const handleTranscribe = async (targetUrl = urlInput, pushRoute = true) => {
+  const handleTranscribe = async (targetUrl = urlInput, pushRoute = true, targetCourse = null) => {
     const rawUrl = targetUrl || urlInput;
     if (!rawUrl.trim()) return;
     const vidId = extractVideoId(rawUrl);
 
+    const effectiveCourse = targetCourse || selectedCourse || (userLibrary.find(l => l.video_id === vidId)?.course_name) || null;
+
     if (pushRoute && vidId) {
-      navigateTo(`/lecture/${vidId}`);
+      if (effectiveCourse) {
+        setSelectedCourse(effectiveCourse);
+        navigateTo(`/course/${encodeURIComponent(effectiveCourse)}/lecture/${vidId}`);
+      } else {
+        navigateTo(`/lecture/${vidId}`);
+      }
     }
 
     // 1. If currently active video is already this video, do NOT re-generate
@@ -608,6 +635,13 @@ export default function App() {
     // 2. If present in client cache, load immediately (0ms delay, no re-generation)
     if (cachedVideos[vidId]) {
       const cached = cachedVideos[vidId];
+      const finalCourse = cached.course_name || effectiveCourse;
+      if (finalCourse) {
+        setSelectedCourse(finalCourse);
+        if (typeof window !== 'undefined' && window.location.pathname.startsWith('/lecture/')) {
+          navigateTo(`/course/${encodeURIComponent(finalCourse)}/lecture/${vidId}`, true);
+        }
+      }
       setActiveData({ ...cached, cached: true });
       setUrlInput(cached.sourceUrl || `https://vimeo.com/${vidId}`);
       initChatMessages(cached.title, vidId);
@@ -625,7 +659,8 @@ export default function App() {
             source_url: cached.sourceUrl || rawUrl,
             video_url: cached.sourceUrl || rawUrl,
             duration: cached.duration || '',
-            duration_seconds: cached.duration || null
+            duration_seconds: cached.duration || null,
+            course_name: finalCourse
           })
         }).then(() => fetchUserLibrary(googleUser.email)).catch(() => {});
       }
@@ -638,9 +673,17 @@ export default function App() {
 
     try {
       const userParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
-      const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}`);
+      const courseParam = effectiveCourse ? `&course_name=${encodeURIComponent(effectiveCourse)}` : '';
+      const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}${courseParam}`);
       if (res.ok) {
         const data = await res.json();
+        const finalCourse = data.course_name || effectiveCourse;
+        if (finalCourse) {
+          setSelectedCourse(finalCourse);
+          if (typeof window !== 'undefined' && window.location.pathname.startsWith('/lecture/')) {
+            navigateTo(`/course/${encodeURIComponent(finalCourse)}/lecture/${data.videoId}`, true);
+          }
+        }
         setActiveData(data);
         setUrlInput(data.sourceUrl || `https://vimeo.com/${data.videoId}`);
         initChatMessages(data.title, data.videoId);
@@ -685,29 +728,33 @@ export default function App() {
   useEffect(() => {
     // 1. Initial page load check
     const initialPath = window.location.pathname || '/';
-    const initialVidId = getLectureIdFromPath(initialPath);
-    const initialCourse = getCourseNameFromPath(initialPath);
-    if (initialVidId) {
-      handleTranscribe(initialVidId, false);
-    } else if (initialCourse) {
+    const { courseName: initialCourse, videoId: initialVidId } = parsePathRoute(initialPath);
+    if (initialCourse) {
       setSelectedCourse(initialCourse);
+    }
+    if (initialVidId) {
+      handleTranscribe(initialVidId, false, initialCourse);
     }
 
     // 2. Browser Back / Forward navigation listener
     const onPopState = () => {
       const current = window.location.pathname || '/';
       setCurrentPath(current);
-      const vidId = getLectureIdFromPath(current);
-      const courseName = getCourseNameFromPath(current);
-      if (vidId) {
-        if (!activeDataRef.current || activeDataRef.current.videoId !== vidId) {
-          handleTranscribe(vidId, false);
+      const { courseName, videoId } = parsePathRoute(current);
+      if (courseName) {
+        setSelectedCourse(courseName);
+      }
+      if (videoId) {
+        if (!activeDataRef.current || activeDataRef.current.videoId !== videoId) {
+          handleTranscribe(videoId, false, courseName);
         }
       } else {
         setActiveData(null);
         setError(null);
         setCacheNotice(null);
-        setSelectedCourse(courseName || null);
+        if (!courseName) {
+          setSelectedCourse(null);
+        }
       }
     };
 
@@ -1802,16 +1849,16 @@ export default function App() {
               >
                 <Video size={22} color={currentTheme.palette.textSecondary} style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }} />
                 <InputBase
-                  placeholder="Paste any lecture video URL or ID to study & save..."
+                  placeholder={selectedCourse ? `Add video ID or URL to ${selectedCourse}...` : "Paste any lecture video URL or ID to study & save..."}
                   value={urlInput}
                   onChange={(e) => { setUrlInput(e.target.value); setCacheNotice(null); }}
                   onPaste={handlePasteUrl}
-                  onKeyDown={(e) => e.key === 'Enter' && handleTranscribe()}
+                  onKeyDown={(e) => e.key === 'Enter' && handleTranscribe(urlInput, true, selectedCourse)}
                   sx={{ flex: 1, color: currentTheme.palette.textPrimary, fontSize: '0.95rem' }}
                 />
                 <Button
                   variant="contained"
-                  onClick={() => handleTranscribe()}
+                  onClick={() => handleTranscribe(urlInput, true, selectedCourse)}
                   disabled={loading || !urlInput.trim()}
                   startIcon={loading ? <RefreshCw className="loading-pulse" size={16} /> : <Sparkles size={16} />}
                   sx={{
@@ -1825,7 +1872,7 @@ export default function App() {
                     '&:hover': { bgcolor: currentTheme.palette.primaryHover }
                   }}
                 >
-                  {loading ? 'Ingesting...' : 'Transcribe & Study'}
+                  {loading ? 'Ingesting...' : (selectedCourse ? `Add to ${selectedCourse}` : 'Transcribe & Study')}
                 </Button>
               </Paper>
 
@@ -1892,28 +1939,6 @@ export default function App() {
                       <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
                         {activeCourseData?.course_name || selectedCourse}
                       </Typography>
-                      <Chip
-                        icon={<Bookmark size={13} color={currentTheme.palette.primary} />}
-                        label={`/course/${encodeURIComponent(selectedCourse)}`}
-                        size="small"
-                        onClick={() => {
-                          const fullUrl = `${window.location.origin}/course/${encodeURIComponent(selectedCourse)}`;
-                          navigator.clipboard.writeText(fullUrl);
-                          setCacheNotice(`🔗 Copied course URL: ${fullUrl}`);
-                          setTimeout(() => setCacheNotice(null), 3000);
-                        }}
-                        title="Click to copy permanent course URL"
-                        sx={{
-                          fontFamily: 'monospace',
-                          fontWeight: 700,
-                          fontSize: '0.72rem',
-                          bgcolor: currentTheme.palette.badgeBg,
-                          color: currentTheme.palette.badgeColor,
-                          border: `1px solid ${currentTheme.palette.badgeBorder}`,
-                          cursor: 'pointer',
-                          '&:hover': { opacity: 0.85 }
-                        }}
-                      />
                       <Chip
                         label={`${filteredCourseLectures.length} ${filteredCourseLectures.length === 1 ? 'lecture' : 'lectures'}`}
                         size="small"
@@ -2022,18 +2047,6 @@ export default function App() {
                             <BookOpen size={22} color={currentTheme.palette.primary} />
                           </Box>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                            <Chip
-                              label={`/course/${encodeURIComponent(course.course_name)}`}
-                              size="small"
-                              sx={{
-                                fontFamily: 'monospace',
-                                fontWeight: 600,
-                                fontSize: '0.68rem',
-                                bgcolor: currentTheme.palette.badgeBg,
-                                color: currentTheme.palette.badgeColor,
-                                border: `1px solid ${currentTheme.palette.badgeBorder}`
-                              }}
-                            />
                             <Chip
                               label={`${course.lecture_count} ${course.lecture_count === 1 ? 'lecture' : 'lectures'}`}
                               size="small"
@@ -2192,26 +2205,17 @@ export default function App() {
                       >
                         <CardContent sx={{ flex: 1, p: 2.5, display: 'flex', flexDirection: 'column' }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Chip
-                                label={`/lecture/${item.video_id}`}
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleTranscribe(item.video_url || item.video_id);
-                                }}
-                                title="Open dedicated lecture route"
-                                sx={{
-                                  fontFamily: 'monospace',
-                                  fontWeight: 700,
-                                  fontSize: '0.72rem',
-                                  bgcolor: currentTheme.palette.badgeBg,
-                                  color: currentTheme.palette.badgeColor,
-                                  border: `1px solid ${currentTheme.palette.badgeBorder}`,
-                                  cursor: 'pointer',
-                                  '&:hover': { opacity: 0.85 }
-                                }}
-                              />
+                            <Box sx={{
+                              width: 32,
+                              height: 32,
+                              borderRadius: '8px',
+                              bgcolor: 'var(--highlight-bg)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: '1px solid rgba(0, 117, 237, 0.2)'
+                            }}>
+                              <Video size={16} color={currentTheme.palette.primary} />
                             </Box>
                             <Typography variant="caption" sx={{ color: '#64748b', display: 'flex', alignItems: 'center', gap: 0.5 }}>
                               <Clock size={12} /> {formatRelativeTime(item.last_accessed_at || item.created_at)}
@@ -2233,7 +2237,7 @@ export default function App() {
                               cursor: 'pointer',
                               '&:hover': { color: currentTheme.palette.primary }
                             }}
-                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                            onClick={() => handleTranscribe(item.video_url || item.video_id, true, selectedCourse || item.course_name)}
                           >
                             {item.video_title || `Lecture ${item.video_id}`}
                           </Typography>
@@ -2297,7 +2301,7 @@ export default function App() {
                           <Button
                             variant="contained"
                             size="small"
-                            onClick={() => handleTranscribe(item.video_url || item.video_id)}
+                            onClick={() => handleTranscribe(item.video_url || item.video_id, true, selectedCourse || item.course_name)}
                             sx={{
                               textTransform: 'none',
                               fontWeight: 700,
@@ -2384,6 +2388,92 @@ export default function App() {
             overflowY: 'auto',
             borderRight: '1px solid var(--border-color)'
           }}>
+            {/* Breadcrumb Navigation */}
+            <Box
+              component="nav"
+              aria-label="Breadcrumbs"
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                flexWrap: 'wrap',
+                py: 0.5
+              }}
+            >
+              <Button
+                variant="text"
+                size="small"
+                onClick={() => {
+                  setSelectedCourse(null);
+                  setActiveData(null);
+                  navigateTo('/');
+                }}
+                startIcon={<Folder size={15} color={currentTheme.palette.primary} />}
+                sx={{
+                  p: 0,
+                  minWidth: 'auto',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  fontSize: '0.84rem',
+                  color: currentTheme.palette.textSecondary,
+                  '&:hover': { color: currentTheme.palette.primary, bgcolor: 'transparent' }
+                }}
+              >
+                Courses
+              </Button>
+
+              <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
+
+              {(() => {
+                const effectiveCourse = activeData.course_name || selectedCourse || (userLibrary.find(l => l.video_id === activeData.videoId)?.course_name) || 'General Lectures';
+                return (
+                  <Button
+                    variant="text"
+                    size="small"
+                    onClick={() => {
+                      setSelectedCourse(effectiveCourse);
+                      setActiveData(null);
+                      navigateTo(`/course/${encodeURIComponent(effectiveCourse)}`);
+                    }}
+                    sx={{
+                      p: 0,
+                      minWidth: 'auto',
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.84rem',
+                      color: currentTheme.palette.primary,
+                      maxWidth: { xs: 160, sm: 240 },
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      '&:hover': { textDecoration: 'underline', bgcolor: 'transparent' }
+                    }}
+                    title={`Back to course: ${effectiveCourse}`}
+                  >
+                    {effectiveCourse}
+                  </Button>
+                );
+              })()}
+
+              <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
+
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 700,
+                  fontSize: '0.84rem',
+                  color: currentTheme.palette.textPrimary,
+                  maxWidth: { xs: 160, sm: 260, md: 360 },
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+                title={activeData.title}
+              >
+                {activeData.title}
+              </Typography>
+            </Box>
+
             <div style={{
               width: '100%',
               aspectRatio: '16 / 9',
@@ -2410,50 +2500,6 @@ export default function App() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3 }}>{activeData.title}</h1>
-                {(() => {
-                  const cName = activeData.course_name || selectedCourse || (userLibrary.find(l => l.video_id === activeData.videoId)?.course_name) || null;
-                  if (!cName) return null;
-                  return (
-                    <Chip
-                      icon={<BookOpen size={13} color={currentTheme.palette.primary} />}
-                      label={cName}
-                      size="small"
-                      onClick={() => handleSelectCourse(cName)}
-                      title={`Back to course: ${cName}`}
-                      sx={{
-                        fontWeight: 700,
-                        fontSize: '0.74rem',
-                        bgcolor: currentTheme.palette.badgeBg,
-                        color: currentTheme.palette.primary,
-                        cursor: 'pointer',
-                        border: `1px solid ${currentTheme.palette.badgeBorder}`,
-                        '&:hover': { bgcolor: 'var(--highlight-bg)' }
-                      }}
-                    />
-                  );
-                })()}
-                <Chip
-                  icon={<Bookmark size={13} color={currentTheme.palette.primary} />}
-                  label={`/lecture/${activeData.videoId}`}
-                  size="small"
-                  onClick={() => {
-                    const fullUrl = `${window.location.origin}/lecture/${activeData.videoId}`;
-                    navigator.clipboard.writeText(fullUrl);
-                    setCacheNotice(`🔗 Copied permanent route: ${fullUrl}`);
-                    setTimeout(() => setCacheNotice(null), 3000);
-                  }}
-                  title="Click to copy permanent direct lecture route"
-                  sx={{
-                    fontFamily: 'monospace',
-                    bgcolor: currentTheme.palette.badgeBg,
-                    color: currentTheme.palette.badgeColor,
-                    fontWeight: 700,
-                    fontSize: '0.74rem',
-                    cursor: 'pointer',
-                    border: `1px solid ${currentTheme.palette.badgeBorder}`,
-                    '&:hover': { opacity: 0.85 }
-                  }}
-                />
                 {activeData.cached && (
                   <span style={{
                     display: 'inline-flex',

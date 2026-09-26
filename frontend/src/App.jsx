@@ -1536,26 +1536,6 @@ export default function App() {
                 >
                   <Cloud size={15} /> Save to Google Drive
                 </button>
-
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<ArrowLeft size={16} />}
-                  onClick={handleBackToHub}
-                  sx={{
-                    textTransform: 'none',
-                    borderColor: 'rgba(255, 255, 255, 0.35)',
-                    color: '#ffffff',
-                    fontWeight: 600,
-                    fontSize: '0.84rem',
-                    borderRadius: 1.5,
-                    px: 1.5,
-                    py: 0.6,
-                    '&:hover': { borderColor: '#ffffff', bgcolor: 'rgba(255, 255, 255, 0.1)' }
-                  }}
-                >
-                  {selectedCourse ? selectedCourse : (googleUser ? 'My Library' : 'New Video')}
-                </Button>
               </>
             )}
 

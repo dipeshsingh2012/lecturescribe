@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from collections import OrderedDict
@@ -68,6 +69,7 @@ class RelationalDBManager:
     def __init__(self, postgres_url: Optional[str] = None):
         self._explicit_url = postgres_url
         self._memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._resources_memory_cache: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -196,6 +198,24 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_pg_chat_vid ON lecturescribe_chat_logs(video_id);
                         CREATE INDEX IF NOT EXISTS idx_pg_user_lib_email ON lecturescribe_user_library(user_email);
                         CREATE INDEX IF NOT EXISTS idx_pg_user_lib_course ON lecturescribe_user_library(user_email, course_name);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_resources (
+                            id SERIAL PRIMARY KEY,
+                            video_id VARCHAR(64),
+                            course_name VARCHAR(255) NOT NULL,
+                            user_email VARCHAR(255) NOT NULL,
+                            title VARCHAR(255) NOT NULL,
+                            filename VARCHAR(255) NOT NULL,
+                            blob_name VARCHAR(512),
+                            file_type VARCHAR(32) NOT NULL,
+                            file_size_bytes BIGINT DEFAULT 0,
+                            file_url TEXT,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_res_vid ON lecturescribe_resources(video_id);
+                        CREATE INDEX IF NOT EXISTS idx_res_course ON lecturescribe_resources(course_name);
+                        CREATE INDEX IF NOT EXISTS idx_res_email ON lecturescribe_resources(user_email);
                     """)
                     conn.commit()
             print("[PostgreSQL] Connection verified and schema initialized successfully.")
@@ -861,6 +881,190 @@ class RelationalDBManager:
             return True
         finally:
             conn.close()
+
+    def create_resource(
+        self,
+        course_name: str,
+        user_email: str,
+        title: str,
+        filename: str,
+        blob_name: str,
+        file_type: str,
+        file_size_bytes: int = 0,
+        file_url: Optional[str] = None,
+        video_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Insert a resource record into PostgreSQL and memory cache."""
+        clean_email = (user_email or "").strip().lower()
+        clean_course = (course_name or "General Lectures").strip()
+        vid = str(video_id).strip() if video_id and str(video_id).strip() else None
+
+        record = {
+            "video_id": vid,
+            "course_name": clean_course,
+            "user_email": clean_email,
+            "title": title.strip(),
+            "filename": filename.strip(),
+            "blob_name": blob_name,
+            "file_type": file_type.lower(),
+            "file_size_bytes": file_size_bytes,
+            "file_url": file_url,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_resources 
+                        (video_id, course_name, user_email, title, filename, blob_name, file_type, file_size_bytes, file_url)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id, created_at;
+                    """, (vid, clean_course, clean_email, record["title"], record["filename"], blob_name, record["file_type"], file_size_bytes, file_url))
+                    row = cursor.fetchone()
+                    if row:
+                        record["id"] = row["id"]
+                        record["created_at"] = str(row["created_at"])
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Resources Warning] Could not save resource to DB: {e}")
+            if "id" not in record:
+                record["id"] = len(self._resources_memory_cache) + 1
+        finally:
+            if conn:
+                conn.close()
+
+        self._resources_memory_cache.append(record)
+        return record
+
+    def get_lecture_resources(self, video_id: str) -> List[Dict[str, Any]]:
+        """Fetch all resources attached to a specific lecture."""
+        if not video_id:
+            return []
+        vid = str(video_id).strip()
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, video_id, course_name, user_email, title, filename, blob_name, file_type, file_size_bytes, file_url, created_at
+                        FROM lecturescribe_resources
+                        WHERE video_id = %s
+                        ORDER BY created_at ASC;
+                    """, (vid,))
+                    rows = cursor.fetchall() or []
+                    results = []
+                    for r in rows:
+                        results.append({
+                            "id": r["id"],
+                            "video_id": r["video_id"],
+                            "course_name": r["course_name"],
+                            "user_email": r["user_email"],
+                            "title": r["title"],
+                            "filename": r["filename"],
+                            "blob_name": r["blob_name"],
+                            "file_type": r["file_type"],
+                            "file_size_bytes": r["file_size_bytes"],
+                            "file_url": r["file_url"],
+                            "created_at": str(r["created_at"]) if r.get("created_at") else None
+                        })
+                    return results
+        except Exception as e:
+            print(f"[PostgreSQL Resources Warning] Could not fetch lecture resources: {e}")
+            return [r for r in self._resources_memory_cache if r.get("video_id") == vid]
+        finally:
+            if conn:
+                conn.close()
+
+    def get_course_resources(self, course_name: str) -> List[Dict[str, Any]]:
+        """Fetch all resources attached to a course (across all lectures + general)."""
+        if not course_name:
+            return []
+        clean = course_name.strip()
+        slug_as_space = clean.replace("-", " ")
+        slug_as_wildcard = clean.replace("-", "%")
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, video_id, course_name, user_email, title, filename, blob_name, file_type, file_size_bytes, file_url, created_at
+                        FROM lecturescribe_resources
+                        WHERE course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s
+                        ORDER BY created_at ASC;
+                    """, (clean, f"%{clean}%", slug_as_space, f"%{slug_as_wildcard}%"))
+                    rows = cursor.fetchall() or []
+                    results = []
+                    for r in rows:
+                        results.append({
+                            "id": r["id"],
+                            "video_id": r["video_id"],
+                            "course_name": r["course_name"],
+                            "user_email": r["user_email"],
+                            "title": r["title"],
+                            "filename": r["filename"],
+                            "blob_name": r["blob_name"],
+                            "file_type": r["file_type"],
+                            "file_size_bytes": r["file_size_bytes"],
+                            "file_url": r["file_url"],
+                            "created_at": str(r["created_at"]) if r.get("created_at") else None
+                        })
+                    return results
+        except Exception as e:
+            print(f"[PostgreSQL Resources Warning] Could not fetch course resources: {e}")
+            clean_l = clean.lower()
+            return [
+                r for r in self._resources_memory_cache
+                if clean_l in r.get("course_name", "").lower() or r.get("course_name", "").lower().replace("-", " ") == slug_as_space.lower()
+            ]
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_resource(self, resource_id: int, user_email: str) -> Optional[Dict[str, Any]]:
+        """Delete a resource by ID if owned by user_email."""
+        clean_email = (user_email or "").strip().lower()
+        conn = None
+        target = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, blob_name, user_email FROM lecturescribe_resources
+                        WHERE id = %s;
+                    """, (resource_id,))
+                    row = cursor.fetchone()
+                    if not row:
+                        return None
+                    if clean_email and row["user_email"].strip().lower() != clean_email:
+                        raise PermissionError("You can only delete resources you uploaded.")
+                    
+                    target = dict(row)
+                    cursor.execute("DELETE FROM lecturescribe_resources WHERE id = %s;", (resource_id,))
+                    conn.commit()
+        except PermissionError:
+            raise
+        except Exception as e:
+            print(f"[PostgreSQL Resources Warning] Could not delete resource from DB: {e}")
+            for idx, r in enumerate(self._resources_memory_cache):
+                if r.get("id") == resource_id:
+                    if clean_email and r.get("user_email", "").lower() != clean_email:
+                        raise PermissionError("You can only delete resources you uploaded.")
+                    target = r
+                    self._resources_memory_cache.pop(idx)
+                    break
+        finally:
+            if conn:
+                conn.close()
+
+        if target:
+            self._resources_memory_cache = [r for r in self._resources_memory_cache if r.get("id") != resource_id]
+        return target
 
     def _ts_to_secs(self, ts: str) -> int:
         """Convert MM:SS or HH:MM:SS to total seconds."""

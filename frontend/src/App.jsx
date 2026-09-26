@@ -6,7 +6,7 @@ import {
   AlertCircle, RefreshCw, Send, Bot, User, Bookmark, ExternalLink, Database,
   Zap, Cloud, X, Folder, FileCode, CheckCircle2, LogOut,
   Trash2, Clock, BookOpen, Palette, ChevronDown, ChevronUp, Globe, Book,
-  ChevronRight
+  ChevronRight, Paperclip, Upload, Link2
 } from 'lucide-react';
 
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -54,6 +54,31 @@ const formatRelativeTime = (dateStr) => {
   } catch {
     return 'Recently';
   }
+};
+
+const formatBytes = (bytes) => {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+};
+
+const getFileTypeBadge = (fileType, filename) => {
+  const ext = (fileType || filename?.split('.').pop() || '').toLowerCase();
+  if (['pdf'].includes(ext)) {
+    return { label: 'PDF', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)' };
+  }
+  if (['doc', 'docx'].includes(ext)) {
+    return { label: 'DOC', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.12)' };
+  }
+  if (['ppt', 'pptx'].includes(ext)) {
+    return { label: 'SLIDES', color: '#f97316', bg: 'rgba(249, 115, 22, 0.12)' };
+  }
+  if (['link', 'gdrive'].includes(ext)) {
+    return { label: 'LINK', color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)' };
+  }
+  return { label: ext.toUpperCase() || 'FILE', color: '#8b5cf6', bg: 'rgba(139, 92, 246, 0.12)' };
 };
 
 const GoogleIcon = () => (
@@ -235,6 +260,21 @@ export default function App() {
   const [librarySearch, setLibrarySearch] = useState('');
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
 
+  // Resources State (Lecture & Course Materials via GCS)
+  const [lectureResources, setLectureResources] = useState([]);
+  const [lectureResourcesLoading, setLectureResourcesLoading] = useState(false);
+  const [courseResources, setCourseResources] = useState([]);
+  const [courseResourcesLoading, setCourseResourcesLoading] = useState(false);
+  const [courseViewTab, setCourseViewTab] = useState('lectures'); // 'lectures' | 'resources'
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [uploadTarget, setUploadTarget] = useState({ courseName: 'General Lectures', videoId: null });
+  const [uploadMode, setUploadMode] = useState('file'); // 'file' | 'link'
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadTitle, setUploadTitle] = useState('');
+  const [uploadLinkUrl, setUploadLinkUrl] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+
   // LMS Theme State via Zustand (Default: Academic Classic Blue)
   const { currentThemeId, setTheme } = useThemeStore();
 
@@ -310,7 +350,6 @@ export default function App() {
     }
   };
 
-  // Automatically fetch library on mount and when signed in
   useEffect(() => {
     if (googleUser?.email) {
       fetchUserLibrary(googleUser.email);
@@ -318,6 +357,221 @@ export default function App() {
       setUserLibrary([]);
     }
   }, [googleUser?.email]);
+
+  const fetchLectureResources = async (videoId) => {
+    if (!videoId) return;
+    setLectureResourcesLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/resources`);
+      if (res.ok) {
+        const data = await res.json();
+        setLectureResources(data.resources || []);
+      }
+    } catch (err) {
+      console.warn("[Resources] Failed to fetch lecture resources:", err);
+    } finally {
+      setLectureResourcesLoading(false);
+    }
+  };
+
+  const fetchCourseResources = async (courseName) => {
+    if (!courseName) return;
+    setCourseResourcesLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/resources`);
+      if (res.ok) {
+        const data = await res.json();
+        setCourseResources(data.resources || []);
+      }
+    } catch (err) {
+      console.warn("[Resources] Failed to fetch course resources:", err);
+    } finally {
+      setCourseResourcesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeData?.videoId) {
+      fetchLectureResources(activeData.videoId);
+    } else {
+      setLectureResources([]);
+    }
+  }, [activeData?.videoId]);
+
+  useEffect(() => {
+    if (selectedCourse) {
+      fetchCourseResources(selectedCourse);
+    } else {
+      setCourseResources([]);
+    }
+  }, [selectedCourse]);
+
+  const openUploadModal = (target = { courseName: selectedCourse || 'General Lectures', videoId: activeData?.videoId || null }) => {
+    setUploadTarget(target);
+    setUploadMode('file');
+    setUploadFile(null);
+    setUploadTitle('');
+    setUploadLinkUrl('');
+    setUploadError('');
+    setUploadModalOpen(true);
+  };
+
+  const handleUploadResource = async (e) => {
+    if (e) e.preventDefault();
+    if (!googleUser?.email) {
+      setUploadError("Only signed-in users can upload resources. Please sign in with Google.");
+      return;
+    }
+
+    setUploadError('');
+    setIsUploading(true);
+
+    try {
+      const effectiveCourse = uploadTarget.courseName || selectedCourse || activeData?.course_name || 'General Lectures';
+      const effectiveVid = uploadTarget.videoId || activeData?.videoId || null;
+
+      if (uploadMode === 'file') {
+        if (!uploadFile) {
+          setUploadError("Please select a file to upload.");
+          setIsUploading(false);
+          return;
+        }
+
+        // 1. Get presigned upload URL from backend
+        const presignRes = await fetch(`${API_BASE}/api/resources/presign-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: uploadFile.name,
+            content_type: uploadFile.type || 'application/octet-stream',
+            course_name: effectiveCourse,
+            video_id: effectiveVid,
+            user_email: googleUser.email
+          })
+        });
+
+        if (!presignRes.ok) {
+          const errData = await presignRes.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Failed to generate upload signed URL');
+        }
+
+        const presignData = await presignRes.json();
+
+        // 2. Direct upload to GCS signed URL (if not emulated)
+        if (!presignData.is_emulated) {
+          const gcsRes = await fetch(presignData.signed_url, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': uploadFile.type || 'application/octet-stream'
+            },
+            body: uploadFile
+          });
+
+          if (!gcsRes.ok) {
+            throw new Error(`Upload to Google Cloud Storage failed with status ${gcsRes.status}`);
+          }
+        }
+
+        // 3. Confirm upload with backend
+        const ext = uploadFile.name.split('.').pop() || 'file';
+        const confirmRes = await fetch(`${API_BASE}/api/resources/confirm-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: uploadFile.name,
+            blob_name: presignData.blob_name,
+            file_type: ext.toLowerCase(),
+            file_size_bytes: uploadFile.size,
+            course_name: effectiveCourse,
+            video_id: effectiveVid,
+            title: uploadTitle.trim() || uploadFile.name,
+            user_email: googleUser.email
+          })
+        });
+
+        if (!confirmRes.ok) {
+          const errData = await confirmRes.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Failed to record resource in database');
+        }
+
+        const confirmed = await confirmRes.json();
+        const newResource = confirmed.resource;
+
+        if (effectiveVid && effectiveVid === activeData?.videoId) {
+          setLectureResources(prev => [...prev.filter(r => r.id !== newResource.id), newResource]);
+        }
+        if (effectiveCourse) {
+          setCourseResources(prev => [...prev.filter(r => r.id !== newResource.id), newResource]);
+        }
+      } else {
+        // Link upload
+        if (!uploadLinkUrl.trim()) {
+          setUploadError("Please provide a valid link URL.");
+          setIsUploading(false);
+          return;
+        }
+
+        const linkRes = await fetch(`${API_BASE}/api/resources/link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: uploadTitle.trim() || uploadLinkUrl.trim(),
+            url: uploadLinkUrl.trim(),
+            course_name: effectiveCourse,
+            video_id: effectiveVid,
+            user_email: googleUser.email
+          })
+        });
+
+        if (!linkRes.ok) {
+          const errData = await linkRes.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Failed to save resource link');
+        }
+
+        const linkData = await linkRes.json();
+        const newResource = linkData.resource;
+
+        if (effectiveVid && effectiveVid === activeData?.videoId) {
+          setLectureResources(prev => [...prev.filter(r => r.id !== newResource.id), newResource]);
+        }
+        if (effectiveCourse) {
+          setCourseResources(prev => [...prev.filter(r => r.id !== newResource.id), newResource]);
+        }
+      }
+
+      setUploadModalOpen(false);
+      setUploadFile(null);
+      setUploadTitle('');
+      setUploadLinkUrl('');
+      setUploadError('');
+    } catch (err) {
+      console.error("[Resources] Upload error:", err);
+      setUploadError(err.message || 'An error occurred during resource upload.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleDeleteResource = async (resourceId, videoId, courseName) => {
+    if (!googleUser?.email) return;
+    if (!window.confirm('Are you sure you want to delete this resource?')) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/resources/${resourceId}?user_email=${encodeURIComponent(googleUser.email)}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.detail || 'Failed to delete resource');
+        return;
+      }
+      setLectureResources(prev => prev.filter(r => r.id !== resourceId));
+      setCourseResources(prev => prev.filter(r => r.id !== resourceId));
+    } catch (err) {
+      console.error("[Resources] Delete error:", err);
+      alert('Failed to delete resource.');
+    }
+  };
 
   // Client-side cache: In-memory & LocalStorage
   const [cachedVideos, setCachedVideos] = useState(() => {
@@ -1975,6 +2229,75 @@ export default function App() {
                 />
               </Box>
 
+              {/* Course View Tabs (Lectures vs Course Materials) */}
+              {selectedCourse && (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3, flexWrap: 'wrap', gap: 1.5 }}>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      variant={courseViewTab === 'lectures' ? 'contained' : 'outlined'}
+                      size="small"
+                      startIcon={<Video size={15} />}
+                      onClick={() => setCourseViewTab('lectures')}
+                      sx={{
+                        textTransform: 'none',
+                        fontWeight: 700,
+                        fontSize: '0.82rem',
+                        borderRadius: 2,
+                        ...(courseViewTab === 'lectures'
+                          ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                          : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+                      }}
+                    >
+                      Lectures ({filteredCourseLectures.length})
+                    </Button>
+                    <Button
+                      variant={courseViewTab === 'resources' ? 'contained' : 'outlined'}
+                      size="small"
+                      startIcon={<Paperclip size={15} />}
+                      onClick={() => setCourseViewTab('resources')}
+                      sx={{
+                        textTransform: 'none',
+                        fontWeight: 700,
+                        fontSize: '0.82rem',
+                        borderRadius: 2,
+                        ...(courseViewTab === 'resources'
+                          ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                          : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+                      }}
+                    >
+                      Course Materials ({courseResources.length})
+                    </Button>
+                  </Box>
+
+                  <Tooltip title={!googleUser ? "Sign in with Google to upload course resources" : "Upload course-wide slides, syllabus, or notes"}>
+                    <span>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        disabled={!googleUser}
+                        startIcon={<Upload size={14} />}
+                        onClick={() => openUploadModal({
+                          courseName: activeCourseData?.course_name || selectedCourse,
+                          videoId: null
+                        })}
+                        sx={{
+                          textTransform: 'none',
+                          fontWeight: 700,
+                          fontSize: '0.8rem',
+                          borderRadius: 2,
+                          color: currentTheme.palette.primary,
+                          borderColor: currentTheme.palette.cardBorder,
+                          bgcolor: currentTheme.palette.cardBg,
+                          '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary }
+                        }}
+                      >
+                        Add Course Material
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Box>
+              )}
+
               {/* LEVEL 1: COURSE CARDS VIEW */}
               {!selectedCourse ? (
                 filteredCourses.length > 0 ? (
@@ -2141,8 +2464,155 @@ export default function App() {
                     </Typography>
                   </Paper>
                 )
+              ) : courseViewTab === 'resources' ? (
+                /* LEVEL 2B: COURSE MATERIALS & RESOURCES VIEW */
+                courseResourcesLoading ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 8 }}>
+                    <CircularProgress size={36} sx={{ color: currentTheme.palette.primary, mb: 2 }} />
+                    <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary }}>
+                      Loading course materials...
+                    </Typography>
+                  </Box>
+                ) : courseResources.length > 0 ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {courseResources.map((res) => {
+                      const badge = getFileTypeBadge(res.file_type, res.filename);
+                      const isOwner = googleUser?.email && res.user_email?.toLowerCase() === googleUser.email.toLowerCase();
+                      const associatedLecture = res.video_id ? (userLibrary.find(l => l.video_id === res.video_id)?.video_title || `Lecture ${res.video_id}`) : null;
+
+                      return (
+                        <Paper
+                          key={res.id}
+                          elevation={0}
+                          sx={{
+                            p: 2.5,
+                            borderRadius: 2.5,
+                            bgcolor: currentTheme.palette.cardBg,
+                            border: `1px solid ${currentTheme.palette.cardBorder}`,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: 2,
+                            transition: 'all 0.2s ease',
+                            '&:hover': { borderColor: currentTheme.palette.primary, boxShadow: currentTheme.palette.cardShadow }
+                          }}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, flex: 1 }}>
+                            <Box sx={{
+                              px: 1.2,
+                              py: 0.6,
+                              borderRadius: 1.5,
+                              fontWeight: 800,
+                              fontSize: '0.75rem',
+                              letterSpacing: '0.5px',
+                              bgcolor: badge.bg,
+                              color: badge.color,
+                              flexShrink: 0
+                            }}>
+                              {badge.label}
+                            </Box>
+                            <Box sx={{ minWidth: 0, flex: 1 }}>
+                              <Typography variant="subtitle2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary, mb: 0.3 }}>
+                                {res.title || res.filename}
+                              </Typography>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', fontSize: '0.75rem', color: currentTheme.palette.textSecondary }}>
+                                {associatedLecture && (
+                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: currentTheme.palette.primary }}>
+                                    <Video size={13} /> {associatedLecture}
+                                  </Box>
+                                )}
+                                {res.file_size_bytes > 0 && <span>{formatBytes(res.file_size_bytes)}</span>}
+                                <span>Uploaded {formatRelativeTime(res.created_at)}</span>
+                                {res.user_email && <span style={{ opacity: 0.75 }}>by {res.user_email}</span>}
+                              </Box>
+                            </Box>
+                          </Box>
+
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              component="a"
+                              href={res.download_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download={res.file_type !== 'link' && res.file_type !== 'gdrive'}
+                              startIcon={res.file_type === 'link' || res.file_type === 'gdrive' ? <ExternalLink size={14} /> : <Download size={14} />}
+                              sx={{
+                                textTransform: 'none',
+                                fontWeight: 700,
+                                fontSize: '0.8rem',
+                                borderRadius: 2,
+                                color: currentTheme.palette.primary,
+                                borderColor: currentTheme.palette.cardBorder,
+                                '&:hover': { borderColor: currentTheme.palette.primary, bgcolor: 'var(--highlight-bg)' }
+                              }}
+                            >
+                              {res.file_type === 'link' || res.file_type === 'gdrive' ? 'Open' : 'Download'}
+                            </Button>
+                            {isOwner && (
+                              <Tooltip title="Delete Resource">
+                                <IconButton
+                                  size="small"
+                                  onClick={() => handleDeleteResource(res.id, res.video_id, selectedCourse)}
+                                  sx={{ color: '#ef4444', '&:hover': { bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
+                                >
+                                  <Trash2 size={16} />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </Box>
+                        </Paper>
+                      );
+                    })}
+                  </Box>
+                ) : (
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 6,
+                      textAlign: 'center',
+                      bgcolor: currentTheme.palette.cardBg,
+                      border: `1px dashed ${currentTheme.palette.cardBorder}`,
+                      borderRadius: 3
+                    }}
+                  >
+                    <Paperclip size={44} color={currentTheme.palette.primary} style={{ margin: '0 auto 12px', opacity: 0.85 }} />
+                    <Typography variant="h6" sx={{ color: currentTheme.palette.textPrimary, fontWeight: 700, mb: 1 }}>
+                      No Course Materials Yet
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 440, mx: 'auto', mb: 2 }}>
+                      {googleUser
+                        ? 'Upload slide decks, reading assignments, syllabi, or resource links for this course.'
+                        : 'Sign in with Google to upload course materials and syllabus docs.'}
+                    </Typography>
+                    {googleUser && (
+                      <Button
+                        variant="contained"
+                        size="small"
+                        startIcon={<Upload size={14} />}
+                        onClick={() => openUploadModal({
+                          courseName: activeCourseData?.course_name || selectedCourse,
+                          videoId: null
+                        })}
+                        sx={{
+                          bgcolor: currentTheme.palette.primary,
+                          color: '#fff',
+                          fontWeight: 700,
+                          textTransform: 'none',
+                          borderRadius: 2,
+                          px: 2.5,
+                          '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                        }}
+                      >
+                        Upload First Material
+                      </Button>
+                    )}
+                  </Paper>
+                )
               ) : (
-                /* LEVEL 2: INDIVIDUAL LECTURES IN SELECTED COURSE */
+                /* LEVEL 2A: INDIVIDUAL LECTURES IN SELECTED COURSE */
                 courseLoading ? (
                   <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 8 }}>
                     <CircularProgress size={36} sx={{ color: currentTheme.palette.primary, mb: 2 }} />
@@ -2509,7 +2979,7 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
               <button
                 onClick={handleCopyTranscript}
                 style={{
@@ -2521,7 +2991,7 @@ export default function App() {
                   background: 'var(--card-bg)',
                   color: 'var(--text-primary)',
                   border: '1px solid var(--border-color)',
-                  padding: '10px',
+                  padding: '10px 14px',
                   borderRadius: '8px',
                   cursor: 'pointer',
                   fontWeight: 600,
@@ -2531,6 +3001,177 @@ export default function App() {
                 {copied ? <Check size={16} color="var(--theme-primary)" /> : <Copy size={16} />}
                 {copied ? 'Copied Transcript!' : 'Copy Transcript'}
               </button>
+
+              <Tooltip title={!googleUser ? "Sign in with Google to upload resources" : "Upload lecture notes, slides, or links"}>
+                <span>
+                  <button
+                    onClick={() => {
+                      if (!googleUser) return;
+                      openUploadModal({
+                        courseName: activeCourseData?.course_name || selectedCourse || activeData?.course_name || 'General Lectures',
+                        videoId: activeData.videoId
+                      });
+                    }}
+                    disabled={!googleUser}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      background: googleUser ? 'var(--card-bg)' : 'rgba(255, 255, 255, 0.04)',
+                      color: googleUser ? 'var(--theme-primary)' : 'var(--text-secondary)',
+                      border: googleUser ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      cursor: googleUser ? 'pointer' : 'not-allowed',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      opacity: googleUser ? 1 : 0.6,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <Upload size={16} />
+                    Upload Resource
+                  </button>
+                </span>
+              </Tooltip>
+            </div>
+
+            {/* Lecture Resources Shelf */}
+            <div style={{
+              marginTop: '12px',
+              padding: '14px 16px',
+              background: 'var(--card-bg)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '10px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: lectureResources.length > 0 ? '10px' : '0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Paperclip size={15} color="var(--theme-primary)" />
+                  <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    Lecture Resources
+                  </span>
+                  <span style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    padding: '1px 7px',
+                    borderRadius: '10px',
+                    background: 'var(--highlight-bg)',
+                    color: 'var(--theme-primary)'
+                  }}>
+                    {lectureResources.length}
+                  </span>
+                </div>
+                {lectureResourcesLoading && <CircularProgress size={14} sx={{ color: 'var(--theme-primary)' }} />}
+              </div>
+
+              {lectureResources.length === 0 ? (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', paddingTop: '6px' }}>
+                  No materials or slides attached to this lecture yet.{' '}
+                  {googleUser ? 'Click "Upload Resource" above to add PDFs, slides, or links.' : 'Sign in to upload resources.'}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {lectureResources.map((res) => {
+                    const badge = getFileTypeBadge(res.file_type, res.filename);
+                    const isOwner = googleUser?.email && res.user_email?.toLowerCase() === googleUser.email.toLowerCase();
+                    return (
+                      <div
+                        key={res.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '10px',
+                          padding: '8px 12px',
+                          background: 'var(--panel-bg)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '8px',
+                          fontSize: '0.82rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                          <span style={{
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontSize: '0.68rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.5px',
+                            color: badge.color,
+                            background: badge.bg,
+                            flexShrink: 0
+                          }}>
+                            {badge.label}
+                          </span>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{
+                              fontWeight: 600,
+                              color: 'var(--text-primary)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {res.title || res.filename}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', gap: '8px' }}>
+                              {res.file_size_bytes > 0 && <span>{formatBytes(res.file_size_bytes)}</span>}
+                              <span>{formatRelativeTime(res.created_at)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <a
+                            href={res.download_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={res.file_type !== 'link' && res.file_type !== 'gdrive'}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '5px 10px',
+                              borderRadius: '6px',
+                              background: 'var(--highlight-bg)',
+                              color: 'var(--theme-primary)',
+                              border: '1px solid rgba(0, 117, 237, 0.25)',
+                              textDecoration: 'none',
+                              fontWeight: 600,
+                              fontSize: '0.75rem',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {res.file_type === 'link' || res.file_type === 'gdrive' ? (
+                              <><ExternalLink size={13} /> Open</>
+                            ) : (
+                              <><Download size={13} /> Download</>
+                            )}
+                          </a>
+                          {isOwner && (
+                            <button
+                              onClick={() => handleDeleteResource(res.id, activeData.videoId, selectedCourse)}
+                              title="Delete Resource"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '5px',
+                                borderRadius: '6px',
+                                background: 'transparent',
+                                color: '#ef4444',
+                                border: '1px solid rgba(239, 68, 68, 0.25)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
@@ -3835,6 +4476,352 @@ export default function App() {
                 }}
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================================== */}
+      {/* Upload Resource Modal (GCS V4 Signed URLs Direct Upload)                       */}
+      {/* ============================================================================== */}
+      {uploadModalOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '20px'
+        }}>
+          <div style={{
+            background: 'var(--panel-bg)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '16px',
+            width: '100%',
+            maxWidth: '560px',
+            maxHeight: '90vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 24px 60px rgba(0, 0, 0, 0.5)',
+            overflow: 'hidden'
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '18px 24px',
+              borderBottom: '1px solid var(--border-color)',
+              background: 'var(--card-bg)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Upload size={20} color="var(--theme-primary)" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {uploadTarget.videoId ? 'Add Lecture Resource' : 'Add Course Material'}
+                  </h3>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    {uploadTarget.videoId
+                      ? `Attaching to lecture in ${uploadTarget.courseName || 'Course'}`
+                      : `Attaching to course: ${uploadTarget.courseName || 'General Lectures'}`}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setUploadModalOpen(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  borderRadius: '6px',
+                  display: 'flex'
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Body */}
+            <div style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '18px' }}>
+              {/* Mode Switcher Tabs */}
+              <div style={{
+                display: 'flex',
+                background: 'var(--card-bg)',
+                padding: '4px',
+                borderRadius: '8px',
+                border: '1px solid var(--border-color)'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => { setUploadMode('file'); setUploadError(''); }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    background: uploadMode === 'file' ? 'var(--highlight-bg)' : 'transparent',
+                    color: uploadMode === 'file' ? 'var(--theme-primary)' : 'var(--text-secondary)'
+                  }}
+                >
+                  <Paperclip size={14} /> File Upload (PDF, DOC, PPT)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setUploadMode('link'); setUploadError(''); }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    background: uploadMode === 'link' ? 'var(--highlight-bg)' : 'transparent',
+                    color: uploadMode === 'link' ? 'var(--theme-primary)' : 'var(--text-secondary)'
+                  }}
+                >
+                  <Link2 size={14} /> External Link / Docs
+                </button>
+              </div>
+
+              {uploadError && (
+                <div style={{
+                  padding: '10px 14px',
+                  background: 'rgba(239, 68, 68, 0.12)',
+                  border: '1px solid #ef4444',
+                  borderRadius: '8px',
+                  color: '#f87171',
+                  fontSize: '0.82rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <AlertCircle size={16} /> {uploadError}
+                </div>
+              )}
+
+              {uploadMode === 'file' ? (
+                <>
+                  {/* Dropzone / File Picker */}
+                  <label
+                    style={{
+                      border: '2px dashed var(--border-color)',
+                      borderRadius: '12px',
+                      padding: '28px 20px',
+                      textAlign: 'center',
+                      cursor: 'pointer',
+                      background: 'var(--card-bg)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '8px',
+                      transition: 'border-color 0.2s ease'
+                    }}
+                  >
+                    <input
+                      type="file"
+                      style={{ display: 'none' }}
+                      accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.py,.zip"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setUploadFile(file);
+                          if (!uploadTitle) {
+                            setUploadTitle(file.name.replace(/\.[^/.]+$/, ''));
+                          }
+                          setUploadError('');
+                        }
+                      }}
+                    />
+                    <Upload size={32} color="var(--theme-primary)" style={{ opacity: 0.85 }} />
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+                      {uploadFile ? uploadFile.name : 'Click or browse to choose a file'}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Supports PDF, Word (.docx), PowerPoint (.pptx), Text, and Zip
+                    </div>
+                    {uploadFile && (
+                      <div style={{
+                        marginTop: '6px',
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        color: '#10b981',
+                        background: 'rgba(16, 185, 129, 0.12)',
+                        padding: '3px 10px',
+                        borderRadius: '12px'
+                      }}>
+                        {formatBytes(uploadFile.size)} selected
+                      </div>
+                    )}
+                  </label>
+
+                  {/* Resource Title */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                      Resource Title (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Week 1 Lecture Slides & Syllabus"
+                      value={uploadTitle}
+                      onChange={(e) => setUploadTitle(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--card-bg)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.88rem',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Link URL */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                      Resource Link URL
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="https://docs.google.com/document/d/... or Notion / Website"
+                      value={uploadLinkUrl}
+                      onChange={(e) => setUploadLinkUrl(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--card-bg)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.88rem',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+
+                  {/* Resource Title */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                      Resource Title
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Shared Google Doc Notes"
+                      value={uploadTitle}
+                      onChange={(e) => setUploadTitle(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--card-bg)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.88rem',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* GCS Direct Signed URL Explanatory Footnote */}
+              <div style={{
+                padding: '10px 14px',
+                background: 'rgba(0, 117, 237, 0.06)',
+                border: '1px solid rgba(0, 117, 237, 0.2)',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                color: 'var(--text-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <Zap size={15} color="var(--theme-primary)" style={{ flexShrink: 0 }} />
+                <span>Files are uploaded directly to Google Cloud Storage via secure V4 signed URLs.</span>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{
+              padding: '14px 24px',
+              borderTop: '1px solid var(--border-color)',
+              background: 'var(--card-bg)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: '12px'
+            }}>
+              <button
+                type="button"
+                onClick={() => setUploadModalOpen(false)}
+                disabled={isUploading}
+                style={{
+                  padding: '9px 18px',
+                  background: 'transparent',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '6px',
+                  color: 'var(--text-secondary)',
+                  cursor: isUploading ? 'not-allowed' : 'pointer',
+                  fontSize: '0.84rem'
+                }}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleUploadResource}
+                disabled={isUploading || (uploadMode === 'file' ? !uploadFile : !uploadLinkUrl.trim())}
+                style={{
+                  padding: '9px 20px',
+                  background: 'var(--theme-primary)',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontWeight: 700,
+                  fontSize: '0.84rem',
+                  cursor: isUploading || (uploadMode === 'file' ? !uploadFile : !uploadLinkUrl.trim()) ? 'not-allowed' : 'pointer',
+                  opacity: isUploading || (uploadMode === 'file' ? !uploadFile : !uploadLinkUrl.trim()) ? 0.6 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                {isUploading ? (
+                  <>
+                    <RefreshCw className="spinner" size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload size={14} />
+                    {uploadMode === 'file' ? 'Upload Resource' : 'Save Link'}
+                  </>
+                )}
               </button>
             </div>
           </div>

@@ -47,6 +47,7 @@ from backend.database import db_manager
 from backend.google_drive_service import google_drive_service
 from backend.summary_generator import generate_summary_sections
 from backend.redis_service import redis_cache
+from backend.gcs_storage import gcs_storage_service
 
 
 
@@ -685,6 +686,166 @@ def delete_user_lecture(video_id: str, email: str = Query(..., description="User
         raise HTTPException(status_code=400, detail="email and video_id are required.")
     success = db_manager.remove_user_lecture(email, video_id)
     return {"status": "success" if success else "failed"}
+
+
+# ==============================================================================
+# Lecture & Course Resources Endpoints (Google Cloud Storage)
+# ==============================================================================
+
+class PresignUploadRequest(BaseModel):
+    filename: str
+    content_type: Optional[str] = "application/octet-stream"
+    course_name: Optional[str] = "General Lectures"
+    video_id: Optional[str] = None
+    user_email: str
+
+class ConfirmUploadRequest(BaseModel):
+    filename: str
+    blob_name: str
+    file_type: str
+    file_size_bytes: Optional[int] = 0
+    course_name: Optional[str] = "General Lectures"
+    video_id: Optional[str] = None
+    title: Optional[str] = None
+    user_email: str
+
+class CreateLinkResourceRequest(BaseModel):
+    title: str
+    url: str
+    course_name: Optional[str] = "General Lectures"
+    video_id: Optional[str] = None
+    user_email: str
+
+
+@app.post("/api/resources/presign-upload")
+def presign_resource_upload(req: PresignUploadRequest):
+    """Generate a V4 GCS signed URL for direct browser-to-bucket upload."""
+    user_email = (req.user_email or "").strip().lower()
+    if not user_email:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Only signed-in users can upload resources."
+        )
+    if not req.filename or not req.filename.strip():
+        raise HTTPException(status_code=400, detail="Filename cannot be empty.")
+
+    clean_course = (req.course_name or "general").strip().lower().replace(" ", "-")
+    blob_name = gcs_storage_service.get_resource_blob_path(
+        course_slug=clean_course,
+        video_id=req.video_id,
+        filename=req.filename.strip()
+    )
+    upload_info = gcs_storage_service.generate_upload_signed_url(
+        blob_name=blob_name,
+        content_type=req.content_type or "application/octet-stream"
+    )
+    return {"status": "success", **upload_info}
+
+
+@app.post("/api/resources/confirm-upload")
+def confirm_resource_upload(req: ConfirmUploadRequest):
+    """Record resource metadata in PostgreSQL after successful direct GCS upload."""
+    user_email = (req.user_email or "").strip().lower()
+    if not user_email:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Only signed-in users can upload resources."
+        )
+    if not req.blob_name or not req.filename:
+        raise HTTPException(status_code=400, detail="blob_name and filename are required.")
+
+    record = db_manager.create_resource(
+        course_name=req.course_name or "General Lectures",
+        user_email=user_email,
+        title=req.title or req.filename,
+        filename=req.filename,
+        blob_name=req.blob_name,
+        file_type=req.file_type or "file",
+        file_size_bytes=req.file_size_bytes or 0,
+        file_url=None,
+        video_id=req.video_id
+    )
+    record["download_url"] = gcs_storage_service.generate_download_signed_url(req.blob_name)
+    return {"status": "success", "resource": record}
+
+
+@app.post("/api/resources/link")
+def create_link_resource(req: CreateLinkResourceRequest):
+    """Add an external resource link (e.g. Google Docs, Notion, Drive) for a lecture/course."""
+    user_email = (req.user_email or "").strip().lower()
+    if not user_email:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Only signed-in users can add resource links."
+        )
+    url = (req.url or "").strip()
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="A valid HTTP or HTTPS URL is required.")
+
+    ft = "link"
+    if "drive.google.com" in url or "docs.google.com" in url:
+        ft = "gdrive"
+
+    record = db_manager.create_resource(
+        course_name=req.course_name or "General Lectures",
+        user_email=user_email,
+        title=req.title.strip() or url,
+        filename=url,
+        blob_name="",
+        file_type=ft,
+        file_size_bytes=0,
+        file_url=url,
+        video_id=req.video_id
+    )
+    record["download_url"] = url
+    return {"status": "success", "resource": record}
+
+
+@app.get("/api/lecture/{video_id}/resources")
+def get_lecture_resources(video_id: str):
+    """Retrieve all resources attached to a specific lecture with fresh signed download URLs."""
+    vid = video_id.strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="video_id is required.")
+    items = db_manager.get_lecture_resources(vid)
+    for r in items:
+        if r.get("blob_name"):
+            r["download_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"])
+        elif r.get("file_url"):
+            r["download_url"] = r["file_url"]
+    return {"status": "success", "video_id": vid, "resources": items, "count": len(items)}
+
+
+@app.get("/api/course/{course_name}/resources")
+def get_course_resources(course_name: str):
+    """Retrieve all resources attached across a course with fresh signed download URLs."""
+    cname = course_name.strip()
+    if not cname:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    items = db_manager.get_course_resources(cname)
+    for r in items:
+        if r.get("blob_name"):
+            r["download_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"])
+        elif r.get("file_url"):
+            r["download_url"] = r["file_url"]
+    return {"status": "success", "course_name": cname, "resources": items, "count": len(items)}
+
+
+@app.delete("/api/resources/{resource_id}")
+def delete_resource(resource_id: int, user_email: str = Query(..., description="User Google email")):
+    """Delete a resource by ID. Only the uploader is authorized to delete."""
+    clean_email = (user_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=401, detail="Authentication required: user_email is required.")
+    try:
+        deleted = db_manager.delete_resource(resource_id, clean_email)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Resource not found.")
+        if deleted.get("blob_name"):
+            gcs_storage_service.delete_blob(deleted["blob_name"])
+        return {"status": "success", "resource_id": resource_id}
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
 
 
 # ==============================================================================

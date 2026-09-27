@@ -63,20 +63,47 @@ describe('formatters utility functions', () => {
   });
 
   describe('extractVideoId', () => {
-    it('returns empty string for empty url', () => {
+    it('returns empty string for empty url or null/undefined', () => {
       expect(extractVideoId('')).toBe('');
       expect(extractVideoId(null)).toBe('');
+      expect(extractVideoId(undefined)).toBe('');
     });
 
-    it('returns plain numeric IDs directly', () => {
+    it('returns plain numeric IDs directly with whitespace trimmed', () => {
       expect(extractVideoId('123456789')).toBe('123456789');
       expect(extractVideoId('  987654  ')).toBe('987654');
+      expect(extractVideoId('\n1229247139\t')).toBe('1229247139');
     });
 
     it('extracts ID from standard Vimeo URLs', () => {
       expect(extractVideoId('https://vimeo.com/76979871')).toBe('76979871');
+      expect(extractVideoId('http://vimeo.com/76979871')).toBe('76979871');
+      expect(extractVideoId('https://www.vimeo.com/76979871')).toBe('76979871');
+      expect(extractVideoId('vimeo.com/76979871')).toBe('76979871');
+    });
+
+    it('extracts ID from player and embed URLs', () => {
       expect(extractVideoId('https://vimeo.com/video/76979871')).toBe('76979871');
+      expect(extractVideoId('https://player.vimeo.com/video/76979871')).toBe('76979871');
+    });
+
+    it('extracts ID from URLs with query parameters and fragments', () => {
       expect(extractVideoId('vimeo.com/76979871?autoplay=1')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871?autoplay=1&muted=true')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871#t=30s')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871/')).toBe('76979871');
+    });
+
+    it('extracts ID from unlisted, channel, group, and manage URLs', () => {
+      expect(extractVideoId('https://vimeo.com/76979871/abc123def')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/channels/staffpicks/76979871')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/groups/motion/videos/76979871')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/manage/videos/76979871')).toBe('76979871');
+    });
+
+    it('returns trimmed string for non-matching URLs', () => {
+      expect(extractVideoId('custom-slug')).toBe('custom-slug');
+      expect(extractVideoId('https://example.com/other')).toBe('https://example.com/other');
     });
   });
 

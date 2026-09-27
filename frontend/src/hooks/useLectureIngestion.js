@@ -96,7 +96,7 @@ export function useLectureIngestion({
         }
       }
       setActiveData({ ...cached, cached: true });
-      setUrlInput(cached.sourceUrl || `https://vimeo.com/${vidId}`);
+      setUrlInput('');
       if (typeof initChatMessages === 'function') {
         initChatMessages(cached.title, vidId);
       }
@@ -143,7 +143,7 @@ export function useLectureIngestion({
           }
         }
         setActiveData(data);
-        setUrlInput(data.sourceUrl || `https://vimeo.com/${data.videoId}`);
+        setUrlInput('');
         if (typeof initChatMessages === 'function') {
           initChatMessages(data.title, data.videoId);
         }

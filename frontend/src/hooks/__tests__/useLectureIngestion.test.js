@@ -159,4 +159,113 @@ describe('useLectureIngestion hook functionality', () => {
 
     expect(result.current.cacheNotice).toContain('Pasted video is already cached');
   });
+
+  it('clears the video input box once the video is ingested from API', async () => {
+    const lecturePayload = {
+      videoId: '11223344',
+      title: 'Quantum Computing',
+      cues: [{ time: '00:01', text: 'Qubits' }],
+      course_name: 'Physics'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => lecturePayload
+    });
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      result.current.setUrlInput('https://vimeo.com/11223344');
+    });
+    expect(result.current.urlInput).toBe('https://vimeo.com/11223344');
+
+    await act(async () => {
+      await result.current.handleTranscribe();
+    });
+
+    // Verification: activeData is set and urlInput is cleared
+    expect(result.current.activeData.videoId).toBe('11223344');
+    expect(result.current.urlInput).toBe('');
+  });
+
+  it('clears the video input box once cached video is loaded', async () => {
+    const cachedItem = {
+      videoId: '88776655',
+      title: 'Operating Systems',
+      cues: [],
+      course_name: 'CS'
+    };
+    localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '88776655': cachedItem }));
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      result.current.setUrlInput('https://vimeo.com/88776655');
+    });
+    expect(result.current.urlInput).toBe('https://vimeo.com/88776655');
+
+    await act(async () => {
+      await result.current.handleTranscribe();
+    });
+
+    expect(result.current.activeData.videoId).toBe('88776655');
+    expect(result.current.urlInput).toBe('');
+  });
+
+  it('preserves the video input box content if ingestion fails with an error', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ detail: 'Video not found or private' })
+    });
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      result.current.setUrlInput('https://vimeo.com/invalid-video');
+    });
+
+    await act(async () => {
+      await result.current.handleTranscribe();
+    });
+
+    // The input should remain so user can fix it, but error is shown
+    expect(result.current.urlInput).toBe('https://vimeo.com/invalid-video');
+    expect(result.current.error).toContain('Video not found or private');
+    expect(result.current.activeData).toBeNull();
+  });
 });

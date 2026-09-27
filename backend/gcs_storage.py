@@ -12,6 +12,9 @@ import uuid
 import datetime
 from typing import Optional, Dict, Any
 
+import google.auth
+from google.auth.transport import requests as auth_requests
+
 try:
     from google.cloud import storage
     from google.auth.exceptions import DefaultCredentialsError
@@ -78,45 +81,40 @@ class GCSStorageService:
         else:
             return f"courses/{safe_course}/general/{unique_prefix}_{safe_name}"
 
-    def generate_upload_signed_url(
-        self,
-        blob_name: str,
-        content_type: str = "application/octet-stream",
-        expires_minutes: int = 15
-    ) -> Dict[str, Any]:
-        """
-        Generate a V4 signed URL allowing the client to directly PUT bytes into GCS.
-        """
+    def generate_upload_signed_url(self, blob_name: str, content_type: str = "application/octet-stream", expires_minutes: int = 15
+) -> Dict[str, Any]:
+        """Generate a V4 signed URL allowing the client to directly PUT bytes into GCS."""
         bucket = self._get_bucket()
-        if bucket:
-            try:
-                blob = bucket.blob(blob_name)
-                url = blob.generate_signed_url(
-                    version="v4",
-                    expiration=datetime.timedelta(minutes=expires_minutes),
-                    method="PUT",
-                    content_type=content_type,
-                )
-                return {
-                    "signed_url": url,
-                    "blob_name": blob_name,
-                    "bucket": self.bucket_name,
-                    "method": "PUT",
-                    "expires_in_seconds": expires_minutes * 60,
-                    "is_emulated": False
-                }
-            except Exception as e:
-                print(f"[GCS Signed URL Warning] Signed URL generation failed ({e}). Returning emulated direct URL.")
+        if not bucket:
+            raise RuntimeError("GCS bucket is not initialized.")
 
-        # Fallback / Emulated signed URL for environments without GCS private key credentials
-        emulated_url = f"https://storage.googleapis.com/{self.bucket_name}/{blob_name}"
+        blob = bucket.blob(blob_name)
+
+        # Refresh credentials to guarantee access_token is available
+        credentials, _ = google.auth.default()
+        if not credentials.valid:
+            credentials.refresh(auth_requests.Request())
+
+        sign_kwargs = {
+            "version": "v4",
+            "expiration": datetime.timedelta(minutes=expires_minutes),
+            "method": "PUT",
+            "content_type": content_type,
+        }
+
+        # Pass token & email when running on Cloud Run / GCE / GKE
+        if hasattr(credentials, "service_account_email") and credentials.token:
+            sign_kwargs["service_account_email"] = credentials.service_account_email
+            sign_kwargs["access_token"] = credentials.token
+
+        url = blob.generate_signed_url(**sign_kwargs)
+
         return {
-            "signed_url": emulated_url,
+            "signed_url": url,
             "blob_name": blob_name,
             "bucket": self.bucket_name,
             "method": "PUT",
             "expires_in_seconds": expires_minutes * 60,
-            "is_emulated": True
         }
 
     def generate_download_signed_url(

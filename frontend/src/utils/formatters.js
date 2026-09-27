@@ -2,6 +2,7 @@ export const formatRelativeTime = (dateStr) => {
   if (!dateStr) return 'Recently';
   try {
     const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return 'Recently';
     const now = new Date();
     const diffMs = now - date;
     const diffMins = Math.floor(diffMs / 60000);

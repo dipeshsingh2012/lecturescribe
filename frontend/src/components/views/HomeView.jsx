@@ -176,20 +176,22 @@ export default function HomeView({
           placeholder={selectedCourse ? "Search lectures in this course..." : "Search courses or lectures..."}
           value={librarySearch}
           onChange={(e) => setLibrarySearch(e.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search size={16} color={currentTheme.palette.textSecondary} />
-              </InputAdornment>
-            ),
-            sx: {
-              bgcolor: currentTheme.palette.cardBg,
-              borderRadius: 2,
-              fontSize: '0.85rem',
-              color: currentTheme.palette.textPrimary,
-              width: { xs: '100%', sm: 280 },
-              '& fieldset': { borderColor: currentTheme.palette.cardBorder },
-              '&:hover fieldset': { borderColor: currentTheme.palette.primary }
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search size={16} color={currentTheme.palette.textSecondary} />
+                </InputAdornment>
+              ),
+              sx: {
+                bgcolor: currentTheme.palette.cardBg,
+                borderRadius: 2,
+                fontSize: '0.85rem',
+                color: currentTheme.palette.textPrimary,
+                width: { xs: '100%', sm: 280 },
+                '& fieldset': { borderColor: currentTheme.palette.cardBorder },
+                '&:hover fieldset': { borderColor: currentTheme.palette.primary }
+              }
             }
           }}
         />

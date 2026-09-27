@@ -77,6 +77,9 @@ describe('formatters utility functions', () => {
       expect(extractVideoId('https://vimeo.com/76979871')).toBe('76979871');
       expect(extractVideoId('https://vimeo.com/video/76979871')).toBe('76979871');
       expect(extractVideoId('vimeo.com/76979871?autoplay=1')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871#t=30s')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871/abc123def')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/channels/staffpicks/76979871')).toBe('76979871');
     });
   });
 

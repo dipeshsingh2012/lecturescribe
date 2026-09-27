@@ -19,7 +19,7 @@ def extract_video_id(url: str) -> str:
     url_str = str(url).strip()
     if url_str.isdigit():
         return url_str
-    match = re.search(r"vimeo\.com/(?:video/)?(\d+)", url_str)
+    match = re.search(r"vimeo\.com/(?:channels/[^/]+/|groups/[^/]+/videos/|manage/videos/|video/)?(\d+)", url_str)
     if match:
         return match.group(1)
     raise ValueError(f"Could not extract Vimeo video ID from: {url}")

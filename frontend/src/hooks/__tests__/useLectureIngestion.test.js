@@ -89,4 +89,74 @@ describe('useLectureIngestion hook functionality', () => {
     expect(result.current.activeData.videoId).toBe('999');
     expect(result.current.activeData.cached).toBe(true);
   });
+
+  it('extracts video ID from complex Vimeo URL during ingestion', async () => {
+    const lecturePayload = {
+      videoId: '55443322',
+      title: 'Advanced Machine Learning',
+      cues: [{ time: '00:00', text: 'Intro' }],
+      course_name: 'CS'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => lecturePayload
+    });
+
+    const navigateTo = vi.fn();
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo,
+        initChatMessages: vi.fn()
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/55443322?autoplay=1&muted=true#t=1m');
+    });
+
+    expect(result.current.activeData.videoId).toBe('55443322');
+    expect(navigateTo).toHaveBeenCalledWith(expect.stringContaining('55443322'));
+  });
+
+  it('extracts video ID on clipboard paste and alerts if already cached', () => {
+    const cachedItem = {
+      videoId: '12345678',
+      title: 'Deep Learning',
+      cues: [],
+      course_name: 'AI'
+    };
+    localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '12345678': cachedItem }));
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      const mockEvent = {
+        clipboardData: {
+          getData: () => 'https://vimeo.com/12345678?param=1'
+        }
+      };
+      result.current.handlePasteUrl(mockEvent);
+    });
+
+    expect(result.current.cacheNotice).toContain('Pasted video is already cached');
+  });
 });

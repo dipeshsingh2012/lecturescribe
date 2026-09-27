@@ -48,7 +48,7 @@ export const extractVideoId = (url) => {
   if (!url) return '';
   const trimmed = String(url).trim();
   if (/^\d+$/.test(trimmed)) return trimmed;
-  const match = trimmed.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  const match = trimmed.match(/vimeo\.com\/(?:channels\/[^\/]+\/|groups\/[^\/]+\/videos\/|manage\/videos\/|video\/)?(\d+)/);
   return match ? match[1] : trimmed;
 };
 

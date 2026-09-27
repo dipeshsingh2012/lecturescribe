@@ -131,12 +131,12 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            course_name: uploadTarget.courseName || selectedCourse || 'General Lectures',
+            course_name: uploadTarget.courseName || selectedCourse,
             video_id: uploadTarget.videoId || null,
             title: uploadTitle.trim() || uploadFile.name.replace(/\.[^/.]+$/, ''),
             filename: uploadFile.name,
-            gcs_path: presignData.gcs_path,
-            file_type: presignData.file_type,
+            blob_name: presignData.blob_name,
+            file_type: uploadFile.name.split('.').pop()?.toLowerCase() || 'file',
             file_size_bytes: uploadFile.size,
             user_email: googleUser.email
           })

@@ -1,5 +1,19 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { createTheme } from '@mui/material/styles';
+
+export const createAppMuiTheme = (currentTheme) => createTheme({
+  palette: {
+    mode: currentTheme.mode || 'light',
+    primary: { main: currentTheme.palette.primary },
+    secondary: { main: currentTheme.palette.secondary },
+    background: { default: currentTheme.palette.background, paper: currentTheme.palette.cardBg },
+    text: { primary: currentTheme.palette.textPrimary, secondary: currentTheme.palette.textSecondary },
+    divider: currentTheme.palette.cardBorder,
+  },
+  shape: { borderRadius: 8 },
+  typography: { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' }
+});
 
 export const LMS_THEMES = {
   academic: {

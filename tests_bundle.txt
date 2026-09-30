@@ -1,0 +1,3079 @@
+================================================================================
+TEST SUITE FILES (37 files found)
+================================================================================
+
+- frontend/src/components/common/__tests__/GoogleIcon.test.jsx
+- frontend/src/components/common/__tests__/MarkdownWithTimestamps.test.jsx
+- frontend/src/components/course/__tests__/CourseGrid.test.jsx
+- frontend/src/components/course/__tests__/CourseLectures.test.jsx
+- frontend/src/components/course/__tests__/CourseMaterials.test.jsx
+- frontend/src/components/home/__tests__/HeroBanner.test.jsx
+- frontend/src/components/home/__tests__/QuickAddBar.test.jsx
+- frontend/src/components/layout/__tests__/Header.test.jsx
+- frontend/src/components/lecture/__tests__/AITutor.test.jsx
+- frontend/src/components/lecture/__tests__/LecturePlayer.test.jsx
+- frontend/src/components/lecture/__tests__/LectureResourcesShelf.test.jsx
+- frontend/src/components/lecture/__tests__/TranscriptSearch.test.jsx
+- frontend/src/components/modals/__tests__/DownloadModal.test.jsx
+- frontend/src/components/modals/__tests__/UploadResourceModal.test.jsx
+- frontend/src/components/views/__tests__/HomeView.test.jsx
+- frontend/src/components/views/__tests__/LectureWorkspace.test.jsx
+- frontend/src/components/views/__tests__/LoadingView.test.jsx
+- frontend/src/hooks/__tests__/useAITutor.test.js
+- frontend/src/hooks/__tests__/useCourseDetail.test.js
+- frontend/src/hooks/__tests__/useGoogleAuth.test.js
+- frontend/src/hooks/__tests__/useLectureIngestion.test.js
+- frontend/src/hooks/__tests__/useLecturePlayer.test.js
+- frontend/src/hooks/__tests__/useResources.test.js
+- frontend/src/hooks/__tests__/useUserLibrary.test.js
+- frontend/src/store/__tests__/themeStore.test.js
+- frontend/src/utils/__tests__/formatters.test.js
+- frontend/src/utils/__tests__/routing.test.js
+- frontend/vitest.config.js
+- pytest.ini
+- tests/test_api_health.py
+- tests/test_api_transcript.py
+- tests/test_redis_cache.py
+- tests/test_resources.py
+- tests/test_services.py
+- tests/test_submission.py
+- tests/test_summary_generator.py
+- tests/test_vimeo_client.py
+
+
+================================================================================
+TEST FILE CONTENTS
+================================================================================
+
+--- START OF FILE: frontend/src/components/common/__tests__/GoogleIcon.test.jsx ---
+import React from 'react';
+import { describe, it, expect } from 'vitest';
+import { render } from '@testing-library/react';
+import GoogleIcon from '../GoogleIcon';
+
+describe('GoogleIcon', () => {
+  it('renders SVG icon with google colored paths', () => {
+    const { container } = render(<GoogleIcon />);
+    const svg = container.querySelector('svg');
+    expect(svg).toBeInTheDocument();
+    expect(svg).toHaveAttribute('viewBox', '0 0 24 24');
+    const paths = container.querySelectorAll('path');
+    expect(paths.length).toBe(4);
+  });
+});
+--- END OF FILE: frontend/src/components/common/__tests__/GoogleIcon.test.jsx ---
+
+--- START OF FILE: frontend/src/components/common/__tests__/MarkdownWithTimestamps.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import MarkdownWithTimestamps from '../MarkdownWithTimestamps';
+
+describe('MarkdownWithTimestamps', () => {
+  it('renders plain text markdown properly', () => {
+    render(<MarkdownWithTimestamps content="This is **bold** text." />);
+    expect(screen.getByText(/This is/)).toBeInTheDocument();
+    expect(screen.getByText('bold')).toBeInTheDocument();
+  });
+
+  it('detects inline timestamps and converts them to clickable jump buttons', () => {
+    const handleCueClick = vi.fn();
+    render(
+      <MarkdownWithTimestamps
+        content="Check this topic at [05:23] and also at [1:12:45]."
+        onCueClick={handleCueClick}
+      />
+    );
+
+    const button1 = screen.getByRole('button', { name: /05:23/i });
+    const button2 = screen.getByRole('button', { name: /1:12:45/i });
+    expect(button1).toBeInTheDocument();
+    expect(button2).toBeInTheDocument();
+
+    fireEvent.click(button1);
+    expect(handleCueClick).toHaveBeenCalledWith('05:23');
+
+    fireEvent.click(button2);
+    expect(handleCueClick).toHaveBeenCalledWith('1:12:45');
+  });
+
+  it('renders empty content gracefully', () => {
+    const { container } = render(<MarkdownWithTimestamps content="" />);
+    expect(container.firstChild).toBeNull();
+  });
+});
+--- END OF FILE: frontend/src/components/common/__tests__/MarkdownWithTimestamps.test.jsx ---
+
+--- START OF FILE: frontend/src/components/course/__tests__/CourseGrid.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import CourseGrid from '../CourseGrid';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('CourseGrid', () => {
+  it('renders empty state when filteredCourses is empty', () => {
+    render(
+      <CourseGrid
+        filteredCourses={[]}
+        handleSelectCourse={vi.fn()}
+        librarySearch=""
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Your Course Library is Empty')).toBeInTheDocument();
+  });
+
+  it('renders search empty state when search term has no results', () => {
+    render(
+      <CourseGrid
+        filteredCourses={[]}
+        handleSelectCourse={vi.fn()}
+        librarySearch="Quantum Computing"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('No matching courses found')).toBeInTheDocument();
+    expect(screen.getByText(/matched "Quantum Computing"/i)).toBeInTheDocument();
+  });
+
+  it('renders course cards and triggers handleSelectCourse upon card click', () => {
+    const handleSelectCourse = vi.fn();
+    const courses = [
+      {
+        course_name: 'Machine Learning',
+        lecture_count: 2,
+        lectures: [
+          { video_id: '101', title: 'Intro to ML' },
+          { video_id: '102', title: 'Neural Networks' }
+        ],
+        total_duration_seconds: 7200,
+        latest_timestamp: '2026-09-01T12:00:00Z'
+      }
+    ];
+
+    render(
+      <CourseGrid
+        filteredCourses={courses}
+        handleSelectCourse={handleSelectCourse}
+        librarySearch=""
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Machine Learning')).toBeInTheDocument();
+    expect(screen.getByText('2 lectures')).toBeInTheDocument();
+
+    const openCourseBtn = screen.getByRole('button', { name: /View Lectures/i });
+    fireEvent.click(openCourseBtn);
+    expect(handleSelectCourse).toHaveBeenCalledWith('Machine Learning');
+  });
+});
+--- END OF FILE: frontend/src/components/course/__tests__/CourseGrid.test.jsx ---
+
+--- START OF FILE: frontend/src/components/course/__tests__/CourseLectures.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import CourseLectures from '../CourseLectures';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('CourseLectures', () => {
+  it('renders loading state when courseLoading is true', () => {
+    render(
+      <CourseLectures
+        courseLoading={true}
+        filteredCourseLectures={[]}
+        handleTranscribe={vi.fn()}
+        handleDeleteFromLibrary={vi.fn()}
+        handleClearCourse={vi.fn()}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Loading course lectures...')).toBeInTheDocument();
+  });
+
+  it('renders empty lecture list state when no lectures exist', () => {
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={[]}
+        handleTranscribe={vi.fn()}
+        handleDeleteFromLibrary={vi.fn()}
+        handleClearCourse={vi.fn()}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/No lectures in this course yet/i)).toBeInTheDocument();
+  });
+
+  it('renders lecture cards, clicking lecture calls handleTranscribe, and delete button works', () => {
+    const handleTranscribe = vi.fn();
+    const handleDeleteFromLibrary = vi.fn();
+    const lectures = [
+      {
+        video_id: '998877',
+        video_url: 'https://vimeo.com/998877',
+        video_title: 'Classical Mechanics Lecture 1',
+        total_duration_seconds: 3600,
+        cue_count: 50,
+        resource_count: 2,
+        ingested_at: '2026-09-10T10:00:00Z'
+      }
+    ];
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={lectures}
+        handleTranscribe={handleTranscribe}
+        handleDeleteFromLibrary={handleDeleteFromLibrary}
+        handleClearCourse={vi.fn()}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Classical Mechanics Lecture 1')).toBeInTheDocument();
+
+    const studyBtn = screen.getByRole('button', { name: /Study Lecture →/i });
+    fireEvent.click(studyBtn);
+    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/998877', true, 'Physics 101');
+
+    const deleteBtn = screen.getByRole('button', { name: /Remove from My Library/i });
+    fireEvent.click(deleteBtn);
+    expect(handleDeleteFromLibrary).toHaveBeenCalledWith('998877');
+  });
+});
+--- END OF FILE: frontend/src/components/course/__tests__/CourseLectures.test.jsx ---
+
+--- START OF FILE: frontend/src/components/course/__tests__/CourseMaterials.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import CourseMaterials from '../CourseMaterials';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('CourseMaterials', () => {
+  it('renders loading indicator when courseResourcesLoading is true', () => {
+    render(
+      <CourseMaterials
+        courseResourcesLoading={true}
+        courseResources={[]}
+        googleUser={null}
+        selectedCourse="AI 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Loading course materials...')).toBeInTheDocument();
+  });
+
+  it('renders empty state when there are no course materials', () => {
+    render(
+      <CourseMaterials
+        courseResourcesLoading={false}
+        courseResources={[]}
+        googleUser={null}
+        selectedCourse="AI 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('No Course Materials Yet')).toBeInTheDocument();
+  });
+
+  it('renders resource items and allows deletion if authenticated owner', () => {
+    const handleDeleteResource = vi.fn();
+    const resources = [
+      {
+        id: 'res-1',
+        title: 'Syllabus PDF',
+        filename: 'syllabus.pdf',
+        file_type: 'pdf',
+        file_size_bytes: 1048576,
+        download_url: 'https://storage.googleapis.com/test/syllabus.pdf',
+        created_at: '2026-09-01T00:00:00Z',
+        source_type: 'file',
+        lecture_title: 'Intro',
+        user_email: 'prof@example.com'
+      }
+    ];
+
+    render(
+      <CourseMaterials
+        courseResourcesLoading={false}
+        courseResources={resources}
+        googleUser={{ email: 'prof@example.com' }}
+        selectedCourse="AI 101"
+        handleDeleteResource={handleDeleteResource}
+        openUploadModal={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Syllabus PDF')).toBeInTheDocument();
+    expect(screen.getByText('1 MB')).toBeInTheDocument();
+
+    const deleteBtn = screen.getByRole('button', { name: /Delete Resource/i });
+    fireEvent.click(deleteBtn);
+    expect(handleDeleteResource).toHaveBeenCalledWith('res-1', undefined, 'AI 101');
+  });
+});
+--- END OF FILE: frontend/src/components/course/__tests__/CourseMaterials.test.jsx ---
+
+--- START OF FILE: frontend/src/components/home/__tests__/HeroBanner.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import HeroBanner from '../HeroBanner';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('HeroBanner', () => {
+  it('renders guest state with sign in button when no googleUser', () => {
+    const handleGoogleSignIn = vi.fn();
+    render(
+      <HeroBanner
+        googleUser={null}
+        userLibrary={[]}
+        handleGoogleSignIn={handleGoogleSignIn}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Welcome back, Scholar!/i)).toBeInTheDocument();
+    const signInBtn = screen.getByRole('button', { name: /Sign in with Google/i });
+    expect(signInBtn).toBeInTheDocument();
+
+    fireEvent.click(signInBtn);
+    expect(handleGoogleSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders authenticated user profile and stats when googleUser is provided', () => {
+    const user = {
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      picture: 'https://example.com/avatar.jpg'
+    };
+    const library = [
+      { course_name: 'CS101', total_duration_seconds: 3600 },
+      { course_name: 'CS101', total_duration_seconds: 1800 },
+      { course_name: 'MATH201', total_duration_seconds: 7200 }
+    ];
+
+    render(
+      <HeroBanner
+        googleUser={user}
+        userLibrary={library}
+        handleGoogleSignIn={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Welcome back, Ada!/i)).toBeInTheDocument();
+    expect(screen.getByText('Total Lectures')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+  });
+});
+--- END OF FILE: frontend/src/components/home/__tests__/HeroBanner.test.jsx ---
+
+--- START OF FILE: frontend/src/components/home/__tests__/QuickAddBar.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import QuickAddBar from '../QuickAddBar';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('QuickAddBar', () => {
+  it('renders input with placeholder and calls setUrlInput on change', () => {
+    const setUrlInput = vi.fn();
+    const setCacheNotice = vi.fn();
+    render(
+      <QuickAddBar
+        urlInput="https://vimeo.com/123456"
+        setUrlInput={setUrlInput}
+        setCacheNotice={setCacheNotice}
+        handlePasteUrl={vi.fn()}
+        handleTranscribe={vi.fn()}
+        loading={false}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const input = screen.getByPlaceholderText(/Paste any lecture video URL or ID/i);
+    expect(input).toHaveValue('https://vimeo.com/123456');
+
+    fireEvent.change(input, { target: { value: 'https://vimeo.com/999' } });
+    expect(setUrlInput).toHaveBeenCalledWith('https://vimeo.com/999');
+    expect(setCacheNotice).toHaveBeenCalledWith(null);
+  });
+
+  it('triggers handleTranscribe when Transcribe button is clicked or Enter is pressed', () => {
+    const handleTranscribe = vi.fn();
+    render(
+      <QuickAddBar
+        urlInput="https://vimeo.com/123456"
+        setUrlInput={vi.fn()}
+        setCacheNotice={vi.fn()}
+        handlePasteUrl={vi.fn()}
+        handleTranscribe={handleTranscribe}
+        loading={false}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const btn = screen.getByRole('button', { name: /Transcribe & Study/i });
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/123456', true);
+
+    const input = screen.getByPlaceholderText(/Paste any lecture video URL or ID/i);
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    expect(handleTranscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables transcribe button when loading or input is empty', () => {
+    const { rerender } = render(
+      <QuickAddBar
+        urlInput=""
+        setUrlInput={vi.fn()}
+        setCacheNotice={vi.fn()}
+        handlePasteUrl={vi.fn()}
+        handleTranscribe={vi.fn()}
+        loading={false}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Transcribe & Study/i })).toBeDisabled();
+
+    rerender(
+      <QuickAddBar
+        urlInput="https://vimeo.com/123456"
+        setUrlInput={vi.fn()}
+        setCacheNotice={vi.fn()}
+        handlePasteUrl={vi.fn()}
+        handleTranscribe={vi.fn()}
+        loading={true}
+        currentTheme={mockTheme}
+      />
+    );
+    expect(screen.getByRole('button', { name: /Ingesting.../i })).toBeDisabled();
+  });
+});
+--- END OF FILE: frontend/src/components/home/__tests__/QuickAddBar.test.jsx ---
+
+--- START OF FILE: frontend/src/components/layout/__tests__/Header.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import Header from '../Header';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+vi.mock('@dipesh.singh/proton', () => ({
+  ProtonThemeSelector: () => <div data-testid="proton-theme-selector">ProtonThemeSelector</div>
+}));
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('Header', () => {
+  it('renders brand name and clicking it invokes handleBackToHub', () => {
+    const handleBackToHub = vi.fn();
+    render(
+      <Header
+        activeData={null}
+        activeTab="transcript"
+        setActiveTab={vi.fn()}
+        openDownloadModal={vi.fn()}
+        googleUser={null}
+        handleGoogleSignIn={vi.fn()}
+        handleGoogleSignOut={vi.fn()}
+        handleBackToHub={handleBackToHub}
+        userLibrary={[]}
+        userMenuAnchor={null}
+        setUserMenuAnchor={vi.fn()}
+        currentThemeId="academic"
+        setTheme={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const brand = screen.getByText('LearnScribe LMS');
+    expect(brand).toBeInTheDocument();
+    fireEvent.click(brand);
+    expect(handleBackToHub).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders lecture navigation buttons when activeData is present', () => {
+    const setActiveTab = vi.fn();
+    const openDownloadModal = vi.fn();
+    const activeData = { videoId: '123', title: 'Calculus 101' };
+
+    render(
+      <Header
+        activeData={activeData}
+        activeTab="transcript"
+        setActiveTab={setActiveTab}
+        openDownloadModal={openDownloadModal}
+        googleUser={null}
+        handleGoogleSignIn={vi.fn()}
+        handleGoogleSignOut={vi.fn()}
+        handleBackToHub={vi.fn()}
+        userLibrary={[]}
+        userMenuAnchor={null}
+        setUserMenuAnchor={vi.fn()}
+        currentThemeId="academic"
+        setTheme={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const searchBtn = screen.getByRole('button', { name: /Search Transcript/i });
+    const tutorBtn = screen.getByRole('button', { name: /AI Tutor/i });
+    const gdriveBtn = screen.getByRole('button', { name: /Save to Google Drive/i });
+
+    expect(searchBtn).toBeInTheDocument();
+    expect(tutorBtn).toBeInTheDocument();
+    expect(gdriveBtn).toBeInTheDocument();
+
+    fireEvent.click(tutorBtn);
+    expect(setActiveTab).toHaveBeenCalledWith('tutor');
+
+    fireEvent.click(gdriveBtn);
+    expect(openDownloadModal).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders Google sign-in button when logged out', () => {
+    const handleGoogleSignIn = vi.fn();
+    render(
+      <Header
+        activeData={null}
+        activeTab="transcript"
+        setActiveTab={vi.fn()}
+        openDownloadModal={vi.fn()}
+        googleUser={null}
+        handleGoogleSignIn={handleGoogleSignIn}
+        handleGoogleSignOut={vi.fn()}
+        handleBackToHub={vi.fn()}
+        userLibrary={[]}
+        userMenuAnchor={null}
+        setUserMenuAnchor={vi.fn()}
+        currentThemeId="academic"
+        setTheme={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const signInBtn = screen.getByRole('button', { name: /Sign In/i });
+    expect(signInBtn).toBeInTheDocument();
+    fireEvent.click(signInBtn);
+    expect(handleGoogleSignIn).toHaveBeenCalledWith(false);
+  });
+});
+--- END OF FILE: frontend/src/components/layout/__tests__/Header.test.jsx ---
+
+--- START OF FILE: frontend/src/components/lecture/__tests__/AITutor.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import AITutor from '../AITutor';
+
+describe('AITutor', () => {
+  const defaultModels = [
+    { id: 'llama-3.2', name: 'Llama 3.2 3B', provider: 'Groq', badge: 'Fastest' },
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', provider: 'Google', badge: 'Smart' }
+  ];
+
+  it('renders chat header, web toggle, and new chat button', () => {
+    const setWebSearchEnabled = vi.fn();
+    const clearChatHistory = vi.fn();
+
+    render(
+      <AITutor
+        webSearchEnabled={false}
+        setWebSearchEnabled={setWebSearchEnabled}
+        clearChatHistory={clearChatHistory}
+        selectedModel="llama-3.2"
+        setSelectedModel={vi.fn()}
+        availableModels={defaultModels}
+        chatMessages={[]}
+        setChatMessages={vi.fn()}
+        viewMode="learning"
+        submissionSummaries={{}}
+        cleanSubmissionFallback={vi.fn()}
+        handleCueClick={vi.fn()}
+        copiedPromptId={null}
+        copyUserPrompt={vi.fn()}
+        copiedSubmissionId={null}
+        copySubmissionText={vi.fn()}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        chatInputRef={{ current: null }}
+        chatEndRef={{ current: null }}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('AI Tutor')).toBeInTheDocument();
+    expect(screen.getByText('Web: OFF')).toBeInTheDocument();
+
+    const webBtn = screen.getByTitle(/Web grounding DISABLED/i);
+    fireEvent.click(webBtn);
+    expect(setWebSearchEnabled).toHaveBeenCalled();
+
+    const newChatBtn = screen.getByTitle(/Start a new chat thread/i);
+    fireEvent.click(newChatBtn);
+    expect(clearChatHistory).toHaveBeenCalled();
+  });
+
+  it('renders chat messages and handles sending a question', () => {
+    const handleSendMessage = vi.fn();
+    const setChatInput = vi.fn();
+    const messages = [
+      { id: '1', sender: 'user', text: 'What is gradient descent?' },
+      { id: '2', sender: 'bot', text: 'Gradient descent is an optimization algorithm.' }
+    ];
+
+    render(
+      <AITutor
+        webSearchEnabled={true}
+        setWebSearchEnabled={vi.fn()}
+        clearChatHistory={vi.fn()}
+        selectedModel="llama-3.2"
+        setSelectedModel={vi.fn()}
+        availableModels={defaultModels}
+        chatMessages={messages}
+        setChatMessages={vi.fn()}
+        viewMode="learning"
+        submissionSummaries={{}}
+        cleanSubmissionFallback={vi.fn()}
+        handleCueClick={vi.fn()}
+        copiedPromptId={null}
+        copyUserPrompt={vi.fn()}
+        copiedSubmissionId={null}
+        copySubmissionText={vi.fn()}
+        chatLoading={false}
+        chatInput="Tell me more"
+        setChatInput={setChatInput}
+        chatInputRef={{ current: null }}
+        chatEndRef={{ current: null }}
+        handleSendMessage={handleSendMessage}
+      />
+    );
+
+    expect(screen.getByText('What is gradient descent?')).toBeInTheDocument();
+    expect(screen.getByText(/optimization algorithm/i)).toBeInTheDocument();
+
+    const input = screen.getByPlaceholderText(/Ask AI tutor anything about this lecture/i);
+    expect(input).toHaveValue('Tell me more');
+
+    fireEvent.change(input, { target: { value: 'How about Adam optimizer?' } });
+    expect(setChatInput).toHaveBeenCalledWith('How about Adam optimizer?');
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    expect(handleSendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+--- END OF FILE: frontend/src/components/lecture/__tests__/AITutor.test.jsx ---
+
+--- START OF FILE: frontend/src/components/lecture/__tests__/LecturePlayer.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import LecturePlayer from '../LecturePlayer';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('LecturePlayer', () => {
+  it('returns null if activeData is not present', () => {
+    const { container } = render(
+      <LecturePlayer
+        activeData={null}
+        currentTheme={mockTheme}
+      />
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders video iframe, title, copy transcript button, and upload button', () => {
+    const handleCopyTranscript = vi.fn();
+    const openUploadModal = vi.fn();
+    const activeData = {
+      videoId: '556677',
+      title: 'Deep Learning Foundations',
+      course_name: 'CS229',
+      duration: '45:00',
+      total_cues: 120
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={{ course_name: 'CS229' }}
+        selectedCourse="CS229"
+        setSelectedCourse={vi.fn()}
+        userLibrary={[]}
+        effectiveCourses={[]}
+        setActiveData={vi.fn()}
+        navigateTo={vi.fn()}
+        iframeRef={{ current: null }}
+        copied={false}
+        handleCopyTranscript={handleCopyTranscript}
+        googleUser={{ email: 'student@example.com' }}
+        openUploadModal={openUploadModal}
+        lectureResources={[]}
+        lectureResourcesLoading={false}
+        handleDeleteResource={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getAllByText('Deep Learning Foundations')[0]).toBeInTheDocument();
+    expect(screen.getByText('CS229')).toBeInTheDocument();
+
+    const copyBtn = screen.getByRole('button', { name: /Copy Transcript/i });
+    expect(copyBtn).toBeInTheDocument();
+    fireEvent.click(copyBtn);
+    expect(handleCopyTranscript).toHaveBeenCalledTimes(1);
+
+    const uploadBtn = screen.getByRole('button', { name: /Upload Resource/i });
+    expect(uploadBtn).toBeInTheDocument();
+    fireEvent.click(uploadBtn);
+    expect(openUploadModal).toHaveBeenCalledWith({
+      videoId: '556677',
+      courseName: 'CS229'
+    });
+  });
+});
+--- END OF FILE: frontend/src/components/lecture/__tests__/LecturePlayer.test.jsx ---
+
+--- START OF FILE: frontend/src/components/lecture/__tests__/LectureResourcesShelf.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import LectureResourcesShelf from '../LectureResourcesShelf';
+
+describe('LectureResourcesShelf', () => {
+  it('renders empty notice when lectureResources is empty', () => {
+    render(
+      <LectureResourcesShelf
+        lectureResources={[]}
+        lectureResourcesLoading={false}
+        googleUser={null}
+        handleDeleteResource={vi.fn()}
+        activeData={{ videoId: '123' }}
+        selectedCourse="Math"
+      />
+    );
+
+    expect(screen.getByText(/No materials or slides attached to this lecture yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sign in to upload resources/i)).toBeInTheDocument();
+  });
+
+  it('renders resource cards and triggers handleDeleteResource when delete is clicked', () => {
+    const handleDeleteResource = vi.fn();
+    const resources = [
+      {
+        id: 'res-lecture-1',
+        title: 'Lecture Slides Chapter 1',
+        filename: 'slides_ch1.pptx',
+        file_type: 'ppt',
+        file_size_bytes: 2048000,
+        download_url: 'https://storage.googleapis.com/test/slides.pptx',
+        source_type: 'file',
+        created_at: '2026-09-15T08:00:00Z',
+        user_email: 'student@example.com'
+      }
+    ];
+
+    render(
+      <LectureResourcesShelf
+        lectureResources={resources}
+        lectureResourcesLoading={false}
+        googleUser={{ email: 'student@example.com' }}
+        handleDeleteResource={handleDeleteResource}
+        activeData={{ videoId: '123' }}
+        selectedCourse="Math"
+      />
+    );
+
+    expect(screen.getByText('Lecture Slides Chapter 1')).toBeInTheDocument();
+    expect(screen.getByText('2 MB')).toBeInTheDocument();
+
+    const deleteBtn = screen.getByTitle('Delete Resource');
+    fireEvent.click(deleteBtn);
+    expect(handleDeleteResource).toHaveBeenCalledWith('res-lecture-1', '123', 'Math');
+  });
+});
+--- END OF FILE: frontend/src/components/lecture/__tests__/LectureResourcesShelf.test.jsx ---
+
+--- START OF FILE: frontend/src/components/lecture/__tests__/TranscriptSearch.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import TranscriptSearch from '../TranscriptSearch';
+
+describe('TranscriptSearch', () => {
+  it('renders search input and updates query when user types', () => {
+    const setSearchQuery = vi.fn();
+    render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery="vectors"
+        setSearchQuery={setSearchQuery}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+      />
+    );
+
+    const input = screen.getByPlaceholderText(/Search transcript by keywords/i);
+    expect(input).toHaveValue('vectors');
+
+    fireEvent.change(input, { target: { value: 'matrices' } });
+    expect(setSearchQuery).toHaveBeenCalledWith('matrices');
+  });
+
+  it('renders cue items with timestamps and calls handleCueClick on selection', () => {
+    const handleCueClick = vi.fn();
+    const cues = [
+      { time: '01:15', text: 'Welcome to linear algebra.' },
+      { time: '04:30', text: 'Today we discuss dot products.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={handleCueClick}
+        activeCueIdx={1}
+      />
+    );
+
+    expect(screen.getByText('Showing 2 hits')).toBeInTheDocument();
+    expect(screen.getByText(/01:15/)).toBeInTheDocument();
+    expect(screen.getByText('Welcome to linear algebra.')).toBeInTheDocument();
+
+    const cueItem = screen.getByText(/04:30/);
+    fireEvent.click(cueItem);
+    expect(handleCueClick).toHaveBeenCalledWith('04:30');
+  });
+
+  it('renders 0 hits count when displayCues is empty', () => {
+    render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery="nonexistent"
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+      />
+    );
+
+    expect(screen.getByText('Showing 0 hits')).toBeInTheDocument();
+  });
+});
+--- END OF FILE: frontend/src/components/lecture/__tests__/TranscriptSearch.test.jsx ---
+
+--- START OF FILE: frontend/src/components/modals/__tests__/DownloadModal.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import DownloadModal from '../DownloadModal';
+
+describe('DownloadModal', () => {
+  it('returns null when open is false', () => {
+    const { container } = render(
+      <DownloadModal
+        open={false}
+        onClose={vi.fn()}
+        activeData={{ title: 'Sample' }}
+      />
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders modal content when open is true, and clicking close invokes onClose', () => {
+    const onClose = vi.fn();
+    const activeData = {
+      videoId: '123456',
+      title: 'Intro to Python',
+      course_name: 'CS50'
+    };
+
+    render(
+      <DownloadModal
+        open={true}
+        onClose={onClose}
+        activeData={activeData}
+        gdriveStatus={{ configured: true }}
+        gdriveError={null}
+        setGdriveError={vi.fn()}
+        gdriveAccessToken="mock-token"
+        googleUser={{ name: 'Guido van Rossum', email: 'guido@python.org' }}
+        googleClientIdInput=""
+        setGoogleClientIdInput={vi.fn()}
+        gdriveJob={null}
+        gdriveUploading={false}
+        handleGoogleSignIn={vi.fn()}
+        handleGoogleSignOut={vi.fn()}
+        handleStartGdriveUpload={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Save Lecture Bundle to Google Drive')).toBeInTheDocument();
+    expect(screen.getAllByText(/Intro to Python/i).length).toBeGreaterThan(0);
+
+    const closeBtn = screen.getByRole('button', { name: /Close/i });
+    fireEvent.click(closeBtn);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('renders upload trigger button and starts upload when clicked', () => {
+    const handleStartGdriveUpload = vi.fn();
+    render(
+      <DownloadModal
+        open={true}
+        onClose={vi.fn()}
+        activeData={{ videoId: '123', title: 'Intro to Python' }}
+        gdriveStatus={{ configured: true }}
+        gdriveAccessToken="mock-token"
+        googleUser={{ email: 'user@example.com' }}
+        gdriveJob={null}
+        gdriveUploading={false}
+        handleStartGdriveUpload={handleStartGdriveUpload}
+      />
+    );
+
+    const uploadBtn = screen.getByRole('button', { name: /Upload Full Bundle to Google Drive/i });
+    expect(uploadBtn).toBeInTheDocument();
+    fireEvent.click(uploadBtn);
+    expect(handleStartGdriveUpload).toHaveBeenCalledTimes(1);
+  });
+});
+--- END OF FILE: frontend/src/components/modals/__tests__/DownloadModal.test.jsx ---
+
+--- START OF FILE: frontend/src/components/modals/__tests__/UploadResourceModal.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import UploadResourceModal from '../UploadResourceModal';
+
+describe('UploadResourceModal', () => {
+  it('returns null when open is false', () => {
+    const { container } = render(
+      <UploadResourceModal
+        open={false}
+        onClose={vi.fn()}
+        uploadTarget={{}}
+      />
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders modal with mode tabs and allows switching modes', () => {
+    const setUploadMode = vi.fn();
+    render(
+      <UploadResourceModal
+        open={true}
+        onClose={vi.fn()}
+        uploadTarget={{ videoId: '123', courseName: 'Data Science' }}
+        uploadMode="file"
+        setUploadMode={setUploadMode}
+        uploadFile={null}
+        setUploadFile={vi.fn()}
+        uploadTitle=""
+        setUploadTitle={vi.fn()}
+        uploadLinkUrl=""
+        setUploadLinkUrl={vi.fn()}
+        isUploading={false}
+        uploadError={null}
+        setUploadError={vi.fn()}
+        handleUploadResource={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Add Lecture Resource')).toBeInTheDocument();
+    expect(screen.getByText(/Attaching to lecture in Data Science/i)).toBeInTheDocument();
+
+    const linkTab = screen.getByRole('button', { name: /External Link/i });
+    fireEvent.click(linkTab);
+    expect(setUploadMode).toHaveBeenCalledWith('link');
+  });
+
+  it('triggers handleUploadResource when save button is clicked in link mode', () => {
+    const handleUploadResource = vi.fn();
+    render(
+      <UploadResourceModal
+        open={true}
+        onClose={vi.fn()}
+        uploadTarget={{ videoId: null, courseName: 'Data Science' }}
+        uploadMode="link"
+        setUploadMode={vi.fn()}
+        uploadFile={null}
+        setUploadFile={vi.fn()}
+        uploadTitle="Official Docs"
+        setUploadTitle={vi.fn()}
+        uploadLinkUrl="https://numpy.org"
+        setUploadLinkUrl={vi.fn()}
+        isUploading={false}
+        uploadError={null}
+        setUploadError={vi.fn()}
+        handleUploadResource={handleUploadResource}
+      />
+    );
+
+    expect(screen.getByText('Add Course Material')).toBeInTheDocument();
+    const saveBtn = screen.getByRole('button', { name: /Save Link/i });
+    expect(saveBtn).not.toBeDisabled();
+    fireEvent.click(saveBtn);
+    expect(handleUploadResource).toHaveBeenCalledTimes(1);
+  });
+});
+--- END OF FILE: frontend/src/components/modals/__tests__/UploadResourceModal.test.jsx ---
+
+--- START OF FILE: frontend/src/components/views/__tests__/HomeView.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import HomeView from '../HomeView';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('HomeView', () => {
+  const baseProps = {
+    selectedCourse: null,
+    googleUser: null,
+    userLibrary: [],
+    handleGoogleSignIn: vi.fn(),
+    urlInput: '',
+    setUrlInput: vi.fn(),
+    setCacheNotice: vi.fn(),
+    cacheNotice: null,
+    handlePasteUrl: vi.fn(),
+    handleTranscribe: vi.fn(),
+    loading: false,
+    error: null,
+    handleClearCourse: vi.fn(),
+    activeCourseData: null,
+    filteredCourseLectures: [],
+    filteredCourses: [],
+    fetchUserLibrary: vi.fn(),
+    libraryLoading: false,
+    librarySearch: '',
+    setLibrarySearch: vi.fn(),
+    courseViewTab: 'lectures',
+    setCourseViewTab: vi.fn(),
+    courseResources: [],
+    openUploadModal: vi.fn(),
+    handleSelectCourse: vi.fn(),
+    courseResourcesLoading: false,
+    handleDeleteResource: vi.fn(),
+    courseLoading: false,
+    handleDeleteFromLibrary: vi.fn(),
+    currentTheme: mockTheme
+  };
+
+  it('renders home hub view with My Courses and empty grid when selectedCourse is null', () => {
+    render(<HomeView {...baseProps} />);
+
+    expect(screen.getByText('My Courses')).toBeInTheDocument();
+    expect(screen.getByText('Your Course Library is Empty')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Paste any lecture video URL or ID/i)).toBeInTheDocument();
+  });
+
+  it('renders selected course view with back button and lectures when selectedCourse is provided', () => {
+    const handleClearCourse = vi.fn();
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        handleClearCourse={handleClearCourse}
+      />
+    );
+
+    expect(screen.getByText('Biostatistics')).toBeInTheDocument();
+
+    const backBtn = screen.getAllByRole('button', { name: /All Courses/i })[0];
+    fireEvent.click(backBtn);
+    expect(handleClearCourse).toHaveBeenCalledTimes(1);
+  });
+});
+--- END OF FILE: frontend/src/components/views/__tests__/HomeView.test.jsx ---
+
+--- START OF FILE: frontend/src/components/views/__tests__/LectureWorkspace.test.jsx ---
+import React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import LectureWorkspace from '../LectureWorkspace';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('LectureWorkspace', () => {
+  const activeData = {
+    videoId: '445566',
+    title: 'Operating Systems',
+    course_name: 'CS301'
+  };
+
+  const baseProps = {
+    activeData,
+    activeCourseData: { course_name: 'CS301' },
+    selectedCourse: 'CS301',
+    setSelectedCourse: vi.fn(),
+    userLibrary: [],
+    effectiveCourses: [],
+    setActiveData: vi.fn(),
+    navigateTo: vi.fn(),
+    iframeRef: { current: null },
+    copied: false,
+    handleCopyTranscript: vi.fn(),
+    googleUser: null,
+    openUploadModal: vi.fn(),
+    lectureResources: [],
+    lectureResourcesLoading: false,
+    handleDeleteResource: vi.fn(),
+    activeTab: 'transcript',
+    displayCues: [{ time: '02:00', text: 'Kernel architecture.' }],
+    searchQuery: '',
+    setSearchQuery: vi.fn(),
+    handleCueClick: vi.fn(),
+    activeCueIdx: 0,
+    webSearchEnabled: false,
+    setWebSearchEnabled: vi.fn(),
+    clearChatHistory: vi.fn(),
+    selectedModel: 'llama-3.2',
+    setSelectedModel: vi.fn(),
+    availableModels: [],
+    chatMessages: [],
+    setChatMessages: vi.fn(),
+    viewMode: 'learning',
+    submissionSummaries: {},
+    cleanSubmissionFallback: vi.fn(),
+    copiedPromptId: null,
+    copyUserPrompt: vi.fn(),
+    copiedSubmissionId: null,
+    copySubmissionText: vi.fn(),
+    chatLoading: false,
+    chatInput: '',
+    setChatInput: vi.fn(),
+    chatInputRef: { current: null },
+    chatEndRef: { current: null },
+    handleSendMessage: vi.fn(),
+    currentTheme: mockTheme
+  };
+
+  it('renders LecturePlayer on the left and TranscriptSearch when activeTab is transcript', () => {
+    render(<LectureWorkspace {...baseProps} activeTab="transcript" />);
+
+    expect(screen.getAllByText('Operating Systems').length).toBeGreaterThan(0);
+    expect(screen.getByText('Instant Transcript Search')).toBeInTheDocument();
+    expect(screen.getByText('Kernel architecture.')).toBeInTheDocument();
+  });
+
+  it('renders AITutor on the right when activeTab is tutor', () => {
+    render(<LectureWorkspace {...baseProps} activeTab="tutor" />);
+
+    expect(screen.getAllByText('Operating Systems').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('AI Tutor').length).toBeGreaterThan(0);
+  });
+});
+--- END OF FILE: frontend/src/components/views/__tests__/LectureWorkspace.test.jsx ---
+
+--- START OF FILE: frontend/src/components/views/__tests__/LoadingView.test.jsx ---
+import React from 'react';
+import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import LoadingView from '../LoadingView';
+import { LMS_THEMES } from '../../../store/themeStore';
+
+const mockTheme = LMS_THEMES.academic;
+
+describe('LoadingView', () => {
+  it('renders ingestion loading message and subtitle', () => {
+    render(<LoadingView currentTheme={mockTheme} />);
+
+    expect(screen.getByText('Ingesting Lecture...')).toBeInTheDocument();
+    expect(screen.getByText(/Downloading audio, extracting verbatim captions/i)).toBeInTheDocument();
+  });
+});
+--- END OF FILE: frontend/src/components/views/__tests__/LoadingView.test.jsx ---
+
+--- START OF FILE: frontend/src/hooks/__tests__/useAITutor.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useAITutor } from '../useAITutor';
+
+describe('useAITutor hook functionality', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/ai/models')) {
+        return Promise.resolve({ ok: true, json: async () => ({ models: [] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+  });
+
+  it('fetches AI models and sets selected model when activeData is provided', async () => {
+    const models = [
+      { id: 'llama-3.2', name: 'Llama 3.2', is_configured: true, is_recommended: true }
+    ];
+
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/ai/models')) {
+        return Promise.resolve({ ok: true, json: async () => ({ models }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const activeData = { videoId: 'v10', transcript: 'Hello class.' };
+    const { result } = renderHook(() => useAITutor(activeData, null));
+
+    await act(async () => {});
+
+    expect(result.current.availableModels).toEqual(models);
+    expect(result.current.selectedModel).toBe('llama-3.2');
+  });
+
+  it('handleSendMessage sends user query to RAG endpoint and appends bot response', async () => {
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/ai/models')) {
+        return Promise.resolve({ ok: true, json: async () => ({ models: [] }) });
+      }
+      if (url.includes('/api/rag/query')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            answer: 'Backpropagation computes the gradient.',
+            submission_text: 'Backpropagation computes gradients using chain rule.'
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const activeData = { videoId: 'v10' };
+    const { result } = renderHook(() => useAITutor(activeData, null));
+
+    act(() => {
+      result.current.setChatInput('Explain backprop');
+    });
+
+    await act(async () => {
+      await result.current.handleSendMessage();
+    });
+
+    expect(result.current.chatMessages.length).toBe(2);
+    expect(result.current.chatMessages[0].text).toBe('Explain backprop');
+    expect(result.current.chatMessages[1].text).toBe('Backpropagation computes the gradient.');
+    expect(result.current.chatInput).toBe('');
+  });
+
+  it('clearChatHistory empties message history', async () => {
+    const { result } = renderHook(() => useAITutor({ videoId: 'v10' }, null));
+
+    act(() => {
+      result.current.setChatMessages([{ sender: 'user', text: 'Hi' }]);
+    });
+    expect(result.current.chatMessages.length).toBe(1);
+
+    await act(async () => {
+      await result.current.clearChatHistory();
+    });
+    expect(result.current.chatMessages.length).toBe(0);
+  });
+});
+--- END OF FILE: frontend/src/hooks/__tests__/useAITutor.test.js ---
+
+--- START OF FILE: frontend/src/hooks/__tests__/useCourseDetail.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import { useCourseDetail } from '../useCourseDetail';
+
+describe('useCourseDetail hook functionality', () => {
+  beforeEach(() => {
+    window.history.pushState({}, '', '/');
+    vi.restoreAllMocks();
+  });
+
+  it('resolves activeCourseData from effectiveCourses matching selectedCourse', () => {
+    const effectiveCourses = [
+      {
+        course_name: 'Database Systems',
+        lectures: [
+          { video_id: 'db1', video_title: 'SQL Indexing' },
+          { video_id: 'db2', video_title: 'B-Trees' }
+        ]
+      }
+    ];
+
+    const { result } = renderHook(() =>
+      useCourseDetail(effectiveCourses, 'user@example.com', '', null)
+    );
+
+    act(() => {
+      result.current.setSelectedCourse('Database Systems');
+    });
+
+    expect(result.current.activeCourseData.course_name).toBe('Database Systems');
+    expect(result.current.filteredCourseLectures.length).toBe(2);
+  });
+
+  it('filters course lectures by search keyword', () => {
+    const effectiveCourses = [
+      {
+        course_name: 'Database Systems',
+        lectures: [
+          { video_id: 'db1', video_title: 'SQL Indexing' },
+          { video_id: 'db2', video_title: 'B-Trees' }
+        ]
+      }
+    ];
+
+    const { result, rerender } = renderHook(
+      ({ search }) => useCourseDetail(effectiveCourses, 'user@example.com', search, null),
+      { initialProps: { search: '' } }
+    );
+
+    act(() => {
+      result.current.setSelectedCourse('Database Systems');
+    });
+
+    expect(result.current.filteredCourseLectures.length).toBe(2);
+
+    rerender({ search: 'Indexing' });
+    expect(result.current.filteredCourseLectures.length).toBe(1);
+    expect(result.current.filteredCourseLectures[0].video_title).toBe('SQL Indexing');
+  });
+
+  it('fetches directCourseData when course is not in effectiveCourses', async () => {
+    const coursePayload = {
+      course_name: 'New External Course',
+      lectures: [{ video_id: 'ext-1', video_title: 'Intro' }]
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ course: coursePayload })
+    });
+
+    const { result } = renderHook(() =>
+      useCourseDetail([], 'user@example.com', '', null)
+    );
+
+    act(() => {
+      result.current.setSelectedCourse('new-external-course');
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeCourseData?.course_name).toBe('New External Course');
+    });
+  });
+});
+--- END OF FILE: frontend/src/hooks/__tests__/useCourseDetail.test.js ---
+
+--- START OF FILE: frontend/src/hooks/__tests__/useGoogleAuth.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useGoogleAuth } from '../useGoogleAuth';
+
+describe('useGoogleAuth hook functionality', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it('initializes with default null values or localStorage state', () => {
+    localStorage.setItem('lecturescribe_google_user', JSON.stringify({ name: 'Ada', email: 'ada@example.com' }));
+    localStorage.setItem('lecturescribe_gdrive_token', 'valid-token-123');
+    localStorage.setItem('lecturescribe_gdrive_token_expires', String(Date.now() + 3600000));
+
+    const { result } = renderHook(() => useGoogleAuth(null));
+    expect(result.current.googleUser).toEqual({ name: 'Ada', email: 'ada@example.com' });
+    expect(result.current.gdriveAccessToken).toBe('valid-token-123');
+  });
+
+  it('clears expired tokens from localStorage on initialization', () => {
+    localStorage.setItem('lecturescribe_gdrive_token', 'expired-token');
+    localStorage.setItem('lecturescribe_gdrive_token_expires', String(Date.now() - 5000));
+
+    const { result } = renderHook(() => useGoogleAuth(null));
+    expect(result.current.gdriveAccessToken).toBe('');
+    expect(localStorage.getItem('lecturescribe_gdrive_token')).toBeNull();
+  });
+
+  it('handleGoogleSignOut resets state and removes credentials from localStorage', () => {
+    localStorage.setItem('lecturescribe_google_user', JSON.stringify({ email: 'user@test.com' }));
+    localStorage.setItem('lecturescribe_gdrive_token', 'token-abc');
+
+    const { result } = renderHook(() => useGoogleAuth(null));
+    act(() => {
+      result.current.handleGoogleSignOut();
+    });
+
+    expect(result.current.googleUser).toBeNull();
+    expect(result.current.gdriveAccessToken).toBe('');
+    expect(localStorage.getItem('lecturescribe_google_user')).toBeNull();
+    expect(localStorage.getItem('lecturescribe_gdrive_token')).toBeNull();
+  });
+
+  it('manages download modal state and fetches Google Drive status', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ configured: true, client_id: 'client-123' })
+    });
+
+    const { result } = renderHook(() => useGoogleAuth({ videoId: 'v1' }));
+    expect(result.current.isDownloadModalOpen).toBe(false);
+
+    await act(async () => {
+      await result.current.openDownloadModal({ videoId: 'v1' });
+    });
+
+    expect(result.current.isDownloadModalOpen).toBe(true);
+    expect(result.current.gdriveStatus).toEqual({ configured: true, client_id: 'client-123' });
+
+    act(() => {
+      result.current.closeDownloadModal();
+    });
+    expect(result.current.isDownloadModalOpen).toBe(false);
+  });
+});
+--- END OF FILE: frontend/src/hooks/__tests__/useGoogleAuth.test.js ---
+
+--- START OF FILE: frontend/src/hooks/__tests__/useLectureIngestion.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useLectureIngestion } from '../useLectureIngestion';
+
+describe('useLectureIngestion hook functionality', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it('transcribes video via API when not in client cache', async () => {
+    const lecturePayload = {
+      videoId: '76979871',
+      title: 'The New Normal',
+      cues: [{ time: '00:10', text: 'Opening remarks' }],
+      course_name: 'Media Studies'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => lecturePayload
+    });
+
+    const navigateTo = vi.fn();
+    const initChatMessages = vi.fn();
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: 'student@example.com',
+        selectedCourse: 'Media Studies',
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo,
+        initChatMessages
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/76979871', true, 'Media Studies');
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/transcript?url=')
+    );
+
+    expect(result.current.activeData.videoId).toBe('76979871');
+    expect(result.current.activeData.title).toBe('The New Normal');
+    expect(navigateTo).toHaveBeenCalledWith(expect.stringContaining('76979871'));
+    expect(initChatMessages).toHaveBeenCalled();
+
+    // Verify written to localStorage cache
+    const stored = JSON.parse(localStorage.getItem('lecturescribe_cached_videos') || '{}');
+    expect(stored['76979871']).toBeDefined();
+  });
+
+  it('loads instantly from client cache if already cached', async () => {
+    const cachedItem = {
+      videoId: '999',
+      title: 'Cached Lecture',
+      cues: [],
+      course_name: 'History'
+    };
+    localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '999': cachedItem }));
+
+    global.fetch = vi.fn();
+    const navigateTo = vi.fn();
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo,
+        initChatMessages: vi.fn()
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('999', true, null);
+    });
+
+    // Should NOT call the backend API because cache hit
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result.current.activeData.videoId).toBe('999');
+    expect(result.current.activeData.cached).toBe(true);
+  });
+
+  it('extracts video ID from complex Vimeo URL during ingestion', async () => {
+    const lecturePayload = {
+      videoId: '55443322',
+      title: 'Advanced Machine Learning',
+      cues: [{ time: '00:00', text: 'Intro' }],
+      course_name: 'CS'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => lecturePayload
+    });
+
+    const navigateTo = vi.fn();
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo,
+        initChatMessages: vi.fn()
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/55443322?autoplay=1&muted=true#t=1m');
+    });
+
+    expect(result.current.activeData.videoId).toBe('55443322');
+    expect(navigateTo).toHaveBeenCalledWith(expect.stringContaining('55443322'));
+  });
+
+  it('extracts video ID on clipboard paste and alerts if already cached', () => {
+    const cachedItem = {
+      videoId: '12345678',
+      title: 'Deep Learning',
+      cues: [],
+      course_name: 'AI'
+    };
+    localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '12345678': cachedItem }));
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      const mockEvent = {
+        clipboardData: {
+          getData: () => 'https://vimeo.com/12345678?param=1'
+        }
+      };
+      result.current.handlePasteUrl(mockEvent);
+    });
+
+    expect(result.current.cacheNotice).toContain('Pasted video is already cached');
+  });
+
+  it('clears the video input box once the video is ingested from API', async () => {
+    const lecturePayload = {
+      videoId: '11223344',
+      title: 'Quantum Computing',
+      cues: [{ time: '00:01', text: 'Qubits' }],
+      course_name: 'Physics'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => lecturePayload
+    });
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      result.current.setUrlInput('https://vimeo.com/11223344');
+    });
+    expect(result.current.urlInput).toBe('https://vimeo.com/11223344');
+
+    await act(async () => {
+      await result.current.handleTranscribe();
+    });
+
+    // Verification: activeData is set and urlInput is cleared
+    expect(result.current.activeData.videoId).toBe('11223344');
+    expect(result.current.urlInput).toBe('');
+  });
+
+  it('clears the video input box once cached video is loaded', async () => {
+    const cachedItem = {
+      videoId: '88776655',
+      title: 'Operating Systems',
+      cues: [],
+      course_name: 'CS'
+    };
+    localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '88776655': cachedItem }));
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      result.current.setUrlInput('https://vimeo.com/88776655');
+    });
+    expect(result.current.urlInput).toBe('https://vimeo.com/88776655');
+
+    await act(async () => {
+      await result.current.handleTranscribe();
+    });
+
+    expect(result.current.activeData.videoId).toBe('88776655');
+    expect(result.current.urlInput).toBe('');
+  });
+
+  it('preserves the video input box content if ingestion fails with an error', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ detail: 'Video not found or private' })
+    });
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    act(() => {
+      result.current.setUrlInput('https://vimeo.com/invalid-video');
+    });
+
+    await act(async () => {
+      await result.current.handleTranscribe();
+    });
+
+    // The input should remain so user can fix it, but error is shown
+    expect(result.current.urlInput).toBe('https://vimeo.com/invalid-video');
+    expect(result.current.error).toContain('Video not found or private');
+    expect(result.current.activeData).toBeNull();
+  });
+});
+--- END OF FILE: frontend/src/hooks/__tests__/useLectureIngestion.test.js ---
+
+--- START OF FILE: frontend/src/hooks/__tests__/useLecturePlayer.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useLecturePlayer } from '../useLecturePlayer';
+
+vi.mock('@vimeo/player', () => {
+  return {
+    default: vi.fn().mockImplementation(() => ({
+      on: vi.fn(),
+      setCurrentTime: vi.fn().mockResolvedValue(undefined),
+      play: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn()
+    }))
+  };
+});
+
+describe('useLecturePlayer hook functionality', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('provides default displayCues from activeData when searchQuery is empty', () => {
+    const activeData = {
+      videoId: 'v100',
+      cues: [
+        { time: '01:00', text: 'First point' },
+        { time: '02:00', text: 'Second point' }
+      ]
+    };
+
+    const { result } = renderHook(() => useLecturePlayer(activeData));
+    expect(result.current.displayCues).toEqual(activeData.cues);
+  });
+
+  it('triggers debounced search when searchQuery is updated', async () => {
+    vi.useFakeTimers();
+    const searchHits = [{ time: '01:00', text: 'First point match' }];
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: searchHits })
+    });
+
+    const activeData = { videoId: 'v100', cues: [] };
+    const { result } = renderHook(() => useLecturePlayer(activeData));
+
+    act(() => {
+      result.current.setSearchQuery('match');
+    });
+
+    // Fast forward debounce timer
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/search'),
+      expect.objectContaining({ method: 'POST' })
+    );
+
+    vi.useRealTimers();
+  });
+
+  it('handleCopyTranscript formats cues and writes to clipboard', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: { writeText: writeTextMock }
+    });
+
+    const activeData = {
+      videoId: 'v100',
+      cues: [{ time: '01:30', text: 'Key theorem statement.' }]
+    };
+
+    const { result } = renderHook(() => useLecturePlayer(activeData));
+
+    await act(async () => {
+      await result.current.handleCopyTranscript();
+    });
+
+    expect(writeTextMock).toHaveBeenCalledWith(
+      expect.stringContaining('[01:30]** Key theorem statement.')
+    );
+    expect(result.current.copied).toBe(true);
+  });
+});
+--- END OF FILE: frontend/src/hooks/__tests__/useLecturePlayer.test.js ---
+
+--- START OF FILE: frontend/src/hooks/__tests__/useResources.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useResources } from '../useResources';
+
+describe('useResources hook functionality', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('fetches lecture resources when activeVideoId changes', async () => {
+    const mockRes = [{ id: 'res-1', title: 'Cheat Sheet', file_type: 'pdf' }];
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/lecture/video-123/resources')) {
+        return Promise.resolve({ ok: true, json: async () => ({ resources: mockRes }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ resources: [] }) });
+    });
+
+    const { result } = renderHook(() => useResources('video-123', null, null));
+    await act(async () => {});
+
+    expect(result.current.lectureResources).toEqual(mockRes);
+  });
+
+  it('opens and configures upload modal via openUploadModal', () => {
+    const { result } = renderHook(() => useResources(null, null, null));
+    expect(result.current.uploadModalOpen).toBe(false);
+
+    act(() => {
+      result.current.openUploadModal({ videoId: 'v10', courseName: 'Robotics' });
+    });
+
+    expect(result.current.uploadModalOpen).toBe(true);
+    expect(result.current.uploadTarget).toEqual({ videoId: 'v10', courseName: 'Robotics' });
+  });
+
+  it('handleDeleteResource sends DELETE request and removes resource from state', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true });
+      }
+      if (url.includes('/api/lecture/v1/resources')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ resources: [{ id: 'res-del-1' }, { id: 'res-keep-2' }] })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ resources: [] }) });
+    });
+
+    const { result } = renderHook(() => useResources('v1', null, { email: 'user@test.com' }));
+    await act(async () => {});
+
+    await act(async () => {
+      await result.current.handleDeleteResource('res-del-1', 'v1', null);
+    });
+
+    expect(result.current.lectureResources.map(r => r.id)).toEqual(['res-keep-2']);
+  });
+});
+--- END OF FILE: frontend/src/hooks/__tests__/useResources.test.js ---
+
+--- START OF FILE: frontend/src/hooks/__tests__/useUserLibrary.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useUserLibrary } from '../useUserLibrary';
+
+describe('useUserLibrary hook functionality', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('fetches library and course data when userEmail is provided', async () => {
+    const mockLibrary = [
+      { video_id: 'v100', course_name: 'Algorithms', video_title: 'Sorting' }
+    ];
+    const mockCourses = [
+      { course_name: 'Algorithms', lecture_count: 1 }
+    ];
+
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/user/library')) {
+        return Promise.resolve({ ok: true, json: async () => ({ library: mockLibrary }) });
+      }
+      if (url.includes('/api/user/courses')) {
+        return Promise.resolve({ ok: true, json: async () => ({ courses: mockCourses }) });
+      }
+      return Promise.reject(new Error('Unknown url'));
+    });
+
+    const { result } = renderHook(() => useUserLibrary('user@example.com'));
+
+    // Wait for useEffect fetch to complete
+    await act(async () => {});
+
+    expect(result.current.userLibrary).toEqual(mockLibrary);
+    expect(result.current.effectiveCourses).toEqual(mockCourses);
+  });
+
+  it('filters courses according to librarySearch', async () => {
+    const mockCourses = [
+      { course_name: 'Quantum Physics', lecture_count: 3 },
+      { course_name: 'Organic Chemistry', lecture_count: 2 }
+    ];
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ courses: mockCourses, library: [] })
+    });
+
+    const { result } = renderHook(() => useUserLibrary('user@example.com'));
+    await act(async () => {});
+
+    act(() => {
+      result.current.setLibrarySearch('Quantum');
+    });
+
+    expect(result.current.filteredCourses.length).toBe(1);
+    expect(result.current.filteredCourses[0].course_name).toBe('Quantum Physics');
+  });
+
+  it('handleDeleteFromLibrary calls DELETE endpoint and removes item from state', async () => {
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ library: [{ video_id: 'del-1' }, { video_id: 'del-2' }], courses: [] })
+      });
+    });
+
+    const { result } = renderHook(() => useUserLibrary('user@example.com'));
+    await act(async () => {});
+
+    await act(async () => {
+      await result.current.handleDeleteFromLibrary('del-1');
+    });
+
+    expect(result.current.userLibrary.map(i => i.video_id)).toEqual(['del-2']);
+  });
+});
+--- END OF FILE: frontend/src/hooks/__tests__/useUserLibrary.test.js ---
+
+--- START OF FILE: frontend/src/store/__tests__/themeStore.test.js ---
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  useThemeStore,
+  LMS_THEMES,
+  applyThemeCssVariables,
+  createAppMuiTheme
+} from '../themeStore';
+
+describe('themeStore & styling utilities', () => {
+  beforeEach(() => {
+    useThemeStore.setState({ currentThemeId: 'academic' });
+  });
+
+  it('contains valid LMS themes including academic, canvas, blackboard, moodle_boost, coursera', () => {
+    expect(LMS_THEMES.academic).toBeDefined();
+    expect(LMS_THEMES.canvas).toBeDefined();
+    expect(LMS_THEMES.blackboard).toBeDefined();
+    expect(LMS_THEMES.moodle_boost).toBeDefined();
+    expect(LMS_THEMES.coursera).toBeDefined();
+  });
+
+  it('updates currentThemeId via setTheme', () => {
+    const { setTheme } = useThemeStore.getState();
+    setTheme('canvas');
+    expect(useThemeStore.getState().currentThemeId).toBe('canvas');
+    expect(useThemeStore.getState().getCurrentTheme().name).toBe('Canvas LMS');
+  });
+
+  it('applies CSS custom variables to document.documentElement', () => {
+    applyThemeCssVariables(LMS_THEMES.academic);
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--theme-primary')).toBe(LMS_THEMES.academic.palette.primary);
+    expect(root.style.getPropertyValue('--header-bg')).toBe(LMS_THEMES.academic.palette.headerBg);
+  });
+
+  it('builds a valid Material-UI theme via createAppMuiTheme', () => {
+    const theme = createAppMuiTheme(LMS_THEMES.academic);
+    expect(theme.palette.primary.main).toBe(LMS_THEMES.academic.palette.primary);
+    expect(theme.palette.background.default).toBe(LMS_THEMES.academic.palette.background);
+    expect(theme.shape.borderRadius).toBe(8);
+  });
+});
+--- END OF FILE: frontend/src/store/__tests__/themeStore.test.js ---
+
+--- START OF FILE: frontend/src/utils/__tests__/formatters.test.js ---
+import { describe, it, expect } from 'vitest';
+import {
+  formatRelativeTime,
+  formatBytes,
+  getFileTypeBadge,
+  extractVideoId,
+  parseTimestampToSeconds,
+  cleanSubmissionFallback
+} from '../formatters';
+
+describe('formatters utility functions', () => {
+  describe('formatRelativeTime', () => {
+    it('returns "Recently" for empty/invalid inputs', () => {
+      expect(formatRelativeTime(null)).toBe('Recently');
+      expect(formatRelativeTime('')).toBe('Recently');
+      expect(formatRelativeTime('invalid-date')).toBe('Recently');
+    });
+
+    it('formats recent timestamps accurately', () => {
+      const now = Date.now();
+      expect(formatRelativeTime(new Date(now - 10000).toISOString())).toBe('Just now');
+      expect(formatRelativeTime(new Date(now - 5 * 60000).toISOString())).toBe('5m ago');
+      expect(formatRelativeTime(new Date(now - 3 * 3600000).toISOString())).toBe('3h ago');
+      expect(formatRelativeTime(new Date(now - 25 * 3600000).toISOString())).toBe('Yesterday');
+      expect(formatRelativeTime(new Date(now - 5 * 86400000).toISOString())).toBe('5d ago');
+    });
+  });
+
+  describe('formatBytes', () => {
+    it('returns "0 B" for 0 or undefined', () => {
+      expect(formatBytes(0)).toBe('0 B');
+      expect(formatBytes(null)).toBe('0 B');
+    });
+
+    it('formats bytes, kilobytes, megabytes, and gigabytes', () => {
+      expect(formatBytes(500)).toBe('500 B');
+      expect(formatBytes(1024)).toBe('1 KB');
+      expect(formatBytes(1536)).toBe('1.5 KB');
+      expect(formatBytes(1048576)).toBe('1 MB');
+      expect(formatBytes(2621440)).toBe('2.5 MB');
+      expect(formatBytes(1073741824)).toBe('1 GB');
+    });
+  });
+
+  describe('getFileTypeBadge', () => {
+    it('returns correct badge for pdf', () => {
+      const badge = getFileTypeBadge('pdf', 'test.pdf');
+      expect(badge.label).toBe('PDF');
+      expect(badge.color).toBe('#ef4444');
+    });
+
+    it('returns correct badge for docs and slides', () => {
+      expect(getFileTypeBadge('docx').label).toBe('DOC');
+      expect(getFileTypeBadge('ppt').label).toBe('SLIDES');
+      expect(getFileTypeBadge('link').label).toBe('LINK');
+      expect(getFileTypeBadge('gdrive').label).toBe('LINK');
+    });
+
+    it('falls back to uppercase extension or FILE', () => {
+      expect(getFileTypeBadge('zip').label).toBe('ZIP');
+      expect(getFileTypeBadge('', '').label).toBe('FILE');
+    });
+  });
+
+  describe('extractVideoId', () => {
+    it('returns empty string for empty url or null/undefined', () => {
+      expect(extractVideoId('')).toBe('');
+      expect(extractVideoId(null)).toBe('');
+      expect(extractVideoId(undefined)).toBe('');
+    });
+
+    it('returns plain numeric IDs directly with whitespace trimmed', () => {
+      expect(extractVideoId('123456789')).toBe('123456789');
+      expect(extractVideoId('  987654  ')).toBe('987654');
+      expect(extractVideoId('\n1229247139\t')).toBe('1229247139');
+    });
+
+    it('extracts ID from standard Vimeo URLs', () => {
+      expect(extractVideoId('https://vimeo.com/76979871')).toBe('76979871');
+      expect(extractVideoId('http://vimeo.com/76979871')).toBe('76979871');
+      expect(extractVideoId('https://www.vimeo.com/76979871')).toBe('76979871');
+      expect(extractVideoId('vimeo.com/76979871')).toBe('76979871');
+    });
+
+    it('extracts ID from player and embed URLs', () => {
+      expect(extractVideoId('https://vimeo.com/video/76979871')).toBe('76979871');
+      expect(extractVideoId('https://player.vimeo.com/video/76979871')).toBe('76979871');
+    });
+
+    it('extracts ID from URLs with query parameters and fragments', () => {
+      expect(extractVideoId('vimeo.com/76979871?autoplay=1')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871?autoplay=1&muted=true')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871#t=30s')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/76979871/')).toBe('76979871');
+    });
+
+    it('extracts ID from unlisted, channel, group, and manage URLs', () => {
+      expect(extractVideoId('https://vimeo.com/76979871/abc123def')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/channels/staffpicks/76979871')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/groups/motion/videos/76979871')).toBe('76979871');
+      expect(extractVideoId('https://vimeo.com/manage/videos/76979871')).toBe('76979871');
+    });
+
+    it('returns trimmed string for non-matching URLs', () => {
+      expect(extractVideoId('custom-slug')).toBe('custom-slug');
+      expect(extractVideoId('https://example.com/other')).toBe('https://example.com/other');
+    });
+  });
+
+  describe('parseTimestampToSeconds', () => {
+    it('parses MM:SS to seconds', () => {
+      expect(parseTimestampToSeconds('01:30')).toBe(90);
+      expect(parseTimestampToSeconds('00:45')).toBe(45);
+    });
+
+    it('parses HH:MM:SS to seconds', () => {
+      expect(parseTimestampToSeconds('01:02:03')).toBe(3723);
+    });
+
+    it('handles falsy or empty values', () => {
+      expect(parseTimestampToSeconds('')).toBe(0);
+      expect(parseTimestampToSeconds(null)).toBe(0);
+    });
+  });
+
+  describe('cleanSubmissionFallback', () => {
+    it('removes conversational bot preambles and timestamps', () => {
+      const raw = "Based on the professor's lecture: [01:23] Machine learning is a field of study.";
+      const cleaned = cleanSubmissionFallback(raw);
+      expect(cleaned).not.toContain("Based on the professor's lecture");
+      expect(cleaned).not.toContain("[01:23]");
+      expect(cleaned).toContain("Machine learning is a field of study.");
+    });
+
+    it('strips markdown formatting symbols', () => {
+      const raw = "## Overview\n* **Supervised** learning uses `labeled` datasets.";
+      const cleaned = cleanSubmissionFallback(raw);
+      expect(cleaned).not.toContain('##');
+      expect(cleaned).not.toContain('**');
+      expect(cleaned).not.toContain('`');
+      expect(cleaned).toContain('Supervised learning uses labeled datasets.');
+    });
+
+    it('limits output to target words', () => {
+      const longText = new Array(200).fill('word').join(' ');
+      const cleaned = cleanSubmissionFallback(longText, 50);
+      const wordCount = cleaned.split(/\s+/).length;
+      expect(wordCount).toBeLessThanOrEqual(52);
+    });
+  });
+});
+--- END OF FILE: frontend/src/utils/__tests__/formatters.test.js ---
+
+--- START OF FILE: frontend/src/utils/__tests__/routing.test.js ---
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  parsePathRoute,
+  getLectureIdFromPath,
+  getCourseNameFromPath,
+  normalizeCourseSlug,
+  navigateTo
+} from '../routing';
+
+describe('routing utility functions', () => {
+  describe('normalizeCourseSlug', () => {
+    it('normalizes course strings to clean URL slugs', () => {
+      expect(normalizeCourseSlug('Applied Mathematics for AI')).toBe('applied-mathematics-for-ai');
+      expect(normalizeCourseSlug('CS 101: Intro to Python!')).toBe('cs-101-intro-to-python');
+      expect(normalizeCourseSlug('---Data-Science---')).toBe('data-science');
+      expect(normalizeCourseSlug('')).toBe('');
+      expect(normalizeCourseSlug(null)).toBe('');
+    });
+  });
+
+  describe('parsePathRoute', () => {
+    it('parses nested course lecture paths', () => {
+      const res = parsePathRoute('/course/data-science/lecture/123456');
+      expect(res.courseName).toBe('data-science');
+      expect(res.videoId).toBe('123456');
+    });
+
+    it('parses standalone course paths', () => {
+      const res = parsePathRoute('/course/computer-vision');
+      expect(res.courseName).toBe('computer-vision');
+      expect(res.videoId).toBeNull();
+    });
+
+    it('parses standalone lecture paths', () => {
+      const res = parsePathRoute('/lecture/987654');
+      expect(res.courseName).toBeNull();
+      expect(res.videoId).toBe('987654');
+    });
+
+    it('returns nulls for root path', () => {
+      const res = parsePathRoute('/');
+      expect(res.courseName).toBeNull();
+      expect(res.videoId).toBeNull();
+    });
+  });
+
+  describe('getLectureIdFromPath and getCourseNameFromPath', () => {
+    it('extracts lecture ID correctly', () => {
+      expect(getLectureIdFromPath('/course/math/lecture/555')).toBe('555');
+      expect(getLectureIdFromPath('/course/math')).toBeNull();
+    });
+
+    it('extracts course name correctly', () => {
+      expect(getCourseNameFromPath('/course/physics-101/lecture/555')).toBe('physics-101');
+      expect(getCourseNameFromPath('/lecture/555')).toBeNull();
+    });
+  });
+
+  describe('navigateTo', () => {
+    beforeEach(() => {
+      window.history.pushState({}, '', '/');
+    });
+
+    it('pushes state and triggers onStateUpdate callback', () => {
+      const onStateUpdate = vi.fn();
+      navigateTo('/course/ml', false, onStateUpdate);
+      expect(window.location.pathname).toBe('/course/ml');
+      expect(onStateUpdate).toHaveBeenCalledWith('/course/ml');
+    });
+
+    it('replaces state when replace option is true', () => {
+      navigateTo('/course/deep-learning', true);
+      expect(window.location.pathname).toBe('/course/deep-learning');
+    });
+  });
+});
+--- END OF FILE: frontend/src/utils/__tests__/routing.test.js ---
+
+--- START OF FILE: frontend/vitest.config.js ---
+import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: './src/setupTests.js',
+  },
+});
+--- END OF FILE: frontend/vitest.config.js ---
+
+--- START OF FILE: pytest.ini ---
+[pytest]
+pythonpath = .
+testpaths = tests
+--- END OF FILE: pytest.ini ---
+
+--- START OF FILE: tests/test_api_health.py ---
+import unittest
+from fastapi.testclient import TestClient
+from backend.main import app
+
+class TestAPIHealth(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app, raise_server_exceptions=False)
+
+    def test_health_route(self):
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data.get("status"), "ok")
+        self.assertEqual(data.get("service"), "lecturescribe-triad-api")
+
+    def test_course_route_not_found(self):
+        response = self.client.get("/api/course/nonexistent_course_test_123")
+        self.assertEqual(response.status_code, 404)
+
+if __name__ == "__main__":
+    unittest.main()
+--- END OF FILE: tests/test_api_health.py ---
+
+--- START OF FILE: tests/test_api_transcript.py ---
+import unittest
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+from backend.main import app
+
+class TestAPITranscript(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.sample_vtt = """WEBVTT
+
+1
+00:00:01.000 --> 00:00:04.000
+Welcome to Robotics 101.
+
+2
+00:00:05.000 --> 00:00:09.000
+Today we discuss forward kinematics.
+"""
+
+    @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.fetch_player_config")
+    @patch("backend.main.get_text_tracks")
+    @patch("backend.main.fetch_vtt")
+    @patch("backend.main.algolia_service.ingest_cues")
+    @patch("backend.main.pinecone_rag_engine.ingest_transcript")
+    @patch("backend.main.db_manager.save_video_transcript")
+    def test_transcript_extracts_course_name_when_omitted(
+        self,
+        mock_save_transcript,
+        mock_pinecone,
+        mock_algolia,
+        mock_fetch_vtt,
+        mock_get_tracks,
+        mock_fetch_config,
+        mock_get_saved_video
+    ):
+        mock_get_saved_video.return_value = None
+        mock_fetch_config.return_value = {
+            "video": {
+                "title": "Robotics 101 Lecture 1 - Introduction",
+                "duration": 3600
+            }
+        }
+        mock_get_tracks.return_value = [
+            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+        ]
+        mock_fetch_vtt.return_value = self.sample_vtt
+        mock_save_transcript.return_value = True
+        mock_pinecone.return_value = []
+
+        # Calling without course_name parameter triggers extract_course_name(title)
+        response = self.client.get("/api/transcript?url=https://vimeo.com/1229247139")
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertEqual(data["videoId"], "1229247139")
+        self.assertEqual(data["course_name"], "Robotics 101")
+        self.assertEqual(len(data["cues"]), 2)
+        mock_save_transcript.assert_called_once()
+        self.assertEqual(mock_save_transcript.call_args[1].get("course_name"), "Robotics 101")
+
+    @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.fetch_player_config")
+    @patch("backend.main.get_text_tracks")
+    @patch("backend.main.fetch_vtt")
+    @patch("backend.main.algolia_service.ingest_cues")
+    @patch("backend.main.pinecone_rag_engine.ingest_transcript")
+    @patch("backend.main.db_manager.save_video_transcript")
+    def test_transcript_uses_explicit_course_name(
+        self,
+        mock_save_transcript,
+        mock_pinecone,
+        mock_algolia,
+        mock_fetch_vtt,
+        mock_get_tracks,
+        mock_fetch_config,
+        mock_get_saved_video
+    ):
+        mock_get_saved_video.return_value = None
+        mock_fetch_config.return_value = {
+            "video": {
+                "title": "Intro to AI Module 1",
+                "duration": 1800
+            }
+        }
+        mock_get_tracks.return_value = [
+            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+        ]
+        mock_fetch_vtt.return_value = self.sample_vtt
+        mock_save_transcript.return_value = True
+
+        response = self.client.get("/api/transcript?url=https://vimeo.com/1229247139&course_name=Artificial%20Intelligence")
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertEqual(data["course_name"], "Artificial Intelligence")
+        self.assertEqual(mock_save_transcript.call_args[1].get("course_name"), "Artificial Intelligence")
+
+    def test_transcript_invalid_url_raises_400(self):
+        response = self.client.get("/api/transcript?url=not-a-valid-vimeo-link")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.json())
+
+if __name__ == "__main__":
+    unittest.main()
+--- END OF FILE: tests/test_api_transcript.py ---
+
+--- START OF FILE: tests/test_redis_cache.py ---
+import unittest
+import time
+from unittest.mock import MagicMock
+from fastapi.testclient import TestClient
+
+from backend.redis_service import RedisCacheService, redis_cache
+from backend.main import app
+
+
+class TestRedisCache(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.service = RedisCacheService()
+
+    def test_query_normalization(self):
+        """Test canonical query normalization prevents cache fragmentation."""
+        q1 = "Create a summary for a 15 min read?"
+        q2 = "  create a summary for a 15 min read   "
+        q3 = "CREATE A SUMMARY FOR A 15 MIN READ!"
+        q4 = "...create a summary   for a 15 min read..."
+
+        norm1 = self.service.normalize_query(q1)
+        norm2 = self.service.normalize_query(q2)
+        norm3 = self.service.normalize_query(q3)
+        norm4 = self.service.normalize_query(q4)
+
+        self.assertEqual(norm1, "create a summary for a 15 min read")
+        self.assertEqual(norm1, norm2)
+        self.assertEqual(norm2, norm3)
+        self.assertEqual(norm3, norm4)
+
+    def test_make_query_key_deterministic(self):
+        """Test that query cache keys are identical for semantically equivalent queries."""
+        k1 = self.service.make_query_key("vid_101", "What is transfer learning?", "auto")
+        k2 = self.service.make_query_key("vid_101", "  what is transfer learning?  ", "auto")
+        k3 = self.service.make_query_key("vid_101", "What is deep learning?", "auto")
+        k4 = self.service.make_query_key("vid_102", "What is transfer learning?", "auto")
+
+        self.assertEqual(k1, k2)
+        self.assertNotEqual(k1, k3)
+        self.assertNotEqual(k1, k4)
+        self.assertTrue(k1.startswith("ls:rag:query:vid_101:"))
+
+    def test_make_tool_key_order_independent(self):
+        """Test that tool argument ordering does not change the cache key."""
+        k1 = self.service.make_tool_key("vid_200", "search_transcript", {"query": "unet", "top_k": 5})
+        k2 = self.service.make_tool_key("vid_200", "search_transcript", {"top_k": 5, "query": "unet"})
+
+        self.assertEqual(k1, k2)
+        self.assertTrue(k1.startswith("ls:rag:tool:vid_200:search_transcript:"))
+
+    def test_health_check_includes_redis(self):
+        """Verify that GET /health reports redis_cache status."""
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("redis_cache", data)
+        redis_status = data["redis_cache"]
+        self.assertIn("status", redis_status)
+
+    def test_mock_cache_set_and_get(self):
+        """Test cache read/write semantics using a mocked Redis client."""
+        mock_redis = MagicMock()
+        service = RedisCacheService(redis_url="redis://localhost:6379")
+        service.client = mock_redis
+        service.enabled = True
+
+        test_data = {
+            "answer": "UNet is a convolutional network...",
+            "citations": [{"timestamp": "12:00", "text": "UNet intro"}],
+            "model": "Llama 3.1 8B"
+        }
+
+        # Mock GET returning None (cache miss)
+        mock_redis.get.return_value = None
+        miss_res = service.get_query("test_vid", "Explain UNet", "auto")
+        self.assertIsNone(miss_res)
+
+        # SET call
+        service.set_query("test_vid", "Explain UNet", "auto", test_data, ttl_seconds=300)
+        self.assertTrue(mock_redis.setex.called or mock_redis.set.called)
+
+        # Mock GET returning JSON string (cache hit)
+        import json
+        mock_redis.get.return_value = json.dumps(test_data)
+        hit_res = service.get_query("test_vid", "Explain UNet?", "auto")
+        self.assertIsNotNone(hit_res)
+        self.assertTrue(hit_res.get("cached"))
+        self.assertEqual(hit_res.get("cache_tier"), "REDIS")
+        self.assertEqual(hit_res.get("answer"), "UNet is a convolutional network...")
+
+
+if __name__ == "__main__":
+    unittest.main()
+--- END OF FILE: tests/test_redis_cache.py ---
+
+--- START OF FILE: tests/test_resources.py ---
+import unittest
+from fastapi.testclient import TestClient
+from backend.main import app
+from backend.gcs_storage import GCSStorageService, gcs_storage_service
+from backend.database import db_manager
+
+
+class TestGCSStorageService(unittest.TestCase):
+    def test_clean_filename(self):
+        self.assertEqual(GCSStorageService.clean_filename(""), "document")
+        self.assertEqual(GCSStorageService.clean_filename("my presentation.pdf"), "my_presentation.pdf")
+        self.assertEqual(GCSStorageService.clean_filename("../../../etc/passwd"), "passwd")
+        self.assertEqual(GCSStorageService.clean_filename("lecture#1 [notes]!.docx"), "lecture_1__notes__.docx")
+
+    def test_get_resource_blob_path(self):
+        path = GCSStorageService.get_resource_blob_path("Machine-Learning-101", "123456", "slides.pdf")
+        self.assertTrue(path.startswith("courses/machine-learning-101/lectures/123456/"))
+        self.assertTrue(path.endswith("_slides.pdf"))
+
+        general_path = GCSStorageService.get_resource_blob_path("General", None, "syllabus.docx")
+        self.assertTrue(general_path.startswith("courses/general/general/"))
+        self.assertTrue(general_path.endswith("_syllabus.docx"))
+
+    def test_signed_urls_emulated(self):
+        # In test sandbox without ADC credentials, it returns valid emulated URLs
+        res = gcs_storage_service.generate_upload_signed_url("courses/ml/test.pdf", content_type="application/pdf")
+        self.assertIn("signed_url", res)
+        self.assertEqual(res["blob_name"], "courses/ml/test.pdf")
+
+        dl = gcs_storage_service.generate_download_signed_url("courses/ml/test.pdf")
+        self.assertTrue(dl.startswith("https://storage.googleapis.com/"))
+
+
+class TestResourceEndpoints(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    def test_presign_upload_requires_auth(self):
+        # Missing or empty user_email should return 401
+        res = self.client.post("/api/resources/presign-upload", json={
+            "filename": "slides.pdf",
+            "course_name": "CS101",
+            "video_id": "999888",
+            "user_email": ""
+        })
+        self.assertEqual(res.status_code, 401)
+        self.assertIn("Only signed-in users", res.json()["detail"])
+
+    def test_presign_upload_success(self):
+        res = self.client.post("/api/resources/presign-upload", json={
+            "filename": "week1_slides.pdf",
+            "content_type": "application/pdf",
+            "course_name": "Deep Learning",
+            "video_id": "999888",
+            "user_email": "student@example.com"
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("signed_url", data)
+        self.assertIn("blob_name", data)
+        self.assertTrue(data["blob_name"].startswith("courses/deep-learning/lectures/999888/"))
+
+    def test_confirm_upload_and_retrieve(self):
+        # 1. Confirm upload
+        confirm_res = self.client.post("/api/resources/confirm-upload", json={
+            "filename": "cheat_sheet.pdf",
+            "blob_name": "courses/cs101/lectures/777/cheat_sheet.pdf",
+            "file_type": "pdf",
+            "file_size_bytes": 10240,
+            "course_name": "CS101",
+            "video_id": "777",
+            "title": "Week 1 Cheat Sheet",
+            "user_email": "prof@example.com"
+        })
+        self.assertEqual(confirm_res.status_code, 200)
+        res_data = confirm_res.json()["resource"]
+        res_id = res_data["id"]
+        self.assertEqual(res_data["title"], "Week 1 Cheat Sheet")
+        self.assertIn("download_url", res_data)
+
+        # 2. Retrieve by lecture
+        lecture_res = self.client.get("/api/lecture/777/resources")
+        self.assertEqual(lecture_res.status_code, 200)
+        lecture_items = lecture_res.json()["resources"]
+        matching = [item for item in lecture_items if item["id"] == res_id]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["title"], "Week 1 Cheat Sheet")
+
+        # 3. Retrieve by course
+        course_res = self.client.get("/api/course/CS101/resources")
+        self.assertEqual(course_res.status_code, 200)
+        course_items = course_res.json()["resources"]
+        matching_course = [item for item in course_items if item["id"] == res_id]
+        self.assertEqual(len(matching_course), 1)
+
+        # 4. Unauthorized user cannot delete
+        del_unauthorized = self.client.delete(f"/api/resources/{res_id}?user_email=other@example.com")
+        self.assertEqual(del_unauthorized.status_code, 403)
+
+        # 5. Authorized uploader can delete
+        del_res = self.client.delete(f"/api/resources/{res_id}?user_email=prof@example.com")
+        self.assertEqual(del_res.status_code, 200)
+
+    def test_link_resource(self):
+        # Create external link
+        res = self.client.post("/api/resources/link", json={
+            "title": "Official PyTorch Documentation",
+            "url": "https://pytorch.org/docs/stable/index.html",
+            "course_name": "Deep Learning",
+            "video_id": "555444",
+            "user_email": "learner@example.com"
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()["resource"]
+        self.assertEqual(data["file_type"], "link")
+        self.assertEqual(data["file_url"], "https://pytorch.org/docs/stable/index.html")
+
+
+if __name__ == "__main__":
+    unittest.main()
+--- END OF FILE: tests/test_resources.py ---
+
+--- START OF FILE: tests/test_services.py ---
+import unittest
+from backend.web_search import search_web_for_context
+from backend.google_drive_service import google_drive_service
+from backend.rag_engine import pinecone_rag_engine
+
+class TestServices(unittest.TestCase):
+    def test_web_search_empty_query(self):
+        results = search_web_for_context("")
+        self.assertEqual(results, [])
+
+    def test_gdrive_auth_status_structure(self):
+        status = google_drive_service.get_auth_status()
+        self.assertIn("has_libraries", status)
+        self.assertIn("configured", status)
+        self.assertIn("auth_type", status)
+
+    def test_gdrive_job_creation(self):
+        job_id = google_drive_service.create_job("test_video", "Test Lecture")
+        self.assertTrue(len(job_id) > 0)
+        job = google_drive_service.get_job(job_id)
+        self.assertIsNotNone(job)
+    def test_user_library_record_payload(self):
+        from backend.main import UserLibraryRecordRequest
+        payload = {
+            "email": "dipesh.singh2012@gmail.com",
+            "video_id": "1229629089",
+            "video_title": "Introduction to Speech and Natural Language Processing",
+            "video_url": "https://vimeo.com/1229629089",
+            "duration_seconds": "1h 18m"
+        }
+        req = UserLibraryRecordRequest(**payload)
+        self.assertEqual(req.email, "dipesh.singh2012@gmail.com")
+        self.assertEqual(req.video_id, "1229629089")
+        self.assertEqual(req.video_title, "Introduction to Speech and Natural Language Processing")
+
+    def test_reciprocal_rank_fusion(self):
+        """Test RRF fusion of two ranked lists."""
+        list1 = [
+            {"start_time": "01:00", "text": "First result from list1", "video_id": "123"},
+            {"start_time": "02:00", "text": "Second result from list1", "video_id": "123"},
+            {"start_time": "03:00", "text": "Third result from list1", "video_id": "123"}
+        ]
+        list2 = [
+            {"start_time": "02:00", "text": "Second result from list1", "video_id": "123"},
+            {"start_time": "01:00", "text": "First result from list1", "video_id": "123"},
+            {"start_time": "04:00", "text": "Fourth result from list2", "video_id": "123"}
+        ]
+        
+        fused = pinecone_rag_engine.reciprocal_rank_fusion([list1, list2], k=60)
+        
+        # Should return 4 unique items
+        self.assertEqual(len(fused), 4)
+        
+        # Items appearing in both lists should have higher scores (ranked first)
+        # Items 01:00 and 02:00 appear in both lists, so they should be ranked higher
+        first_two_items = fused[:2]
+        start_times = [item.get("start_time") for item in first_two_items]
+        self.assertIn("01:00", start_times)
+        self.assertIn("02:00", start_times)
+
+    def test_agent_tools_declarations(self):
+        """Verify the 4 agent tools are declared with valid function schemas."""
+        tool_names = [t["function"]["name"] for t in pinecone_rag_engine.AGENT_TOOLS]
+        self.assertIn("get_lecture_outline", tool_names)
+        self.assertIn("search_transcript", tool_names)
+        self.assertIn("get_transcript_window", tool_names)
+        self.assertIn("search_web_context", tool_names)
+
+    def test_agent_execute_tool_outline(self):
+        """Verify execute_tool correctly executes get_lecture_outline."""
+        from unittest.mock import patch
+        mock_video = {
+            "title": "Computer Vision 101",
+            "summarySections": [
+                {"title": "Intro [00:00 - 10:00]", "points": ["Cameras capture light"]}
+            ],
+            "cues": []
+        }
+        with patch("backend.database.db_manager.get_saved_video", return_value=mock_video):
+            res_str, citations, web = pinecone_rag_engine.execute_tool(
+                tool_name="get_lecture_outline",
+                arguments={"video_id": "cv_test"},
+                target_video_id="cv_test",
+                lecture_title="Computer Vision 101"
+            )
+            self.assertIn("Cameras capture light", res_str)
+            self.assertEqual(len(citations), 1)
+            self.assertEqual(citations[0]["timestamp"], "00:00")
+
+    def test_agent_execute_tool_transcript_window(self):
+        """Verify execute_tool correctly fetches transcript cues for a time window."""
+        from unittest.mock import patch
+        mock_cues = [
+            {"time": "02:00", "text": "Starting discussion on convolution filters."},
+            {"time": "04:00", "text": "Filters slide across the spatial grid."},
+            {"time": "12:00", "text": "Much later in the lecture."}
+        ]
+        with patch("backend.database.db_manager.get_saved_video", return_value={"cues": mock_cues}):
+            res_str, citations, web = pinecone_rag_engine.execute_tool(
+                tool_name="get_transcript_window",
+                arguments={"start_time": "01:00", "end_time": "05:00", "video_id": "test_cv"},
+                target_video_id="test_cv",
+                lecture_title="CV"
+            )
+            self.assertIn("convolution filters", res_str)
+            self.assertIn("Filters slide", res_str)
+            self.assertNotIn("Much later", res_str)
+
+    def test_agent_unknown_tool_fails_fast(self):
+        """Verify unknown tool request raises an immediate ValueError."""
+        with self.assertRaises(ValueError):
+            pinecone_rag_engine.execute_tool("non_existent_tool", {}, "vid", "title")
+
+    def test_agent_fail_fast_missing_credentials(self):
+        """Verify query_rag raises RuntimeError when no LLM credentials exist."""
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"HUGGINGFACE_TOKEN": "", "GROQ_API_KEY": "", "GEMINI_API_KEY": "", "OPENAI_API_KEY": ""}):
+            with self.assertRaises(RuntimeError):
+                pinecone_rag_engine.query_rag(query="test", video_id="vid")
+
+    def test_submission_fails_fast_on_unexecuted_function(self):
+        """Verify generate_submission_version raises ValueError when input is raw function call."""
+        with self.assertRaises(ValueError):
+            pinecone_rag_engine.generate_submission_version("<function=get_lecture_outline video_id=\"1228259148\"></function>")
+
+    def test_submission_fails_fast_on_empty_text(self):
+        """Verify generate_submission_version raises ValueError on empty text."""
+        with self.assertRaises(ValueError):
+            pinecone_rag_engine.generate_submission_version("")
+
+    def test_transcript_window_fails_fast_when_no_cues_in_window(self):
+        """Verify execute_tool raises ValueError if no cues match window (no fallback to cues[:8])."""
+        from unittest.mock import patch
+        mock_cues = [
+            {"time": "02:00", "text": "Early cue"},
+            {"time": "03:00", "text": "Another early cue"}
+        ]
+        with patch("backend.database.db_manager.get_saved_video", return_value={"cues": mock_cues}):
+            with self.assertRaises(ValueError):
+                pinecone_rag_engine.execute_tool(
+                    tool_name="get_transcript_window",
+                    arguments={"start_time": "50:00", "end_time": "55:00", "video_id": "test_cv"},
+                    target_video_id="test_cv",
+                    lecture_title="CV"
+                )
+
+    def test_chat_history_db_methods(self):
+        """Verify get_chat_history and clear_chat_history format and execute correctly."""
+        from unittest.mock import patch, MagicMock
+        from backend.database import db_manager
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            {
+                "id": 1,
+                "video_id": "test_vid",
+                "user_prompt": "What is attention?",
+                "ai_reply": "Attention is a mechanism in deep learning.",
+                "citations_json": [{"timestamp": "01:23", "text": "attention"}],
+                "user_email": "student@example.com",
+                "submission_text": "Attention enables models to weight tokens.",
+                "model": "Groq Llama 3.3 70B",
+                "web_sources_json": [],
+                "created_at": None
+            }
+        ]
+        mock_conn = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+        with patch.object(db_manager, "_get_connection", return_value=mock_conn):
+            # Test retrieval
+            history = db_manager.get_chat_history("test_vid", "student@example.com")
+            self.assertEqual(len(history), 2)
+            self.assertEqual(history[0]["sender"], "user")
+            self.assertEqual(history[0]["text"], "What is attention?")
+            self.assertEqual(history[1]["sender"], "bot")
+            self.assertEqual(history[1]["text"], "Attention is a mechanism in deep learning.")
+            self.assertEqual(history[1]["model"], "Groq Llama 3.3 70B")
+            self.assertEqual(history[1]["submission_text"], "Attention enables models to weight tokens.")
+
+            # Test clear
+            success = db_manager.clear_chat_history("test_vid", "student@example.com")
+            self.assertTrue(success)
+
+    def test_rag_query_request_chat_history(self):
+        from backend.main import RAGQueryRequest
+        req = RAGQueryRequest(
+            query="Tell me more about point 2",
+            video_id="test_vid",
+            chat_history=[
+                {"role": "user", "content": "Explain SVMs."},
+                {"role": "assistant", "content": "Support Vector Machines find optimal hyperplanes."}
+            ]
+        )
+        self.assertEqual(len(req.chat_history), 2)
+        self.assertEqual(req.chat_history[0]["role"], "user")
+
+    def test_api_chat_history_endpoints(self):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        client = TestClient(app)
+        with patch("backend.main.db_manager.get_chat_history") as mock_get:
+            mock_get.return_value = [
+                {"id": "msg_user_1", "sender": "user", "text": "Hello"},
+                {"id": "msg_bot_1", "sender": "bot", "text": "Welcome to class!"}
+            ]
+            resp = client.get("/api/chat/history?video_id=test_vid&email=test@example.com")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["count"], 2)
+            self.assertEqual(len(data["messages"]), 2)
+
+        with patch("backend.main.db_manager.clear_chat_history") as mock_clear:
+            mock_clear.return_value = True
+            resp = client.delete("/api/chat/history?video_id=test_vid&email=test@example.com")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+
+    def test_extract_course_name(self):
+        from backend.database import extract_course_name
+        self.assertEqual(
+            extract_course_name("Introduction to Financial Analytics Live session -1 (18 / 9 / 2026)"),
+            "Introduction to Financial Analytics"
+        )
+        self.assertEqual(
+            extract_course_name("Introduction to Financial Analytics Live session -2 (25 / 9 / 2026)"),
+            "Introduction to Financial Analytics"
+        )
+        self.assertEqual(
+            extract_course_name("Computer Vision Live Session - 1"),
+            "Computer Vision"
+        )
+        self.assertEqual(
+            extract_course_name("Introduction to Speech and Natural Language Processing"),
+            "Introduction to Speech and Natural Language Processing"
+        )
+
+    def test_api_user_courses_endpoint(self):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        client = TestClient(app)
+        with patch("backend.main.db_manager.get_user_courses") as mock_courses:
+            mock_courses.return_value = [
+                {
+                    "course_name": "Introduction to Financial Analytics",
+                    "lecture_count": 2,
+                    "lectures": [
+                        {"video_id": "1228259148", "title": "Session 1"},
+                        {"video_id": "1230314346", "title": "Session 2"}
+                    ]
+                }
+            ]
+            resp = client.get("/api/user/courses?email=test@example.com")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["count"], 1)
+            self.assertEqual(data["courses"][0]["course_name"], "Introduction to Financial Analytics")
+            self.assertEqual(data["courses"][0]["lecture_count"], 2)
+
+if __name__ == "__main__":
+    unittest.main()
+
+--- END OF FILE: tests/test_services.py ---
+
+--- START OF FILE: tests/test_submission.py ---
+import unittest
+from backend.rag_engine import pinecone_rag_engine
+
+class TestSubmissionEngine(unittest.TestCase):
+    def test_clean_for_submission(self):
+        raw_text = """Based on the professor's lecture transcript, we can identify:
+- **Supervised Learning**: Model learns from labeled data [05:22].
+- **Unsupervised Learning**: Clustering patterns [14:40].
+```python
+def train(): pass
+```
+Here's what I found regarding machine learning paradigms."""
+        
+        cleaned = pinecone_rag_engine._clean_for_submission(raw_text, target_words=100)
+        
+        # Must remove bracketed timestamps
+        self.assertNotIn("[05:22]", cleaned)
+        self.assertNotIn("[14:40]", cleaned)
+        # Must remove markdown symbols
+        self.assertNotIn("**", cleaned)
+        self.assertNotIn("```", cleaned)
+        # Must remove conversational cliches
+        self.assertNotIn("Here's what I found", cleaned)
+
+    def test_clean_submission_academic_preamble(self):
+        """Verify removal of verbose LLM submission preambles."""
+        raw_preamble = (
+            "Here is a concise academic submission of around 120 words summarizing the technical "
+            "takeaway or solution for this topic: Computer vision has undergone significant "
+            "transformations [00:00 - 15:20], evolving from early machine learning to current deep learning techniques."
+        )
+        cleaned = pinecone_rag_engine._clean_for_submission(raw_preamble, target_words=100)
+        self.assertNotIn("Here is a concise academic submission", cleaned)
+        self.assertNotIn("[00:00 - 15:20]", cleaned)
+        self.assertTrue(cleaned.startswith("Computer vision has undergone"))
+
+    def test_clean_submission_timestamp_ranges(self):
+        """Verify bracketed timestamp ranges are removed."""
+        text = "Neural networks were introduced [00:00 - 15:30] and convolutional layers [15:30 - 30:00] process features."
+        cleaned = pinecone_rag_engine._clean_for_submission(text, target_words=50)
+        self.assertNotIn("[00:00 - 15:30]", cleaned)
+        self.assertNotIn("[15:30 - 30:00]", cleaned)
+
+    def test_generate_submission_fail_fast_no_keys(self):
+        """Verify fail-fast exception when no LLM keys are configured."""
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"HUGGINGFACE_TOKEN": "", "GROQ_API_KEY": "", "GEMINI_API_KEY": "", "OPENAI_API_KEY": ""}):
+            with self.assertRaises(RuntimeError):
+                pinecone_rag_engine.generate_submission_version("Sample text", "dummy_video")
+
+if __name__ == "__main__":
+    unittest.main()
+
+--- END OF FILE: tests/test_submission.py ---
+
+--- START OF FILE: tests/test_summary_generator.py ---
+import unittest
+from backend.summary_generator import (
+    clean_sentence_text,
+    is_greeting_or_banter,
+    reconstruct_sentences,
+    generate_summary_sections,
+)
+
+class TestSummaryGenerator(unittest.TestCase):
+    def test_clean_sentence_text(self):
+        cleaned = clean_sentence_text("basically what we want to discuss here is algorithm design, right?")
+        self.assertTrue(cleaned.startswith("What we want to discuss"))
+        self.assertTrue(cleaned.endswith("."))
+
+    def test_is_greeting_or_banter(self):
+        self.assertTrue(is_greeting_or_banter("Good evening everyone, can you hear me?"))
+        self.assertTrue(is_greeting_or_banter("Yes sir, screen visible."))
+        self.assertFalse(is_greeting_or_banter("In this section we formalize the theorem proof."))
+
+    def test_reconstruct_sentences(self):
+        cues = [
+            {"time": "00:01", "text": "We will investigate"},
+            {"time": "00:03", "text": "the formal verification of cryptographic protocols."},
+        ]
+        sentences = reconstruct_sentences(cues)
+        self.assertEqual(len(sentences), 1)
+        self.assertEqual(sentences[0]["time"], "00:01")
+        self.assertIn("cryptographic protocols", sentences[0]["text"])
+
+    @unittest.mock.patch("backend.summary_generator.generate_llm_summary")
+    def test_generate_summary_sections(self, mock_llm):
+        mock_llm.return_value = [
+            {"title": "Consensus Protocols [00:01 - 00:45]", "points": ["[00:15] Paxos and Raft mechanisms."]}
+        ]
+        cues = [
+            {"time": "00:01", "text": "In this lecture we analyze distributed consistency models and consensus."},
+            {"time": "00:15", "text": "The primary objective is understanding Paxos and Raft mechanisms."},
+            {"time": "00:30", "text": "How do we guarantee safety under network partitions?"},
+            {"time": "00:45", "text": "We observe that state machine replication requires a stable majority."},
+        ]
+        sections = generate_summary_sections(cues, "Distributed Systems")
+        self.assertIsInstance(sections, list)
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0]["title"], "Consensus Protocols [00:01 - 00:45]")
+        self.assertTrue(any("points" in s for s in sections))
+        mock_llm.assert_called_once_with(cues, "Distributed Systems")
+
+if __name__ == "__main__":
+    unittest.main()
+
+--- END OF FILE: tests/test_summary_generator.py ---
+
+--- START OF FILE: tests/test_vimeo_client.py ---
+import unittest
+from backend.vimeo_client import extract_video_id, format_timestamp, parse_vtt
+
+class TestVimeoClient(unittest.TestCase):
+    def test_extract_video_id_from_raw_id(self):
+        self.assertEqual(extract_video_id("1229247139"), "1229247139")
+        self.assertEqual(extract_video_id("  1229247139  "), "1229247139")
+        self.assertEqual(extract_video_id("\t76979871\n"), "76979871")
+
+    def test_extract_video_id_from_url(self):
+        self.assertEqual(extract_video_id("https://vimeo.com/1229247139"), "1229247139")
+        self.assertEqual(extract_video_id("http://vimeo.com/1229247139"), "1229247139")
+        self.assertEqual(extract_video_id("https://www.vimeo.com/1229247139"), "1229247139")
+        self.assertEqual(extract_video_id("vimeo.com/1229247139"), "1229247139")
+        self.assertEqual(extract_video_id("https://player.vimeo.com/video/1229247139"), "1229247139")
+        self.assertEqual(extract_video_id("http://player.vimeo.com/video/76979871"), "76979871")
+
+    def test_extract_video_id_from_url_with_parameters_and_fragments(self):
+        self.assertEqual(extract_video_id("https://vimeo.com/1229247139?autoplay=1"), "1229247139")
+        self.assertEqual(extract_video_id("https://vimeo.com/1229247139?param1=val&param2=123"), "1229247139")
+        self.assertEqual(extract_video_id("https://vimeo.com/1229247139#t=30s"), "1229247139")
+        self.assertEqual(extract_video_id("https://vimeo.com/1229247139/?autoplay=1#t=1m"), "1229247139")
+        self.assertEqual(extract_video_id("https://vimeo.com/1229247139/"), "1229247139")
+
+    def test_extract_video_id_from_special_vimeo_formats(self):
+        # Unlisted / private hash
+        self.assertEqual(extract_video_id("https://vimeo.com/1229247139/abc123def"), "1229247139")
+        # Channels
+        self.assertEqual(extract_video_id("https://vimeo.com/channels/staffpicks/1229247139"), "1229247139")
+        # Groups
+        self.assertEqual(extract_video_id("https://vimeo.com/groups/motion/videos/1229247139"), "1229247139")
+        # Manage videos
+        self.assertEqual(extract_video_id("https://vimeo.com/manage/videos/1229247139"), "1229247139")
+
+    def test_extract_video_id_invalid(self):
+        with self.assertRaises(ValueError):
+            extract_video_id("")
+        with self.assertRaises(ValueError):
+            extract_video_id("   ")
+        with self.assertRaises(ValueError):
+            extract_video_id("https://vimeo.com/about")
+        with self.assertRaises(ValueError):
+            extract_video_id("https://youtube.com/watch?v=123456")
+
+    def test_format_timestamp(self):
+        self.assertEqual(format_timestamp("00:01:23.456"), "01:23")
+        self.assertEqual(format_timestamp("01:05:30.000"), "1:05:30")
+        self.assertEqual(format_timestamp("00:00:15.100"), "00:15")
+
+    def test_parse_vtt(self):
+        sample_vtt = """WEBVTT
+
+1
+00:00:01.000 --> 00:00:04.000
+Welcome to the lecture.
+
+2
+00:00:05.000 --> 00:00:09.000
+Today we discuss distributed systems.
+"""
+        segments = parse_vtt(sample_vtt)
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0]["text"], "Welcome to the lecture.")
+        self.assertEqual(segments[0]["start"], "00:00:01.000")
+        self.assertEqual(segments[1]["text"], "Today we discuss distributed systems.")
+
+if __name__ == "__main__":
+    unittest.main()
+--- END OF FILE: tests/test_vimeo_client.py ---
+

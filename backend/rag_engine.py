@@ -120,7 +120,7 @@ class Llama3PineconeRAGStore:
             self.index = self.pc.Index(self.index_name)
             return True
         except Exception as e:
-            print(f"⚠️️ [Pinecone Startup Warning] Error creating/verifying Pinecone index: {e}")
+            print(f"⚠️ [Pinecone Startup Warning] Error creating/verifying Pinecone index: {e}")
             return False
 
     def _generate_embedding(self, text: str) -> List[float]:
@@ -204,7 +204,7 @@ class Llama3PineconeRAGStore:
         """Return available models and their configuration status."""
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", "")
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
 
         return [
             {
@@ -429,6 +429,9 @@ class Llama3PineconeRAGStore:
             cues = saved.get("cues", []) if saved else []
             window = [c for c in cues if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec]
 
+            if not window:
+                raise ValueError(f"No transcript cues found within time window [{st} - {et}].")
+
             dialogue = " ".join([f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in window])
             citations.append({"timestamp": st, "end_time": et, "text": dialogue[:120] + "..."})
             return json.dumps({"start_time": st, "end_time": et, "transcript": dialogue}), citations, web_sources
@@ -463,7 +466,7 @@ class Llama3PineconeRAGStore:
 
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN","")
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
 
         if groq_key and (not model_id or "groq" in model_id or "llama-3.3" in model_id):
             endpoint = "https://api.groq.com/openai/v1/chat/completions"
@@ -541,58 +544,112 @@ class Llama3PineconeRAGStore:
 
     def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
         """Strip markdown syntax, timestamps, and AI boilerplate from text."""
-        cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*\d{1,2}:\d{2}(?::\d{2})?)?\]", "", text)
+        cleaned = text.strip()
+        # Remove markdown code blocks and inline code
         cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+        # Remove headers, bold, italics
         cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
         cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
         cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+        # Remove timestamps and timestamp ranges [00:00 - 15:20] or [05:22]
+        cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*\d{1,2}:\d{2}(?::\d{2})?)?\]", "", cleaned)
+        # Remove common academic / conversational introductory preambles
+        cleaned = re.sub(r"(?i)^here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*", "", cleaned)
+        cleaned = re.sub(r"(?i)^based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*", "", cleaned)
+        cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found\s+regarding\s+[^:.\n]*[:.\n]*\s*", "", cleaned)
+        cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*", "", cleaned)
+        # Normalize whitespace
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
-    def generate_submission_version(self, original_text: str, video_id: Optional[str] = "", word_count: int = 100, model_id: Optional[str] = None) -> Dict[str, Any]:
+    def generate_submission_version(
+        self,
+        original_text: str,
+        video_id: Optional[str] = "",
+        word_count: int = 100,
+        model_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Synthesize plain-text MTech student submission version via safe cloud cascading."""
-        import requests
+        # 1. Validation checks matching tests
+        if not original_text or not original_text.strip():
+            raise ValueError("original_text cannot be empty.")
+        if re.search(r"<\s*function\s*=", original_text):
+            raise ValueError("Input contains raw unexecuted function call tags.")
+
         clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
+
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN","")
-        
-        system_prompt = f"Write an authentic Indian M.Tech graduate text summary of exactly around {word_count} words. No markdown, no timestamps."
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        openai_key = os.getenv("OPENAI_API_KEY", "")
+
+        # 2. Must fail-fast with RuntimeError if no LLM keys are present
+        if not (groq_key or hf_token or gemini_key or openai_key):
+            raise RuntimeError("No LLM keys configured for submission generation.")
+
+        system_prompt = (
+            f"Write an authentic Indian M.Tech graduate text summary of exactly around {word_count} words. "
+            "No markdown, no timestamps."
+        )
         user_content = f"Summarize this content: {clean_base}"
-        
+
         if groq_key:
             try:
+                import requests
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
                 payload = {
                     "model": "llama-3.3-70b-versatile",
-                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
                     "temperature": 0.3
                 }
                 r = requests.post(url, headers=headers, json=payload, timeout=15)
-                raw_output = r.json()["choices"][0]["message"]["content"].strip()
-                final_sub = self._clean_for_submission(raw_output, target_words=word_count)
-                return {"status": "success", "submission_text": final_sub, "word_count": len(final_sub.split()), "model": "Groq Llama 3.3 70B"}
+                if r.status_code == 200:
+                    raw_output = r.json()["choices"][0]["message"]["content"].strip()
+                    final_sub = self._clean_for_submission(raw_output, target_words=word_count)
+                    return {
+                        "status": "success",
+                        "submission_text": final_sub,
+                        "word_count": len(final_sub.split()),
+                        "model": "Groq Llama 3.3 70B"
+                    }
             except Exception:
                 pass
-                
+
         if hf_token and HAS_HF:
             try:
                 client = InferenceClient(api_key=hf_token)
                 resp = client.chat.completions.create(
                     model="meta-llama/Llama-3.1-8B-Instruct",
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
                     temperature=0.3,
                     max_tokens=300
                 )
                 raw_output = resp.choices.message.content.strip()
                 final_sub = self._clean_for_submission(raw_output, target_words=word_count)
-                return {"status": "success", "submission_text": final_sub, "word_count": len(final_sub.split()), "model": "Hugging Face Llama 3.1 8B"}
+                return {
+                    "status": "success",
+                    "submission_text": final_sub,
+                    "word_count": len(final_sub.split()),
+                    "model": "Hugging Face Llama 3.1 8B"
+                }
             except Exception:
                 pass
-                
+
         final_sub = " ".join(clean_base.split()[:word_count]) + "."
-        return {"status": "success", "submission_text": final_sub, "word_count": len(final_sub.split()), "model": "Local Fallback Engine"}
+        return {
+            "status": "success",
+            "submission_text": final_sub,
+            "word_count": len(final_sub.split()),
+            "model": "Local Fallback Engine"
+        }
 
     def _build_summary_response(self, text: str, model_name: str, title: str, video_id: str) -> Dict[str, Any]:
         """Helper to extract timestamps and format summary response."""
@@ -676,7 +733,7 @@ class Llama3PineconeRAGStore:
                             continue
 
                         # Other status codes (e.g. 404): try next candidate model
-                        print(f"⚠️️ [Gemini {model_name} Notice] Status {resp.status_code}: {resp.text[:140]}")
+                        print(f"⚠️ [Gemini {model_name} Notice] Status {resp.status_code}: {resp.text[:140]}")
                         break
 
                     except requests.exceptions.RequestException as e:
@@ -733,9 +790,9 @@ class Llama3PineconeRAGStore:
             (
                 "huggingface",
                 "Hugging Face Llama 3.1 8B",
-                os.getenv("HUGGINGFACE_TOKEN", ""),
+                os.getenv("HUGGINGFACE_TOKEN", "") or os.getenv("HF_TOKEN", ""),
                 "https://huggingface.co/api/whoami-v2",
-                {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_TOKEN', '')}"}
+                {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_TOKEN', '') or os.getenv('HF_TOKEN', '')}"}
             ),
             (
                 "gemini",
@@ -786,7 +843,7 @@ class Llama3PineconeRAGStore:
             if active is None and reachable:
                 active = provider_key
 
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", "")
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", "") or os.getenv("HF_TOKEN", "")
         router_configured = bool(hf_token)
         results["hf_router"] = {
             "display": f"HF Router ({os.getenv('LLAMA_MODEL', 'meta-llama/Llama-3.1-8B-Instruct')})",

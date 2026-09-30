@@ -7,7 +7,12 @@
 import os
 import re
 from typing import List, Dict, Any, Optional
-from huggingface_hub import InferenceClient
+try:
+    from huggingface_hub import InferenceClient
+    HAS_HF = True
+except ImportError:
+    InferenceClient = None
+    HAS_HF = False
 
 INTENT_SUMMARY = "SUMMARY"
 INTENT_CHAT = "CHAT"
@@ -42,6 +47,9 @@ def slm_classify_intent(
     # =================================================================
     # LAYER 2: HUGGING FACE SERVERLESS CLOUD ROUTER
     # =================================================================
+    if not HAS_HF:
+        print("⚠️ [Router Warning] 'huggingface_hub' not installed. Defaulting to CHAT.")
+        return INTENT_CHAT
     model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     hf_token = os.getenv("HUGGINGFACE_TOKEN","")
 

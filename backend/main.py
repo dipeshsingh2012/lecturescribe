@@ -55,7 +55,7 @@ from backend.slm_router import slm_classify_intent, INTENT_SUMMARY, INTENT_CHAT
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle manager: Automatically creates & verifies all indexes and databases on server start."""
+    """Lifecycle manager: Initializes services safely without blocking container boot."""
     print("\n" + "=" * 60)
     print("🚀 LectureScribe Triad Server Starting Up...")
     print("=" * 60)
@@ -85,57 +85,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ [Algolia Startup Warning]: {e}")
 
-    # 4. Cloud LLM Providers & Router connectivity
+    # 4. Cloud LLM Providers & Local Hugging Face SLM connectivity
     print("🤖 [4/4] Probing Cloud LLM Providers & Intent Router...")
     try:
-        llm_status = pinecone_rag_engine.check_llm_connectivity()
-        providers = llm_status.get("providers", {})
-        active_key = llm_status.get("active_provider")
-        
-        reachable_cloud = sum(1 for k, v in providers.items() if k != "hf_router" and v.get("reachable"))
-        total_cloud_configured = sum(1 for k, v in providers.items() if k != "hf_router" and v.get("configured"))
-        
-        print(f"   Active cloud provider: {active_key or 'NONE'}")
-        print(f"   Cloud LLMs reachable:  {reachable_cloud}/{total_cloud_configured}")
-        
-        for pk, pv in providers.items():
-            if pk == "hf_router":
-                continue
-            if not pv.get("configured"):
-                continue
-            mark = "✅" if pv.get("reachable") else "⚠️"
-            lat = pv.get("latency_ms")
-            lat_str = f"{lat}ms" if lat is not None else "n/a"
-            err = f" — {pv.get('error')}" if pv.get("error") else ""
-            print(f"   {mark} [{pk:>12}] {pv.get('display'):<28} {lat_str:<10}{err}")
-            
-        router_info = providers.get("hf_router", {})
-        rmark = "✅" if router_info.get("reachable") else "⚠️"
-        print(f"   {rmark} [hf-router   ] {router_info.get('display'):<28} {'Ready' if router_info.get('reachable') else router_info.get('error')}")
+        pinecone_rag_engine.check_llm_connectivity()
     except Exception as e:
         print(f"⚠️ [LLM Startup Warning]: Could not complete connectivity probe: {e}")
 
-    # 5. Optional warm-up pre-index if WARMUP_VIDEO_ID environment variable is set
-    warmup_vid = os.getenv("WARMUP_VIDEO_ID")
-    if warmup_vid:
-        try:
-            sample = db_manager.get_saved_video(warmup_vid)
-            if sample:
-                algolia_service.ingest_cues(warmup_vid, sample["title"], sample["cues"])
-                pinecone_rag_engine.ingest_transcript(warmup_vid, sample["title"], sample["cues"])
-                print(f"⚡ [Warmup] Pre-indexed warmup video '{warmup_vid}' ({len(sample['cues'])} cues).")
-        except Exception as e:
-            print(f"⚠️ [Warmup Notice]: {e}")
-
     print("=" * 60)
-    print("✨ All Engines, Indexes & LLM Providers Ready!")
+    print("✨ Server ready and listening on port!")
     print("=" * 60 + "\n")
 
     yield
 
-    # --- Server Shutdown ---
     print("\n🛑 LectureScribe Triad Server Shutting Down...")
-
 
 app = FastAPI(
     title="LectureScribe Triad API (Postgres + Algolia + Pinecone)",

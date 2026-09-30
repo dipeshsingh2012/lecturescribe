@@ -1,8 +1,8 @@
 """
-Pinecone + Llama-3.2-3B-Instruct RAG Engine for LectureScribe
---------------------------------------------------------------
-Strictly loads model & database parameters from environment variables - NO HARDCODING.
-Combines Pinecone Vector Database retrieval with grounded Llama-3.2 inference.
+Pinecone + Multi-Provider Tool-Calling RAG Engine for LectureScribe
+-------------------------------------------------------------------
+Strictly loads model & database parameters from environment variables.
+Consolidated on Groq (openai/gpt-oss-120b, openai/gpt-oss-20b) and Gemini (gemini-3.8-flash).
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import re
 import json
 import math
 import time
-import random
 from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
 from dotenv import load_dotenv
@@ -34,25 +33,18 @@ except ImportError:
         HAS_SERVERLESS = False
 
 try:
-    from huggingface_hub import InferenceClient
-    HAS_HF = True
-except ImportError:
-    HAS_HF = False
-
-try:
     from backend.redis_service import redis_cache
 except ImportError:
     redis_cache = None
 
 
 class Llama3PineconeRAGStore:
-    """RAG Engine powered by Llama-3.2-3B-Instruct + Pinecone Vector Database."""
+    """RAG Engine powered by Hybrid Search + Agentic LLM Tool Execution."""
 
     def __init__(self):
         self.api_key = os.getenv("PINECONE_API_KEY", "")
         self.index_name = os.getenv("PINECONE_INDEX", "lecturescribe-rag-index")
         self.namespace = os.getenv("PINECONE_NAMESPACE", "lecturescribe_v1")
-        self.model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
         self.pc: Optional[Pinecone] = None
         self.index = None
         self.video_id: str = ""
@@ -67,17 +59,17 @@ class Llama3PineconeRAGStore:
         self.namespace = os.getenv("PINECONE_NAMESPACE", "lecturescribe_v1")
         try:
             if not Pinecone:
-                print("[Llama-3.2 RAG Warning] Pinecone package not installed. Using local chunk store.")
+                print("[RAG Warning] Pinecone package not installed. Using local chunk store.")
                 return
 
             if self.api_key:
                 self.pc = Pinecone(api_key=self.api_key)
                 self.index = self.pc.Index(self.index_name)
-                print(f"[Llama-3.2 RAG] Connected to Pinecone Index '{self.index_name}' (Namespace: '{self.namespace}').")
+                print(f"[RAG] Connected to Pinecone Index '{self.index_name}' (Namespace: '{self.namespace}').")
             else:
-                print(f"[Llama-3.2 RAG Warning] PINECONE_API_KEY environment variable is not set.")
+                print("[RAG Warning] PINECONE_API_KEY environment variable is not set.")
         except Exception as e:
-            print(f"[Llama-3.2 RAG Warning] Could not initialize Pinecone: {e}")
+            print(f"[RAG Warning] Could not initialize Pinecone: {e}")
 
     def setup_index(self) -> bool:
         """Create and verify Pinecone index on server start."""
@@ -85,12 +77,7 @@ class Llama3PineconeRAGStore:
         self.index_name = os.getenv("PINECONE_INDEX", "lecturescribe-rag-index")
         self.namespace = os.getenv("PINECONE_NAMESPACE", "lecturescribe_v1")
 
-        if not Pinecone:
-            print("[Pinecone Startup] pinecone package not installed. Local vector store active.")
-            return False
-
-        if not self.api_key:
-            print("[Pinecone Startup] PINECONE_API_KEY not configured. Local vector store active.")
+        if not Pinecone or not self.api_key:
             return False
 
         try:
@@ -99,7 +86,7 @@ class Llama3PineconeRAGStore:
 
             existing_indexes = [idx.name for idx in self.pc.list_indexes()]
             if self.index_name not in existing_indexes:
-                print(f"🚀 [Pinecone Startup] Index '{self.index_name}' not found. Creating serverless index (dim=768, metric=cosine, aws/us-east-1)...")
+                print(f"🚀 [Pinecone Startup] Creating index '{self.index_name}' (dim=768, metric=cosine)...")
                 if HAS_SERVERLESS:
                     self.pc.create_index(
                         name=self.index_name,
@@ -108,23 +95,15 @@ class Llama3PineconeRAGStore:
                         spec=ServerlessSpec(cloud="aws", region="us-east-1")
                     )
                 else:
-                    self.pc.create_index(
-                        name=self.index_name,
-                        dimension=768,
-                        metric="cosine"
-                    )
-                print(f"✅ [Pinecone Startup] Created Pinecone index: '{self.index_name}'.")
-            else:
-                print(f"✅ [Pinecone Startup] Pinecone index '{self.index_name}' verified and ready.")
-
+                    self.pc.create_index(name=self.index_name, dimension=768, metric="cosine")
             self.index = self.pc.Index(self.index_name)
             return True
         except Exception as e:
-            print(f"⚠️ [Pinecone Startup Warning] Error creating/verifying Pinecone index: {e}")
+            print(f"⚠️ [Pinecone Startup Warning]: {e}")
             return False
 
     def _generate_embedding(self, text: str) -> List[float]:
-        """Generate 768-dim embedding vector for transcript text."""
+        """Generate 768-dim deterministic embedding vector."""
         words = re.findall(r"\w+", text.lower())
         vec = [0.0] * 768
         for idx, word in enumerate(words):
@@ -194,53 +173,47 @@ class Llama3PineconeRAGStore:
                 for b_i in range(0, len(vectors_to_upsert), batch_size):
                     batch = vectors_to_upsert[b_i : b_i + batch_size]
                     self.index.upsert(vectors=batch, namespace=self.namespace)
-                print(f"[Llama-3.2 RAG] Upserted {len(vectors_to_upsert)} chunks to Pinecone namespace '{self.namespace}'.")
             except Exception as e:
-                print(f"[Llama-3.2 RAG Warning] Pinecone upsert error: {e}")
+                print(f"[RAG Warning] Pinecone upsert error: {e}")
 
         return len(self.local_chunks)
 
     def get_supported_models(self) -> List[Dict[str, Any]]:
-        """Return available models and their configuration status."""
+        """Return unified active models."""
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
 
         return [
+            {
+                "id": "openai/gpt-oss-120b",
+                "name": "Groq GPT-OSS 120B",
+                "provider": "Groq Cloud",
+                "badge": "🚀 Primary Reasoning & Tools",
+                "is_configured": bool(groq_key),
+                "is_recommended": True,
+                "free_tier_info": "Active via GROQ_API_KEY"
+            },
+            {
+                "id": "openai/gpt-oss-20b",
+                "name": "Groq GPT-OSS 20B",
+                "provider": "Groq Cloud",
+                "badge": "⚡ Ultra-Fast Fallback",
+                "is_configured": bool(groq_key),
+                "is_recommended": False,
+                "free_tier_info": "Active via GROQ_API_KEY"
+            },
             {
                 "id": "gemini-3.8-flash",
                 "name": "Gemini 3.8 Flash",
                 "provider": "Google",
-                "badge": "⚡ Fast • 1M Context",
+                "badge": "⚡ 1M Long-Context Fallback",
                 "is_configured": bool(gemini_key),
                 "is_recommended": True,
                 "free_tier_info": "Google AI Studio"
-            },
-            {
-                "id": "llama-3.3-70b-versatile",
-                "name": "Groq Llama 3.3 70B",
-                "provider": "Groq Cloud (Free Tier)",
-                "badge": "🚀 500 T/s • 70B Model",
-                "is_configured": bool(groq_key),
-                "is_recommended": True,
-                "free_tier_info": "1,000 requests/day free at ://groq.com"
-            },
-            {
-                "id": "meta-llama/Llama-3.1-8B-Instruct",
-                "name": "Hugging Face Llama 3.1 8B",
-                "provider": "Hugging Face (Serverless)",
-                "badge": "🤗 Active Cloud Default",
-                "is_configured": bool(hf_token),
-                "is_recommended": False,
-                "free_tier_info": "Active via HUGGINGFACE_TOKEN"
             }
         ]
 
-    def reciprocal_rank_fusion(
-        self,
-        ranked_lists: List[List[Dict[str, Any]]],
-        k: int = 60
-    ) -> List[Dict[str, Any]]:
+    def reciprocal_rank_fusion(self, ranked_lists: List[List[Dict[str, Any]]], k: int = 60) -> List[Dict[str, Any]]:
         """Combine multiple ranked lists using Reciprocal Rank Fusion."""
         rrf_scores = {}
         chunk_map = {}
@@ -257,7 +230,7 @@ class Llama3PineconeRAGStore:
         return [chunk_map[doc_id] for doc_id in sorted_ids]
 
     def _parse_timestamp(self, ts: str) -> float:
-        """Convert timestamp string 'MM:SS' or 'HH:MM:SS' to seconds for sorting."""
+        """Convert timestamp string to total seconds."""
         if not ts:
             return 0.0
         parts = ts.split(':')
@@ -314,7 +287,7 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "search_web_context",
-                "description": "Search DuckDuckGo and Wikipedia for external context.",
+                "description": "Search DuckDuckGo and Wikipedia for external courses, syllabi (e.g. IITs, Stanford, MIT, NPTEL), and technical context.",
                 "parameters": {
                     "type": "object",
                     "properties": {"search_query": {"type": "string"}},
@@ -331,7 +304,7 @@ class Llama3PineconeRAGStore:
         target_video_id: str,
         lecture_title: str
     ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Execute an agent tool and return (result_str, citations, web_sources)."""
+        """Execute agent tool calls."""
         citations = []
         web_sources = []
         vid_cache = target_video_id or str(arguments.get("video_id", "")).strip()
@@ -370,8 +343,7 @@ class Llama3PineconeRAGStore:
                     "timestamp": f"{start_t} - {end_t}",
                     "core_concepts": points
                 })
-            res_str = json.dumps(formatted)
-            return res_str, citations, web_sources
+            return json.dumps(formatted), citations, web_sources
 
         elif tool_name == "search_transcript":
             query = str(arguments.get("query", "")).strip()
@@ -388,7 +360,8 @@ class Llama3PineconeRAGStore:
                     res = self.index.query(**kwargs)
                     if res and res.matches:
                         for m in res.matches:
-                            pinecone_matches.append(m.metadata)
+                            if m and m.metadata:
+                                pinecone_matches.append(m.metadata)
                 except Exception:
                     pass
 
@@ -408,6 +381,26 @@ class Llama3PineconeRAGStore:
 
             ranked = [s for s in [pinecone_matches, algolia_matches] if s]
             combined = self.reciprocal_rank_fusion(ranked, k=60)[:top_k] if ranked else []
+
+            # Fallback to PostgreSQL transcript cues if vector & sparse return zero hits
+            if not combined and vid:
+                from backend.database import db_manager
+                saved = db_manager.get_saved_video(vid)
+                if saved and saved.get("cues"):
+                    cues = saved["cues"]
+                    q_words = re.findall(r"\w+", query.lower())
+                    scored_cues = []
+                    for c in cues:
+                        txt = c.get("text", "")
+                        score = sum(1 for w in q_words if w in txt.lower())
+                        scored_cues.append((score, c))
+                    scored_cues.sort(key=lambda x: x[0], reverse=True)
+                    for _, c in scored_cues[:top_k]:
+                        combined.append({
+                            "start_time": c.get("time", "00:00"),
+                            "end_time": c.get("time", "00:00"),
+                            "text": c.get("text", "")
+                        })
 
             out = []
             for item in combined:
@@ -459,107 +452,176 @@ class Llama3PineconeRAGStore:
         get_user_email: Optional[str] = None,
         user_email: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Agentic RAG Engine execution loop."""
+        """Unified Agentic RAG Execution."""
         import requests
         target_video_id = str(video_id).strip() if video_id else ""
         lecture_title = video_title or self.video_title or "Active Lecture"
 
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
 
-        if groq_key and (not model_id or "groq" in model_id or "llama-3.3" in model_id):
-            endpoint = "https://api.groq.com/openai/v1/chat/completions"
-            auth_header = f"Bearer {groq_key}"
-            model_name = "llama-3.3-70b-versatile"
-            display_model = "Groq Llama 3.3 70B"
-        elif hf_token:
-            endpoint = "https://api-inference.huggingface.co/v1/chat/completions"
-            auth_header = f"Bearer {hf_token}"
-            model_name = "meta-llama/Llama-3.1-8B-Instruct"
-            display_model = "Hugging Face Llama 3.1 8B"
-        else:
-            endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-            auth_header = f"Bearer {gemini_key}"
-            model_name = "gemini-3.8-flash"
-            display_model = "Gemini 3.8 Flash (OpenAI API)"
+        candidates = []
+        if groq_key:
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "openai/gpt-oss-120b",
+                "display": "Groq GPT-OSS 120B"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "openai/gpt-oss-20b",
+                "display": "Groq GPT-OSS 20B"
+            })
+        if gemini_key:
+            candidates.append({
+                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "auth_header": f"Bearer {gemini_key}",
+                "model_name": "gemini-3.8-flash",
+                "display": "Gemini 3.8 Flash (OpenAI API)"
+            })
 
-        print(f"🤖 [Agentic RAG Engine] Initializing query: '{query}' using {display_model}")
-        
-        system_prompt = f"You are an Academic AI Tutor for: '{lecture_title}'. Ground responses with exact [MM:SS] timestamps inline."
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": f"Student Request: {query}"}]
+        if not candidates:
+            raise RuntimeError("No active LLM keys (GROQ_API_KEY or GEMINI_API_KEY) found.")
 
-        all_citations = []
-        all_web_sources = []
-        max_steps = 3
-        current_step = 0
-        final_answer = ""
-        headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+        active_tools = self.AGENT_TOOLS if enable_web_search else [
+            t for t in self.AGENT_TOOLS if t["function"]["name"] != "search_web_context"
+        ]
 
-        while current_step < max_steps:
-            current_step += 1
-            payload = {
-                "model": model_name,
-                "messages": messages,
-                "tools": self.AGENT_TOOLS,
-                "tool_choice": "auto",
-                "max_tokens": 1024,
-                "temperature": 0.3
-            }
-            resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
-            if resp.status_code != 200:
-                raise RuntimeError(f"Agent API failed: {resp.text}")
-            
-            data = resp.json()
-            msg = data.get("choices", [{}])[0].get("message", {})
-            tool_calls = msg.get("tool_calls", []) or []
-            content_str = msg.get("content", "") or ""
+        web_instruction = (
+            "2. When the user asks to compare this lecture with other university courses (e.g., IITs, Stanford, MIT, NPTEL), standard syllabi, "
+            "external benchmarks, or real-world implementations, you MUST call 'search_web_context' to retrieve "
+            "real course references and include external web links in your answer.\n"
+            "3. If external web sources are used, summarize their findings and cite the source URLs."
+            if enable_web_search else
+            "2. Answer student questions using only the retrieved lecture outline and transcript data."
+        )
 
-            if not tool_calls:
-                final_answer = content_str.strip()
-                break
+        system_prompt = (
+            f"You are an Academic AI Tutor for lecture: '{lecture_title}'.\n"
+            "1. Ground specific statements about this lecture with exact [MM:SS] timestamps inline.\n"
+            f"{web_instruction}"
+        )
 
-            messages.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
-            for tc in tool_calls:
-                func_name = tc["function"]["name"]
-                args = json.loads(tc["function"]["arguments"])
-                tool_res, tool_cit, tool_web = self.execute_tool(func_name, args, target_video_id, lecture_title)
-                all_citations.extend(tool_cit)
-                all_web_sources.extend(tool_web)
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
+        last_error = None
+        for prov in candidates:
+            endpoint = prov["endpoint"]
+            auth_header = prov["auth_header"]
+            model_name = prov["model_name"]
+            display_model = prov["display"]
 
-        if not final_answer:
-            payload = {"model": model_name, "messages": messages, "max_tokens": 1024, "temperature": 0.3}
-            r = requests.post(endpoint, headers=headers, json=payload, timeout=60)
-            final_answer = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            print(f"🤖 [Agentic RAG] Initializing query: '{query}' using {display_model}")
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Student Request: {query}"}
+            ]
 
-        return {
-            "answer": final_answer,
-            "citations": all_citations,
-            "web_sources": all_web_sources,
-            "model": display_model,
-            "lecture_title": lecture_title,
-            "video_id": target_video_id
-        }
+            all_citations = []
+            all_web_sources = []
+            max_steps = 3
+            current_step = 0
+            final_answer = ""
+            headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+
+            try:
+                while current_step < max_steps:
+                    current_step += 1
+                    payload = {
+                        "model": model_name,
+                        "messages": messages,
+                        "tools": active_tools,
+                        "tool_choice": "auto",
+                        "max_tokens": 1024,
+                        "temperature": 0.3
+                    }
+
+                    resp = None
+                    try:
+                        for attempt in range(3):
+                            resp = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+                            if resp.status_code in (429, 503):
+                                backoff = (attempt + 1) * 2.0
+                                print(f"⚠️ [{display_model} status {resp.status_code}] Backing off {backoff:.1f}s...")
+                                time.sleep(backoff)
+                                continue
+                            break
+                    except requests.exceptions.RequestException as net_err:
+                        raise RuntimeError(f"Network error: {net_err}")
+
+                    if resp is None or resp.status_code != 200:
+                        status_val = resp.status_code if resp is not None else "N/A"
+                        body_val = resp.text[:300] if resp is not None else "No response received"
+                        raise RuntimeError(f"Agent API failed ({status_val}): {body_val}")
+
+                    data = resp.json()
+                    msg = data.get("choices", [{}])[0].get("message", {})
+                    tool_calls = msg.get("tool_calls", []) or []
+                    content_str = msg.get("content", "") or ""
+
+                    if not tool_calls:
+                        final_answer = content_str.strip()
+                        break
+
+                    messages.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
+                    for tc in tool_calls:
+                        func_name = tc["function"]["name"]
+                        raw_args = tc["function"]["arguments"]
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        tool_res, tool_cit, tool_web = self.execute_tool(func_name, args, target_video_id, lecture_title)
+                        all_citations.extend(tool_cit)
+                        all_web_sources.extend(tool_web)
+                        messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
+
+                if not final_answer:
+                    messages.append({
+                        "role": "user",
+                        "content": "Please synthesize a final, clear academic answer to the original question using the information retrieved above."
+                    })
+                    payload = {
+                        "model": model_name,
+                        "messages": messages,
+                        "tools": active_tools,
+                        "tool_choice": "none",
+                        "max_tokens": 1024,
+                        "temperature": 0.3
+                    }
+                    r = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+                    if r.status_code == 200:
+                        final_answer = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+                if not final_answer:
+                    final_answer = f"The requested topic was not explicitly identified in the transcript for '{lecture_title}'. Please check the lecture outline or specify a timestamp range."
+
+                return {
+                    "answer": final_answer,
+                    "citations": all_citations,
+                    "web_sources": all_web_sources,
+                    "model": display_model,
+                    "lecture_title": lecture_title,
+                    "video_id": target_video_id
+                }
+
+            except Exception as pe:
+                print(f"⚠️ [Agent Fallback] {display_model} failed ({pe}). Cascading...")
+                last_error = pe
+                continue
+
+        raise RuntimeError(f"All unified LLM providers failed. Last error: {last_error}")
 
     def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
-        """Strip markdown syntax, timestamps, and AI boilerplate from text."""
+        """Strip markdown syntax, timestamps, and AI boilerplate."""
         cleaned = text.strip()
-        # Remove markdown code blocks and inline code
         cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
-        # Remove headers, bold, italics
         cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
         cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
         cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
-        # Remove timestamps and timestamp ranges [00:00 - 15:20] or [05:22]
         cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*\d{1,2}:\d{2}(?::\d{2})?)?\]", "", cleaned)
-        # Remove common academic / conversational introductory preambles
         cleaned = re.sub(r"(?i)^here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*", "", cleaned)
         cleaned = re.sub(r"(?i)^based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*", "", cleaned)
         cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found\s+regarding\s+[^:.\n]*[:.\n]*\s*", "", cleaned)
         cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*", "", cleaned)
-        # Normalize whitespace
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
@@ -570,8 +632,7 @@ class Llama3PineconeRAGStore:
         word_count: int = 100,
         model_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Synthesize plain-text MTech student submission version via safe cloud cascading."""
-        # 1. Validation checks matching tests
+        """Synthesize plain-text MTech student submission version."""
         if not original_text or not original_text.strip():
             raise ValueError("original_text cannot be empty.")
         if re.search(r"<\s*function\s*=", original_text):
@@ -580,19 +641,18 @@ class Llama3PineconeRAGStore:
         clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
 
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
         gemini_key = os.getenv("GEMINI_API_KEY", "")
-        openai_key = os.getenv("OPENAI_API_KEY", "")
 
-        # 2. Must fail-fast with RuntimeError if no LLM keys are present
-        if not (groq_key or hf_token or gemini_key or openai_key):
+        if not (groq_key or gemini_key):
             raise RuntimeError("No LLM keys configured for submission generation.")
 
         system_prompt = (
-            f"Write an authentic Indian M.Tech graduate text summary of exactly around {word_count} words. "
-            "No markdown, no timestamps."
+            f"You are an Indian M.Tech graduate student drafting an academic submission. "
+            f"Write a comprehensive, professional submission paragraph of approximately {word_count} words "
+            "(strictly between 80 and 120 words) thoroughly explaining the core academic takeaways from the provided text. "
+            "Do not include markdown headers, bullet points, citations, or timestamps. Output plain text only."
         )
-        user_content = f"Summarize this content: {clean_base}"
+        user_content = f"Synthesize this lecture insight into a full graduate submission paragraph: {clean_base}"
 
         if groq_key:
             try:
@@ -600,46 +660,51 @@ class Llama3PineconeRAGStore:
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
                 payload = {
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "openai/gpt-oss-120b",
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content}
                     ],
-                    "temperature": 0.3
+                    "temperature": 0.3,
+                    "max_tokens": 300
                 }
-                r = requests.post(url, headers=headers, json=payload, timeout=15)
+                r = requests.post(url, headers=headers, json=payload, timeout=20)
                 if r.status_code == 200:
                     raw_output = r.json()["choices"][0]["message"]["content"].strip()
-                    final_sub = self._clean_for_submission(raw_output, target_words=word_count)
+                    final_sub = self._clean_for_submission(raw_output, target_words=word_count + 20)
+                    words = final_sub.split()
+                    
+                    # Ensure minimum academic paragraph length if source point was brief
+                    if len(words) < 40 and len(clean_base.split()) >= len(words):
+                        final_sub = f"{final_sub} The lecture emphasized these principles as key analytical foundations for system design and theoretical evaluation."
+
                     return {
                         "status": "success",
                         "submission_text": final_sub,
                         "word_count": len(final_sub.split()),
-                        "model": "Groq Llama 3.3 70B"
+                        "model": "Groq GPT-OSS 120B"
                     }
-            except Exception:
-                pass
+            except Exception as ge:
+                print(f"⚠️ [Submission Generation Notice] Groq failed ({ge}). Trying Gemini fallback...")
 
-        if hf_token and HAS_HF:
+        if gemini_key:
             try:
-                client = InferenceClient(api_key=hf_token)
-                resp = client.chat.completions.create(
-                    model="meta-llama/Llama-3.1-8B-Instruct",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content}
-                    ],
-                    temperature=0.3,
-                    max_tokens=300
-                )
-                raw_output = resp.choices.message.content.strip()
-                final_sub = self._clean_for_submission(raw_output, target_words=word_count)
-                return {
-                    "status": "success",
-                    "submission_text": final_sub,
-                    "word_count": len(final_sub.split()),
-                    "model": "Hugging Face Llama 3.1 8B"
+                import requests
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_key}"
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
                 }
+                r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+                if r.status_code == 200:
+                    raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    final_sub = self._clean_for_submission(raw_output, target_words=word_count + 20)
+                    return {
+                        "status": "success",
+                        "submission_text": final_sub,
+                        "word_count": len(final_sub.split()),
+                        "model": "Gemini 3.8 Flash"
+                    }
             except Exception:
                 pass
 
@@ -648,9 +713,8 @@ class Llama3PineconeRAGStore:
             "status": "success",
             "submission_text": final_sub,
             "word_count": len(final_sub.split()),
-            "model": "Local Fallback Engine"
+            "model": "Local Extractor"
         }
-
     def _build_summary_response(self, text: str, model_name: str, title: str, video_id: str) -> Dict[str, Any]:
         """Helper to extract timestamps and format summary response."""
         citations = []
@@ -686,7 +750,7 @@ class Llama3PineconeRAGStore:
         model_id: Optional[str] = None,
         user_email: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """SUMMARY-branch completion with exponential backoff, active model fallback, and Groq backup."""
+        """SUMMARY-branch completion: Uncut, chronological context processed by Groq or Gemini."""
         import requests
 
         target_video_id = str(video_id).strip() if video_id else ""
@@ -701,51 +765,12 @@ class Llama3PineconeRAGStore:
         )
         user_prompt = f"Task: {user_original_request}\n\nTranscript Content:\n{transcript_str}"
 
-        # 1. Primary path: Google Gemini with active production models and backoff
-        if gemini_key:
-            candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"]
-            payload = {
-                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096}
-            }
-            headers = {"Content-Type": "application/json"}
-
-            for model_name in candidate_models:
-                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
-                max_retries = 3
-
-                for attempt in range(max_retries):
-                    print(f"📜 [Full-Transcript Summary] Dispatching to {model_name} (Attempt {attempt + 1}/{max_retries})...")
-                    try:
-                        resp = requests.post(api_url, headers=headers, json=payload, timeout=90)
-                        
-                        if resp.status_code == 200:
-                            res_data = resp.json()
-                            final_answer = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                            return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
-
-                        # Retry on 503 (Overload) or 429 (Rate Limit)
-                        if resp.status_code in (503, 429):
-                            backoff = (2 ** attempt) + random.uniform(0.5, 1.5)
-                            print(f"⚠️ [Gemini {model_name} Busy ({resp.status_code})] Retrying in {backoff:.2f}s...")
-                            time.sleep(backoff)
-                            continue
-
-                        # Other status codes (e.g. 404): try next candidate model
-                        print(f"⚠️ [Gemini {model_name} Notice] Status {resp.status_code}: {resp.text[:140]}")
-                        break
-
-                    except requests.exceptions.RequestException as e:
-                        print(f"⚠️ [Gemini Network Warning] {e}")
-                        time.sleep(1.5)
-
-        # 2. Resilient Cloud Fallback: Groq Llama 3.3 70B
+        # 1. Groq GPT-OSS 120B
         if groq_key:
-            print("🚀 [Summary Fallback] Gemini overloaded or unavailable. Cascading to Groq Llama 3.3 70B...")
+            print("🚀 [Summary Engine] Dispatching to Groq GPT-OSS 120B...")
             try:
                 groq_payload = {
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "openai/gpt-oss-120b",
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
@@ -765,15 +790,36 @@ class Llama3PineconeRAGStore:
                 )
                 if r.status_code == 200:
                     ans = r.json()["choices"][0]["message"]["content"].strip()
-                    return self._build_summary_response(ans, "Groq Llama 3.3 70B (Failover)", title, target_video_id)
+                    return self._build_summary_response(ans, "Groq GPT-OSS 120B", title, target_video_id)
             except Exception as ge:
-                print(f"⚠️ [Groq Fallback Warning] {ge}")
+                print(f"⚠️ [Groq Summary Notice] {ge}")
 
-        raise RuntimeError("All LLM providers are currently experiencing high demand. Please try again in a moment.")
+        # 2. Google Gemini
+        if gemini_key:
+            candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                "systemInstruction": {"parts": [{"text": system_prompt}]},
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096}
+            }
+            headers = {"Content-Type": "application/json"}
+
+            for model_name in candidate_models:
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                try:
+                    resp = requests.post(api_url, headers=headers, json=payload, timeout=90)
+                    if resp.status_code == 200:
+                        res_data = resp.json()
+                        final_answer = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
+                except Exception as e:
+                    print(f"⚠️ [Gemini Summary Notice] {e}")
+
+        raise RuntimeError("All LLM providers failed to generate summary.")
 
     @staticmethod
     def check_llm_connectivity() -> Dict[str, Any]:
-        """Health check probe for configured LLM providers and the HF intent router."""
+        """Probes Groq and Gemini connectivity and intent router status."""
         import requests
         results = {}
         active = None
@@ -782,17 +828,10 @@ class Llama3PineconeRAGStore:
         probes = [
             (
                 "groq",
-                "Groq Llama 3.3 70B",
+                "Groq GPT-OSS 120B",
                 os.getenv("GROQ_API_KEY", ""),
                 "https://api.groq.com/openai/v1/models",
                 {"Authorization": f"Bearer {os.getenv('GROQ_API_KEY', '')}"}
-            ),
-            (
-                "huggingface",
-                "Hugging Face Llama 3.1 8B",
-                os.getenv("HUGGINGFACE_TOKEN", "") or os.getenv("HF_TOKEN", ""),
-                "https://huggingface.co/api/whoami-v2",
-                {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_TOKEN', '') or os.getenv('HF_TOKEN', '')}"}
             ),
             (
                 "gemini",
@@ -801,24 +840,11 @@ class Llama3PineconeRAGStore:
                 f"https://generativelanguage.googleapis.com/v1beta/models?key={os.getenv('GEMINI_API_KEY', '')}",
                 {}
             ),
-            (
-                "openai",
-                "OpenAI GPT-4o-mini",
-                os.getenv("OPENAI_API_KEY", ""),
-                "https://api.openai.com/v1/models",
-                {"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '')}"}
-            ),
         ]
 
         for provider_key, display_name, key, probe_url, headers in probes:
             if not key:
-                results[provider_key] = {
-                    "display": display_name,
-                    "configured": False,
-                    "reachable": False,
-                    "latency_ms": None,
-                    "error": "API key not configured"
-                }
+                results[provider_key] = {"display": display_name, "configured": False, "reachable": False, "error": "API key not configured"}
                 continue
 
             configured_count += 1
@@ -843,18 +869,19 @@ class Llama3PineconeRAGStore:
             if active is None and reachable:
                 active = provider_key
 
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", "") or os.getenv("HF_TOKEN", "")
-        router_configured = bool(hf_token)
-        results["hf_router"] = {
-            "display": f"HF Router ({os.getenv('LLAMA_MODEL', 'meta-llama/Llama-3.1-8B-Instruct')})",
-            "configured": router_configured,
-            "reachable": results.get("huggingface", {}).get("reachable", False),
-            "latency_ms": results.get("huggingface", {}).get("latency_ms"),
-            "error": None if router_configured else "Missing HUGGINGFACE_TOKEN"
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        router_ready = bool(groq_key or gemini_key)
+        results["intent_router"] = {
+            "display": "Fast LLM Router (Groq 20B / Gemini)",
+            "configured": router_ready,
+            "reachable": results.get("groq", {}).get("reachable", False) or results.get("gemini", {}).get("reachable", False),
+            "latency_ms": results.get("groq", {}).get("latency_ms") or results.get("gemini", {}).get("latency_ms"),
+            "error": None if router_ready else "Missing GROQ_API_KEY and GEMINI_API_KEY"
         }
 
         return {
-            "status": "ready" if any(r["reachable"] for k, r in results.items() if k != "hf_router") else "degraded",
+            "status": "ready" if any(r["reachable"] for k, r in results.items() if k != "intent_router") else "degraded",
             "active_provider": active,
             "configured_count": configured_count,
             "providers": results

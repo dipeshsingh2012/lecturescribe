@@ -117,11 +117,10 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
     """
     groq_key = os.getenv("GROQ_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
-    hf_token = os.getenv("HUGGINGFACE_TOKEN", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
     openai_base = os.getenv("LLAMA_OPENAI_BASE", os.getenv("LLAMA_API_BASE", ""))
     model_id = 'gemini-3.8-flash'
-    if not (groq_key or gemini_key or hf_token or openai_key or openai_base):
+    if not (groq_key or gemini_key or openai_key or openai_base):
         return None
 
     sentences = reconstruct_sentences(cues)
@@ -148,7 +147,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
             from openai import OpenAI
             client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
             resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -188,29 +187,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
         except Exception as e:
             print(f"[LLM Gemini Notice] Skipped: {e}")
 
-    # 3. HuggingFace Inference Client
-    if hf_token:
-        try:
-            from huggingface_hub import InferenceClient
-            client = InferenceClient(model=model_id, token=hf_token)
-            resp = client.chat_completion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=1024,
-                temperature=0.2
-            )
-            raw = resp.choices[0].message.content.strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-            data = json.loads(raw)
-            if isinstance(data, list) and len(data) >= 2:
-                return data
-        except Exception as e:
-            print(f"[LLM HF Notice] Skipped: {e}")
-
-    # 4. OpenAI / Ollama compatible endpoint
+    # 3. OpenAI / Ollama compatible endpoint
     if openai_key or openai_base:
         try:
             from openai import OpenAI

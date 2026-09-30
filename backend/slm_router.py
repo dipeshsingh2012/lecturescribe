@@ -1,21 +1,27 @@
 # ===================================================================
 # File: backend/slm_router.py
 # -------------------------------------------------------------------
-# Hardened Hugging Face InferenceClient Cloud Intent Router
+# Fast Structured LLM Intent Router for LectureScribe
+# Routes queries via Groq (openai/gpt-oss-20b) with Gemini fallback.
 # ===================================================================
 
 import os
-import re
+import json
+import requests
 from typing import List, Dict, Any, Optional
-try:
-    from huggingface_hub import InferenceClient
-    HAS_HF = True
-except ImportError:
-    InferenceClient = None
-    HAS_HF = False
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Ensure .env is explicitly loaded
+_env_file = Path(__file__).resolve().parent.parent / ".env"
+if _env_file.exists():
+    load_dotenv(dotenv_path=_env_file, override=True)
+else:
+    load_dotenv(override=True)
 
 INTENT_SUMMARY = "SUMMARY"
 INTENT_CHAT = "CHAT"
+
 
 def slm_classify_intent(
     query: str,
@@ -23,83 +29,95 @@ def slm_classify_intent(
     video_title: Optional[str] = None,
 ) -> str:
     """
-    Classifies a user query into SUMMARY or CHAT via an explicit dual-stage layer.
-    Uses regex rules first for perfect keyword catching, then executes an HF Cloud call.
+    Classifies a user query into SUMMARY or CHAT using a fast, high-capability LLM.
+    Guarantees structured output via JSON mode.
     """
     if not query or not query.strip():
         return INTENT_CHAT
 
-    clean_query = query.strip().lower()
-
-    # =================================================================
-    # LAYER 1: DETERMINISTIC HEURISTIC GATEWAY (Failsafe for Summaries)
-    # =================================================================
-    # If the student explicitly demands a summary or reading guide, force it immediately.
-    summary_keywords = [
-        r"\bsummary\b", r"\bsummarise\b", r"\bsummarize\b", r"\boverview\b", 
-        r"\brecap\b", r"\bwalkthrough\b", r"\bread\b", r"\bguide\b", r"\bnotes\b",
-        r"\btldr\b", r"\bbreakdown\b", r"\btakeaway\b", r"\btakeaways\b"
-    ]
-    if any(re.search(pattern, clean_query) for pattern in summary_keywords):
-        print("🧭 [Router Layer 1] Match Found! Forcing SUMMARY Route via Heuristic Match.")
-        return INTENT_SUMMARY
-
-    # =================================================================
-    # LAYER 2: HUGGING FACE SERVERLESS CLOUD ROUTER
-    # =================================================================
-    if not HAS_HF:
-        print("⚠️ [Router Warning] 'huggingface_hub' not installed. Defaulting to CHAT.")
-        return INTENT_CHAT
-    model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-    hf_token = os.getenv("HUGGINGFACE_TOKEN","")
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
 
     system_prompt = (
-        "You are an absolute, strict binary intent router for an academic lecture chatbot. "
-        "Your task is to classify the user's input query into exactly one word: either 'SUMMARY' or 'CHAT'.\n\n"
-        "DEFINITIONS:\n"
-        "- SUMMARY: The user wants an overview, full lecture notes, structured takeaways, or a long-form chronological reading guide.\n"
-        "- CHAT: The user is asking a specific question, a technical formula derivation, an implementation problem, or a single pinpoint detail.\n\n"
-        "CRITICAL CONSTRAINT: Output ONLY the single uppercase word 'SUMMARY' or 'CHAT'. Do not include punctuation, reasoning, markdown backticks, or introduction text."
+        "You are an intent router for an academic lecture learning platform. "
+        "Classify the student query into one of two categories:\n\n"
+        "1. SUMMARY: The user wants an overview, comprehensive lecture notes, key takeaways, "
+        "a study guide, core definitions, or a chronological reading/walkthrough across the entire lecture.\n"
+        "2. CHAT: The user is asking a specific targeted question, a formula derivation, code/concept clarification, "
+        "a syllabus/university comparison, or looking for a specific topic segment.\n\n"
+        "You must respond ONLY with a valid JSON object matching this schema:\n"
+        '{"intent": "SUMMARY"} or {"intent": "CHAT"}'
     )
 
     user_payload_lines = []
     if video_title:
-        user_payload_lines.append(f"Lecture File Title: {video_title}")
+        user_payload_lines.append(f"Lecture Title: {video_title}")
     if chat_history:
         history_snippet = [
-            f"{(m.get('role') or m.get('sender') or 'user').upper()}: {(m.get('content') or m.get('text') or '')[:150]}"
-            for m in chat_history[-3:]
+            f"{(m.get('role') or m.get('sender') or 'user').upper()}: {(m.get('content') or m.get('text') or '')[:120]}"
+            for m in chat_history[-2:]
             if (m.get('content') or m.get('text'))
         ]
         if history_snippet:
-            user_payload_lines.append("Recent chat history turns:\n" + "\n".join(history_snippet))
-            
-    user_payload_lines.append(f"Target Input Query to Classify: {query.strip()}")
-    user_payload_lines.append("Classification token assignment (SUMMARY or CHAT):")
+            user_payload_lines.append("Recent Conversation:\n" + "\n".join(history_snippet))
+
+    user_payload_lines.append(f"User Query to Classify: {query.strip()}")
     user_prompt = "\n\n".join(user_payload_lines)
 
-    try:
-        client = InferenceClient(api_key=hf_token)
-        
-        completion = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.0,      # Absolute zero for greedy token extraction
-            max_tokens=3,         # Hard cap to cut off any verbose filler
-            top_p=0.001
-        )
-        
-        raw_output = completion.choices.message.content or ""
-        text = raw_output.strip().upper()
-        text = re.sub(r"[^A-Z]", "", text) # Isolate pure alphanumeric response tokens
+    # 1. Primary: Groq Fast Classification (openai/gpt-oss-20b)
+    if groq_key:
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "openai/gpt-oss-20b",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.0,
+                "max_tokens": 50
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = json.loads(content)
+                intent = str(parsed.get("intent", "")).upper()
+                if intent in (INTENT_SUMMARY, INTENT_CHAT):
+                    print(f"🧭 [LLM Router (Groq 20B)] Classified as: {intent}")
+                    return intent
+        except Exception as ge:
+            print(f"⚠️ [LLM Router Notice] Groq classification failed ({ge}). Trying Gemini...")
 
-        if "SUMMARY" in text:
-            return INTENT_SUMMARY
-        return INTENT_CHAT
-        
-    except Exception as e:
-        print(f"⚠️ [Hugging Face Cloud Router Exception]: {e}. Defaulting to CHAT path.")
-        return INTENT_CHAT
+    # 2. Fallback: Google Gemini (gemini-3.8-flash)
+    if gemini_key:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                "systemInstruction": {"parts": [{"text": system_prompt}]},
+                "generationConfig": {
+                    "temperature": 0.0,
+                    "responseMimeType": "application/json",
+                    "maxOutputTokens": 50
+                }
+            }
+            resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=6)
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                parsed = json.loads(content)
+                intent = str(parsed.get("intent", "")).upper()
+                if intent in (INTENT_SUMMARY, INTENT_CHAT):
+                    print(f"🧭 [LLM Router (Gemini 3.8)] Classified as: {intent}")
+                    return intent
+        except Exception as e:
+            print(f"⚠️ [LLM Router Notice] Gemini classification failed ({e})")
+
+    print("⚠️ [LLM Router Warning] Router LLMs unavailable. Defaulting to CHAT.")
+    return INTENT_CHAT

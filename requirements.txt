@@ -18,7 +18,6 @@ redis>=5.0.0
 # Search & Vector RAG Triad Services
 algoliasearch>=4.0.0,<5.0.0
 pinecone>=3.0.0
-huggingface_hub>=0.20.0
 
 # Google Drive Cloud Upload & Google Cloud Storage
 google-api-python-client>=2.100.0

@@ -62,3 +62,7 @@ yarn-error.log*
 Thumbs.db
 project_bundle.txt
 bundle_script.py
+bundle_frontend.py
+bundle_project.py
+project_full_bundle.txt
+frontend_components_bundle.txt

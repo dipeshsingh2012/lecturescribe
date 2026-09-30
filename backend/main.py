@@ -49,7 +49,7 @@ from backend.summary_generator import generate_summary_sections
 from backend.redis_service import redis_cache
 from backend.gcs_storage import gcs_storage_service
 
-# Native Hugging Face Intent Router Integration
+# LLM Intent Router Integration
 from backend.slm_router import slm_classify_intent, INTENT_SUMMARY, INTENT_CHAT
 
 
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ [Algolia Startup Warning]: {e}")
 
-    # 4. Cloud LLM Providers & Local Hugging Face SLM connectivity
+    # 4. Cloud LLM Providers & Router connectivity
     print("🤖 [4/4] Probing Cloud LLM Providers & Intent Router...")
     try:
         pinecone_rag_engine.check_llm_connectivity()
@@ -119,7 +119,7 @@ class ChatRequest(BaseModel):
     video_title: Optional[str] = None
     cues: Optional[List[Dict[str, str]]] = None
     user_email: Optional[str] = None
-    model_id: Optional[str] = None
+    model_id: Optional[str] = None  # Retained as optional ignore to maintain backward compatibility
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
     chat_history: Optional[List[Dict[str, Any]]] = None
@@ -131,7 +131,7 @@ class RAGQueryRequest(BaseModel):
     cues: Optional[List[Dict[str, str]]] = None
     top_k: Optional[int] = 10
     user_email: Optional[str] = None
-    model_id: Optional[str] = None
+    model_id: Optional[str] = None  # Retained as optional ignore
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
     chat_history: Optional[List[Dict[str, Any]]] = None
@@ -301,11 +301,6 @@ def algolia_search(req: AlgoliaSearchRequest):
     hits = algolia_service.search(req.query, video_id=req.video_id, limit=req.limit or 20)
     return {"hits": hits, "count": len(hits)}
 
-@app.get("/api/ai/models")
-def get_ai_models():
-    """Return available LLM models and their configuration status."""
-    return {"models": pinecone_rag_engine.get_supported_models()}
-
 @app.post("/api/rag/query")
 def rag_query(req: RAGQueryRequest):
     """Perform grounded retrieval + multi-model answer synthesis with transparent logging."""
@@ -316,25 +311,25 @@ def rag_query(req: RAGQueryRequest):
     print("\n" + "=" * 60)
     print(f"📥 [API /api/rag/query] === Incoming RAG Query ===")
     print(f"   Query: '{req.query}'")
-    print(f"   Video ID: '{req.video_id}' | Title: '{req.video_title or 'Auto'}' | Model: '{req.model_id or 'auto'}'")
+    print(f"   Video ID: '{req.video_id}' | Title: '{req.video_title or 'Auto'}'")
     print(f"   Top K: {req.top_k} | Web Search Enabled: {req.enable_web_search} | Bypass Cache: {req.bypass_cache}")
 
     # 1. Check Hosted Redis Cache First
     if not req.bypass_cache and req.video_id and redis_cache:
-        cached_result = redis_cache.get_query(req.video_id, req.query, req.model_id or "")
+        cached_result = redis_cache.get_query(req.video_id, req.query, "auto")
         if cached_result:
             elapsed = time.time() - t_start
             print(f"⚡ [API /api/rag/query Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
             print("=" * 60 + "\n")
             return cached_result
 
-    # 2. Local Hugging Face SLM Intent Router: classify SUMMARY vs CHAT
+    # 2. Structured LLM Intent Router: classify SUMMARY vs CHAT
     intent = slm_classify_intent(
         query=req.query,
         chat_history=req.chat_history,
         video_title=req.video_title,
     )
-    print(f"🧭 [SLM Router /api/rag/query] Intent classified via HF Pipeline as: {intent}")
+    print(f"🧭 [Intent Router /api/rag/query] Intent classified as: {intent}")
 
     try:
         if intent == INTENT_SUMMARY:
@@ -356,19 +351,27 @@ def rag_query(req: RAGQueryRequest):
                 lecture_title=lecture_title,
                 video_id=req.video_id,
                 user_original_request=req.query,
-                model_id=req.model_id,
                 user_email=req.user_email,
             )
-        else:
+        elif intent == INTENT_CHAT:
             print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
-            # CHAT branch: existing hybrid Pinecone + Algolia + RRF + agent tool loop
             result = pinecone_rag_engine.query_rag(
                 req.query,
                 video_id=req.video_id,
                 video_title=req.video_title,
                 cues=req.cues,
                 top_k=req.top_k or 10,
-                model_id=req.model_id,
+                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+                user_email=req.user_email,
+                chat_history=req.chat_history
+            )
+        else:
+            result = pinecone_rag_engine.query_rag(
+                req.query,
+                video_id=req.video_id,
+                video_title=req.video_title,
+                cues=req.cues,
+                top_k=req.top_k or 10,
                 enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
                 user_email=req.user_email,
                 chat_history=req.chat_history
@@ -392,12 +395,11 @@ def rag_query(req: RAGQueryRequest):
         else:
             raise HTTPException(status_code=500, detail=f"{err_type}: {err_msg}")
 
-    # Auto-generate academic submission version (~120 words, human graduate persona)
+    # Auto-generate academic submission version (~120 words)
     sub_res = pinecone_rag_engine.generate_submission_version(
         original_text=result.get("answer", ""),
         video_id=req.video_id,
-        word_count=120,
-        model_id=req.model_id
+        word_count=120
     )
     result["submission_text"] = sub_res.get("submission_text", "")
     result["submission_word_count"] = sub_res.get("word_count", 0)
@@ -417,9 +419,9 @@ def rag_query(req: RAGQueryRequest):
         except Exception as e:
             print(f"⚠️ [Chat Log Notice]: {e}")
 
-    # 2. Store in Hosted Redis Cache
+    # Store in Hosted Redis Cache
     if req.video_id and redis_cache:
-        redis_cache.set_query(req.video_id, req.query, req.model_id or "", result)
+        redis_cache.set_query(req.video_id, req.query, "auto", result)
 
     elapsed = time.time() - t_start
     print(f"✅ [API /api/rag/query] Completed in {elapsed:.2f}s | Citations: {len(result.get('citations', []))} | Model: {result.get('model')}")
@@ -444,7 +446,7 @@ def chat_with_transcript(req: ChatRequest):
 
     # 1. Check Hosted Redis Cache First
     if not req.bypass_cache and video_id and video_id != "active" and redis_cache:
-        cached_result = redis_cache.get_query(video_id, user_prompt, req.model_id or "")
+        cached_result = redis_cache.get_query(video_id, user_prompt, "auto")
         if cached_result:
             elapsed = time.time() - t_start
             print(f"⚡ [API /api/chat Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
@@ -459,13 +461,13 @@ def chat_with_transcript(req: ChatRequest):
                 "cached": True
             }
 
-    # 2. Local Hugging Face SLM Intent Router: classify SUMMARY vs CHAT
+    # 2. Structured LLM Intent Router: classify SUMMARY vs CHAT
     intent = slm_classify_intent(
         query=user_prompt,
         chat_history=req.chat_history,
         video_title=title,
     )
-    print(f"🧭 [SLM Router /api/chat] Intent classified via HF Pipeline as: {intent}")
+    print(f"🧭 [Intent Router /api/chat] Intent classified as: {intent}")
 
     if req.cues is not None and len(req.cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
         pinecone_rag_engine.ingest_transcript(video_id, title, req.cues)
@@ -491,10 +493,9 @@ def chat_with_transcript(req: ChatRequest):
                 lecture_title=lecture_title,
                 video_id=video_id,
                 user_original_request=user_prompt,
-                model_id=req.model_id,
                 user_email=req.user_email,
             )
-        else:
+        elif intent == INTENT_CHAT:
             print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
             rag_res = pinecone_rag_engine.query_rag(
                 user_prompt,
@@ -502,7 +503,17 @@ def chat_with_transcript(req: ChatRequest):
                 video_title=title,
                 cues=cues,
                 top_k=10,
-                model_id=req.model_id,
+                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+                user_email=req.user_email,
+                chat_history=req.chat_history
+            )
+        else:
+            rag_res = pinecone_rag_engine.query_rag(
+                user_prompt,
+                video_id=video_id,
+                video_title=title,
+                cues=cues,
+                top_k=10,
                 enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
                 user_email=req.user_email,
                 chat_history=req.chat_history
@@ -530,8 +541,7 @@ def chat_with_transcript(req: ChatRequest):
     sub_res = pinecone_rag_engine.generate_submission_version(
         original_text=reply,
         video_id=video_id,
-        word_count=120,
-        model_id=req.model_id
+        word_count=120
     )
     sub_text = sub_res.get("submission_text", "")
     sub_word_count = sub_res.get("word_count", 0)
@@ -551,7 +561,7 @@ def chat_with_transcript(req: ChatRequest):
     except Exception as e:
         print(f"⚠️ [Chat Log Notice]: {e}")
 
-    # 2. Store in Hosted Redis Cache
+    # Store in Hosted Redis Cache
     if video_id and video_id != "active" and redis_cache:
         cache_data = {
             "answer": reply,
@@ -563,7 +573,7 @@ def chat_with_transcript(req: ChatRequest):
             "lecture_title": title,
             "video_id": video_id
         }
-        redis_cache.set_query(video_id, user_prompt, req.model_id or "", cache_data)
+        redis_cache.set_query(video_id, user_prompt, "auto", cache_data)
 
     elapsed = time.time() - t_start
     print(f"✅ [API /api/chat] Completed in {elapsed:.2f}s | Citations: {len(citations)} | Model: {rag_res.get('model')}")
@@ -629,8 +639,7 @@ def condense_for_submission(req: SubmissionRequest):
     return pinecone_rag_engine.generate_submission_version(
         original_text=req.original_text,
         video_id=req.video_id or "",
-        word_count=req.word_count or 120,
-        model_id=req.model_id
+        word_count=req.word_count or 120
     )
 
 

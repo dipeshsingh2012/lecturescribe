@@ -3,10 +3,8 @@ import {
   Box,
   Paper,
   Avatar,
-  Typography,
-  Button
+  Typography
 } from '@mui/material';
-import GoogleIcon from '../common/GoogleIcon';
 
 export default function HeroBanner({
   googleUser,
@@ -101,7 +99,7 @@ export default function HeroBanner({
             </Typography>
           </Paper>
         </Box>
-      ) : ''}
+      ) : null}
     </Paper>
   );
 }

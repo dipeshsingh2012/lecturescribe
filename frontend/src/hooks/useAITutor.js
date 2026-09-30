@@ -6,8 +6,6 @@ export function useAITutor(activeData, googleUser) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
-  const [availableModels, setAvailableModels] = useState([]);
-  const [selectedModel, setSelectedModel] = useState('gemini-3.8-flash');
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [viewMode, setViewMode] = useState('learning'); // 'learning' or 'submission'
   const [submissionSummaries, setSubmissionSummaries] = useState({});
@@ -15,27 +13,6 @@ export function useAITutor(activeData, googleUser) {
   const [copiedPromptId, setCopiedPromptId] = useState(null);
   const chatEndRef = useRef(null);
   const chatInputRef = useRef(null);
-
-  // Fetch available AI models only when active lecture/tutor is loaded
-  useEffect(() => {
-    if (!activeData || availableModels.length > 0) return;
-
-    fetch(`${API_BASE}/api/ai/models`)
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.models && data.models.length > 0) {
-          setAvailableModels(data.models);
-          const rec = data.models.find(m => m.is_recommended && m.is_configured);
-          const firstConf = data.models.find(m => m.is_configured);
-          if (rec) {
-            setSelectedModel(rec.id);
-          } else if (firstConf) {
-            setSelectedModel(firstConf.id);
-          }
-        }
-      })
-      .catch(err => console.warn('Could not load AI models list:', err));
-  }, [activeData, availableModels.length]);
 
   // Auto scroll chat to bottom
   useEffect(() => {
@@ -105,7 +82,6 @@ export function useAITutor(activeData, googleUser) {
         body: JSON.stringify({
           query: textToSend,
           video_id: activeData.videoId,
-          model: selectedModel,
           enable_web_search: webSearchEnabled,
           user_email: googleUser?.email || null
         })
@@ -118,7 +94,7 @@ export function useAITutor(activeData, googleUser) {
           sender: 'bot',
           text: data.answer,
           citations: data.citations || [],
-          model: data.model || selectedModel,
+          model: data.model || 'Groq GPT-OSS 120B',
           web_sources: data.web_sources || [],
           submission_text: data.submission_text || null
         };
@@ -153,10 +129,9 @@ export function useAITutor(activeData, googleUser) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          original_answer: originalText,
+          original_text: originalText,
           video_id: videoId,
-          target_word_count: 120,
-          model: selectedModel
+          word_count: 120
         })
       });
 
@@ -195,9 +170,6 @@ export function useAITutor(activeData, googleUser) {
     chatInput,
     setChatInput,
     chatLoading,
-    availableModels,
-    selectedModel,
-    setSelectedModel,
     webSearchEnabled,
     setWebSearchEnabled,
     viewMode,

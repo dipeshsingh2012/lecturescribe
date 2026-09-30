@@ -206,9 +206,6 @@ export default function App() {
             webSearchEnabled={tutor.webSearchEnabled}
             setWebSearchEnabled={tutor.setWebSearchEnabled}
             clearChatHistory={tutor.clearChatHistory}
-            selectedModel={tutor.selectedModel}
-            setSelectedModel={tutor.setSelectedModel}
-            availableModels={tutor.availableModels}
             chatMessages={tutor.chatMessages}
             setChatMessages={tutor.setChatMessages}
             viewMode={tutor.viewMode}

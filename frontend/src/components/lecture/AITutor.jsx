@@ -156,10 +156,10 @@ export default function AITutor({
                 boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
               }}
             >
-              {(availableModels.length > 0 ? availableModels : [
-                { id: 'gemini-3.8-flash', name: 'Gemini 2.0 Flash', badge: '⚡ Free 1.5k/day' },
-                { id: 'llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B', badge: '🚀 Free 1k/day' },
-                { id: 'meta-llama/Llama-3.1-8B-Instruct', name: 'HF Llama 3.1 8B', badge: '🤗 Active Free' }
+             {(availableModels.length > 0 ? availableModels : [
+                { id: 'openai/gpt-oss-120b', name: 'Groq GPT-OSS 120B', badge: '🚀 Primary' },
+                { id: 'openai/gpt-oss-20b', name: 'Groq GPT-OSS 20B', badge: '⚡ Fast' },
+                { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', badge: '⚡ Long Context' }
               ]).map(m => (
                 <option key={m.id} value={m.id}>
                   {m.badge ? `${m.name} (${m.badge})` : m.name}

@@ -157,7 +157,7 @@ export default function AITutor({
               }}
             >
               {(availableModels.length > 0 ? availableModels : [
-                { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', badge: '⚡ Free 1.5k/day' },
+                { id: 'gemini-3.8-flash', name: 'Gemini 2.0 Flash', badge: '⚡ Free 1.5k/day' },
                 { id: 'llama-3.3-70b-versatile', name: 'Groq Llama 3.3 70B', badge: '🚀 Free 1k/day' },
                 { id: 'meta-llama/Llama-3.1-8B-Instruct', name: 'HF Llama 3.1 8B', badge: '🤗 Active Free' }
               ]).map(m => (

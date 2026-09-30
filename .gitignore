@@ -60,3 +60,5 @@ yarn-error.log*
 *.swo
 .DS_Store
 Thumbs.db
+project_bundle.txt
+bundle_script.py

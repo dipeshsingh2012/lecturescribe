@@ -117,11 +117,10 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
     """
     groq_key = os.getenv("GROQ_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
-    hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
+    hf_token = os.getenv("HUGGINGFACE_TOKEN", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
     openai_base = os.getenv("LLAMA_OPENAI_BASE", os.getenv("LLAMA_API_BASE", ""))
-    model_id = os.getenv("LLAMA_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-
+    model_id = 'gemini-3.8-flash'
     if not (groq_key or gemini_key or hf_token or openai_key or openai_base):
         return None
 
@@ -172,7 +171,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
             from openai import OpenAI
             client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
             resp = client.chat.completions.create(
-                model="gemini-2.0-flash",
+                model="gemini-3.8-flash",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}

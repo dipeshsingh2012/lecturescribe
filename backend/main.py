@@ -49,6 +49,8 @@ from backend.summary_generator import generate_summary_sections
 from backend.redis_service import redis_cache
 from backend.gcs_storage import gcs_storage_service
 
+# Native Hugging Face Intent Router Integration
+from backend.slm_router import slm_classify_intent, INTENT_SUMMARY, INTENT_CHAT
 
 
 @asynccontextmanager
@@ -59,10 +61,10 @@ async def lifespan(app: FastAPI):
     print("=" * 60)
 
     # 1. Relational Database verification
-    print("📦 [1/3] Verifying Relational DB (PostgreSQL)...")
+    print("📦 [1/4] Verifying Relational DB (PostgreSQL)...")
     try:
         if db_manager and db_manager.postgres_url:
-            db_manager._init_postgres_schema()
+            db_manager._init_postgres_schema(_first_init=False)
             print("✅ [Database Startup] PostgreSQL database ready.")
         else:
             print("⚠️ [Database Startup Warning]: DATABASE_URL not yet configured. Deferring schema initialization.")
@@ -70,20 +72,50 @@ async def lifespan(app: FastAPI):
         print(f"⚠️ [Database Startup Warning]: {e}")
 
     # 2. Pinecone Index creation & connection
-    print("🌲 [2/3] Verifying/Creating Pinecone Vector Index...")
+    print("🌲 [2/4] Verifying/Creating Pinecone Vector Index...")
     try:
         pinecone_rag_engine.setup_index()
     except Exception as e:
         print(f"⚠️ [Pinecone Startup Warning]: {e}")
 
     # 3. Algolia Search Index verification & settings
-    print("🔍 [3/3] Verifying/Configuring Algolia Search Index...")
+    print("🔍 [3/4] Verifying/Configuring Algolia Search Index...")
     try:
         algolia_service.setup_index()
     except Exception as e:
         print(f"⚠️ [Algolia Startup Warning]: {e}")
 
-    # 4. Optional warm-up pre-index if WARMUP_VIDEO_ID environment variable is set
+    # 4. Cloud LLM Providers & Router connectivity
+    print("🤖 [4/4] Probing Cloud LLM Providers & Intent Router...")
+    try:
+        llm_status = pinecone_rag_engine.check_llm_connectivity()
+        providers = llm_status.get("providers", {})
+        active_key = llm_status.get("active_provider")
+        
+        reachable_cloud = sum(1 for k, v in providers.items() if k != "hf_router" and v.get("reachable"))
+        total_cloud_configured = sum(1 for k, v in providers.items() if k != "hf_router" and v.get("configured"))
+        
+        print(f"   Active cloud provider: {active_key or 'NONE'}")
+        print(f"   Cloud LLMs reachable:  {reachable_cloud}/{total_cloud_configured}")
+        
+        for pk, pv in providers.items():
+            if pk == "hf_router":
+                continue
+            if not pv.get("configured"):
+                continue
+            mark = "✅" if pv.get("reachable") else "⚠️"
+            lat = pv.get("latency_ms")
+            lat_str = f"{lat}ms" if lat is not None else "n/a"
+            err = f" — {pv.get('error')}" if pv.get("error") else ""
+            print(f"   {mark} [{pk:>12}] {pv.get('display'):<28} {lat_str:<10}{err}")
+            
+        router_info = providers.get("hf_router", {})
+        rmark = "✅" if router_info.get("reachable") else "⚠️"
+        print(f"   {rmark} [hf-router   ] {router_info.get('display'):<28} {'Ready' if router_info.get('reachable') else router_info.get('error')}")
+    except Exception as e:
+        print(f"⚠️ [LLM Startup Warning]: Could not complete connectivity probe: {e}")
+
+    # 5. Optional warm-up pre-index if WARMUP_VIDEO_ID environment variable is set
     warmup_vid = os.getenv("WARMUP_VIDEO_ID")
     if warmup_vid:
         try:
@@ -96,7 +128,7 @@ async def lifespan(app: FastAPI):
             print(f"⚠️ [Warmup Notice]: {e}")
 
     print("=" * 60)
-    print("✨ All Triad Engines & Indexes Ready!")
+    print("✨ All Engines, Indexes & LLM Providers Ready!")
     print("=" * 60 + "\n")
 
     yield
@@ -157,7 +189,6 @@ class RegenerateSummaryRequest(BaseModel):
     video_id: str
 
 
-
 @app.get("/health")
 def health_check():
     db_status = "PostgreSQL Ready" if (db_manager and db_manager.postgres_url) else "Pending Configuration"
@@ -165,6 +196,10 @@ def health_check():
     pinecone_idx = getattr(pinecone_rag_engine, "index_name", "lecturescribe-rag-index")
     pinecone_ns = getattr(pinecone_rag_engine, "namespace", "lecturescribe_v1")
     redis_info = redis_cache.get_status() if redis_cache else {"status": "Not configured"}
+    try:
+        llm_info = pinecone_rag_engine.check_llm_connectivity()
+    except Exception as e:
+        llm_info = {"status": "probe_error", "error": str(e), "providers": {}}
     return {
         "status": "ok",
         "service": "lecturescribe-triad-api",
@@ -172,7 +207,8 @@ def health_check():
         "algolia_index": algolia_idx,
         "pinecone_index": pinecone_idx,
         "pinecone_namespace": pinecone_ns,
-        "redis_cache": redis_info
+        "redis_cache": redis_info,
+        "llm_providers": llm_info
     }
 
 @app.get("/api/course/{course_name}/lecture/{video_id}")
@@ -329,25 +365,57 @@ def rag_query(req: RAGQueryRequest):
             print("=" * 60 + "\n")
             return cached_result
 
+    # 2. Local Hugging Face SLM Intent Router: classify SUMMARY vs CHAT
+    intent = slm_classify_intent(
+        query=req.query,
+        chat_history=req.chat_history,
+        video_title=req.video_title,
+    )
+    print(f"🧭 [SLM Router /api/rag/query] Intent classified via HF Pipeline as: {intent}")
+
     try:
-        result = pinecone_rag_engine.query_rag(
-            req.query,
-            video_id=req.video_id,
-            video_title=req.video_title,
-            cues=req.cues,
-            top_k=req.top_k or 10,
-            model_id=req.model_id,
-            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
-            user_email=req.user_email,
-            chat_history=req.chat_history
-        )
+        if intent == INTENT_SUMMARY:
+            print("🚀 ROUTING EXECUTION: SUMMARY INTENT — Streaming uncut chronological context straight to Cloud LLM")
+            if not req.video_id:
+                raise ValueError("SUMMARY intent requires a valid video_id to fetch the full transcript.")
+            saved = db_manager.get_saved_video(req.video_id)
+            if not saved or not saved.get("cues"):
+                raise ValueError(f"No transcript cues found in database for video {req.video_id}. SUMMARY requires the full transcript.")
+            cues: List[Dict[str, str]] = saved["cues"]
+            lecture_title = saved.get("title") or req.video_title or "Lecture"
+            full_transcript_with_timestamps = "\n".join(
+                f"[{cue['time']}] {cue['text']}"
+                for cue in cues
+                if cue.get("text", "").strip()
+            )
+            result = pinecone_rag_engine.generate_full_transcript_summary(
+                transcript_str=full_transcript_with_timestamps,
+                lecture_title=lecture_title,
+                video_id=req.video_id,
+                user_original_request=req.query,
+                model_id=req.model_id,
+                user_email=req.user_email,
+            )
+        else:
+            print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
+            # CHAT branch: existing hybrid Pinecone + Algolia + RRF + agent tool loop
+            result = pinecone_rag_engine.query_rag(
+                req.query,
+                video_id=req.video_id,
+                video_title=req.video_title,
+                cues=req.cues,
+                top_k=req.top_k or 10,
+                model_id=req.model_id,
+                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+                user_email=req.user_email,
+                chat_history=req.chat_history
+            )
     except Exception as e:
         elapsed = time.time() - t_start
         print(f"\n❌ [API /api/rag/query Error] Failed after {elapsed:.2f}s:")
         traceback.print_exc()
         print("=" * 60 + "\n")
         
-        # Fail-fast error propagation with explicit HTTP statuses
         err_type = type(e).__name__
         err_msg = str(e)
         if "Timeout" in err_type or "timed out" in err_msg.lower():
@@ -428,22 +496,54 @@ def chat_with_transcript(req: ChatRequest):
                 "cached": True
             }
 
+    # 2. Local Hugging Face SLM Intent Router: classify SUMMARY vs CHAT
+    intent = slm_classify_intent(
+        query=user_prompt,
+        chat_history=req.chat_history,
+        video_title=title,
+    )
+    print(f"🧭 [SLM Router /api/chat] Intent classified via HF Pipeline as: {intent}")
+
     if req.cues is not None and len(req.cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
         pinecone_rag_engine.ingest_transcript(video_id, title, req.cues)
         algolia_service.ingest_cues(video_id, title, req.cues)
 
     try:
-        rag_res = pinecone_rag_engine.query_rag(
-            user_prompt,
-            video_id=video_id,
-            video_title=title,
-            cues=cues,
-            top_k=10,
-            model_id=req.model_id,
-            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
-            user_email=req.user_email,
-            chat_history=req.chat_history
-        )
+        if intent == INTENT_SUMMARY:
+            print("🚀 ROUTING EXECUTION: SUMMARY INTENT — Streaming uncut chronological context straight to Cloud LLM")
+            if not video_id or video_id == "active":
+                raise ValueError("SUMMARY intent requires a valid video_id to fetch the full transcript.")
+            saved = db_manager.get_saved_video(video_id)
+            if not saved or not saved.get("cues"):
+                raise ValueError(f"No transcript cues found in database for video {video_id}. SUMMARY requires the full transcript.")
+            cues_list: List[Dict[str, str]] = saved["cues"]
+            lecture_title = saved.get("title") or title or "Lecture"
+            full_transcript_with_timestamps = "\n".join(
+                f"[{cue['time']}] {cue['text']}"
+                for cue in cues_list
+                if cue.get("text", "").strip()
+            )
+            rag_res = pinecone_rag_engine.generate_full_transcript_summary(
+                transcript_str=full_transcript_with_timestamps,
+                lecture_title=lecture_title,
+                video_id=video_id,
+                user_original_request=user_prompt,
+                model_id=req.model_id,
+                user_email=req.user_email,
+            )
+        else:
+            print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
+            rag_res = pinecone_rag_engine.query_rag(
+                user_prompt,
+                video_id=video_id,
+                video_title=title,
+                cues=cues,
+                top_k=10,
+                model_id=req.model_id,
+                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+                user_email=req.user_email,
+                chat_history=req.chat_history
+            )
     except Exception as e:
         elapsed = time.time() - t_start
         print(f"\n❌ [API /api/chat Error] Failed after {elapsed:.2f}s:")
@@ -904,14 +1004,12 @@ def upload_lecture_bundle_to_gdrive(
     if not video_id:
         raise HTTPException(status_code=400, detail="A valid video_id or Vimeo URL is required.")
 
-    # Check configuration
     if not req.access_token:
         raise HTTPException(
             status_code=400,
             detail="Please sign in with Google in the export modal to authorize uploading this lecture to your Google Drive."
         )
 
-    # 1. Fetch or load video cues, VTT, and title
     saved = db_manager.get_saved_video(video_id)
     cues: List[Dict[str, str]] = []
     vtt_content = ""
@@ -938,13 +1036,11 @@ def upload_lecture_bundle_to_gdrive(
     except Exception as e:
         print(f"⚠️ [Vimeo Config Notice during bundle upload]: {e}")
 
-    # Fallback to saved DB cues if live fetch was skipped or failed
     if not cues and saved and saved.get("cues"):
         cues = saved.get("cues", [])
         if not title or title == "Lecture":
             title = saved.get("title", f"Lecture {video_id}")
 
-    # Build summary markdown dynamically if not explicitly provided
     summary_md = req.summary_content
     if not summary_md:
         sections = saved.get("summarySections") if saved else None
@@ -960,10 +1056,8 @@ def upload_lecture_bundle_to_gdrive(
                 s_lines.append("")
             summary_md = "\n".join(s_lines)
 
-    # Create background job
     job_id = google_drive_service.create_job(video_id, title)
 
-    # Schedule background execution
     background_tasks.add_task(
         google_drive_service.execute_bundle_upload,
         job_id=job_id,
@@ -1007,7 +1101,6 @@ if os.path.exists(frontend_dist):
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
-        # Do not catch unhandled API routes
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
         file_path = os.path.join(frontend_dist, full_path)
@@ -1017,5 +1110,3 @@ if os.path.exists(frontend_dist):
         if os.path.isfile(index_file):
             return FileResponse(index_file)
         raise HTTPException(status_code=404, detail="Frontend build index not found")
-
-

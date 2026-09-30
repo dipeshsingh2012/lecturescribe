@@ -7,7 +7,7 @@ export function useAITutor(activeData, googleUser) {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [availableModels, setAvailableModels] = useState([]);
-  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.8-flash');
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [viewMode, setViewMode] = useState('learning'); // 'learning' or 'submission'
   const [submissionSummaries, setSubmissionSummaries] = useState({});
@@ -118,7 +118,7 @@ export function useAITutor(activeData, googleUser) {
           sender: 'bot',
           text: data.answer,
           citations: data.citations || [],
-          model: data.model_used || selectedModel,
+          model: data.model || selectedModel,
           web_sources: data.web_sources || [],
           submission_text: data.submission_text || null
         };

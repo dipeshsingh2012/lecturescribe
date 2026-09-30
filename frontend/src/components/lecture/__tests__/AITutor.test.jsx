@@ -6,7 +6,7 @@ import AITutor from '../AITutor';
 describe('AITutor', () => {
   const defaultModels = [
     { id: 'llama-3.2', name: 'Llama 3.2 3B', provider: 'Groq', badge: 'Fastest' },
-    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'Google', badge: 'Smart' }
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', provider: 'Google', badge: 'Smart' }
   ];
 
   it('renders chat header, web toggle, and new chat button', () => {

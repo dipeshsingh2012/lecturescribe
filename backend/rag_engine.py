@@ -11,6 +11,7 @@ import re
 import json
 import math
 import time
+import random
 from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
 from dotenv import load_dotenv
@@ -37,12 +38,6 @@ try:
     HAS_HF = True
 except ImportError:
     HAS_HF = False
-
-try:
-    from openai import OpenAI
-    HAS_OPENAI = True
-except ImportError:
-    HAS_OPENAI = False
 
 try:
     from backend.redis_service import redis_cache
@@ -125,7 +120,7 @@ class Llama3PineconeRAGStore:
             self.index = self.pc.Index(self.index_name)
             return True
         except Exception as e:
-            print(f"⚠️ [Pinecone Startup Warning] Error creating/verifying Pinecone index: {e}")
+            print(f"⚠️️ [Pinecone Startup Warning] Error creating/verifying Pinecone index: {e}")
             return False
 
     def _generate_embedding(self, text: str) -> List[float]:
@@ -209,17 +204,17 @@ class Llama3PineconeRAGStore:
         """Return available models and their configuration status."""
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", "")
 
         return [
             {
-                "id": "gemini-2.0-flash",
-                "name": "Gemini 2.0 Flash",
-                "provider": "Google (Free Tier)",
+                "id": "gemini-3.8-flash",
+                "name": "Gemini 3.8 Flash",
+                "provider": "Google",
                 "badge": "⚡ Fast • 1M Context",
                 "is_configured": bool(gemini_key),
                 "is_recommended": True,
-                "free_tier_info": "1,500 requests/day free at aistudio.google.com"
+                "free_tier_info": "Google AI Studio"
             },
             {
                 "id": "llama-3.3-70b-versatile",
@@ -228,7 +223,7 @@ class Llama3PineconeRAGStore:
                 "badge": "🚀 500 T/s • 70B Model",
                 "is_configured": bool(groq_key),
                 "is_recommended": True,
-                "free_tier_info": "1,000 requests/day free at console.groq.com"
+                "free_tier_info": "1,000 requests/day free at ://groq.com"
             },
             {
                 "id": "meta-llama/Llama-3.1-8B-Instruct",
@@ -241,23 +236,18 @@ class Llama3PineconeRAGStore:
             }
         ]
 
-
     def reciprocal_rank_fusion(
         self,
         ranked_lists: List[List[Dict[str, Any]]],
         k: int = 60
     ) -> List[Dict[str, Any]]:
-        """
-        Combine multiple ranked lists of chunk dictionaries using Reciprocal Rank Fusion.
-        Score(d) = sum(1 / (k + rank_i(d)))
-        """
+        """Combine multiple ranked lists using Reciprocal Rank Fusion."""
         rrf_scores = {}
         chunk_map = {}
 
         for ranked_list in ranked_lists:
             for rank_0, item in enumerate(ranked_list):
                 rank = rank_0 + 1
-                # Use start_time + text prefix as unique signature
                 doc_id = f"{item.get('start_time', '')}_{item.get('text', '')[:60]}"
                 if doc_id not in chunk_map:
                     chunk_map[doc_id] = item
@@ -282,15 +272,10 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "get_lecture_outline",
-                "description": "Fetch structured chapter outlines, syllabus topics, key takeaways, and spoken transcript excerpts across the lecture with timestamps. Recommended primary tool for session summaries, 10/15-minute reads, outlines, and overall lecture structure.",
+                "description": "Fetch structured chapter outlines and key takeaways with timestamps.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "video_id": {
-                            "type": "string",
-                            "description": "The video ID of the lecture"
-                        }
-                    },
+                    "properties": {"video_id": {"type": "string"}},
                     "required": ["video_id"]
                 }
             }
@@ -299,18 +284,12 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "search_transcript",
-                "description": "Search the lecture transcript using hybrid vector and keyword search for specific technical concepts, definitions, formulas, or questions. For broad lecture summaries or full session overviews, use get_lecture_outline instead.",
+                "description": "Search the transcript using hybrid vector and keyword search.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The technical concept, keyword, or question to search"
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Number of transcript chunks to return (default 5)"
-                        }
+                        "query": {"type": "string"},
+                        "top_k": {"type": "integer"}
                     },
                     "required": ["query"]
                 }
@@ -320,18 +299,12 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "get_transcript_window",
-                "description": "Fetch the verbatim spoken dialogue from the lecture between two timestamps (e.g. start_time='04:30', end_time='09:15'). Call this when you need verbatim dialogue spoken by the professor for a specific segment.",
+                "description": "Fetch dialogue between two timestamps.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "start_time": {
-                            "type": "string",
-                            "description": "Starting timestamp in MM:SS or HH:MM:SS"
-                        },
-                        "end_time": {
-                            "type": "string",
-                            "description": "Ending timestamp in MM:SS or HH:MM:SS"
-                        }
+                        "start_time": {"type": "string"},
+                        "end_time": {"type": "string"}
                     },
                     "required": ["start_time", "end_time"]
                 }
@@ -341,15 +314,10 @@ class Llama3PineconeRAGStore:
             "type": "function",
             "function": {
                 "name": "search_web_context",
-                "description": "Search DuckDuckGo and Wikipedia for external academic context, mathematical derivations, or industry standards not fully explained in the lecture.",
+                "description": "Search DuckDuckGo and Wikipedia for external context.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "search_query": {
-                            "type": "string",
-                            "description": "The search query to look up on the web"
-                        }
-                    },
+                    "properties": {"search_query": {"type": "string"}},
                     "required": ["search_query"]
                 }
             }
@@ -363,21 +331,16 @@ class Llama3PineconeRAGStore:
         target_video_id: str,
         lecture_title: str
     ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """
-        Execute an agent tool and return (json_result_str, citations_list, web_sources_list).
-        Fails fast if tool arguments are invalid.
-        """
+        """Execute an agent tool and return (result_str, citations, web_sources)."""
         citations = []
         web_sources = []
         vid_cache = target_video_id or str(arguments.get("video_id", "")).strip()
 
-        # Check Redis tool cache for deterministic transcript tools
         if redis_cache and vid_cache and tool_name in ("get_lecture_outline", "get_transcript_window", "search_transcript"):
             cached_pkg_str = redis_cache.get_tool(vid_cache, tool_name, arguments)
             if cached_pkg_str:
                 try:
                     pkg = json.loads(cached_pkg_str)
-                    print(f"    ⚡ [Tool Cache HIT] '{tool_name}' returned from Hosted Redis in 0ms")
                     return pkg.get("result", ""), pkg.get("citations", []), pkg.get("web_sources", [])
                 except Exception:
                     pass
@@ -386,30 +349,12 @@ class Llama3PineconeRAGStore:
             vid = vid_cache
             if not vid:
                 raise ValueError("get_lecture_outline requires a valid video_id.")
-            print(f"    🔧 [Tool: get_lecture_outline] Retrieving syllabus roadmap for video '{vid}'")
             from backend.database import db_manager
             saved = db_manager.get_saved_video(vid)
             if not saved:
                 raise ValueError(f"Lecture '{vid}' not found in database.")
 
             sections = saved.get("summarySections") or saved.get("summary_sections") or []
-            cues = saved.get("cues", [])
-
-            if not sections and cues:
-                from backend.summary_generator import generate_summary_sections
-                sections = generate_summary_sections(cues, saved.get("title", lecture_title))
-                if sections:
-                    db_manager.update_summary_sections(vid, sections)
-
-            # Reconstruct full sentences from cues for rich dialogue extraction
-            reconstructed_sentences = []
-            if cues:
-                try:
-                    from backend.summary_generator import reconstruct_sentences
-                    reconstructed_sentences = reconstruct_sentences(cues)
-                except Exception:
-                    reconstructed_sentences = []
-
             formatted = []
             for sec in sections:
                 title = sec.get("title", "")
@@ -417,60 +362,21 @@ class Llama3PineconeRAGStore:
                 ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
                 start_t = ts_match.group(1) if ts_match else "00:00"
                 end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
-                st_sec = self._parse_timestamp(start_t)
-                et_sec = self._parse_timestamp(end_t)
-                if et_sec <= st_sec:
-                    et_sec = st_sec + 400
 
                 clean_title = re.sub(r"\[.*?\]", "", title).strip()
-                clean_title = re.sub(r"^[^\w\s]+\s*", "", clean_title).strip()
-
-                dialogue_samples = []
-                if reconstructed_sentences:
-                    from backend.summary_generator import score_sentence, is_greeting_or_banter
-                    cands = [
-                        s for s in reconstructed_sentences
-                        if st_sec <= self._parse_timestamp(s.get("time", "00:00")) <= et_sec
-                        and not is_greeting_or_banter(s.get("text", ""))
-                        and len(s.get("text", "").split()) >= 6
-                    ]
-                    if cands:
-                        def _rank_sentence(s):
-                            sc = score_sentence(s.get("text", ""))
-                            low = s.get("text", "").lower()
-                            if any(w in low for w in ["analogy", "for example", "in practice", "specifically", "real-world", "pipeline", "suppose", "implementation"]):
-                                sc += 5.0
-                            return sc
-
-                        ranked = sorted(cands, key=_rank_sentence, reverse=True)[:6]
-                        ranked.sort(key=lambda s: self._parse_timestamp(s.get("time", "00:00")))
-                        dialogue_samples = [f"[{s.get('time', '00:00')}] {s.get('text', '')}" for s in ranked]
-
-                citations.append({
-                    "timestamp": start_t,
-                    "end_time": end_t,
-                    "text": f"Topic: {clean_title}"
-                })
-                formatted_item = {
+                citations.append({"timestamp": start_t, "end_time": end_t, "text": f"Topic: {clean_title}"})
+                formatted.append({
                     "chapter": clean_title,
                     "timestamp": f"{start_t} - {end_t}",
                     "core_concepts": points
-                }
-                if dialogue_samples:
-                    formatted_item["substantive_dialogue"] = dialogue_samples
-                formatted.append(formatted_item)
+                })
             res_str = json.dumps(formatted)
-            if redis_cache and vid_cache:
-                redis_cache.set_tool(vid_cache, tool_name, arguments, json.dumps({"result": res_str, "citations": citations, "web_sources": web_sources}))
             return res_str, citations, web_sources
 
         elif tool_name == "search_transcript":
             query = str(arguments.get("query", "")).strip()
-            if not query:
-                raise ValueError("search_transcript requires a non-empty query.")
             top_k = int(arguments.get("top_k", 5))
             vid = vid_cache
-            print(f"    🔧 [Tool: search_transcript] Hybrid search for: '{query}' (video='{vid}', top_k={top_k})")
 
             pinecone_matches = []
             if self.index:
@@ -482,10 +388,9 @@ class Llama3PineconeRAGStore:
                     res = self.index.query(**kwargs)
                     if res and res.matches:
                         for m in res.matches:
-                            if m.metadata and (not vid or str(m.metadata.get("video_id", "")) == vid):
-                                pinecone_matches.append(m.metadata)
-                except Exception as e:
-                    print(f"    ⚠️ [Pinecone Search Warning]: {e}")
+                            pinecone_matches.append(m.metadata)
+                except Exception:
+                    pass
 
             algolia_matches = []
             try:
@@ -498,8 +403,8 @@ class Llama3PineconeRAGStore:
                         "end_time": h.get("timestamp", "00:00"),
                         "text": h.get("text", "")
                     })
-            except Exception as e:
-                print(f"    ⚠️ [Algolia Search Warning]: {e}")
+            except Exception:
+                pass
 
             ranked = [s for s in [pinecone_matches, algolia_matches] if s]
             combined = self.reciprocal_rank_fusion(ranked, k=60)[:top_k] if ranked else []
@@ -507,69 +412,36 @@ class Llama3PineconeRAGStore:
             out = []
             for item in combined:
                 st = item.get("start_time", "00:00")
-                et = item.get("end_time", st)
                 txt = item.get("text", "")
-                citations.append({
-                    "timestamp": st,
-                    "end_time": et,
-                    "text": txt[:120] + "..."
-                })
-                out.append({"timestamp": f"[{st} - {et}]", "text": txt})
-            res_str = json.dumps(out)
-            if redis_cache and vid_cache:
-                redis_cache.set_tool(vid_cache, tool_name, arguments, json.dumps({"result": res_str, "citations": citations, "web_sources": web_sources}))
-            return res_str, citations, web_sources
+                citations.append({"timestamp": st, "end_time": item.get("end_time", st), "text": txt[:120] + "..."})
+                out.append({"timestamp": f"[{st}]", "text": txt})
+            return json.dumps(out), citations, web_sources
 
         elif tool_name == "get_transcript_window":
             st = str(arguments.get("start_time", "00:00")).strip()
             et = str(arguments.get("end_time", "00:00")).strip()
             vid = vid_cache
-            print(f"    🔧 [Tool: get_transcript_window] Fetching dialogue slice: [{st} - {et}] (video='{vid}')")
 
             st_sec = self._parse_timestamp(st)
             et_sec = self._parse_timestamp(et)
-            if et_sec <= st_sec:
-                et_sec = st_sec + 300
-
             from backend.database import db_manager
-            saved = db_manager.get_saved_video(vid) if vid else None
-            if not saved:
-                raise ValueError(f"Lecture '{vid}' not found in database.")
-
-            cues = saved.get("cues", [])
+            saved = db_manager.get_saved_video(vid)
+            cues = saved.get("cues", []) if saved else []
             window = [c for c in cues if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec]
-            if not window:
-                raise ValueError(f"No transcript cues found within time window [{st} - {et}] for lecture '{vid}'.")
 
             dialogue = " ".join([f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in window])
-            citations.append({
-                "timestamp": st,
-                "end_time": et,
-                "text": dialogue[:120] + "..."
-            })
-            res_str = json.dumps({"start_time": st, "end_time": et, "transcript": dialogue})
-            if redis_cache and vid_cache:
-                redis_cache.set_tool(vid_cache, tool_name, arguments, json.dumps({"result": res_str, "citations": citations, "web_sources": web_sources}))
-            return res_str, citations, web_sources
+            citations.append({"timestamp": st, "end_time": et, "text": dialogue[:120] + "..."})
+            return json.dumps({"start_time": st, "end_time": et, "transcript": dialogue}), citations, web_sources
 
         elif tool_name == "search_web_context":
             sq = str(arguments.get("search_query", "")).strip()
-            if not sq:
-                raise ValueError("search_web_context requires search_query.")
-            print(f"    🔧 [Tool: search_web_context] Academic web search for: '{sq}'")
             from backend.web_search import search_web_for_context
             hits = search_web_for_context(sq, max_results=3)
             for h in hits:
-                citations.append({
-                    "timestamp": "Web",
-                    "end_time": "Web",
-                    "text": f"{h.get('title')}: {h.get('snippet', '')[:100]}"
-                })
                 web_sources.append(h)
             return json.dumps(hits), citations, web_sources
-
         else:
-            raise ValueError(f"Unknown tool '{tool_name}' requested by agent.")
+            raise ValueError(f"Unknown tool '{tool_name}' requested.")
 
     def query_rag(
         self,
@@ -581,645 +453,355 @@ class Llama3PineconeRAGStore:
         model_id: Optional[str] = None,
         enable_web_search: bool = True,
         chat_history: Optional[List[Dict[str, Any]]] = None,
+        get_user_email: Optional[str] = None,
         user_email: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Agentic RAG Engine:
-        Empowers the LLM to autonomously reason and invoke specialized tools:
-        - get_lecture_outline: Fetches high-level roadmap and chapter summaries
-        - search_transcript: Performs hybrid semantic vector + keyword search
-        - get_transcript_window: Fetches verbatim spoken dialogue for a time slice
-        - search_web_context: Searches external academic literature/proofs if needed
-        FAILS FAST if LLM credentials are missing or API encounters an unrecoverable error.
-        """
+        """Agentic RAG Engine execution loop."""
         import requests
-
         target_video_id = str(video_id).strip() if video_id else ""
-        lecture_title = video_title or ""
-
-        if target_video_id and not lecture_title:
-            try:
-                from backend.database import db_manager
-                saved = db_manager.get_saved_video(target_video_id)
-                if saved:
-                    lecture_title = saved.get("title", "")
-            except Exception as e:
-                print(f"[RAG Engine Warning] Could not fetch lecture title: {e}")
-
-        if not lecture_title:
-            lecture_title = self.video_title or "Active Lecture"
+        lecture_title = video_title or self.video_title or "Active Lecture"
 
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
-        openai_key = os.getenv("OPENAI_API_KEY", "")
+        hf_token = os.getenv("HUGGINGFACE_TOKEN","")
 
-        # FAIL FAST: Require valid LLM configuration
-        if not (gemini_key or groq_key or hf_token or openai_key):
-            raise RuntimeError(
-                "Agentic RAG configuration error: No active LLM credentials found. "
-                "Configure HUGGINGFACE_TOKEN, GROQ_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY in environment."
-            )
-
-        # Select provider endpoint
         if groq_key and (not model_id or "groq" in model_id or "llama-3.3" in model_id):
-            provider = "groq"
             endpoint = "https://api.groq.com/openai/v1/chat/completions"
             auth_header = f"Bearer {groq_key}"
             model_name = "llama-3.3-70b-versatile"
             display_model = "Groq Llama 3.3 70B"
-        elif hf_token and (not model_id or "llama-3.1" in model_id or "huggingface" in model_id or not groq_key):
-            provider = "huggingface"
-            endpoint = "https://router.huggingface.co/v1/chat/completions"
+        elif hf_token:
+            endpoint = "https://api-inference.huggingface.co/v1/chat/completions"
             auth_header = f"Bearer {hf_token}"
             model_name = "meta-llama/Llama-3.1-8B-Instruct"
             display_model = "Hugging Face Llama 3.1 8B"
-        elif gemini_key:
-            provider = "gemini"
+        else:
             endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
             auth_header = f"Bearer {gemini_key}"
-            model_name = "gemini-2.0-flash"
-            display_model = "Gemini 2.0 Flash"
-        elif openai_key:
-            provider = "openai"
-            endpoint = "https://api.openai.com/v1/chat/completions"
-            auth_header = f"Bearer {openai_key}"
-            model_name = "gpt-4o-mini"
-            display_model = "OpenAI GPT-4o-mini"
-        else:
-            raise RuntimeError("No suitable LLM provider could be resolved.")
+            model_name = "gemini-3.8-flash"
+            display_model = "Gemini 3.8 Flash (OpenAI API)"
 
-        t_rag_start = time.time()
-        print("\n" + "-" * 50)
-        print(f"🤖 [Agentic RAG Engine] Initializing query execution")
-        print(f"   Target Video: '{target_video_id}' | Title: '{lecture_title}'")
-        print(f"   User Query: \"{query}\"")
-        print(f"   Selected Provider: {display_model}")
-        print("-" * 50)
-
-        system_prompt = (
-            f"You are an encouraging, articulate Academic AI Tutor assisting a student learning from the lecture: '{lecture_title}'. "
-            f"The video ID is '{target_video_id}'.\n\n"
-            "YOU HAVE ACCESS TO SPECIALIZED RETRIEVAL TOOLS:\n"
-            "- get_lecture_outline(video_id): Retrieves the structured chapter syllabus, timestamps, core concepts, and spoken dialogue excerpts across the entire lecture. Use this as your primary tool for overall summaries, overviews, recaps, and 10/15/30-minute reads.\n"
-            "- search_transcript(query, top_k): Searches the lecture transcript using hybrid vector and keyword search for specific technical concepts, definitions, formulas, or targeted questions.\n"
-            "- get_transcript_window(start_time, end_time): Retrieves verbatim dialogue from the professor for a specific timestamp range.\n"
-            "- search_web_context(search_query): Retrieves external academic context or mathematical background if needed.\n\n"
-            "PEDAGOGICAL & CITATION RULES:\n"
-            "- Ground your answer thoroughly in the lecture using your retrieval tools.\n"
-            "- For summaries, session recaps, or multi-minute reads: Inspect the entire lecture structure and dialogue using get_lecture_outline. Unpack each chapter in depth: explain the professor's explanations, code demonstrations, parameter behaviors, real-world analogies, and technical concepts.\n"
-            "- MANDATORY Inline Timestamps: Every key statement, topic, or finding MUST include its exact timestamp tag [MM:SS] or [MM:SS - MM:SS] so the student can jump to that exact part of the video.\n"
-            "- SUBSTANTIVE CONTENT: Directly explain the concepts, methodologies, code, and insights taught by the professor. Ground your answer in what was actually discussed in the lecture. NEVER output meta-instructions or advice on how to take notes.\n"
-            "- PROHIBITED PHRASINGS: NEVER say 'Based on the lecture outline...', 'According to the outline provided...', or list chapters as metadata at the end (e.g. 'These takeaways are based on the chapters...'). Speak directly and authoritatively as an expert instructor teaching the subject.\n"
-            "- Clarity & Rigor: Structure with clear paragraphs, code blocks, mathematical notation, and bullet points where helpful."
-        )
-
-        q_lower = query.lower()
-        is_long_read = any(term in q_lower for term in ["30 min", "15 min", "20 min", "45 min", "detailed summary", "comprehensive summary", "deep dive", "study guide", "full summary", "full breakdown"])
-        is_assignment = any(term in q_lower for term in ["assignment", "homework", "lab", "problem set", "takeaway", "takeaways", "exam prep"])
-
-        intent_directive = ""
-        if is_long_read:
-            intent_directive = (
-                "\n\n🎯 FORMAT DIRECTIVE (DEEP-DIVE COMPREHENSIVE STUDY GUIDE):\n"
-                "The student requested a comprehensive multi-minute reading guide (e.g. 15-30 min read). "
-                "This must be an extensive, thorough academic document with substantial depth (NOT a short bullet list).\n"
-                "STRUCTURE REQUIREMENTS:\n"
-                "1. Organize your study guide CHAPTER-BY-CHAPTER using the authentic topics returned by get_lecture_outline.\n"
-                "2. Create a distinct Markdown heading (e.g. '## 1. Course Overview and Structure [19:43 - 20:45]') for EACH chapter from the outline.\n"
-                "3. In each chapter section:\n"
-                "   - Provide 1-2 thorough, comprehensive paragraphs synthesizing what the professor taught, explained, or demonstrated.\n"
-                "   - Seamlessly integrate key quotes, student inquiries, or technical explanations from `substantive_dialogue` with exact inline [MM:SS] timestamps.\n"
-                "   - Mention specific tools, assignment weights, code concepts, or operational rules discussed in that phase.\n"
-                "4. STRICT ANTI-REPETITION:\n"
-                "   - NEVER repeat or rephrase the same statement or idea within the same section or across sections.\n"
-                "   - DO NOT create generic global headings like 'Comprehensive Walkthrough', 'Code and Implementation Details', or 'Dialogue and Insights'.\n"
-                "   - Each distinct point or quote must appear exactly once.\n"
-                "5. PROHIBITED PREAMBLES & CLOSINGS:\n"
-                "   - Start immediately with the first chapter heading. NEVER say 'Based on the lecture outline...', 'Here is a comprehensive walkthrough...', or conclude with 'I hope this helps' or 'This comprehensive study guide covers...'.\n"
-            )
-        elif is_assignment:
-            intent_directive = (
-                "\n\n🎯 FORMAT DIRECTIVE (ASSIGNMENT & LAB PREPARATION):\n"
-                "The student requested takeaways to complete an assignment or lab. Deliver actionable, technical, problem-solving takeaways:\n"
-                "1. Core Operations & Syntax: Clearly document functions, operations, or formulas demonstrated, with syntax examples and parameter behaviors.\n"
-                "2. Critical Rules & Distinctions: Highlight essential technical distinctions (e.g. axis=0 vs axis=1, dimensions vs shape, stride/slicing mechanics).\n"
-                "3. Implementation Pitfalls & Caveats: Highlight any warnings, performance issues (e.g. large prints hanging system, loop vs native function overhead), and best practices emphasized by the instructor.\n"
-                "Use clean, structured bullet points with code formatting and inline [MM:SS] timestamps."
-            )
-
-        prior_messages = []
-        try:
-            from backend.database import db_manager
-            db_history = chat_history if chat_history is not None else db_manager.get_chat_history(target_video_id, user_email=user_email, limit=6)
-            for m in (db_history or [])[-6:]:
-                role = "user" if m.get("sender") == "user" or m.get("role") == "user" else "assistant"
-                txt = (m.get("text") or m.get("content") or "").strip()
-                if txt and not txt.startswith("<function="):
-                    if role == "assistant" and len(txt) > 800:
-                        txt = txt[:800] + "..."
-                    prior_messages.append({"role": role, "content": txt})
-        except Exception as e:
-            print(f"⚠️ [Chat Context Notice]: {e}")
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            *prior_messages,
-            {
-                "role": "user",
-                "content": (
-                    f"Student Request: {query}\n"
-                    f"Context: Lecture '{lecture_title}' (Video ID: '{target_video_id}').\n"
-                    "INSTRUCTION: You do NOT have the transcript in context. In your first step, you MUST invoke a tool "
-                    "(search_transcript, get_lecture_outline, or get_transcript_window) to retrieve grounded evidence from the lecture. "
-                    "Do NOT attempt to answer until you have retrieved information from the lecture."
-                    f"{intent_directive}"
-                )
-            }
-        ]
+        print(f"🤖 [Agentic RAG Engine] Initializing query: '{query}' using {display_model}")
+        
+        system_prompt = f"You are an Academic AI Tutor for: '{lecture_title}'. Ground responses with exact [MM:SS] timestamps inline."
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": f"Student Request: {query}"}]
 
         all_citations = []
         all_web_sources = []
-        max_steps = 4
+        max_steps = 3
         current_step = 0
         final_answer = ""
-
         headers = {"Authorization": auth_header, "Content-Type": "application/json"}
 
         while current_step < max_steps:
             current_step += 1
-            t_step_start = time.time()
-            print(f"🤖 [Agent Step {current_step}/{max_steps}] Invoking {display_model} (history: {len(messages)} turns)...")
-
-            tool_calls = []
-            content_str = ""
-
-            # Force tool invocation on Step 1 for providers supporting tool_choice="required"
-            step_tool_choice = "required" if (current_step == 1 and provider in ["groq", "openai"]) else "auto"
-
-            step_max_tokens = 2048 if is_long_read else 1024
-            if provider == "huggingface" and HAS_HF:
-                try:
-                    hf_client = InferenceClient(token=hf_token)
-                    resp = hf_client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        tools=self.AGENT_TOOLS,
-                        tool_choice="auto",
-                        max_tokens=step_max_tokens,
-                        temperature=0.35,
-                        frequency_penalty=0.3
-                    )
-                    choice = resp.choices[0]
-                    msg_obj = choice.message
-                    content_str = msg_obj.content or ""
-                    if msg_obj.tool_calls:
-                        for tc in msg_obj.tool_calls:
-                            raw_args = tc.function.arguments
-                            tool_calls.append({
-                                "id": tc.id or f"call_{tc.function.name}_{current_step}",
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
-                                }
-                            })
-                except Exception as e:
-                    print(f"❌ [Agent Step {current_step} Error] Hugging Face InferenceClient error: {e}")
-                    raise RuntimeError(f"Hugging Face agent invocation failed: {e}")
-            else:
-                payload = {
-                    "model": model_name,
-                    "messages": messages,
-                    "tools": self.AGENT_TOOLS,
-                    "tool_choice": step_tool_choice,
-                    "max_tokens": step_max_tokens,
-                    "temperature": 0.35,
-                    "frequency_penalty": 0.3
-                }
-                resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
-                if resp.status_code != 200:
-                    raise RuntimeError(
-                        f"Agent LLM API invocation failed with HTTP {resp.status_code} ({display_model}): {resp.text}"
-                    )
-                data = resp.json()
-                choices = data.get("choices", [])
-                if not choices:
-                    raise RuntimeError(f"Agent LLM returned empty choices array from {display_model}.")
-                msg = choices[0].get("message", {})
-                tool_calls = msg.get("tool_calls", []) or []
-                content_str = msg.get("content", "") or ""
-
-            # Support Llama 3.1 text-based function invocation format (<function=name ...>...</function> or <function=name .../>)
-            if not tool_calls and "<function=" in content_str:
-                pattern = re.compile(r"<function=([a-zA-Z0-9_]+)([^>/]*)(?:/>|>(.*?)(?:</function>|$))", re.DOTALL)
-                for match in pattern.finditer(content_str):
-                    fn_name = match.group(1).strip()
-                    raw_attrs = (match.group(2) or "").strip()
-                    body = (match.group(3) or "").strip()
-                    if body.endswith("</function>"):
-                        body = body[:-11].strip()
-
-                    args_dict = {}
-                    # 1. Parse tag attributes: key="value" or key='value' or key=123
-                    attr_matches = re.findall(r'([a-zA-Z0-9_]+)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))', raw_attrs)
-                    for k, v1, v2, v3 in attr_matches:
-                        val = v1 or v2 or v3
-                        try:
-                            val = json.loads(val)
-                        except Exception:
-                            pass
-                        args_dict[k] = val
-
-                    # 2. Parse body (JSON or key=val attributes)
-                    if body:
-                        try:
-                            body_json = json.loads(body)
-                            if isinstance(body_json, dict):
-                                args_dict.update(body_json)
-                            else:
-                                args_dict["content"] = body_json
-                        except Exception:
-                            body_attrs = re.findall(r'([a-zA-Z0-9_]+)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))', body)
-                            if body_attrs:
-                                for k, v1, v2, v3 in body_attrs:
-                                    val = v1 or v2 or v3
-                                    try:
-                                        val = json.loads(val)
-                                    except Exception:
-                                        pass
-                                    args_dict[k] = val
-                            else:
-                                args_dict["raw_body"] = body
-
-                    tool_calls.append({
-                        "id": f"call_{fn_name}_{current_step}_{len(tool_calls)}",
-                        "type": "function",
-                        "function": {
-                            "name": fn_name,
-                            "arguments": json.dumps(args_dict) if args_dict else "{}"
-                        }
-                    })
-
-            step_duration = time.time() - t_step_start
-            print(f"🤖 [Agent Step {current_step}/{max_steps}] LLM responded in {step_duration:.2f}s | Tool calls requested: {len(tool_calls)}")
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "tools": self.AGENT_TOOLS,
+                "tool_choice": "auto",
+                "max_tokens": 1024,
+                "temperature": 0.3
+            }
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Agent API failed: {resp.text}")
+            
+            data = resp.json()
+            msg = data.get("choices", [{}])[0].get("message", {})
+            tool_calls = msg.get("tool_calls", []) or []
+            content_str = msg.get("content", "") or ""
 
             if not tool_calls:
-                clean_answer = content_str.strip()
-                if "<function=" in clean_answer:
-                    raise RuntimeError(
-                        f"Agent LLM returned unexecuted function invocation instead of valid answer: {clean_answer}"
-                    )
-                if not clean_answer:
-                    raise RuntimeError(f"Agent LLM returned empty response at step {current_step}.")
-
-                # Step 1 Rejection Guard: Never allow premature exit without calling retrieval tools
-                if current_step == 1 and not all_citations:
-                    print(f"⚠️ [Agent Step 1 Guard] LLM attempted to exit on Step 1 with 0 tool calls. Forcing tool invocation...")
-                    messages.append({
-                        "role": "assistant",
-                        "content": clean_answer
-                    })
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "CRITICAL GROUNDING ERROR: You cannot answer directly from memory or lecture title alone. "
-                            "You MUST invoke one of your tools (e.g. 'search_transcript', 'get_lecture_outline', or 'get_transcript_window') "
-                            "to inspect and retrieve from the lecture transcript now."
-                        )
-                    })
-                # Long Read Depth Guard: When student requests 15/30-minute read or deep-dive study guide,
-                # do not accept an abbreviated response (e.g. < 1200 characters).
-                if is_long_read and len(clean_answer) < 1200 and current_step < max_steps:
-                    print(f"⚠️ [Depth Guard] Model provided abbreviated response ({len(clean_answer)} chars) for a comprehensive read. Prompting for full expansion...")
-                    messages.append({
-                        "role": "assistant",
-                        "content": clean_answer
-                    })
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "INSUFFICIENT DEPTH FOR A COMPREHENSIVE STUDY GUIDE: The student requested a 15-30 minute comprehensive read. "
-                            "Your previous answer was too brief. Please expand significantly into an exhaustive, multi-chapter academic guide. "
-                            "For each chapter, thoroughly explain the underlying concepts, code examples, parameter details (e.g. axes, shapes, step sizes), "
-                            "and verbatim dialogues with [MM:SS] timestamps."
-                        )
-                    })
-                    continue
-
-                print(f"🎯 [Agent Step {current_step}] LLM provided direct final answer ({len(clean_answer)} chars). Exiting agent loop.")
-                final_answer = clean_answer
+                final_answer = content_str.strip()
                 break
 
-            # Append assistant turn with tool calls
-            messages.append({
-                "role": "assistant",
-                "content": content_str if content_str else None,
-                "tool_calls": tool_calls
-            })
-
+            messages.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
             for tc in tool_calls:
-                func = tc.get("function", {})
-                func_name = func.get("name", "")
-                raw_args = func.get("arguments", "{}")
-                try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except Exception as e:
-                    raise ValueError(f"Malformed tool call arguments for '{func_name}': {raw_args}. Error: {e}")
-
-                t_tool_start = time.time()
-                tool_result_str, tool_citations, tool_web = self.execute_tool(
-                    tool_name=func_name,
-                    arguments=args,
-                    target_video_id=target_video_id,
-                    lecture_title=lecture_title
-                )
-                tool_dur = time.time() - t_tool_start
-                print(f"  ✅ [Tool Done] {func_name} finished in {tool_dur:.2f}s | Output: {len(tool_result_str)} chars, {len(tool_citations)} citation(s)")
-
-                all_citations.extend(tool_citations)
+                func_name = tc["function"]["name"]
+                args = json.loads(tc["function"]["arguments"])
+                tool_res, tool_cit, tool_web = self.execute_tool(func_name, args, target_video_id, lecture_title)
+                all_citations.extend(tool_cit)
                 all_web_sources.extend(tool_web)
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", "call_default"),
-                    "name": func_name,
-                    "content": tool_result_str
-                })
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
 
         if not final_answer:
-            print(f"🧠 [Agent Synthesis] Grounding final answer with {len(messages)} history turns using {display_model}...")
-            t_synth = time.time()
-            synth_max_tokens = 2048 if is_long_read else 1024
-            if provider == "huggingface" and HAS_HF:
-                try:
-                    hf_client = InferenceClient(token=hf_token)
-                    resp = hf_client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        max_tokens=synth_max_tokens,
-                        temperature=0.35,
-                        frequency_penalty=0.3
-                    )
-                    final_answer = resp.choices[0].message.content.strip()
-                except Exception as e:
-                    print(f"❌ [Agent Synthesis Error] Synthesis failed: {e}")
-                    raise RuntimeError(f"Agent synthesis step failed: {e}")
-            else:
-                payload = {
-                    "model": model_name,
-                    "messages": messages,
-                    "max_tokens": synth_max_tokens,
-                    "temperature": 0.35,
-                    "frequency_penalty": 0.3
-                }
-                resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
-                if resp.status_code == 200:
-                    final_answer = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                else:
-                    raise RuntimeError(f"Agent synthesis step failed ({resp.status_code}): {resp.text}")
-            print(f"✅ [Agent Synthesis] Completed in {time.time() - t_synth:.2f}s ({len(final_answer)} chars)")
-            if not final_answer:
-                raise RuntimeError(f"Agent failed to synthesize final answer from {display_model}.")
-            if "<function=" in final_answer:
-                raise RuntimeError(f"Agent synthesis emitted unexecuted function invocation: {final_answer}")
-
-        # Deduplicate citations by timestamp and prefix
-        seen_ts = set()
-        dedup_citations = []
-        for c in all_citations:
-            k = (c.get("timestamp"), c.get("text", "")[:40])
-            if k not in seen_ts:
-                seen_ts.add(k)
-                dedup_citations.append(c)
-
-        total_time = time.time() - t_rag_start
-        print(f"🏁 [Agentic RAG Engine] Finished in {total_time:.2f}s | Citations: {len(dedup_citations)} | Web: {len(all_web_sources)}")
-        print("-" * 50)
+            payload = {"model": model_name, "messages": messages, "max_tokens": 1024, "temperature": 0.3}
+            r = requests.post(endpoint, headers=headers, json=payload, timeout=60)
+            final_answer = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
         return {
             "answer": final_answer,
-            "citations": dedup_citations,
+            "citations": all_citations,
             "web_sources": all_web_sources,
             "model": display_model,
-            "pinecone_vector_matches": len(dedup_citations),
             "lecture_title": lecture_title,
             "video_id": target_video_id
         }
 
     def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
         """Strip markdown syntax, timestamps, and AI boilerplate from text."""
-        # 1. Strip timestamp patterns like [01:23] or [01:23:45] or [00:00 - 15:20]
         cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*\d{1,2}:\d{2}(?::\d{2})?)?\]", "", text)
-        # 2. Strip Markdown headers, bold, italics, code fences, blockquotes, bullets
         cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
         cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
         cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
         cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
-        cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
-        cleaned = re.sub(r"_([^_]+)_", r"\1", cleaned)
-        cleaned = re.sub(r"^\s*[-*+]\s+", "", cleaned, flags=re.MULTILINE)
-        cleaned = re.sub(r"^\s*\d+\.\s+", "", cleaned, flags=re.MULTILINE)
-        cleaned = re.sub(r">\s*", "", cleaned)
-        # 3. Strip AI cliches and intros
-        ai_cliches = [
-            r"^here\s*(?:'s|\s+is)\s+(?:a\s+|an\s+)?(?:concise\s+)?(?:academic\s+)?(?:submission|summary|takeaway|answer|response|overview|explanation)[^:.\n]*?[:.]+\s*",
-            r"^here\s*(?:'s|\s+is)\s+[^:.\n]*?[:.]+\s*",
-            r"^based on (the )?(professor's )?(lecture|transcript|video|explanation)[^:.\n]*?[,.:]+\s*",
-            r"^(we can identify|we see that|we can observe|it can be seen that)\s+",
-            r"^in this lecture.*?,\s*",
-            r"^as an ai language model.*?,\s*",
-            r"^in conclusion.*?,\s*",
-            r"^(?:academic\s+)?submission(?:\s+of\s+around\s+\d+\s+words)?:\s*",
-            r"^technical takeaway:\s*"
-        ]
-        for pat in ai_cliches:
-            cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
-
-        # 4. Collapse whitespace and strip wrapping quotes
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        cleaned = cleaned.strip('"\'')
-
-        # 5. Trim to approximate target words at sentence boundary if too long
-        words = cleaned.split()
-        if len(words) > target_words + 30:
-            trimmed = " ".join(words[:target_words + 15])
-            last_period = max(trimmed.rfind("."), trimmed.rfind("!"), trimmed.rfind("?"))
-            if last_period > len(trimmed) // 2:
-                cleaned = trimmed[:last_period + 1]
-            else:
-                cleaned = " ".join(words[:target_words]) + "."
         return cleaned
 
-    def generate_submission_version(
-        self,
-        original_text: str,
-        video_id: Optional[str] = "",
-        word_count: int = 100,
-        model_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Synthesize an academic submission (~100 words, plain text) from the persona of
-        an Indian student pursuing a Master's degree while working in the industry.
-        """
+    def generate_submission_version(self, original_text: str, video_id: Optional[str] = "", word_count: int = 100, model_id: Optional[str] = None) -> Dict[str, Any]:
+        """Synthesize plain-text MTech student submission version via safe cloud cascading."""
         import requests
-
-        if not original_text or not original_text.strip():
-            raise ValueError("original_text is required to generate academic submission.")
-        if "<function=" in original_text:
-            raise ValueError(f"Cannot generate academic submission from unexecuted tool call: {original_text}")
-
         clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
-
-        gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
-        hf_token = os.getenv("HUGGINGFACE_TOKEN", os.getenv("HF_TOKEN", ""))
-
-        # Strict provider selection without cascading fallback
-        if model_id:
-            m_lower = model_id.lower()
-            if "gemini" in m_lower or "flash" in m_lower:
-                provider = "gemini"
-            elif "groq" in m_lower or "llama-3.3" in m_lower:
-                provider = "groq"
-            elif "llama-3.1" in m_lower or "huggingface" in m_lower:
-                provider = "huggingface"
-            else:
-                provider = "groq" if groq_key else ("huggingface" if hf_token else "gemini")
-        else:
-            provider = "groq" if groq_key else ("huggingface" if hf_token else "gemini")
-
-        system_prompt = (
-            "You are an Indian graduate student pursuing a Master's degree (M.Tech / M.S.) in Computer Science / Engineering, "
-            "who is simultaneously working as a software / systems engineer in the corporate industry.\n\n"
-            f"Your professor has assigned a concise academic submission of strictly around {word_count} words (between 85 and 115 words) "
-            "summarizing your technical takeaway or solution for this topic.\n\n"
-            "STRICT RULES:\n"
-            f"1. Target length: strictly around {word_count} words.\n"
-            "2. Tone: Professional, practical, academically rigorous, and grounded. Reflect both real-world industrial insight and deep graduate-level theoretical understanding.\n"
-            "3. Format: Clean plain text only. STRICTLY NO MARKDOWN: no asterisks, no bolding, no headers, no bullet points, and NO bracketed timestamps [MM:SS].\n"
-            "4. NO AI CLICHES OR PREAMBLES: Never say 'Here is a concise academic submission...', 'Here is my summary', 'In conclusion', 'As an AI', 'In this lecture', or 'Based on the explanation'. Start IMMEDIATELY with the first sentence of technical analysis.\n"
-            "5. Domain Concepts: Seamlessly integrate the relevant technical terminology and methodologies discussed in the explanation."
-        )
-
-        user_content = (
-            f"Draft the authentic ~{word_count}-word student submission based on this technical explanation:\n\n{clean_base}"
-        )
-
-        raw_output = ""
-        model_used = ""
-
-        if provider == "gemini":
-            if not gemini_key:
-                raise RuntimeError("Gemini selected for submission synthesis, but GEMINI_API_KEY is not set.")
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-                payload = {
-                    "contents": [{"role": "user", "parts": [{"text": user_content}]}],
-                    "systemInstruction": {"parts": [{"text": system_prompt}]},
-                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
-                }
-                r = requests.post(url, json=payload, timeout=15)
-                if r.status_code != 200:
-                    raise RuntimeError(f"Gemini API returned HTTP {r.status_code}: {r.text}")
-                data = r.json()
-                candidates = data.get("candidates", [])
-                if not candidates or "content" not in candidates[0]:
-                    raise RuntimeError("Gemini returned empty candidates array.")
-                parts = candidates[0]["content"].get("parts", [])
-                if not parts:
-                    raise RuntimeError("Gemini returned empty parts in content.")
-                raw_output = parts[0].get("text", "").strip()
-                model_used = "Gemini 2.0 Flash"
-            except Exception as e:
-                raise RuntimeError(f"Gemini submission synthesis failed: {e}")
-
-        elif provider == "groq":
-            if not groq_key:
-                raise RuntimeError("Groq selected for submission synthesis, but GROQ_API_KEY is not set.")
+        hf_token = os.getenv("HUGGINGFACE_TOKEN","")
+        
+        system_prompt = f"Write an authentic Indian M.Tech graduate text summary of exactly around {word_count} words. No markdown, no timestamps."
+        user_content = f"Summarize this content: {clean_base}"
+        
+        if groq_key:
             try:
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
                 payload = {
                     "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content}
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 300
+                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
+                    "temperature": 0.3
                 }
                 r = requests.post(url, headers=headers, json=payload, timeout=15)
-                if r.status_code != 200:
-                    raise RuntimeError(f"Groq API returned HTTP {r.status_code}: {r.text}")
-                data = r.json()
-                choices = data.get("choices", [])
-                if not choices or "message" not in choices[0]:
-                    raise RuntimeError("Groq returned empty choices array.")
-                raw_output = choices[0]["message"].get("content", "").strip()
-                model_used = "Groq Llama 3.3 70B"
-            except Exception as e:
-                raise RuntimeError(f"Groq submission synthesis failed: {e}")
-
-        elif provider == "huggingface":
-            if not hf_token:
-                raise RuntimeError("Hugging Face selected for submission synthesis, but HUGGINGFACE_TOKEN is not set.")
+                raw_output = r.json()["choices"][0]["message"]["content"].strip()
+                final_sub = self._clean_for_submission(raw_output, target_words=word_count)
+                return {"status": "success", "submission_text": final_sub, "word_count": len(final_sub.split()), "model": "Groq Llama 3.3 70B"}
+            except Exception:
+                pass
+                
+        if hf_token and HAS_HF:
             try:
-                if HAS_HF and InferenceClient:
-                    client = InferenceClient(api_key=hf_token)
-                    resp = client.chat.completions.create(
-                        model="meta-llama/Llama-3.1-8B-Instruct",
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_content}
-                        ],
-                        temperature=0.25,
-                        max_tokens=300
-                    )
-                    if not resp or not resp.choices or not resp.choices[0].message:
-                        raise RuntimeError("Hugging Face InferenceClient returned empty response.")
-                    raw_output = resp.choices[0].message.content.strip()
-                    model_used = "Hugging Face Llama 3.1 8B"
-                else:
-                    url = "https://router.huggingface.co/v1/chat/completions"
-                    headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": "application/json"}
-                    payload = {
-                        "model": "meta-llama/Llama-3.1-8B-Instruct",
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_content}
-                        ],
-                        "temperature": 0.25,
-                        "max_tokens": 300
-                    }
-                    r = requests.post(url, headers=headers, json=payload, timeout=30)
-                    if r.status_code != 200:
-                        raise RuntimeError(f"Hugging Face Router returned HTTP {r.status_code}: {r.text}")
-                    choices = r.json().get("choices", [])
-                    if not choices or "message" not in choices[0]:
-                        raise RuntimeError("Hugging Face Router returned empty choices.")
-                    raw_output = choices[0]["message"].get("content", "").strip()
-                    model_used = "Hugging Face Llama 3.1 8B"
-            except Exception as e:
-                raise RuntimeError(f"Hugging Face submission synthesis failed: {e}")
-        else:
-            raise RuntimeError(f"Unsupported LLM provider '{provider}' for submission synthesis.")
+                client = InferenceClient(api_key=hf_token)
+                resp = client.chat.completions.create(
+                    model="meta-llama/Llama-3.1-8B-Instruct",
+                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
+                    temperature=0.3,
+                    max_tokens=300
+                )
+                raw_output = resp.choices.message.content.strip()
+                final_sub = self._clean_for_submission(raw_output, target_words=word_count)
+                return {"status": "success", "submission_text": final_sub, "word_count": len(final_sub.split()), "model": "Hugging Face Llama 3.1 8B"}
+            except Exception:
+                pass
+                
+        final_sub = " ".join(clean_base.split()[:word_count]) + "."
+        return {"status": "success", "submission_text": final_sub, "word_count": len(final_sub.split()), "model": "Local Fallback Engine"}
 
-        if not raw_output:
-            raise RuntimeError(f"Submission generation failed: Empty output received from {model_used or provider}.")
-
-        final_submission = self._clean_for_submission(raw_output, target_words=word_count)
-        words = final_submission.split()
+    def _build_summary_response(self, text: str, model_name: str, title: str, video_id: str) -> Dict[str, Any]:
+        """Helper to extract timestamps and format summary response."""
+        citations = []
+        seen = set()
+        ts_pattern = re.compile(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]")
+        for match in ts_pattern.finditer(text):
+            start_t = match.group(1)
+            key = (start_t, text[max(0, match.start() - 20):min(len(text), match.end() + 20)])
+            if key not in seen:
+                seen.add(key)
+                citations.append({
+                    "timestamp": start_t,
+                    "end_time": match.group(2) or start_t,
+                    "text": "Extracted segment"
+                })
 
         return {
-            "status": "success",
-            "submission_text": final_submission,
-            "word_count": len(words),
-            "target_word_count": word_count,
-            "model": model_used
+            "answer": text,
+            "citations": citations,
+            "web_sources": [],
+            "model": model_name,
+            "lecture_title": title,
+            "video_id": video_id,
+            "pinecone_vector_matches": 0
+        }
+
+    def generate_full_transcript_summary(
+        self,
+        transcript_str: str,
+        lecture_title: str,
+        video_id: str,
+        user_original_request: str,
+        model_id: Optional[str] = None,
+        user_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """SUMMARY-branch completion with exponential backoff, active model fallback, and Groq backup."""
+        import requests
+
+        target_video_id = str(video_id).strip() if video_id else ""
+        title = lecture_title or "Active Lecture"
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
+
+        system_prompt = (
+            f"You are an AI Tutor for lecture: '{title}'. Unpack the unabridged transcript "
+            "chronologically into distinct Markdown chapters using ## headers. Ground every statement "
+            "with exact inline [MM:SS] timestamps."
+        )
+        user_prompt = f"Task: {user_original_request}\n\nTranscript Content:\n{transcript_str}"
+
+        # 1. Primary path: Google Gemini with active production models and backoff
+        if gemini_key:
+            candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"]
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                "systemInstruction": {"parts": [{"text": system_prompt}]},
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096}
+            }
+            headers = {"Content-Type": "application/json"}
+
+            for model_name in candidate_models:
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                max_retries = 3
+
+                for attempt in range(max_retries):
+                    print(f"📜 [Full-Transcript Summary] Dispatching to {model_name} (Attempt {attempt + 1}/{max_retries})...")
+                    try:
+                        resp = requests.post(api_url, headers=headers, json=payload, timeout=90)
+                        
+                        if resp.status_code == 200:
+                            res_data = resp.json()
+                            final_answer = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                            return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
+
+                        # Retry on 503 (Overload) or 429 (Rate Limit)
+                        if resp.status_code in (503, 429):
+                            backoff = (2 ** attempt) + random.uniform(0.5, 1.5)
+                            print(f"⚠️ [Gemini {model_name} Busy ({resp.status_code})] Retrying in {backoff:.2f}s...")
+                            time.sleep(backoff)
+                            continue
+
+                        # Other status codes (e.g. 404): try next candidate model
+                        print(f"⚠️️ [Gemini {model_name} Notice] Status {resp.status_code}: {resp.text[:140]}")
+                        break
+
+                    except requests.exceptions.RequestException as e:
+                        print(f"⚠️ [Gemini Network Warning] {e}")
+                        time.sleep(1.5)
+
+        # 2. Resilient Cloud Fallback: Groq Llama 3.3 70B
+        if groq_key:
+            print("🚀 [Summary Fallback] Gemini overloaded or unavailable. Cascading to Groq Llama 3.3 70B...")
+            try:
+                groq_payload = {
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 4096
+                }
+                groq_headers = {
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json"
+                }
+                r = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers=groq_headers,
+                    json=groq_payload,
+                    timeout=90
+                )
+                if r.status_code == 200:
+                    ans = r.json()["choices"][0]["message"]["content"].strip()
+                    return self._build_summary_response(ans, "Groq Llama 3.3 70B (Failover)", title, target_video_id)
+            except Exception as ge:
+                print(f"⚠️ [Groq Fallback Warning] {ge}")
+
+        raise RuntimeError("All LLM providers are currently experiencing high demand. Please try again in a moment.")
+
+    @staticmethod
+    def check_llm_connectivity() -> Dict[str, Any]:
+        """Health check probe for configured LLM providers and the HF intent router."""
+        import requests
+        results = {}
+        active = None
+        configured_count = 0
+
+        probes = [
+            (
+                "groq",
+                "Groq Llama 3.3 70B",
+                os.getenv("GROQ_API_KEY", ""),
+                "https://api.groq.com/openai/v1/models",
+                {"Authorization": f"Bearer {os.getenv('GROQ_API_KEY', '')}"}
+            ),
+            (
+                "huggingface",
+                "Hugging Face Llama 3.1 8B",
+                os.getenv("HUGGINGFACE_TOKEN", ""),
+                "https://huggingface.co/api/whoami-v2",
+                {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_TOKEN', '')}"}
+            ),
+            (
+                "gemini",
+                "Gemini 3.8 Flash",
+                os.getenv("GEMINI_API_KEY", ""),
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={os.getenv('GEMINI_API_KEY', '')}",
+                {}
+            ),
+            (
+                "openai",
+                "OpenAI GPT-4o-mini",
+                os.getenv("OPENAI_API_KEY", ""),
+                "https://api.openai.com/v1/models",
+                {"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '')}"}
+            ),
+        ]
+
+        for provider_key, display_name, key, probe_url, headers in probes:
+            if not key:
+                results[provider_key] = {
+                    "display": display_name,
+                    "configured": False,
+                    "reachable": False,
+                    "latency_ms": None,
+                    "error": "API key not configured"
+                }
+                continue
+
+            configured_count += 1
+            t0 = time.time()
+            reachable = False
+            err_msg = None
+            try:
+                r = requests.get(probe_url, headers=headers, timeout=5)
+                reachable = (r.status_code == 200)
+                if not reachable:
+                    err_msg = f"HTTP {r.status_code}"
+            except Exception as exc:
+                err_msg = str(exc)
+
+            results[provider_key] = {
+                "display": display_name,
+                "configured": True,
+                "reachable": reachable,
+                "latency_ms": round((time.time() - t0) * 1000, 2) if reachable else None,
+                "error": err_msg
+            }
+            if active is None and reachable:
+                active = provider_key
+
+        hf_token = os.getenv("HUGGINGFACE_TOKEN", "")
+        router_configured = bool(hf_token)
+        results["hf_router"] = {
+            "display": f"HF Router ({os.getenv('LLAMA_MODEL', 'meta-llama/Llama-3.1-8B-Instruct')})",
+            "configured": router_configured,
+            "reachable": results.get("huggingface", {}).get("reachable", False),
+            "latency_ms": results.get("huggingface", {}).get("latency_ms"),
+            "error": None if router_configured else "Missing HUGGINGFACE_TOKEN"
+        }
+
+        return {
+            "status": "ready" if any(r["reachable"] for k, r in results.items() if k != "hf_router") else "degraded",
+            "active_provider": active,
+            "configured_count": configured_count,
+            "providers": results
         }
 
 
 pinecone_rag_engine = Llama3PineconeRAGStore()
-

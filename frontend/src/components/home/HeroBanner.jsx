@@ -101,27 +101,7 @@ export default function HeroBanner({
             </Typography>
           </Paper>
         </Box>
-      ) : (
-        <Button
-          variant="contained"
-          onClick={() => handleGoogleSignIn(false)}
-          startIcon={<GoogleIcon />}
-          sx={{
-            background: '#ffffff',
-            color: '#1f2937',
-            textTransform: 'none',
-            fontWeight: 700,
-            fontSize: '0.86rem',
-            borderRadius: '20px',
-            px: 2.5,
-            py: 1,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
-            '&:hover': { background: '#f3f4f6' }
-          }}
-        >
-          Sign in with Google
-        </Button>
-      )}
+      ) : ''}
     </Paper>
   );
 }

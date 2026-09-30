@@ -97,8 +97,19 @@ class RelationalDBManager:
             raise ValueError("DATABASE_URL is not set.")
         return psycopg2.connect(url, cursor_factory=RealDictCursor)
 
-    def _init_postgres_schema(self):
-        """Initialize PostgreSQL schema for LectureScribe tables."""
+    def _init_postgres_schema(self, _first_init: bool = True):
+        """Initialize PostgreSQL schema for LectureScribe tables.
+
+        Idempotent: when ``_first_init`` is False (e.g. re-invoked from the
+        FastAPI lifespan block), the heavy connection + CREATE TABLE work and
+        the verbose "[PostgreSQL] Connection verified…" print are skipped IF
+        ``self._schema_initialized`` is already True. The lifespan block is
+        expected to print its own short one-line confirmation banner.
+        """
+        if not _first_init and self._schema_initialized:
+            # Already verified and initialized at module-import time.
+            # No-op here so we don't duplicate the "[PostgreSQL] Connection verified…" banner.
+            return
         if not self.postgres_url:
             print("⚠️ [PostgreSQL Notice] DATABASE_URL not set yet. Skipping schema initialization.")
             return
@@ -218,6 +229,7 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_res_email ON lecturescribe_resources(user_email);
                     """)
                     conn.commit()
+            self._schema_initialized = True
             print("[PostgreSQL] Connection verified and schema initialized successfully.")
         finally:
             conn.close()

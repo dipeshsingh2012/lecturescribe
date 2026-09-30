@@ -42,24 +42,39 @@ class AlgoliaSearchService:
         self.client = None
         self.local_records: List[Dict[str, Any]] = []
 
-        self._init_algolia()
+        self._init_algolia(_first_init=True)
 
-    def _init_algolia(self):
-        self.app_id = os.getenv("ALGOLIA_APP_ID", "")
-        self.api_key = os.getenv("ALGOLIA_API_KEY", "")
-        self.index_name = os.getenv("ALGOLIA_INDEX_NAME", "lecturescribe_transcripts_v1")
+    def _init_algolia(self, _first_init: bool = False):
+        app_id = os.getenv("ALGOLIA_APP_ID", "")
+        api_key = os.getenv("ALGOLIA_API_KEY", "")
+        index_name = os.getenv("ALGOLIA_INDEX_NAME", "lecturescribe_transcripts_v1")
+        creds_changed = (
+            self.app_id != app_id
+            or self.api_key != api_key
+            or self.index_name != index_name
+        )
+        self.app_id = app_id
+        self.api_key = api_key
+        self.index_name = index_name
         try:
-            if HAS_ALGOLIA and self.app_id and self.api_key:
-                self.client = SearchClientSync(self.app_id, self.api_key)
-                print(f"[Algolia Service] Connected to Algolia Cloud Index '{self.index_name}'.")
-            else:
-                print(f"[Algolia Service] ALGOLIA_APP_ID / ALGOLIA_API_KEY not configured. Using dynamic indexer.")
+            if not (HAS_ALGOLIA and self.app_id and self.api_key):
+                if _first_init:
+                    print(f"[Algolia Service] ALGOLIA_APP_ID / ALGOLIA_API_KEY not configured. Using dynamic indexer.")
+                self.client = None
+                return
+            # Idempotency guard: if a client already exists and credentials haven't changed,
+            # skip the verbose "[Algolia Service] Connected to..." banner. The lifespan block
+            # will print its own short green rule-confirmation line.
+            if self.client is not None and not creds_changed and not _first_init:
+                return
+            self.client = SearchClientSync(self.app_id, self.api_key)
+            print(f"[Algolia Service] Connected to Algolia Cloud Index '{self.index_name}'.")
         except Exception as e:
             print(f"[Algolia Warning] Could not initialize Algolia client: {e}")
 
     def setup_index(self) -> bool:
         """Create and configure Algolia index settings on server start."""
-        self._init_algolia()
+        self._init_algolia(_first_init=False)
         if not self.client:
             return False
 

@@ -44,6 +44,9 @@ def slm_classify_intent(
         r"^summarise\b",
         r"summary for \d+\s*min",
         r"summarize (?:the )?(?:main|core )?takeaways",
+        r"^explain (?:the )?(?:key |core )?(?:concepts|definitions|takeaways)",
+        r"(?:key|core) concepts and definitions",
+        r"\b(key takeaways|definitions)\b",
     ]
     if any(re.search(p, clean_q) for p in summary_direct_patterns):
         print(f"🧭 [Fast Intent Router] Deterministically classified as: {INTENT_SUMMARY}")
@@ -133,7 +136,7 @@ def slm_classify_intent(
         except Exception as e:
             print(f"⚠️ [LLM Router Notice] Gemini classification failed ({e})")
 
-    if re.search(r"\b(summary|summarize|summarise|takeaways|study guide|lecture notes)\b", clean_q):
+    if re.search(r"\b(summary|summarize|summarise|takeaways|study guide|lecture notes|key concepts|definitions)\b", clean_q):
         print(f"🧭 [Intent Router Fallback] Classified as: {INTENT_SUMMARY} via pattern match.")
         return INTENT_SUMMARY
 

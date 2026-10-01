@@ -291,4 +291,38 @@ describe('useAITutor hook functionality', () => {
     expect(result.current.chatMessages[1].text).toBe('ELIZA was created by Joseph Weizenbaum at MIT.');
     expect(result.current.submissionSummaries['bot-1']).toBe('ELIZA created by Joseph Weizenbaum.');
   });
+
+  it('deleteChatMessage removes paired message from state and calls DELETE endpoint', async () => {
+    let deletedUrl = null;
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (opts?.method === 'DELETE' && url.includes('/api/chat/message')) {
+        deletedUrl = url;
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'success' }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const activeData = { videoId: 'v123' };
+    const { result } = renderHook(() => useAITutor(activeData, { email: 'student@example.com' }));
+
+    act(() => {
+      result.current.setChatMessages([
+        { id: 'msg_user_42', sender: 'user', text: 'Prompt 1' },
+        { id: 'msg_bot_42', sender: 'bot', text: 'Response 1', submission_text: 'Sub 1' },
+        { id: 'msg_user_43', sender: 'user', text: 'Prompt 2' },
+        { id: 'msg_bot_43', sender: 'bot', text: 'Response 2', submission_text: 'Sub 2' }
+      ]);
+    });
+
+    await act(async () => {
+      await result.current.deleteChatMessage('msg_bot_42');
+    });
+
+    expect(result.current.chatMessages.length).toBe(2);
+    expect(result.current.chatMessages[0].id).toBe('msg_user_43');
+    expect(result.current.chatMessages[1].id).toBe('msg_bot_43');
+    expect(deletedUrl).toContain('/api/chat/message?message_id=msg_bot_42');
+    expect(deletedUrl).toContain('video_id=v123');
+    expect(deletedUrl).toContain('email=student%40example.com');
+  });
 });

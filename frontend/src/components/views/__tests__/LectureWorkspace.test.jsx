@@ -68,10 +68,27 @@ describe('LectureWorkspace', () => {
     expect(screen.getByText('Kernel architecture.')).toBeInTheDocument();
   });
 
-  it('renders AITutor on the right when activeTab is tutor', () => {
-    render(<LectureWorkspace {...baseProps} activeTab="tutor" />);
+  it('renders AITutor on the right when activeTab is tutor and passes deleteChatMessage', () => {
+    const deleteChatMessage = vi.fn();
+    const messages = [
+      { id: 'msg_user_1', sender: 'user', text: 'Prompt 1' },
+      { id: 'msg_bot_1', sender: 'bot', text: 'Answer 1' }
+    ];
+    render(
+      <LectureWorkspace
+        {...baseProps}
+        activeTab="tutor"
+        chatMessages={messages}
+        deleteChatMessage={deleteChatMessage}
+      />
+    );
 
     expect(screen.getAllByText('Operating Systems').length).toBeGreaterThan(0);
     expect(screen.getAllByText('AI Tutor').length).toBeGreaterThan(0);
+
+    const deleteBtn = screen.getByRole('button', { name: /Delete message/i });
+    deleteBtn.click();
+    expect(deleteChatMessage).toHaveBeenCalledWith('msg_user_1');
   });
 });
+

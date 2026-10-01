@@ -226,6 +226,114 @@ class TestChatAutopopulate(unittest.TestCase):
         )
         mock_save_log.assert_called_once()
 
+    def test_autopopulate_prompts_classified_as_summary(self):
+        """All 4 standard autopopulate prompts must be deterministically classified as SUMMARY."""
+        from backend.slm_router import slm_classify_intent, INTENT_SUMMARY
+        for prompt in AUTOPOPULATE_PROMPTS:
+            intent = slm_classify_intent(prompt)
+            self.assertEqual(intent, INTENT_SUMMARY, f"Prompt '{prompt}' should classify as SUMMARY")
+
+    @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.db_manager.get_chat_history")
+    @patch("backend.main.db_manager.save_chat_log")
+    @patch("backend.main.process_chat_message")
+    def test_autopopulate_concurrent_requests_serialized_by_lock(
+        self,
+        mock_process,
+        mock_save_log,
+        mock_get_history,
+        mock_get_video
+    ):
+        """Concurrent requests for the same video are serialized by video_lock so LLMs only run once."""
+        mock_get_video.return_value = {
+            "title": "Concurrent Lecture",
+            "cues": [{"time": "00:01", "text": "Intro"}]
+        }
+        mock_process.return_value = {
+            "reply": "Generated answer",
+            "citations": [],
+            "model": "Groq Llama 3.3 70B",
+            "submission_text": "Sub text"
+        }
+        
+        # When first request checks: empty.
+        # When first request finishes saving: returns 8 messages.
+        # When second request checks under lock: returns 8 messages.
+        persisted = [{"id": f"msg_{i}", "text": f"text {i}"} for i in range(8)]
+        mock_get_history.side_effect = [[], persisted, persisted]
+
+        import concurrent.futures
+        def call_endpoint():
+            return self.client.post("/api/chat/autopopulate", json={
+                "video_id": "vid-concurrent",
+                "user_email": "test@example.com"
+            })
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            f1 = executor.submit(call_endpoint)
+            f2 = executor.submit(call_endpoint)
+            r1 = f1.result()
+            r2 = f2.result()
+
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r2.status_code, 200)
+        # process_chat_message should only be called 4 times (for the first request), NOT 8 times
+        self.assertEqual(mock_process.call_count, 4)
+
+    @patch("backend.main.db_manager.delete_chat_message")
+    @patch("backend.main.redis_cache")
+    def test_delete_chat_message_endpoint(self, mock_redis, mock_delete_msg):
+        """DELETE /api/chat/message deletes row from DB and invalidates video cache."""
+        mock_delete_msg.return_value = True
+        res = self.client.delete("/api/chat/message?message_id=msg_user_123&video_id=vid_999&email=test@example.com")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["message_id"], "msg_user_123")
+        mock_delete_msg.assert_called_once_with(
+            message_id="msg_user_123",
+            video_id="vid_999",
+            user_email="test@example.com"
+        )
+        mock_redis.invalidate_video.assert_called_once_with("vid_999")
+
+    def test_delete_chat_message_endpoint_missing_id(self):
+        """DELETE /api/chat/message without message_id returns 422/400 validation error."""
+        res = self.client.delete("/api/chat/message")
+        self.assertIn(res.status_code, (400, 422))
+
+    @patch("backend.database.RelationalDBManager._get_connection")
+    def test_delete_chat_message_db_method(self, mock_get_conn):
+        """RelationalDBManager.delete_chat_message correctly parses message IDs and executes parameterized query."""
+        from backend.database import db_manager
+        
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_get_conn.return_value = mock_conn
+
+        # Test with msg_user_ prefix
+        success = db_manager.delete_chat_message("msg_user_456", video_id="vid1", user_email="user@test.com")
+        self.assertTrue(success)
+        mock_cursor.execute.assert_called_with(
+            "DELETE FROM lecturescribe_chat_logs WHERE id = %s AND video_id = %s AND (user_email = %s OR user_email IS NULL);",
+            (456, "vid1", "user@test.com")
+        )
+
+        # Test with msg_bot_ prefix
+        success2 = db_manager.delete_chat_message("msg_bot_789")
+        self.assertTrue(success2)
+        mock_cursor.execute.assert_called_with(
+            "DELETE FROM lecturescribe_chat_logs WHERE id = %s;",
+            (789,)
+        )
+
+        # Test with invalid string ID
+        success3 = db_manager.delete_chat_message("invalid_id")
+        self.assertFalse(success3)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -242,6 +242,7 @@ export default function App() {
             webSearchEnabled={tutor.webSearchEnabled}
             setWebSearchEnabled={tutor.setWebSearchEnabled}
             clearChatHistory={tutor.clearChatHistory}
+            deleteChatMessage={tutor.deleteChatMessage}
             chatMessages={tutor.chatMessages}
             setChatMessages={tutor.setChatMessages}
             viewMode={tutor.viewMode}

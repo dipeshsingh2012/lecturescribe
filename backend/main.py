@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+import threading
 import traceback
 import concurrent.futures
 from pathlib import Path
@@ -136,6 +137,7 @@ class RAGQueryRequest(BaseModel):
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
     chat_history: Optional[List[Dict[str, Any]]] = None
+    enforce_regenerate: Optional[bool] = False
 
 class SubmissionRequest(BaseModel):
     original_text: str
@@ -326,7 +328,7 @@ def rag_query(req: RAGQueryRequest):
     print(f"📥 [API /api/rag/query] === Incoming RAG Query ===")
     print(f"   Query: '{req.query}'")
     print(f"   Video ID: '{video_id}' | Title: '{video_title or 'Auto'}'")
-    print(f"   Top K: {req.top_k} | Web Search Enabled: {req.enable_web_search} | Bypass Cache: {req.bypass_cache}")
+    print(f"   Top K: {req.top_k} | Web Search Enabled: {req.enable_web_search} | Bypass Cache: {req.bypass_cache} | Enforce Regenerate: {req.enforce_regenerate}")
 
     # 1. Check Hosted Redis Cache First
     if not req.bypass_cache and video_id and redis_cache:
@@ -377,7 +379,8 @@ def rag_query(req: RAGQueryRequest):
                 top_k=req.top_k or 10,
                 enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
                 user_email=req.user_email,
-                chat_history=req.chat_history
+                chat_history=req.chat_history,
+                enforce_regenerate=req.enforce_regenerate or False
             )
         else:
             result = pinecone_rag_engine.query_rag(
@@ -388,7 +391,8 @@ def rag_query(req: RAGQueryRequest):
                 top_k=req.top_k or 10,
                 enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
                 user_email=req.user_email,
-                chat_history=req.chat_history
+                chat_history=req.chat_history,
+                enforce_regenerate=req.enforce_regenerate or False
             )
     except Exception as e:
         elapsed = time.time() - t_start
@@ -409,11 +413,12 @@ def rag_query(req: RAGQueryRequest):
         else:
             raise HTTPException(status_code=500, detail=f"{err_type}: {err_msg}")
 
-    # Auto-generate academic submission version (~120 words)
+    # Auto-generate academic submission version
     sub_res = pinecone_rag_engine.generate_submission_version(
         original_text=result.get("answer", ""),
         video_id=req.video_id,
-        word_count=120
+        word_count=120,
+        query=req.query
     )
     result["submission_text"] = sub_res.get("submission_text", "")
     result["submission_word_count"] = sub_res.get("word_count", 0)
@@ -567,7 +572,8 @@ def process_chat_message(
     sub_res = pinecone_rag_engine.generate_submission_version(
         original_text=reply,
         video_id=vid,
-        word_count=120
+        word_count=120,
+        query=user_prompt
     )
     sub_text = sub_res.get("submission_text", "")
     sub_word_count = sub_res.get("word_count", 0)
@@ -638,6 +644,10 @@ AUTOPOPULATE_PROMPTS = [
     "Explain key concepts and definitions"
 ]
 
+# Per-video locks: prevent concurrent autopopulate runs from duplicating all 4 prompts
+_autopopulate_locks: dict = {}
+_locks_mutex = threading.Lock()
+
 
 @app.post("/api/chat/autopopulate")
 def autopopulate_chat(req: AutoPopulateRequest):
@@ -650,88 +660,95 @@ def autopopulate_chat(req: AutoPopulateRequest):
     if not vid or vid == "active":
         raise HTTPException(status_code=400, detail="A valid video_id is required.")
 
-    # 1. Return immediately if chat logs already exist in PostgreSQL
-    existing = db_manager.get_chat_history(vid, user_email=req.user_email)
-    if existing and len(existing) > 0:
+    lock_key = f"{vid}:{req.user_email or 'all'}"
+    with _locks_mutex:
+        if lock_key not in _autopopulate_locks:
+            _autopopulate_locks[lock_key] = threading.Lock()
+        video_lock = _autopopulate_locks[lock_key]
+
+    with video_lock:
+        # 1. Return immediately if chat logs already exist in PostgreSQL
+        existing = db_manager.get_chat_history(vid, user_email=req.user_email)
+        if existing and len(existing) > 0:
+            return {
+                "status": "success",
+                "video_id": vid,
+                "count": len(existing),
+                "messages": existing
+            }
+
+        # 2. Retrieve video details and cues from DB or request
+        saved_vid = db_manager.get_saved_video(vid)
+        title = (req.video_title or (saved_vid.get("title") if saved_vid else None) or "Lecture").strip()
+        cues = req.cues or (saved_vid.get("cues") if saved_vid else None) or []
+        if not cues:
+            return {
+                "status": "no_cues",
+                "video_id": vid,
+                "count": 0,
+                "messages": []
+            }
+
+        # Ingest cues up front to prime local chunks & Algolia search once
+        if cues and len(pinecone_rag_engine.local_chunks) == 0:
+            pinecone_rag_engine.ingest_transcript(vid, title, cues)
+            algolia_service.ingest_cues(vid, title, cues)
+
+        # 3. Concurrently execute the 4 standard prompts
+        def _execute_prompt(prompt_text: str):
+            try:
+                return process_chat_message(
+                    user_prompt=prompt_text,
+                    video_id=vid,
+                    video_title=title,
+                    cues=cues,
+                    user_email=req.user_email,
+                    bypass_cache=False,
+                    chat_history=[],
+                    save_to_db=False  # Saved sequentially below to guarantee chronological ordering
+                )
+            except Exception as err:
+                print(f"⚠️ [Autopopulate Worker Error for '{prompt_text}']: {err}")
+                return None
+
+        results = [None] * len(AUTOPOPULATE_PROMPTS)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            future_to_idx = {
+                executor.submit(_execute_prompt, prompt): idx 
+                for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS)
+            }
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
+
+        # 4. Sequentially persist to PostgreSQL in exact prompt order
+        for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS):
+            res = results[idx]
+            if not res or not res.get("reply"):
+                continue
+            try:
+                db_manager.save_chat_log(
+                    video_id=vid,
+                    user_prompt=prompt,
+                    ai_reply=res["reply"],
+                    citations=res.get("citations", []),
+                    user_email=req.user_email,
+                    submission_text=res.get("submission_text", ""),
+                    model=res.get("model", ""),
+                    web_sources=res.get("web_sources", [])
+                )
+                time.sleep(0.01)  # 10ms monotonic timestamp spacing
+            except Exception as save_err:
+                print(f"⚠️ [Autopopulate Save Error for prompt {idx}]: {save_err}")
+
+        # 5. Fetch persisted messages from PostgreSQL
+        persisted_messages = db_manager.get_chat_history(vid, user_email=req.user_email)
         return {
             "status": "success",
             "video_id": vid,
-            "count": len(existing),
-            "messages": existing
+            "count": len(persisted_messages),
+            "messages": persisted_messages
         }
-
-    # 2. Retrieve video details and cues from DB or request
-    saved_vid = db_manager.get_saved_video(vid)
-    title = (req.video_title or (saved_vid.get("title") if saved_vid else None) or "Lecture").strip()
-    cues = req.cues or (saved_vid.get("cues") if saved_vid else None) or []
-    if not cues:
-        return {
-            "status": "no_cues",
-            "video_id": vid,
-            "count": 0,
-            "messages": []
-        }
-
-    # Ingest cues up front to prime local chunks & Algolia search once
-    if cues and len(pinecone_rag_engine.local_chunks) == 0:
-        pinecone_rag_engine.ingest_transcript(vid, title, cues)
-        algolia_service.ingest_cues(vid, title, cues)
-
-    # 3. Concurrently execute the 4 standard prompts
-    def _execute_prompt(prompt_text: str):
-        try:
-            return process_chat_message(
-                user_prompt=prompt_text,
-                video_id=vid,
-                video_title=title,
-                cues=cues,
-                user_email=req.user_email,
-                bypass_cache=False,
-                chat_history=[],
-                save_to_db=False  # Saved sequentially below to guarantee chronological ordering
-            )
-        except Exception as err:
-            print(f"⚠️ [Autopopulate Worker Error for '{prompt_text}']: {err}")
-            return None
-
-    results = [None] * len(AUTOPOPULATE_PROMPTS)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_idx = {
-            executor.submit(_execute_prompt, prompt): idx 
-            for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS)
-        }
-        for future in concurrent.futures.as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            results[idx] = future.result()
-
-    # 4. Sequentially persist to PostgreSQL in exact prompt order
-    for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS):
-        res = results[idx]
-        if not res or not res.get("reply"):
-            continue
-        try:
-            db_manager.save_chat_log(
-                video_id=vid,
-                user_prompt=prompt,
-                ai_reply=res["reply"],
-                citations=res.get("citations", []),
-                user_email=req.user_email,
-                submission_text=res.get("submission_text", ""),
-                model=res.get("model", ""),
-                web_sources=res.get("web_sources", [])
-            )
-            time.sleep(0.01)  # 10ms monotonic timestamp spacing
-        except Exception as save_err:
-            print(f"⚠️ [Autopopulate Save Error for prompt {idx}]: {save_err}")
-
-    # 5. Fetch persisted messages from PostgreSQL
-    persisted_messages = db_manager.get_chat_history(vid, user_email=req.user_email)
-    return {
-        "status": "success",
-        "video_id": vid,
-        "count": len(persisted_messages),
-        "messages": persisted_messages
-    }
 
 
 @app.get("/api/chat/history")
@@ -773,6 +790,32 @@ def clear_chat_history(
     return {
         "status": "success" if success else "failed",
         "video_id": vid
+    }
+
+
+@app.delete("/api/chat/message")
+def delete_chat_message(
+    message_id: str = Query(..., description="Message ID to delete (e.g., msg_user_123 or msg_bot_123)"),
+    video_id: Optional[str] = Query(None, description="Optional Vimeo Video ID"),
+    email: Optional[str] = Query(None, description="User email for scoped deletion"),
+    user_email: Optional[str] = Query(None, description="User email alias")
+):
+    """Delete a single message or QA log from PostgreSQL."""
+    mid = str(message_id or "").strip()
+    if not mid:
+        raise HTTPException(status_code=400, detail="message_id parameter is required.")
+
+    target_email = (email or user_email or "").strip()
+    success = db_manager.delete_chat_message(
+        message_id=mid,
+        video_id=video_id.strip() if video_id else None,
+        user_email=target_email or None
+    )
+    if video_id and redis_cache:
+        redis_cache.invalidate_video(video_id.strip())
+    return {
+        "status": "success" if success else "failed",
+        "message_id": mid
     }
 
 

@@ -41,6 +41,30 @@ Here's what I found regarding machine learning paradigms."""
         self.assertNotIn("[00:00 - 15:30]", cleaned)
         self.assertNotIn("[15:30 - 30:00]", cleaned)
 
+    def test_clean_submission_preserves_paragraphs(self):
+        """Verify _clean_for_submission keeps paragraph breaks."""
+        raw = "First paragraph content.\n\nSecond paragraph content after line break."
+        cleaned = pinecone_rag_engine._clean_for_submission(raw, preserve_paragraphs=True)
+        self.assertIn("\n\n", cleaned)
+        self.assertIn("First paragraph content.", cleaned)
+        self.assertIn("Second paragraph content after line break.", cleaned)
+
+    def test_generate_submission_adaptive_comprehensive_target(self):
+        """Verify comprehensive summary query uses higher target word count in fallback."""
+        import os
+        from unittest.mock import patch
+        # Long sample text with 500 words
+        sample_words = " ".join([f"topic{i}" for i in range(500)]) + "."
+        with patch.dict(os.environ, {"GROQ_API_KEY": "", "GEMINI_API_KEY": ""}):
+            # Mocking keys to test fallback extraction logic
+            with patch.object(os, "getenv", return_value="dummy_key"):
+                # With dummy key that fails network, should fall back to local extractor with ~350 words
+                result = pinecone_rag_engine.generate_submission_version(
+                    sample_words,
+                    query="Generate Full Comprehensive Summary"
+                )
+                self.assertGreaterEqual(result["word_count"], 300)
+
     def test_generate_submission_fail_fast_no_keys(self):
         """Verify fail-fast exception when no LLM keys are configured."""
         import os
@@ -51,4 +75,5 @@ Here's what I found regarding machine learning paradigms."""
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -29,6 +29,7 @@ export default function LectureWorkspace({
   webSearchEnabled,
   setWebSearchEnabled,
   clearChatHistory,
+  deleteChatMessage,
   selectedModel,
   setSelectedModel,
   availableModels,
@@ -90,6 +91,7 @@ export default function LectureWorkspace({
           webSearchEnabled={webSearchEnabled}
           setWebSearchEnabled={setWebSearchEnabled}
           clearChatHistory={clearChatHistory}
+          deleteChatMessage={deleteChatMessage}
           selectedModel={selectedModel}
           setSelectedModel={setSelectedModel}
           availableModels={availableModels}

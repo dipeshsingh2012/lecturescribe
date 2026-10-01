@@ -17,19 +17,26 @@ export function useAITutor(activeData, googleUser) {
   const chatInputRef = useRef(null);
   const clearedInSessionRef = useRef(false);
   const currentVideoIdRef = useRef(null);
+  const inFlightFetchRef = useRef(null);
+  const isAutopopulatingRef = useRef(false);
 
   const activeDataRef = useRef(activeData);
   useEffect(() => {
     activeDataRef.current = activeData;
   }, [activeData]);
 
-  // Auto scroll chat to bottom
+  // Auto scroll chat to bottom only when new messages are appended, without hijacking manual user scroll
+  const prevMessageCountRef = useRef(0);
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages, chatLoading]);
+    if (chatMessages.length > prevMessageCountRef.current) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    prevMessageCountRef.current = chatMessages.length;
+  }, [chatMessages.length]);
 
   const autopopulateChat = async (videoId, userEmail = null) => {
-    if (!videoId) return;
+    if (!videoId || isAutopopulatingRef.current) return;
+    isAutopopulatingRef.current = true;
     setChatLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/chat/autopopulate`, {
@@ -59,6 +66,7 @@ export function useAITutor(activeData, googleUser) {
     } catch (err) {
       console.warn("Auto-population error:", err);
     } finally {
+      isAutopopulatingRef.current = false;
       setChatLoading(false);
     }
   };
@@ -69,6 +77,11 @@ export function useAITutor(activeData, googleUser) {
       setSubmissionSummaries({});
       return;
     }
+    // Prevent duplicate in-flight fetch/autopopulate for the same video
+    if (inFlightFetchRef.current === videoId) {
+      return;
+    }
+    inFlightFetchRef.current = videoId;
     try {
       const emailParam = userEmail ? `&email=${encodeURIComponent(userEmail)}` : '';
       const res = await fetch(`${API_BASE}/api/chat/history?video_id=${encodeURIComponent(videoId)}${emailParam}`);
@@ -94,6 +107,10 @@ export function useAITutor(activeData, googleUser) {
       }
     } catch (e) {
       console.warn("Could not fetch chat history:", e);
+    } finally {
+      if (inFlightFetchRef.current === videoId) {
+        inFlightFetchRef.current = null;
+      }
     }
     setChatMessages([]);
     setSubmissionSummaries({});
@@ -106,7 +123,7 @@ export function useAITutor(activeData, googleUser) {
         currentVideoIdRef.current = activeData.videoId;
         clearedInSessionRef.current = false;
         fetchChatHistory(activeData.videoId, googleUser?.email);
-      } else if (chatMessages.length === 0 && !chatLoading && !clearedInSessionRef.current) {
+      } else if (chatMessages.length === 0 && !chatLoading && !clearedInSessionRef.current && inFlightFetchRef.current !== activeData.videoId) {
         fetchChatHistory(activeData.videoId, googleUser?.email);
       }
     } else {
@@ -118,6 +135,8 @@ export function useAITutor(activeData, googleUser) {
   const clearChatHistory = async () => {
     if (!activeData?.videoId) return;
     clearedInSessionRef.current = true;
+    inFlightFetchRef.current = null;
+    isAutopopulatingRef.current = false;
     try {
       const emailParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
       await fetch(`${API_BASE}/api/chat/history?video_id=${encodeURIComponent(activeData.videoId)}${emailParam}`, {
@@ -130,10 +149,52 @@ export function useAITutor(activeData, googleUser) {
     setSubmissionSummaries({});
   };
 
+  const deleteChatMessage = async (messageId) => {
+    if (messageId === undefined || messageId === null || messageId === '') return;
+
+    // Check if it's a paired turn (msg_user_X <-> msg_bot_X)
+    let pairedPrefix = null;
+    let baseId = null;
+    if (typeof messageId === 'string') {
+      if (messageId.startsWith('msg_user_')) {
+        baseId = messageId.replace('msg_user_', '');
+        pairedPrefix = 'msg_bot_';
+      } else if (messageId.startsWith('msg_bot_')) {
+        baseId = messageId.replace('msg_bot_', '');
+        pairedPrefix = 'msg_user_';
+      }
+    }
+
+    setChatMessages(prev => prev.filter((m, i) => {
+      if (m.id === messageId || i === messageId) return false;
+      if (baseId && m.id === `${pairedPrefix}${baseId}`) return false;
+      return true;
+    }));
+
+    setSubmissionSummaries(prev => {
+      const copy = { ...prev };
+      delete copy[messageId];
+      if (baseId) delete copy[`msg_bot_${baseId}`];
+      return copy;
+    });
+
+    try {
+      const emailParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
+      const vid = activeDataRef.current?.videoId || activeData?.videoId;
+      const vidParam = vid ? `&video_id=${encodeURIComponent(vid)}` : '';
+      await fetch(`${API_BASE}/api/chat/message?message_id=${encodeURIComponent(messageId)}${vidParam}${emailParam}`, {
+        method: 'DELETE'
+      });
+    } catch (e) {
+      console.warn("Could not delete chat message on server:", e);
+    }
+  };
+
   const initChatMessages = (title, videoId = null) => {
     const targetVid = videoId || activeData?.videoId;
     if (targetVid) {
       clearedInSessionRef.current = false;
+      currentVideoIdRef.current = targetVid;
       fetchChatHistory(targetVid, googleUser?.email);
     } else {
       setChatMessages([]);
@@ -145,7 +206,8 @@ export function useAITutor(activeData, googleUser) {
     const textToSend = customPrompt || chatInput;
     if (!textToSend.trim() || !activeData) return;
 
-    const newMessages = [...chatMessages, { sender: 'user', text: textToSend }];
+    const userMsgId = `msg_user_${Date.now()}`;
+    const newMessages = [...chatMessages, { id: userMsgId, sender: 'user', text: textToSend }];
     setChatMessages(newMessages);
     setChatInput('');
     setChatLoading(true);
@@ -168,7 +230,7 @@ export function useAITutor(activeData, googleUser) {
       if (res.ok) {
         const data = await res.json();
         const botMsg = {
-          id: data.message_id || Date.now().toString(),
+          id: data.message_id || `msg_bot_${Date.now()}`,
           sender: 'bot',
           text: data.answer,
           citations: data.citations || [],
@@ -284,6 +346,7 @@ export function useAITutor(activeData, googleUser) {
           cues: activeData.cues || [],
           enable_web_search: webSearchEnabled,
           bypass_cache: true,
+          enforce_regenerate: true,
           user_email: googleUser?.email || null,
           chat_history: chatMessages.slice(0, botMsgIdx).slice(-6)
         })
@@ -336,6 +399,7 @@ export function useAITutor(activeData, googleUser) {
     fetchChatHistory,
     autopopulateChat,
     clearChatHistory,
+    deleteChatMessage,
     initChatMessages,
     handleSendMessage,
     generateSubmissionVersion,
@@ -345,3 +409,5 @@ export function useAITutor(activeData, googleUser) {
     regenerateResponse
   };
 }
+
+export default useAITutor;

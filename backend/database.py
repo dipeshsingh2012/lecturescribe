@@ -539,6 +539,57 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
+    def delete_chat_message(
+        self,
+        message_id: str,
+        video_id: Optional[str] = None,
+        user_email: Optional[str] = None
+    ) -> bool:
+        """
+        Delete a chat interaction log from PostgreSQL.
+        Accepts formats: 'msg_user_<id>', 'msg_bot_<id>', or raw integer string '<id>'.
+        """
+        if not message_id:
+            return False
+
+        clean_id_str = str(message_id).strip()
+        if clean_id_str.startswith("msg_user_"):
+            clean_id_str = clean_id_str[len("msg_user_"):]
+        elif clean_id_str.startswith("msg_bot_"):
+            clean_id_str = clean_id_str[len("msg_bot_"):]
+
+        try:
+            row_id = int(clean_id_str)
+        except ValueError:
+            print(f"[PostgreSQL Notice] Invalid message_id for deletion: '{message_id}'")
+            return False
+
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = "DELETE FROM lecturescribe_chat_logs WHERE id = %s"
+                    params = [row_id]
+                    if video_id:
+                        query += " AND video_id = %s"
+                        params.append(video_id)
+                    if clean_email:
+                        query += " AND (user_email = %s OR user_email IS NULL)"
+                        params.append(clean_email)
+                    query += ";"
+                    cursor.execute(query, tuple(params))
+                    deleted_count = cursor.rowcount
+                    conn.commit()
+                    return deleted_count > 0
+        except Exception as e:
+            print(f"[PostgreSQL Notice] delete_chat_message fallback ({e}).")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
     def record_user_lecture(
         self,
         user_email: str,

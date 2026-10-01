@@ -15,7 +15,8 @@ import {
   RefreshCw,
   Send,
   Check,
-  Copy
+  Copy,
+  ChevronDown
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
@@ -23,6 +24,7 @@ export default function AITutor({
   webSearchEnabled,
   setWebSearchEnabled,
   clearChatHistory,
+  deleteChatMessage,
   selectedModel,
   setSelectedModel,
   availableModels = [],
@@ -48,7 +50,19 @@ export default function AITutor({
   handleSendMessage
 }) {
   const [internalCopiedResponseId, setInternalCopiedResponseId] = React.useState(null);
+  const [showScrollBottom, setShowScrollBottom] = React.useState(false);
+  const messagesContainerRef = React.useRef(null);
   const activeCopiedResponseId = copiedResponseId !== undefined && copiedResponseId !== null ? copiedResponseId : internalCopiedResponseId;
+
+  const handleScroll = (e) => {
+    const el = e.currentTarget;
+    const isUp = el.scrollHeight - el.scrollTop - el.clientHeight > 140;
+    setShowScrollBottom(isUp);
+  };
+
+  const scrollToBottom = () => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
 
   const handleCopyResponse = (text, id) => {
     if (typeof copyBotResponse === 'function') {
@@ -68,7 +82,18 @@ export default function AITutor({
     }
   };
   return (
-    <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div style={{
+      flex: 1,
+      minWidth: 0,
+      minHeight: 0,
+      background: 'var(--panel-bg)',
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      maxHeight: '100%',
+      overflow: 'hidden',
+      position: 'relative'
+    }}>
       {/* Chat Header with Model Selector & Web Search Toggle */}
       <div style={{
         padding: '12px 18px',
@@ -78,7 +103,8 @@ export default function AITutor({
         justifyContent: 'space-between',
         flexWrap: 'wrap',
         gap: '10px',
-        background: 'var(--card-bg)'
+        background: 'var(--card-bg)',
+        flexShrink: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
@@ -128,10 +154,11 @@ export default function AITutor({
             <span>Web: {webSearchEnabled ? 'ON' : 'OFF'}</span>
           </button>
 
-          {/* New Chat / Reset Thread Button */}
+          {/* Clear Chat Thread Button */}
           <button
             onClick={clearChatHistory}
-            title="Start a new chat thread (clears chat for this lecture)"
+            title="Clear all chat messages for this lecture (start a new chat thread)"
+            aria-label="Clear chat"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -147,8 +174,8 @@ export default function AITutor({
               transition: 'all 0.2s ease'
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.color = 'var(--text-primary)';
-              e.currentTarget.style.borderColor = 'var(--theme-primary)';
+              e.currentTarget.style.color = '#ef4444';
+              e.currentTarget.style.borderColor = '#ef4444';
               e.currentTarget.style.background = 'var(--card-bg)';
             }}
             onMouseLeave={(e) => {
@@ -158,7 +185,7 @@ export default function AITutor({
             }}
           >
             <Trash2 size={13} />
-            <span>New Chat</span>
+            <span>Clear Chat</span>
           </button>
 
           {/* Model Dropdown */}
@@ -195,14 +222,22 @@ export default function AITutor({
       </div>
 
       {/* Chat Messages Container */}
-      <div style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: '18px 20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '14px'
-      }}>
+      <div
+        className="chat-scroll-container"
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        style={{
+          flex: '1 1 0%',
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          overscrollBehavior: 'contain',
+          padding: '18px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '14px'
+        }}
+      >
         {chatMessages.length === 0 && (
           <div style={{
             margin: 'auto',
@@ -297,9 +332,30 @@ export default function AITutor({
         )}
         {chatMessages.map((msg, idx) => {
           const currentMsgMode = msg.viewOverride || viewMode;
-          const submissionText = submissionSummaries[msg.id] || msg.submission_text || cleanSubmissionFallback(msg.text);
+          const pairedPrompt = (msg.sender === 'bot' && idx > 0 && chatMessages[idx - 1]?.sender === 'user')
+            ? chatMessages[idx - 1].text
+            : '';
+          const submissionText = submissionSummaries[msg.id] || msg.submission_text || cleanSubmissionFallback(msg.text, 120, pairedPrompt);
           const submissionWords = submissionText ? submissionText.trim().split(/\s+/).filter(Boolean).length : 0;
-          const isTargetRange = submissionWords >= 85 && submissionWords <= 155;
+          
+          const promptLower = (pairedPrompt || '').toLowerCase();
+          let targetLabel = '100–150';
+          let minTarget = 85;
+          let maxTarget = 155;
+          if (promptLower.includes('comprehensive') || promptLower.includes('full summary')) {
+            targetLabel = '300–450';
+            minTarget = 260;
+            maxTarget = 480;
+          } else if (promptLower.includes('concept') || promptLower.includes('definition')) {
+            targetLabel = '200–350';
+            minTarget = 180;
+            maxTarget = 380;
+          } else if (promptLower.includes('30 min')) {
+            targetLabel = '160–250';
+            minTarget = 140;
+            maxTarget = 270;
+          }
+          const isTargetRange = submissionWords >= minTarget && submissionWords <= maxTarget;
 
           return (
             <div
@@ -328,7 +384,7 @@ export default function AITutor({
                 </div>
               )}
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '100%' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '100%', minWidth: 0 }}>
                 {/* Per-Message View Mode Toggle */}
                 {msg.sender === 'bot' && (
                   <div style={{
@@ -400,7 +456,7 @@ export default function AITutor({
                         alignItems: 'center',
                         gap: '3px'
                       }}>
-                        {isTargetRange ? '✓' : '•'} {submissionWords} words (Target: 100–150)
+                        {isTargetRange ? '✓' : '•'} {submissionWords} words (Target: {targetLabel})
                       </span>
                     )}
                   </div>
@@ -416,6 +472,8 @@ export default function AITutor({
                   borderTopRightRadius: msg.sender === 'user' ? '2px' : '12px',
                   fontSize: '0.88rem',
                   lineHeight: '1.6',
+                  wordBreak: 'break-word',
+                  overflowWrap: 'break-word',
                   border: msg.sender === 'bot' ? (currentMsgMode === 'submission' ? '1px solid rgba(0, 117, 237, 0.25)' : '1px solid var(--border-color)') : 'none',
                   boxShadow: currentMsgMode === 'submission' && msg.sender === 'bot' ? '0 2px 8px rgba(0, 117, 237, 0.08)' : '0 1px 3px rgba(0,0,0,0.06)'
                 }}>
@@ -515,6 +573,37 @@ export default function AITutor({
                     >
                       <RefreshCw size={10} />
                       <span>Reuse</span>
+                    </button>
+
+                    <button
+                      onClick={() => deleteChatMessage && deleteChatMessage(msg.id || idx)}
+                      title="Delete this prompt and response"
+                      aria-label="Delete message"
+                      style={{
+                        background: 'var(--card-bg)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '6px',
+                        padding: '2px 8px',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = '#ef4444';
+                        e.currentTarget.style.borderColor = '#ef4444';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.borderColor = 'var(--border-color)';
+                      }}
+                    >
+                      <Trash2 size={10} />
+                      <span>Delete</span>
                     </button>
                   </div>
                 )}
@@ -703,6 +792,39 @@ export default function AITutor({
                       <span>{regeneratingId === (msg.id || idx) ? 'Regenerating...' : 'Regenerate'}</span>
                     </button>
 
+                    <button
+                      onClick={() => deleteChatMessage && deleteChatMessage(msg.id || idx)}
+                      title="Delete this response"
+                      aria-label="Delete response"
+                      style={{
+                        background: 'var(--card-bg)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '6px',
+                        padding: '3px 8px',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = '#ef4444';
+                        e.currentTarget.style.borderColor = '#ef4444';
+                        e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.borderColor = 'var(--border-color)';
+                        e.currentTarget.style.background = 'var(--card-bg)';
+                      }}
+                    >
+                      <Trash2 size={11} />
+                      <span>Delete</span>
+                    </button>
+
                     {currentMsgMode === 'learning' && msg.model && (
                       <span style={{
                         display: 'inline-flex',
@@ -825,8 +947,52 @@ export default function AITutor({
         <div ref={chatEndRef} />
       </div>
 
+      {/* Floating Scroll to Bottom Button */}
+      {showScrollBottom && (
+        <button
+          onClick={scrollToBottom}
+          title="Scroll to latest messages"
+          aria-label="Scroll to bottom"
+          style={{
+            position: 'absolute',
+            bottom: '84px',
+            right: '24px',
+            zIndex: 10,
+            background: 'var(--card-bg)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '20px',
+            padding: '5px 12px',
+            fontSize: '0.74rem',
+            fontWeight: 600,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '5px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = 'var(--theme-primary)';
+            e.currentTarget.style.color = 'var(--theme-primary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = 'var(--border-color)';
+            e.currentTarget.style.color = 'var(--text-primary)';
+          }}
+        >
+          <span>Latest</span>
+          <ChevronDown size={14} color="var(--theme-primary)" />
+        </button>
+      )}
+
       {/* Simple Input Text Box */}
-      <div style={{ padding: '12px 20px', background: 'var(--panel-bg)', borderTop: '1px solid var(--border-color)' }}>
+      <div style={{
+        padding: '12px 20px',
+        background: 'var(--panel-bg)',
+        borderTop: '1px solid var(--border-color)',
+        flexShrink: 0
+      }}>
         {/* Quick Prompt Suggestions Row */}
         <div style={{
           display: 'flex',

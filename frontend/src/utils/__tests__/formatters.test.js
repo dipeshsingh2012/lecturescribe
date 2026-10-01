@@ -147,5 +147,20 @@ describe('formatters utility functions', () => {
       const wordCount = cleaned.split(/\s+/).length;
       expect(wordCount).toBeLessThanOrEqual(52);
     });
+
+    it('preserves paragraph breaks', () => {
+      const raw = "Paragraph one content.\n\nParagraph two content.";
+      const cleaned = cleanSubmissionFallback(raw);
+      expect(cleaned).toContain('\n\n');
+      expect(cleaned).toContain('Paragraph one content.');
+      expect(cleaned).toContain('Paragraph two content.');
+    });
+
+    it('adapts target word count for comprehensive summary query', () => {
+      const longText = new Array(400).fill('word').join(' ') + '.';
+      const cleaned = cleanSubmissionFallback(longText, 120, 'Generate Full Comprehensive Summary');
+      const wordCount = cleaned.split(/\s+/).length;
+      expect(wordCount).toBeGreaterThan(250);
+    });
   });
 });

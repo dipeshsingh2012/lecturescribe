@@ -618,7 +618,8 @@ class Llama3PineconeRAGStore:
         enable_web_search: bool = True,
         chat_history: Optional[List[Dict[str, Any]]] = None,
         get_user_email: Optional[str] = None,
-        user_email: Optional[str] = None
+        user_email: Optional[str] = None,
+        enforce_regenerate: bool = False
     ) -> Dict[str, Any]:
         """Unified Agentic RAG Execution."""
         import requests
@@ -719,6 +720,72 @@ class Llama3PineconeRAGStore:
             headers = {"Authorization": auth_header, "Content-Type": "application/json"}
 
             try:
+                if enforce_regenerate:
+                    try:
+                        print("🧭 [Regenerate Enforcement] Forcing Level 2 (course-wide) check: search_course_lectures")
+                        lvl2_has_hits = False
+                        lvl2_res, lvl2_cit, _lvl2_web = self.execute_tool(
+                            "search_course_lectures",
+                            {"query": query, "top_k": max(5, min(12, top_k * 2))},
+                            target_video_id,
+                            lecture_title
+                        )
+                        if lvl2_cit:
+                            lvl2_has_hits = True
+                            all_citations.extend(lvl2_cit)
+                            messages.insert(1, {
+                                "role": "system",
+                                "content": (
+                                    "Level 2 course-wide search results (JSON). "
+                                    "If the concept is not present in this lecture, you MUST use these results, "
+                                    "state that it was not covered in this lecture, and cite the other lecture with [MM:SS]:\n"
+                                    f"{lvl2_res}"
+                                )
+                            })
+                        if (not lvl2_has_hits) and enable_web_search:
+                            print("🧭 [Regenerate Enforcement] Level 2 had no hits. Triggering Level 3 (web) check: search_web_context")
+                            lvl3_res, _lvl3_cit, lvl3_web = self.execute_tool(
+                                "search_web_context",
+                                {"search_query": query},
+                                target_video_id,
+                                lecture_title
+                            )
+                            if lvl3_web:
+                                all_web_sources.extend(lvl3_web)
+                                messages.insert(1, {
+                                    "role": "system",
+                                    "content": (
+                                        "Level 3 web context results (JSON). "
+                                        "If the topic is not covered in this lecture or course, you MUST begin with the Course Boundary Notice "
+                                        "and cite URLs from these sources:\n"
+                                        f"{lvl3_res}"
+                                    )
+                                })
+                    except Exception as e_lvl2:
+                        print(f"⚠️ [Regenerate Enforcement Notice] Level 2 search failed: {e_lvl2}")
+                        if enable_web_search:
+                            try:
+                                print("🧭 [Regenerate Enforcement] Level 2 failed. Triggering Level 3 (web) check: search_web_context")
+                                lvl3_res, _lvl3_cit, lvl3_web = self.execute_tool(
+                                    "search_web_context",
+                                    {"search_query": query},
+                                    target_video_id,
+                                    lecture_title
+                                )
+                                if lvl3_web:
+                                    all_web_sources.extend(lvl3_web)
+                                    messages.insert(1, {
+                                        "role": "system",
+                                        "content": (
+                                            "Level 3 web context results (JSON). "
+                                            "If the topic is not covered in this lecture or course, you MUST begin with the Course Boundary Notice "
+                                            "and cite URLs from these sources:\n"
+                                            f"{lvl3_res}"
+                                        )
+                                    })
+                            except Exception as e_lvl3:
+                                print(f"⚠️ [Regenerate Enforcement Notice] Level 3 search failed: {e_lvl3}")
+
                 while current_step < max_steps:
                     current_step += 1
                     payload = {
@@ -834,20 +901,31 @@ class Llama3PineconeRAGStore:
 
         raise RuntimeError(f"All unified LLM providers failed. Last error: {last_error}")
 
-    def _clean_for_submission(self, text: str, target_words: int = 100) -> str:
-        """Strip markdown syntax, timestamps, and AI boilerplate."""
+    def _clean_for_submission(
+        self,
+        text: str,
+        target_words: int = 100,
+        preserve_paragraphs: bool = True,
+        allow_bold: bool = False
+    ) -> str:
+        """Strip markdown syntax, timestamps, and AI boilerplate while preserving paragraphs."""
         cleaned = text.strip()
         cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
         cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
-        cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
-        cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+        if not allow_bold:
+            cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+            cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
         cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*\d{1,2}:\d{2}(?::\d{2})?)?\]", "", cleaned)
         cleaned = re.sub(r"(?i)^here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*", "", cleaned)
         cleaned = re.sub(r"(?i)^based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*", "", cleaned)
         cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found\s+regarding\s+[^:.\n]*[:.\n]*\s*", "", cleaned)
         cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*", "", cleaned)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if preserve_paragraphs:
+            lines = [re.sub(r"[ \t]+", " ", line).strip() for line in cleaned.splitlines()]
+            cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+        else:
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
     def generate_submission_version(
@@ -855,29 +933,76 @@ class Llama3PineconeRAGStore:
         original_text: str,
         video_id: Optional[str] = "",
         word_count: int = 100,
-        model_id: Optional[str] = None
+        model_id: Optional[str] = None,
+        query: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Synthesize plain-text MTech student submission version."""
+        """Synthesize plain-text MTech student submission version with query-adaptive word counts."""
         if not original_text or not original_text.strip():
             raise ValueError("original_text cannot be empty.")
         if re.search(r"<\s*function\s*=", original_text):
             raise ValueError("Input contains raw unexecuted function call tags.")
 
-        clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
+        query_lower = (query or "").lower().strip()
+        is_comprehensive = any(k in query_lower for k in ["comprehensive", "full summary", "detailed summary", "full comprehensive"])
+        is_concepts = any(k in query_lower for k in ["concept", "definition", "key concepts", "definitions", "terminology"])
+        is_30min = "30 min" in query_lower
+
+        if is_comprehensive:
+            target_words = max(word_count, 350)
+            min_w, max_w = 280, 450
+            system_prompt = (
+                f"You are an Indian M.Tech graduate student drafting an academic assignment submission report. "
+                f"Write a comprehensive, professional academic summary report of approximately {target_words} words "
+                f"(between {min_w} and {max_w} words) covering the core topics, methodologies, and technical insights from the lecture. "
+                "Organize your report into 2-3 clear paragraphs separated by a blank line. "
+                "Do not include conversational filler, timestamps, or raw citations. Output clean academic prose."
+            )
+            user_content = f"Synthesize this lecture insight into a comprehensive multi-paragraph academic submission report: {original_text[:8000]}"
+            max_tokens_val = 800
+        elif is_concepts:
+            target_words = max(word_count, 250)
+            min_w, max_w = 200, 350
+            system_prompt = (
+                f"You are an Indian M.Tech graduate student drafting an academic assignment submission glossary. "
+                f"Write a structured compilation of the key technical concepts and definitions from the lecture of approximately {target_words} words "
+                f"(between {min_w} and {max_w} words). "
+                "Format each definition clearly with the concept term followed by its definition on separate lines. "
+                "Do not include conversational filler, timestamps, or raw citations."
+            )
+            user_content = f"Synthesize these lecture definitions into a structured academic key concepts submission: {original_text[:8000]}"
+            max_tokens_val = 650
+        elif is_30min:
+            target_words = max(word_count, 200)
+            min_w, max_w = 160, 260
+            system_prompt = (
+                f"You are an Indian M.Tech graduate student drafting an academic assignment submission. "
+                f"Write a detailed academic summary paragraph of approximately {target_words} words "
+                f"(between {min_w} and {max_w} words) thoroughly explaining the core academic takeaways from the provided text. "
+                "Do not include markdown headers, bullet points, citations, or timestamps. Output clean academic prose."
+            )
+            clean_base = self._clean_for_submission(original_text, target_words=target_words * 2)
+            user_content = f"Synthesize this lecture insight into an academic submission paragraph: {clean_base}"
+            max_tokens_val = 500
+        else:
+            target_words = word_count or 120
+            min_w, max_w = 80, 150
+            system_prompt = (
+                f"You are an Indian M.Tech graduate student drafting an academic submission. "
+                f"Write a comprehensive, professional submission paragraph of approximately {target_words} words "
+                f"(strictly between {min_w} and {max_w} words) thoroughly explaining the core academic takeaways from the provided text. "
+                "Do not include markdown headers, bullet points, citations, or timestamps. Output plain text only."
+            )
+            clean_base = self._clean_for_submission(original_text, target_words=target_words * 2)
+            user_content = f"Synthesize this lecture insight into a full graduate submission paragraph: {clean_base}"
+            max_tokens_val = 350
+
+        clean_base = self._clean_for_submission(original_text, target_words=target_words * 2)
 
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
 
         if not (groq_key or gemini_key):
             raise RuntimeError("No LLM keys configured for submission generation.")
-
-        system_prompt = (
-            f"You are an Indian M.Tech graduate student drafting an academic submission. "
-            f"Write a comprehensive, professional submission paragraph of approximately {word_count} words "
-            "(strictly between 80 and 120 words) thoroughly explaining the core academic takeaways from the provided text. "
-            "Do not include markdown headers, bullet points, citations, or timestamps. Output plain text only."
-        )
-        user_content = f"Synthesize this lecture insight into a full graduate submission paragraph: {clean_base}"
 
         if groq_key:
             try:
@@ -891,17 +1016,17 @@ class Llama3PineconeRAGStore:
                         {"role": "user", "content": user_content}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 300
+                    "max_tokens": max_tokens_val
                 }
                 r = requests.post(url, headers=headers, json=payload, timeout=20)
                 if r.status_code == 200:
                     raw_output = r.json()["choices"][0]["message"]["content"].strip()
-                    final_sub = self._clean_for_submission(raw_output, target_words=word_count + 20)
+                    final_sub = self._clean_for_submission(raw_output, target_words=target_words + 25)
                     words = final_sub.split()
                     
                     # Ensure minimum academic paragraph length if source point was brief
                     if len(words) < 40 and len(clean_base.split()) >= len(words):
-                        final_sub = f"{final_sub} The lecture emphasized these principles as key analytical foundations for system design and theoretical evaluation."
+                        final_sub = f"{final_sub}\n\nThe lecture emphasized these principles as key analytical foundations for system design and theoretical evaluation."
 
                     return {
                         "status": "success",
@@ -918,12 +1043,12 @@ class Llama3PineconeRAGStore:
                 api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_key}"
                 payload = {
                     "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
-                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_tokens_val}
                 }
                 r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
                 if r.status_code == 200:
                     raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    final_sub = self._clean_for_submission(raw_output, target_words=word_count + 20)
+                    final_sub = self._clean_for_submission(raw_output, target_words=target_words + 25)
                     return {
                         "status": "success",
                         "submission_text": final_sub,
@@ -933,7 +1058,18 @@ class Llama3PineconeRAGStore:
             except Exception:
                 pass
 
-        final_sub = " ".join(clean_base.split()[:word_count]) + "."
+        # Intelligent local fallback: preserve sentence boundaries up to target_words
+        words = clean_base.split()
+        if len(words) <= target_words:
+            final_sub = clean_base
+        else:
+            truncated = " ".join(words[:target_words])
+            last_p = max(truncated.rfind('.'), truncated.rfind('!'), truncated.rfind('?'))
+            if last_p > int(len(truncated) * 0.7):
+                final_sub = truncated[:last_p + 1]
+            else:
+                final_sub = truncated + "."
+
         return {
             "status": "success",
             "submission_text": final_sub,

@@ -345,4 +345,53 @@ describe('AITutor', () => {
     fireEvent.click(regenBtn);
     expect(regenerateResponse).toHaveBeenCalledWith('b1');
   });
+
+  it('renders Delete button on messages and triggers deleteChatMessage with message ID', () => {
+    const deleteChatMessage = vi.fn();
+    const messages = [
+      { id: 'msg_user_99', sender: 'user', text: 'Explain SVM' },
+      { id: 'msg_bot_99', sender: 'bot', text: 'SVM is Support Vector Machine' }
+    ];
+
+    render(
+      <AITutor
+        webSearchEnabled={true}
+        setWebSearchEnabled={vi.fn()}
+        clearChatHistory={vi.fn()}
+        deleteChatMessage={deleteChatMessage}
+        selectedModel="llama-3.2"
+        setSelectedModel={vi.fn()}
+        availableModels={defaultModels}
+        chatMessages={messages}
+        setChatMessages={vi.fn()}
+        viewMode="learning"
+        submissionSummaries={{}}
+        cleanSubmissionFallback={vi.fn()}
+        handleCueClick={vi.fn()}
+        copiedPromptId={null}
+        copyUserPrompt={vi.fn()}
+        copiedSubmissionId={null}
+        copySubmissionText={vi.fn()}
+        copiedResponseId={null}
+        copyBotResponse={vi.fn()}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        chatInputRef={{ current: null }}
+        chatEndRef={{ current: null }}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    const deleteUserBtn = screen.getByRole('button', { name: /Delete message/i });
+    expect(deleteUserBtn).toBeInTheDocument();
+    fireEvent.click(deleteUserBtn);
+    expect(deleteChatMessage).toHaveBeenCalledWith('msg_user_99');
+
+    const deleteBotBtn = screen.getByRole('button', { name: /Delete response/i });
+    expect(deleteBotBtn).toBeInTheDocument();
+    fireEvent.click(deleteBotBtn);
+    expect(deleteChatMessage).toHaveBeenCalledWith('msg_bot_99');
+  });
 });
+

@@ -17,7 +17,7 @@ describe('LecturePlayer', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders video iframe, title, copy transcript button, and upload button', () => {
+  it('renders video iframe, title, and upload button', () => {
     const handleCopyTranscript = vi.fn();
     const openUploadModal = vi.fn();
     const activeData = {
@@ -52,11 +52,7 @@ describe('LecturePlayer', () => {
 
     expect(screen.getAllByText('Deep Learning Foundations')[0]).toBeInTheDocument();
     expect(screen.getByText('CS229')).toBeInTheDocument();
-
-    const copyBtn = screen.getByRole('button', { name: /Copy Transcript/i });
-    expect(copyBtn).toBeInTheDocument();
-    fireEvent.click(copyBtn);
-    expect(handleCopyTranscript).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /Copy Transcript/i })).toBeNull();
 
     const uploadBtn = screen.getByRole('button', { name: /Upload Resource/i });
     expect(uploadBtn).toBeInTheDocument();
@@ -65,5 +61,9 @@ describe('LecturePlayer', () => {
       videoId: '556677',
       courseName: 'CS229'
     });
+
+    expect(screen.queryByText(/Cached \(0ms Re-generation\)/i)).toBeNull();
+    expect(screen.queryByText(/Database Cache/i)).toBeNull();
+    expect(screen.queryByText(/Instant Search/i)).toBeNull();
   });
 });

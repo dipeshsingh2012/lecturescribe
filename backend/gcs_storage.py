@@ -38,7 +38,8 @@ class GCSStorageService:
         if self._client is not None:
             return self._client
         try:
-            self._client = storage.Client()
+            project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT")
+            self._client = storage.Client(project=project)
             self._initialized = True
             return self._client
         except Exception as e:
@@ -103,24 +104,12 @@ class GCSStorageService:
         blob = bucket.blob(blob_name)
 
         try:
-            # Refresh credentials to guarantee access_token is available
-            credentials, _ = google.auth.default()
-            if not credentials.valid:
-                credentials.refresh(auth_requests.Request())
-
-            sign_kwargs = {
-                "version": "v4",
-                "expiration": datetime.timedelta(minutes=expires_minutes),
-                "method": "PUT",
-                "content_type": content_type,
-            }
-
-            # Pass token & email when running on Cloud Run / GCE / GKE
-            if hasattr(credentials, "service_account_email") and credentials.token:
-                sign_kwargs["service_account_email"] = credentials.service_account_email
-                sign_kwargs["access_token"] = credentials.token
-
-            url = blob.generate_signed_url(**sign_kwargs)
+            url = blob.generate_signed_url(
+                version="v4",
+                expiration=datetime.timedelta(minutes=expires_minutes),
+                method="PUT",
+                content_type=content_type,
+            )
             return {
                 "signed_url": url,
                 "blob_name": blob_name,
@@ -129,7 +118,31 @@ class GCSStorageService:
                 "expires_in_seconds": expires_minutes * 60,
             }
         except Exception as e:
-            print(f"[GCS Signed URL Warning] Could not sign with ADC ({e}). Returning emulated URL.")
+            # Fallback for serverless environments (Cloud Run/Compute) using metadata service
+            try:
+                credentials, _ = google.auth.default()
+                if hasattr(credentials, "service_account_email"):
+                    if not credentials.valid:
+                        credentials.refresh(auth_requests.Request())
+                    url = blob.generate_signed_url(
+                        version="v4",
+                        expiration=datetime.timedelta(minutes=expires_minutes),
+                        method="PUT",
+                        content_type=content_type,
+                        service_account_email=credentials.service_account_email,
+                        access_token=credentials.token,
+                    )
+                    return {
+                        "signed_url": url,
+                        "blob_name": blob_name,
+                        "bucket": self.bucket_name,
+                        "method": "PUT",
+                        "expires_in_seconds": expires_minutes * 60,
+                    }
+            except Exception:
+                pass
+
+            print(f"[GCS Signed URL Warning] Could not sign ({e}). Returning emulated URL.")
             return {
                 "signed_url": f"https://storage.googleapis.com/{self.bucket_name}/{blob_name}?mock_upload=true",
                 "blob_name": blob_name,
@@ -141,9 +154,10 @@ class GCSStorageService:
     def generate_download_signed_url(
         self,
         blob_name: str,
-        expires_minutes: int = 60
+        expires_minutes: int = 60,
+        disposition: str = "inline"
     ) -> str:
-        """Generate a V4 signed URL allowing the client to GET/download the object securely."""
+        """Generate a V4 signed URL allowing the client to GET/view/download the object securely."""
         if not blob_name:
             return ""
             
@@ -155,9 +169,26 @@ class GCSStorageService:
                     version="v4",
                     expiration=datetime.timedelta(minutes=expires_minutes),
                     method="GET",
+                    response_disposition=disposition
                 )
                 return url
             except Exception as e:
+                try:
+                    credentials, _ = google.auth.default()
+                    if hasattr(credentials, "service_account_email"):
+                        if not credentials.valid:
+                            credentials.refresh(auth_requests.Request())
+                        url = blob.generate_signed_url(
+                            version="v4",
+                            expiration=datetime.timedelta(minutes=expires_minutes),
+                            method="GET",
+                            response_disposition=disposition,
+                            service_account_email=credentials.service_account_email,
+                            access_token=credentials.token,
+                        )
+                        return url
+                except Exception:
+                    pass
                 print(f"[GCS Download Signed URL Warning] ({e}). Returning standard GCS URL.")
 
         return f"https://storage.googleapis.com/{self.bucket_name}/{blob_name}"

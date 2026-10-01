@@ -8,11 +8,6 @@ import {
 import {
   Folder,
   ChevronRight,
-  Check,
-  Database,
-  Zap,
-  Bot,
-  Copy,
   Upload
 } from 'lucide-react';
 import { normalizeCourseSlug } from '../../utils/routing';
@@ -32,6 +27,7 @@ export default function LecturePlayer({
   handleCopyTranscript,
   googleUser,
   openUploadModal,
+  openPreviewModal,
   lectureResources = [],
   lectureResourcesLoading,
   handleDeleteResource,
@@ -168,59 +164,12 @@ export default function LecturePlayer({
       </div>
 
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3 }}>{activeData.title}</h1>
-          {activeData.cached && (
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              background: 'rgba(16, 185, 129, 0.15)',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              color: '#34d399',
-              padding: '2px 8px',
-              borderRadius: '12px',
-              fontSize: '0.72rem',
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px'
-            }}>
-              <Check size={12} /> Cached (0ms Re-generation)
-            </span>
-          )}
-        </div>
-        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '8px', flexWrap: 'wrap' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Database size={12} color="var(--theme-primary)" /> {activeData.cached ? 'Database Cache (Reused)' : 'Cloud Database'}</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Zap size={12} color="#10b981" /> Instant Search</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Bot size={12} color="#8b5cf6" /> AI Tutor</span>
-        </div>
+        <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3, margin: 0 }}>{activeData.title}</h1>
       </div>
 
-      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-        <button
-          onClick={handleCopyTranscript}
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            background: 'var(--card-bg)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)',
-            padding: '10px 14px',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            fontWeight: 600,
-            fontSize: '0.85rem'
-          }}
-        >
-          {copied ? <Check size={16} color="var(--theme-primary)" /> : <Copy size={16} />}
-          {copied ? 'Copied Transcript!' : 'Copy Transcript'}
-        </button>
-
+      <div style={{ marginTop: '8px' }}>
         <Tooltip title={!googleUser ? "Sign in with Google to upload resources" : "Upload lecture notes, slides, or links"}>
-          <span>
+          <span style={{ display: 'block', width: '100%' }}>
             <button
               onClick={() => {
                 if (!googleUser) return;
@@ -231,6 +180,7 @@ export default function LecturePlayer({
               }}
               disabled={!googleUser}
               style={{
+                width: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -262,6 +212,7 @@ export default function LecturePlayer({
         handleDeleteResource={handleDeleteResource}
         activeData={activeData}
         selectedCourse={selectedCourse}
+        openPreviewModal={openPreviewModal}
       />
     </div>
   );

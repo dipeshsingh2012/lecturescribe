@@ -4,12 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import AITutor from '../AITutor';
 
 describe('AITutor', () => {
-  const defaultModels = [
-    { id: 'llama-3.2', name: 'Llama 3.2 3B', provider: 'Groq', badge: 'Fastest' },
-    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', provider: 'Google', badge: 'Smart' }
-  ];
-
-  it('renders chat header, web toggle, and new chat button', () => {
+  it('renders chat header, web toggle, and new chat button without model selector', () => {
     const setWebSearchEnabled = vi.fn();
     const clearChatHistory = vi.fn();
 
@@ -18,9 +13,6 @@ describe('AITutor', () => {
         webSearchEnabled={false}
         setWebSearchEnabled={setWebSearchEnabled}
         clearChatHistory={clearChatHistory}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={[]}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -42,6 +34,8 @@ describe('AITutor', () => {
 
     expect(screen.getByText('AI Tutor')).toBeInTheDocument();
     expect(screen.getByText('Web: OFF')).toBeInTheDocument();
+    // Model selector dropdown must be removed
+    expect(screen.queryByTitle(/Select the active LLM engine/i)).toBeNull();
 
     const webBtn = screen.getByTitle(/Web grounding DISABLED/i);
     fireEvent.click(webBtn);
@@ -65,9 +59,6 @@ describe('AITutor', () => {
         webSearchEnabled={true}
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={messages}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -111,9 +102,6 @@ describe('AITutor', () => {
         webSearchEnabled={false}
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={messages}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -152,9 +140,6 @@ describe('AITutor', () => {
         webSearchEnabled={false}
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={[]}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -195,9 +180,6 @@ describe('AITutor', () => {
         webSearchEnabled={false}
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={[]}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -236,9 +218,6 @@ describe('AITutor', () => {
         webSearchEnabled={false}
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={[{ id: '1', sender: 'user', text: 'Hi' }]}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -272,9 +251,6 @@ describe('AITutor', () => {
         webSearchEnabled={false}
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={[{ id: '1', sender: 'user', text: 'Hi' }]}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -298,7 +274,6 @@ describe('AITutor', () => {
 
     expect(pillBtn).toBeDisabled();
     fireEvent.click(pillBtn);
-    // Should NOT have been called a second time
     expect(handleSendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -314,9 +289,6 @@ describe('AITutor', () => {
         webSearchEnabled={true}
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={messages}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -359,9 +331,6 @@ describe('AITutor', () => {
         setWebSearchEnabled={vi.fn()}
         clearChatHistory={vi.fn()}
         deleteChatMessage={deleteChatMessage}
-        selectedModel="llama-3.2"
-        setSelectedModel={vi.fn()}
-        availableModels={defaultModels}
         chatMessages={messages}
         setChatMessages={vi.fn()}
         viewMode="learning"
@@ -394,4 +363,3 @@ describe('AITutor', () => {
     expect(deleteChatMessage).toHaveBeenCalledWith('msg_bot_99');
   });
 });
-

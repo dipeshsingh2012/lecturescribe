@@ -25,9 +25,6 @@ export default function AITutor({
   setWebSearchEnabled,
   clearChatHistory,
   deleteChatMessage,
-  selectedModel,
-  setSelectedModel,
-  availableModels = [],
   chatMessages = [],
   setChatMessages,
   viewMode,
@@ -187,37 +184,6 @@ export default function AITutor({
             <Trash2 size={13} />
             <span>Clear Chat</span>
           </button>
-
-          {/* Model Dropdown */}
-          <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              title="Select the active LLM engine"
-              style={{
-                background: 'var(--panel-bg)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '8px',
-                padding: '5px 10px',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                outline: 'none',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
-              }}
-            >
-             {(availableModels.length > 0 ? availableModels : [
-                { id: 'openai/gpt-oss-120b', name: 'Groq GPT-OSS 120B', badge: '🚀 Primary' },
-                { id: 'openai/gpt-oss-20b', name: 'Groq GPT-OSS 20B', badge: '⚡ Fast' },
-                { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', badge: '⚡ Long Context' }
-              ]).map(m => (
-                <option key={m.id} value={m.id}>
-                  {m.badge ? `${m.name} (${m.badge})` : m.name}
-                </option>
-              ))}
-            </select>
-          </div>
         </div>
       </div>
 

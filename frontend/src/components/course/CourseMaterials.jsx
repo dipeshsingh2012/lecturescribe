@@ -14,7 +14,8 @@ import {
   ExternalLink,
   Download,
   Trash2,
-  Upload
+  Upload,
+  Eye
 } from 'lucide-react';
 import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/formatters';
 
@@ -27,6 +28,7 @@ export default function CourseMaterials({
   activeCourseData,
   openUploadModal,
   handleDeleteResource,
+  openPreviewModal,
   currentTheme
 }) {
   if (courseResourcesLoading) {
@@ -146,27 +148,69 @@ export default function CourseMaterials({
             </Box>
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-              <Button
-                variant="outlined"
-                size="small"
-                component="a"
-                href={res.download_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                download={res.file_type !== 'link' && res.file_type !== 'gdrive'}
-                startIcon={res.file_type === 'link' || res.file_type === 'gdrive' ? <ExternalLink size={14} /> : <Download size={14} />}
-                sx={{
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.8rem',
-                  borderRadius: 2,
-                  color: currentTheme.palette.primary,
-                  borderColor: currentTheme.palette.cardBorder,
-                  '&:hover': { borderColor: currentTheme.palette.primary, bgcolor: 'var(--highlight-bg)' }
-                }}
-              >
-                {res.file_type === 'link' || res.file_type === 'gdrive' ? 'Open' : 'Download'}
-              </Button>
+              {res.file_type === 'link' || res.file_type === 'gdrive' ? (
+                <Button
+                  variant="outlined"
+                  size="small"
+                  component="a"
+                  href={res.view_url || res.download_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  startIcon={<ExternalLink size={14} />}
+                  sx={{
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.8rem',
+                    borderRadius: 2,
+                    color: currentTheme.palette.primary,
+                    borderColor: currentTheme.palette.cardBorder,
+                    '&:hover': { borderColor: currentTheme.palette.primary, bgcolor: 'var(--highlight-bg)' }
+                  }}
+                >
+                  Open
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={() => openPreviewModal && openPreviewModal(res)}
+                    startIcon={<Eye size={14} />}
+                    sx={{
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.8rem',
+                      borderRadius: 2,
+                      bgcolor: currentTheme.palette.primary,
+                      color: '#ffffff',
+                      '&:hover': { bgcolor: currentTheme.palette.primary, opacity: 0.9 }
+                    }}
+                  >
+                    View
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    component="a"
+                    href={res.download_url || res.view_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download={res.filename || true}
+                    startIcon={<Download size={14} />}
+                    sx={{
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.8rem',
+                      borderRadius: 2,
+                      color: currentTheme.palette.textSecondary,
+                      borderColor: currentTheme.palette.cardBorder,
+                      '&:hover': { borderColor: currentTheme.palette.primary, bgcolor: 'var(--highlight-bg)' }
+                    }}
+                  >
+                    Download
+                  </Button>
+                </>
+              )}
               {isOwner && (
                 <Tooltip title="Delete Resource">
                   <IconButton

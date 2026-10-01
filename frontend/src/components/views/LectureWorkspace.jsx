@@ -17,6 +17,7 @@ export default function LectureWorkspace({
   handleCopyTranscript,
   googleUser,
   openUploadModal,
+  openPreviewModal,
   lectureResources,
   lectureResourcesLoading,
   handleDeleteResource,
@@ -30,9 +31,6 @@ export default function LectureWorkspace({
   setWebSearchEnabled,
   clearChatHistory,
   deleteChatMessage,
-  selectedModel,
-  setSelectedModel,
-  availableModels,
   chatMessages,
   setChatMessages,
   viewMode,
@@ -71,6 +69,7 @@ export default function LectureWorkspace({
         handleCopyTranscript={handleCopyTranscript}
         googleUser={googleUser}
         openUploadModal={openUploadModal}
+        openPreviewModal={openPreviewModal}
         lectureResources={lectureResources}
         lectureResourcesLoading={lectureResourcesLoading}
         handleDeleteResource={handleDeleteResource}
@@ -85,6 +84,8 @@ export default function LectureWorkspace({
           setSearchQuery={setSearchQuery}
           handleCueClick={handleCueClick}
           activeCueIdx={activeCueIdx}
+          copied={copied}
+          handleCopyTranscript={handleCopyTranscript}
         />
       ) : (
         <AITutor
@@ -92,9 +93,6 @@ export default function LectureWorkspace({
           setWebSearchEnabled={setWebSearchEnabled}
           clearChatHistory={clearChatHistory}
           deleteChatMessage={deleteChatMessage}
-          selectedModel={selectedModel}
-          setSelectedModel={setSelectedModel}
-          availableModels={availableModels}
           chatMessages={chatMessages}
           setChatMessages={setChatMessages}
           viewMode={viewMode}

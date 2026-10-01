@@ -121,7 +121,6 @@ class ChatRequest(BaseModel):
     video_title: Optional[str] = None
     cues: Optional[List[Dict[str, str]]] = None
     user_email: Optional[str] = None
-    model_id: Optional[str] = None  # Retained as optional ignore to maintain backward compatibility
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
     chat_history: Optional[List[Dict[str, Any]]] = None
@@ -133,7 +132,6 @@ class RAGQueryRequest(BaseModel):
     cues: Optional[List[Dict[str, str]]] = None
     top_k: Optional[int] = 10
     user_email: Optional[str] = None
-    model_id: Optional[str] = None  # Retained as optional ignore
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
     chat_history: Optional[List[Dict[str, Any]]] = None
@@ -144,7 +142,6 @@ class SubmissionRequest(BaseModel):
     video_id: Optional[str] = None
     word_count: Optional[int] = 100
     user_email: Optional[str] = None
-    model_id: Optional[str] = None
 
 class AutoPopulateRequest(BaseModel):
     video_id: str
@@ -1027,7 +1024,8 @@ def confirm_resource_upload(req: ConfirmUploadRequest):
         file_url=None,
         video_id=req.video_id
     )
-    record["download_url"] = gcs_storage_service.generate_download_signed_url(req.blob_name)
+    record["view_url"] = gcs_storage_service.generate_download_signed_url(req.blob_name, disposition="inline")
+    record["download_url"] = gcs_storage_service.generate_download_signed_url(req.blob_name, disposition="attachment")
     return {"status": "success", "resource": record}
 
 
@@ -1072,8 +1070,10 @@ def get_lecture_resources(video_id: str):
     items = db_manager.get_lecture_resources(vid)
     for r in items:
         if r.get("blob_name"):
-            r["download_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"])
+            r["view_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"], disposition="inline")
+            r["download_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"], disposition="attachment")
         elif r.get("file_url"):
+            r["view_url"] = r["file_url"]
             r["download_url"] = r["file_url"]
     return {"status": "success", "video_id": vid, "resources": items, "count": len(items)}
 
@@ -1087,8 +1087,10 @@ def get_course_resources(course_name: str):
     items = db_manager.get_course_resources(cname)
     for r in items:
         if r.get("blob_name"):
-            r["download_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"])
+            r["view_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"], disposition="inline")
+            r["download_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"], disposition="attachment")
         elif r.get("file_url"):
+            r["view_url"] = r["file_url"]
             r["download_url"] = r["file_url"]
     return {"status": "success", "course_name": cname, "resources": items, "count": len(items)}
 

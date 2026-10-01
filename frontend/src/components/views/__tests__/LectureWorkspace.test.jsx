@@ -39,9 +39,6 @@ describe('LectureWorkspace', () => {
     webSearchEnabled: false,
     setWebSearchEnabled: vi.fn(),
     clearChatHistory: vi.fn(),
-    selectedModel: 'llama-3.2',
-    setSelectedModel: vi.fn(),
-    availableModels: [],
     chatMessages: [],
     setChatMessages: vi.fn(),
     viewMode: 'learning',
@@ -66,6 +63,7 @@ describe('LectureWorkspace', () => {
     expect(screen.getAllByText('Operating Systems').length).toBeGreaterThan(0);
     expect(screen.getByText('Instant Transcript Search')).toBeInTheDocument();
     expect(screen.getByText('Kernel architecture.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy Transcript/i })).toBeInTheDocument();
   });
 
   it('renders AITutor on the right when activeTab is tutor and passes deleteChatMessage', () => {

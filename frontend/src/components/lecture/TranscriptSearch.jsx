@@ -1,12 +1,14 @@
 import React from 'react';
-import { Search } from 'lucide-react';
+import { Search, Copy, Check } from 'lucide-react';
 
 export default function TranscriptSearch({
   displayCues = [],
   searchQuery,
   setSearchQuery,
   handleCueClick,
-  activeCueIdx
+  activeCueIdx,
+  copied = false,
+  handleCopyTranscript
 }) {
   return (
     <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column' }}>
@@ -25,24 +27,53 @@ export default function TranscriptSearch({
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Showing {displayCues.length} hits</span>
           </div>
 
-          <div style={{ position: 'relative' }}>
-            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-            <input
-              type="text"
-              placeholder="Search transcript by keywords or topics..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                background: 'var(--card-bg)',
-                border: '1px solid var(--border-color)',
-                padding: '10px 14px 10px 36px',
-                borderRadius: '6px',
-                color: 'var(--text-primary)',
-                fontSize: '0.88rem',
-                outline: 'none'
-              }}
-            />
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+              <input
+                type="text"
+                placeholder="Search transcript by keywords or topics..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'var(--card-bg)',
+                  border: '1px solid var(--border-color)',
+                  padding: '10px 14px 10px 36px',
+                  borderRadius: '6px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.88rem',
+                  outline: 'none'
+                }}
+              />
+            </div>
+            {handleCopyTranscript && (
+              <button
+                onClick={handleCopyTranscript}
+                title="Copy entire lecture transcript to clipboard"
+                aria-label="Copy Transcript"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  background: 'var(--card-bg)',
+                  color: copied ? 'var(--theme-primary)' : 'var(--text-primary)',
+                  border: '1px solid var(--border-color)',
+                  padding: '9px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.2s ease',
+                  flexShrink: 0
+                }}
+              >
+                {copied ? <Check size={16} color="var(--theme-primary)" /> : <Copy size={16} />}
+                <span>{copied ? 'Copied Transcript!' : 'Copy Transcript'}</span>
+              </button>
+            )}
           </div>
         </div>
 

@@ -20,6 +20,7 @@ import LectureWorkspace from './components/views/LectureWorkspace';
 import LoadingView from './components/views/LoadingView';
 import DownloadModal from './components/modals/DownloadModal';
 import UploadResourceModal from './components/modals/UploadResourceModal';
+import ResourcePreviewModal from './components/modals/ResourcePreviewModal';
 
 export default function App() {
   const [activeTab, setActiveTabState] = useState(() => {
@@ -230,6 +231,7 @@ export default function App() {
             handleCopyTranscript={player.handleCopyTranscript}
             googleUser={auth.googleUser}
             openUploadModal={resources.openUploadModal}
+            openPreviewModal={resources.openPreviewModal}
             lectureResources={resources.lectureResources}
             lectureResourcesLoading={resources.lectureResourcesLoading}
             handleDeleteResource={resources.handleDeleteResource}
@@ -277,6 +279,12 @@ export default function App() {
           open={resources.uploadModalOpen}
           onClose={() => resources.setUploadModalOpen(false)}
           {...resources}
+        />
+
+        <ResourcePreviewModal
+          open={Boolean(resources.previewResource)}
+          onClose={resources.closePreviewModal}
+          resource={resources.previewResource}
         />
       </div>
     </ThemeProvider>

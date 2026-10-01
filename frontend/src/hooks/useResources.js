@@ -223,6 +223,24 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     }
   };
 
+  const [previewResource, setPreviewResource] = useState(null);
+
+  const openPreviewModal = (resource) => {
+    if (!resource) return;
+    if (resource.file_type === 'link' || resource.file_type === 'gdrive') {
+      const targetUrl = resource.view_url || resource.download_url;
+      if (targetUrl) {
+        window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      }
+      return;
+    }
+    setPreviewResource(resource);
+  };
+
+  const closePreviewModal = () => {
+    setPreviewResource(null);
+  };
+
   return {
     lectureResources,
     setLectureResources,
@@ -248,6 +266,10 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     setUploadError,
     openUploadModal,
     handleUploadResource,
-    handleDeleteResource
+    handleDeleteResource,
+    previewResource,
+    setPreviewResource,
+    openPreviewModal,
+    closePreviewModal
   };
 }

@@ -71,4 +71,39 @@ describe('CourseMaterials', () => {
     fireEvent.click(deleteBtn);
     expect(handleDeleteResource).toHaveBeenCalledWith('res-1', undefined, 'AI 101');
   });
+
+  it('triggers openPreviewModal when View button is clicked', () => {
+    const openPreviewModal = vi.fn();
+    const resources = [
+      {
+        id: 'res-2',
+        title: 'Neural Networks Notes',
+        filename: 'notes.pdf',
+        file_type: 'pdf',
+        file_size_bytes: 500000,
+        view_url: 'https://storage.googleapis.com/test/notes.pdf?inline=1',
+        download_url: 'https://storage.googleapis.com/test/notes.pdf',
+        created_at: '2026-09-02T00:00:00Z',
+        source_type: 'file',
+        user_email: 'prof@example.com'
+      }
+    ];
+
+    render(
+      <CourseMaterials
+        courseResourcesLoading={false}
+        courseResources={resources}
+        googleUser={{ email: 'prof@example.com' }}
+        selectedCourse="AI 101"
+        handleDeleteResource={vi.fn()}
+        openUploadModal={vi.fn()}
+        openPreviewModal={openPreviewModal}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const viewBtn = screen.getByRole('button', { name: /View/i });
+    fireEvent.click(viewBtn);
+    expect(openPreviewModal).toHaveBeenCalledWith(resources[0]);
+  });
 });

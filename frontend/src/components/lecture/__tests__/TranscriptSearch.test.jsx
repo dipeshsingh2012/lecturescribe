@@ -62,4 +62,38 @@ describe('TranscriptSearch', () => {
 
     expect(screen.getByText(/0\s*hits/i)).toBeInTheDocument();
   });
+
+  it('renders Copy Transcript button and triggers handleCopyTranscript on click', () => {
+    const handleCopyTranscript = vi.fn();
+    const { rerender } = render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+        copied={false}
+        handleCopyTranscript={handleCopyTranscript}
+      />
+    );
+
+    const copyBtn = screen.getByRole('button', { name: /Copy Transcript/i });
+    expect(copyBtn).toBeInTheDocument();
+    fireEvent.click(copyBtn);
+    expect(handleCopyTranscript).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+        copied={true}
+        handleCopyTranscript={handleCopyTranscript}
+      />
+    );
+
+    expect(screen.getByText(/Copied Transcript!/i)).toBeInTheDocument();
+  });
 });

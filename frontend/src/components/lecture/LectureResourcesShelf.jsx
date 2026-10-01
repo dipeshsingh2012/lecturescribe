@@ -4,7 +4,8 @@ import {
   Paperclip,
   ExternalLink,
   Download,
-  Trash2
+  Trash2,
+  Eye
 } from 'lucide-react';
 import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/formatters';
 
@@ -14,7 +15,8 @@ export default function LectureResourcesShelf({
   googleUser,
   handleDeleteResource,
   activeData,
-  selectedCourse
+  selectedCourse,
+  openPreviewModal
 }) {
   return (
     <div style={{
@@ -105,32 +107,71 @@ export default function LectureResourcesShelf({
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                  <a
-                    href={res.download_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    download={res.file_type !== 'link' && res.file_type !== 'gdrive'}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '5px 10px',
-                      borderRadius: '6px',
-                      background: 'var(--highlight-bg)',
-                      color: 'var(--theme-primary)',
-                      border: '1px solid rgba(0, 117, 237, 0.25)',
-                      textDecoration: 'none',
-                      fontWeight: 600,
-                      fontSize: '0.75rem',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {res.file_type === 'link' || res.file_type === 'gdrive' ? (
-                      <><ExternalLink size={13} /> Open</>
-                    ) : (
-                      <><Download size={13} /> Download</>
-                    )}
-                  </a>
+                  {res.file_type === 'link' || res.file_type === 'gdrive' ? (
+                    <a
+                      href={res.view_url || res.download_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '5px 10px',
+                        borderRadius: '6px',
+                        background: 'var(--highlight-bg)',
+                        color: 'var(--theme-primary)',
+                        border: '1px solid rgba(0, 117, 237, 0.25)',
+                        textDecoration: 'none',
+                        fontWeight: 600,
+                        fontSize: '0.75rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <ExternalLink size={13} /> Open
+                    </a>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => openPreviewModal && openPreviewModal(res)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '5px 10px',
+                          borderRadius: '6px',
+                          background: 'var(--highlight-bg)',
+                          color: 'var(--theme-primary)',
+                          border: '1px solid rgba(0, 117, 237, 0.25)',
+                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <Eye size={13} /> View
+                      </button>
+                      <a
+                        href={res.download_url || res.view_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download={res.filename || true}
+                        title="Download file"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '5px 7px',
+                          borderRadius: '6px',
+                          background: 'var(--button-secondary-bg, rgba(255, 255, 255, 0.05))',
+                          color: 'var(--text-secondary)',
+                          border: '1px solid var(--border-color)',
+                          textDecoration: 'none',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <Download size={13} />
+                      </a>
+                    </>
+                  )}
                   {isOwner && (
                     <button
                       onClick={() => handleDeleteResource(res.id, activeData?.videoId, selectedCourse)}

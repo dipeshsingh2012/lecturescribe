@@ -178,41 +178,6 @@ class Llama3PineconeRAGStore:
 
         return len(self.local_chunks)
 
-    def get_supported_models(self) -> List[Dict[str, Any]]:
-        """Return unified active models."""
-        gemini_key = os.getenv("GEMINI_API_KEY", "")
-        groq_key = os.getenv("GROQ_API_KEY", "")
-
-        return [
-            {
-                "id": "openai/gpt-oss-120b",
-                "name": "Groq GPT-OSS 120B",
-                "provider": "Groq Cloud",
-                "badge": "🚀 Primary Reasoning & Tools",
-                "is_configured": bool(groq_key),
-                "is_recommended": True,
-                "free_tier_info": "Active via GROQ_API_KEY"
-            },
-            {
-                "id": "openai/gpt-oss-20b",
-                "name": "Groq GPT-OSS 20B",
-                "provider": "Groq Cloud",
-                "badge": "⚡ Ultra-Fast Fallback",
-                "is_configured": bool(groq_key),
-                "is_recommended": False,
-                "free_tier_info": "Active via GROQ_API_KEY"
-            },
-            {
-                "id": "gemini-3.8-flash",
-                "name": "Gemini 3.8 Flash",
-                "provider": "Google",
-                "badge": "⚡ 1M Long-Context Fallback",
-                "is_configured": bool(gemini_key),
-                "is_recommended": True,
-                "free_tier_info": "Google AI Studio"
-            }
-        ]
-
     def reciprocal_rank_fusion(self, ranked_lists: List[List[Dict[str, Any]]], k: int = 60) -> List[Dict[str, Any]]:
         """Combine multiple ranked lists using Reciprocal Rank Fusion."""
         rrf_scores = {}
@@ -614,7 +579,6 @@ class Llama3PineconeRAGStore:
         video_title: Optional[str] = None,
         cues: Optional[List[Dict[str, str]]] = None,
         top_k: int = 10,
-        model_id: Optional[str] = None,
         enable_web_search: bool = True,
         chat_history: Optional[List[Dict[str, Any]]] = None,
         get_user_email: Optional[str] = None,
@@ -933,7 +897,6 @@ class Llama3PineconeRAGStore:
         original_text: str,
         video_id: Optional[str] = "",
         word_count: int = 100,
-        model_id: Optional[str] = None,
         query: Optional[str] = None
     ) -> Dict[str, Any]:
         """Synthesize plain-text MTech student submission version with query-adaptive word counts."""
@@ -1108,7 +1071,6 @@ class Llama3PineconeRAGStore:
         lecture_title: str,
         video_id: str,
         user_original_request: str,
-        model_id: Optional[str] = None,
         user_email: Optional[str] = None,
     ) -> Dict[str, Any]:
         """SUMMARY-branch completion: Uncut, chronological context processed by Groq or Gemini."""

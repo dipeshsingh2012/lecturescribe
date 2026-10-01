@@ -107,6 +107,47 @@ class TestRAGWaterfall(unittest.TestCase):
         self.assertIn("ELIZA", rag_res["answer"])
         self.assertEqual(len(rag_res["web_sources"]), 1)
         self.assertEqual(rag_res["web_sources"][0]["url"], "https://en.wikipedia.org/wiki/ELIZA")
+        # Assert that citations are suppressed on boundary notices
+        self.assertEqual(rag_res["citations"], [])
+
+    def test_filter_citations_suppresses_irrelevant_chunks_on_negative_answer(self):
+        """When an answer states topic was not identified or boundary notice, raw candidate chunks must be suppressed."""
+        answer = "The requested topic was not explicitly identified in the transcript for 'Introduction to Speech and Natural Language Processing Live session -3(20 / 9 / 2026)'."
+        candidate_citations = [
+            {"timestamp": "1:01:56", "text": "Unrelated chunk 1"},
+            {"timestamp": "1:07:31", "text": "Unrelated chunk 2"},
+            {"timestamp": "30:42", "text": "Unrelated chunk 3"}
+        ]
+
+        filtered = pinecone_rag_engine._filter_and_deduplicate_citations(
+            citations=candidate_citations,
+            answer=answer,
+            target_video_id="1231770905"
+        )
+        self.assertEqual(filtered, [])
+
+    def test_filter_citations_keeps_only_referenced_timestamps_and_deduplicates(self):
+        """When the answer cites specific timestamps, only those timestamps are returned with zero duplicates."""
+        answer = "ELIZA was introduced by Joseph Weizenbaum as explained at [14:20]. Later at [31:46], dialog systems were expanded."
+        candidate_citations = [
+            {"timestamp": "14:20", "text": "ELIZA mention", "video_id": "123"},
+            {"timestamp": "14:20", "text": "ELIZA duplicate from step 2", "video_id": "123"},
+            {"timestamp": "31:46", "text": "Dialog expansion", "video_id": "123"},
+            {"timestamp": "1:01:56", "text": "Unrelated topic", "video_id": "123"},
+            {"timestamp": "53:41", "text": "Another unrelated chunk", "video_id": "123"}
+        ]
+
+        filtered = pinecone_rag_engine._filter_and_deduplicate_citations(
+            citations=candidate_citations,
+            answer=answer,
+            target_video_id="123"
+        )
+        self.assertEqual(len(filtered), 2)
+        timestamps = [c["timestamp"] for c in filtered]
+        self.assertIn("14:20", timestamps)
+        self.assertIn("31:46", timestamps)
+        self.assertNotIn("1:01:56", timestamps)
+        self.assertNotIn("53:41", timestamps)
 
 if __name__ == "__main__":
     unittest.main()

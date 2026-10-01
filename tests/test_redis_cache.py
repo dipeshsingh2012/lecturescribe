@@ -39,7 +39,7 @@ class TestRedisCache(unittest.TestCase):
         self.assertEqual(k1, k2)
         self.assertNotEqual(k1, k3)
         self.assertNotEqual(k1, k4)
-        self.assertTrue(k1.startswith("ls:rag:query:vid_101:"))
+        self.assertTrue(k1.startswith("ls:rag:v2:query:vid_101:"))
 
     def test_make_tool_key_order_independent(self):
         """Test that tool argument ordering does not change the cache key."""
@@ -47,7 +47,25 @@ class TestRedisCache(unittest.TestCase):
         k2 = self.service.make_tool_key("vid_200", "search_transcript", {"top_k": 5, "query": "unet"})
 
         self.assertEqual(k1, k2)
-        self.assertTrue(k1.startswith("ls:rag:tool:vid_200:search_transcript:"))
+        self.assertTrue(k1.startswith("ls:rag:v2:tool:vid_200:search_transcript:"))
+
+    def test_invalidate_video_purges_versioned_and_legacy_keys(self):
+        """Verify that invalidate_video cleans both v2 and legacy cache key patterns."""
+        mock_redis = MagicMock()
+        mock_redis.scan.side_effect = [
+            (0, ["ls:rag:v2:query:vid_999:abc"]),
+            (0, ["ls:rag:query:vid_999:old"]),
+            (0, ["ls:rag:v2:tool:vid_999:tool1:123"]),
+            (0, [])
+        ]
+        mock_redis.delete.return_value = 1
+        service = RedisCacheService(redis_url="redis://localhost:6379")
+        service.client = mock_redis
+        service.enabled = True
+
+        deleted = service.invalidate_video("vid_999")
+        self.assertEqual(deleted, 3)
+        self.assertEqual(mock_redis.delete.call_count, 3)
 
     def test_health_check_includes_redis(self):
         """Verify that GET /health reports redis_cache status."""

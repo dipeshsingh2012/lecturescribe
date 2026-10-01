@@ -95,7 +95,7 @@ class RelationalDBManager:
         url = self.postgres_url
         if not url:
             raise ValueError("DATABASE_URL is not set.")
-        return psycopg2.connect(url, cursor_factory=RealDictCursor)
+        return psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=5)
 
     def _init_postgres_schema(self, _first_init: bool = True):
         """Initialize PostgreSQL schema for LectureScribe tables.
@@ -338,8 +338,9 @@ class RelationalDBManager:
         if video_id in self._memory_cache:
             return self._memory_cache[video_id]
 
-        conn = self._get_connection()
+        conn = None
         try:
+            conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT * FROM lecturescribe_videos WHERE video_id = %s;", (video_id,))
@@ -386,8 +387,12 @@ class RelationalDBManager:
                     }
                     self._memory_cache[video_id] = record
                     return record
+        except Exception as e:
+            print(f"[PostgreSQL Notice] get_saved_video fallback ({e}).")
+            return self._memory_cache.get(video_id)
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def save_chat_log(
         self,
@@ -406,8 +411,9 @@ class RelationalDBManager:
 
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
 
-        conn = self._get_connection()
+        conn = None
         try:
+            conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
@@ -427,8 +433,11 @@ class RelationalDBManager:
                         json.dumps(web_sources or [])
                     ))
                     conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] save_chat_log fallback ({e}).")
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def get_chat_history(
         self,
@@ -444,8 +453,9 @@ class RelationalDBManager:
             return []
 
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
-        conn = self._get_connection()
+        conn = None
         try:
+            conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
                     query = """
@@ -488,8 +498,12 @@ class RelationalDBManager:
                             "created_at": ts_str
                         })
                     return history
+        except Exception as e:
+            print(f"[PostgreSQL Notice] get_chat_history fallback ({e}). Returning empty list.")
+            return []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def clear_chat_history(
         self,
@@ -501,8 +515,9 @@ class RelationalDBManager:
             return False
 
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
-        conn = self._get_connection()
+        conn = None
         try:
+            conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
                     if clean_email:
@@ -517,8 +532,12 @@ class RelationalDBManager:
                         """, (video_id,))
                     conn.commit()
             return True
+        except Exception as e:
+            print(f"[PostgreSQL Notice] clear_chat_history fallback ({e}).")
+            return False
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def record_user_lecture(
         self,

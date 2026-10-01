@@ -34,6 +34,9 @@ except ImportError:
     HAS_REDIS = False
 
 
+RAG_CACHE_VERSION = "v2"
+
+
 class RedisCacheService:
     """High-performance Redis Caching Service for LectureScribe."""
 
@@ -105,20 +108,20 @@ class RedisCacheService:
         return q
 
     def make_query_key(self, video_id: str, query: str, model_id: str = "") -> str:
-        """Generate deterministic cache key for a RAG query."""
+        """Generate deterministic cache key for a RAG query (namespaced by pipeline version)."""
         clean_vid = str(video_id or "").strip()
         norm_q = self.normalize_query(query)
         clean_model = str(model_id or "auto").strip().lower()
         seed = f"{clean_vid}:{norm_q}:{clean_model}"
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
-        return f"ls:rag:query:{clean_vid}:{digest}"
+        return f"ls:rag:{RAG_CACHE_VERSION}:query:{clean_vid}:{digest}"
 
     def make_tool_key(self, video_id: str, tool_name: str, args: Dict[str, Any]) -> str:
         """Generate deterministic cache key for an agent tool execution."""
         clean_vid = str(video_id or "").strip()
         args_sorted = json.dumps(args, sort_keys=True)
         digest = hashlib.sha256(args_sorted.encode("utf-8")).hexdigest()[:16]
-        return f"ls:rag:tool:{clean_vid}:{tool_name}:{digest}"
+        return f"ls:rag:{RAG_CACHE_VERSION}:tool:{clean_vid}:{tool_name}:{digest}"
 
     # ---------------------------------------------------------
     # RAG Query Cache Operations
@@ -231,8 +234,13 @@ class RedisCacheService:
         clean_vid = str(video_id).strip()
         deleted_count = 0
         try:
-            # Find and delete both query and tool keys for this video
-            patterns = [f"ls:rag:query:{clean_vid}:*", f"ls:rag:tool:{clean_vid}:*"]
+            # Find and delete both versioned and legacy query and tool keys for this video
+            patterns = [
+                f"ls:rag:*:query:{clean_vid}:*",
+                f"ls:rag:query:{clean_vid}:*",
+                f"ls:rag:*:tool:{clean_vid}:*",
+                f"ls:rag:tool:{clean_vid}:*"
+            ]
             for pat in patterns:
                 cursor = 0
                 while True:

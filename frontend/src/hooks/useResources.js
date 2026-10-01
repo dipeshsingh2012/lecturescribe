@@ -22,8 +22,13 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       return;
     }
     setLectureResourcesLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
     try {
-      const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/resources`);
+      const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/resources`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
         setLectureResources(data.resources || []);
@@ -31,6 +36,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     } catch (err) {
       console.warn("Failed to load lecture resources:", err);
     } finally {
+      clearTimeout(timeoutId);
       setLectureResourcesLoading(false);
     }
   };
@@ -49,8 +55,13 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       return;
     }
     setCourseResourcesLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/resources`);
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/resources`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
         setCourseResources(data.resources || []);
@@ -58,6 +69,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     } catch (err) {
       console.warn("Failed to load course resources:", err);
     } finally {
+      clearTimeout(timeoutId);
       setCourseResourcesLoading(false);
     }
   };

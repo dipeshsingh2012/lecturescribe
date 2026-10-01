@@ -72,5 +72,11 @@ describe('routing utility functions', () => {
       navigateTo('/course/deep-learning', true);
       expect(window.location.pathname).toBe('/course/deep-learning');
     });
+
+    it('navigates with query parameters such as tab marker', () => {
+      navigateTo('/lecture/1231770905?tab=tutor', false);
+      expect(window.location.pathname).toBe('/lecture/1231770905');
+      expect(window.location.search).toBe('?tab=tutor');
+    });
   });
 });

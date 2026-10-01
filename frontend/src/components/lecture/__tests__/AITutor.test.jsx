@@ -301,4 +301,48 @@ describe('AITutor', () => {
     // Should NOT have been called a second time
     expect(handleSendMessage).toHaveBeenCalledTimes(1);
   });
+
+  it('renders Regenerate button on bot responses and triggers regenerateResponse', () => {
+    const regenerateResponse = vi.fn();
+    const messages = [
+      { id: 'u1', sender: 'user', text: 'what is early NLP system mimicking a phsycotherapist' },
+      { id: 'b1', sender: 'bot', text: 'ELIZA was an early natural language processing program...' }
+    ];
+
+    render(
+      <AITutor
+        webSearchEnabled={true}
+        setWebSearchEnabled={vi.fn()}
+        clearChatHistory={vi.fn()}
+        selectedModel="llama-3.2"
+        setSelectedModel={vi.fn()}
+        availableModels={defaultModels}
+        chatMessages={messages}
+        setChatMessages={vi.fn()}
+        viewMode="learning"
+        submissionSummaries={{}}
+        cleanSubmissionFallback={vi.fn()}
+        handleCueClick={vi.fn()}
+        copiedPromptId={null}
+        copyUserPrompt={vi.fn()}
+        copiedSubmissionId={null}
+        copySubmissionText={vi.fn()}
+        copiedResponseId={null}
+        copyBotResponse={vi.fn()}
+        regenerateResponse={regenerateResponse}
+        regeneratingId={null}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        chatInputRef={{ current: null }}
+        chatEndRef={{ current: null }}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    const regenBtn = screen.getByRole('button', { name: /Regenerate/i });
+    expect(regenBtn).toBeInTheDocument();
+    fireEvent.click(regenBtn);
+    expect(regenerateResponse).toHaveBeenCalledWith('b1');
+  });
 });

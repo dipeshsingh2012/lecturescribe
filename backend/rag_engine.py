@@ -240,6 +240,64 @@ class Llama3PineconeRAGStore:
             return float(parts[0]) * 60 + float(parts[1])
         return 0.0
 
+    def _filter_and_deduplicate_citations(
+        self,
+        citations: List[Dict[str, Any]],
+        answer: str,
+        target_video_id: str = ""
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter and deduplicate candidate citations against the synthesized final answer.
+        - Suppresses citations completely if the answer indicates topic is not covered / boundary notice.
+        - Deduplicates candidate citations by (video_id, timestamp_seconds).
+        - If inline timestamps [MM:SS] are present in the answer, retains strictly the referenced citations.
+        """
+        if not citations or not answer:
+            return []
+
+        lower_ans = answer.lower()
+        negative_markers = [
+            "course boundary notice",
+            "not explicitly identified",
+            "not covered in this lecture",
+            "not covered in your course",
+            "not found in the transcript",
+            "was not discussed in the transcript",
+            "could not find any mention",
+            "is not covered in '"
+        ]
+        if any(marker in lower_ans for marker in negative_markers):
+            # If the response is a boundary notice or negative refusal,
+            # suppress candidate lecture chunks unless it's a cross-lecture citation that was explicitly referenced
+            cross_cites = [c for c in citations if c.get("cross_lecture")]
+            if not cross_cites:
+                return []
+
+        # Deduplicate citations by (video_id, parsed_seconds)
+        unique_citations = []
+        seen_keys = set()
+        for c in citations:
+            vid = c.get("video_id") or target_video_id
+            ts = c.get("timestamp", "00:00")
+            sec = self._parse_timestamp(ts)
+            key = (vid, sec)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_citations.append(c)
+
+        # Extract all timestamps referenced in the answer
+        raw_ts_in_answer = re.findall(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", answer)
+        if raw_ts_in_answer:
+            cited_seconds = {self._parse_timestamp(t) for t in raw_ts_in_answer}
+            matched_citations = [
+                c for c in unique_citations
+                if self._parse_timestamp(c.get("timestamp", "00:00")) in cited_seconds
+            ]
+            return matched_citations
+
+        # If answer is positive but didn't write inline timestamps, return top 5 unique candidates
+        return unique_citations[:5]
+
     AGENT_TOOLS = [
         {
             "type": "function",
@@ -745,10 +803,25 @@ class Llama3PineconeRAGStore:
                 if not final_answer:
                     final_answer = f"⚠️ **Course Boundary Notice**: The topic '{query}' is not covered in '{lecture_title}'. Please verify the concept or check other course lectures."
 
+                filtered_citations = self._filter_and_deduplicate_citations(
+                    citations=all_citations,
+                    answer=final_answer,
+                    target_video_id=target_video_id
+                )
+
+                # Deduplicate web sources by URL
+                unique_web_sources = []
+                seen_urls = set()
+                for ws in all_web_sources:
+                    url = ws.get("url", "").strip()
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        unique_web_sources.append(ws)
+
                 return {
                     "answer": final_answer,
-                    "citations": all_citations,
-                    "web_sources": all_web_sources,
+                    "citations": filtered_citations,
+                    "web_sources": unique_web_sources,
                     "model": display_model,
                     "lecture_title": lecture_title,
                     "video_id": target_video_id

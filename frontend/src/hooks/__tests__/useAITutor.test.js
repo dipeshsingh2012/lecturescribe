@@ -251,4 +251,44 @@ describe('useAITutor hook functionality', () => {
     expect(hookResult.result.current.chatLoading).toBe(false);
     expect(hookResult.result.current.chatMessages).toEqual([]);
   });
+
+  it('regenerateResponse calls RAG query with bypass_cache: true and updates message in-place', async () => {
+    let capturedBody = null;
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/api/rag/query')) {
+        capturedBody = JSON.parse(opts.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            message_id: 'bot-1',
+            answer: 'ELIZA was created by Joseph Weizenbaum at MIT.',
+            submission_text: 'ELIZA created by Joseph Weizenbaum.'
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const activeData = { videoId: 'v123', title: 'NLP Session' };
+    const { result } = renderHook(() => useAITutor(activeData, null));
+
+    act(() => {
+      result.current.setChatMessages([
+        { id: 'user-1', sender: 'user', text: 'what is early NLP system mimicking a phsycotherapist' },
+        { id: 'bot-1', sender: 'bot', text: 'Old cached answer' }
+      ]);
+    });
+
+    await act(async () => {
+      await result.current.regenerateResponse('bot-1');
+    });
+
+    expect(capturedBody).not.toBeNull();
+    expect(capturedBody.query).toBe('what is early NLP system mimicking a phsycotherapist');
+    expect(capturedBody.bypass_cache).toBe(true);
+    expect(capturedBody.video_id).toBe('v123');
+
+    expect(result.current.chatMessages[1].text).toBe('ELIZA was created by Joseph Weizenbaum at MIT.');
+    expect(result.current.submissionSummaries['bot-1']).toBe('ELIZA created by Joseph Weizenbaum.');
+  });
 });

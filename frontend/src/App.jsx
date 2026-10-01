@@ -22,15 +22,39 @@ import DownloadModal from './components/modals/DownloadModal';
 import UploadResourceModal from './components/modals/UploadResourceModal';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('transcript');
+  const [activeTab, setActiveTabState] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const tabParam = new URLSearchParams(window.location.search).get('tab');
+      if (tabParam === 'tutor' || tabParam === 'transcript') return tabParam;
+    }
+    return 'transcript';
+  });
+
+  const setActiveTab = (tab) => {
+    setActiveTabState(tab);
+    if (typeof window !== 'undefined') {
+      try {
+        const url = new URL(window.location.href);
+        if (tab === 'transcript') url.searchParams.delete('tab');
+        else url.searchParams.set('tab', tab);
+        window.history.replaceState({}, '', url.pathname + (url.search || ''));
+      } catch (e) {
+        console.warn("Tab URL update warning:", e);
+      }
+    }
+  };
+
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
   const [, setCurrentPath] = useState(() => (typeof window !== 'undefined' ? window.location.pathname || '/' : '/'));
 
   const navigateTo = (path, replace = false) => {
     try {
-      if (typeof window !== 'undefined' && window.location.pathname !== path) {
-        if (replace) window.history.replaceState({}, '', path);
-        else window.history.pushState({}, '', path);
+      if (typeof window !== 'undefined') {
+        const currentFull = window.location.pathname + window.location.search;
+        if (currentFull !== path) {
+          if (replace) window.history.replaceState({}, '', path);
+          else window.history.pushState({}, '', path);
+        }
       }
     } catch (e) {
       console.warn("Navigation history warning:", e);
@@ -98,6 +122,11 @@ export default function App() {
       const { courseName, videoId } = parsePathRoute(current);
       setSelectedCourse(courseName);
 
+      if (typeof window !== 'undefined') {
+        const tabParam = new URLSearchParams(window.location.search).get('tab');
+        setActiveTabState(tabParam === 'tutor' ? 'tutor' : 'transcript');
+      }
+
       if (videoId) {
         if (lecture.activeDataRef.current?.videoId !== videoId) {
           handleTranscribe(`https://vimeo.com/${videoId}`, false, courseName);
@@ -112,6 +141,13 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // When user is on or switches to AI Tutor tab, ensure chat history / autopopulate runs if empty
+  useEffect(() => {
+    if (activeTab === 'tutor' && activeData?.videoId && tutor.chatMessages.length === 0 && !tutor.chatLoading) {
+      tutor.fetchChatHistory(activeData.videoId, auth.googleUser?.email);
+    }
+  }, [activeTab, activeData?.videoId]);
 
   // Theme Management
   const { currentThemeId, setTheme } = useThemeStore();
@@ -217,6 +253,8 @@ export default function App() {
             copySubmissionText={tutor.copySubmissionText}
             copiedResponseId={tutor.copiedResponseId}
             copyBotResponse={tutor.copyBotResponse}
+            regenerateResponse={tutor.regenerateResponse}
+            regeneratingId={tutor.regeneratingId}
             chatLoading={tutor.chatLoading}
             chatInput={tutor.chatInput}
             setChatInput={tutor.setChatInput}

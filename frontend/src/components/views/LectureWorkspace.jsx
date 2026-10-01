@@ -43,6 +43,8 @@ export default function LectureWorkspace({
   copySubmissionText,
   copiedResponseId,
   copyBotResponse,
+  regenerateResponse,
+  regeneratingId,
   chatLoading,
   chatInput,
   setChatInput,
@@ -103,6 +105,8 @@ export default function LectureWorkspace({
           copySubmissionText={copySubmissionText}
           copiedResponseId={copiedResponseId}
           copyBotResponse={copyBotResponse}
+          regenerateResponse={regenerateResponse}
+          regeneratingId={regeneratingId}
           chatLoading={chatLoading}
           chatInput={chatInput}
           setChatInput={setChatInput}

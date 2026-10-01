@@ -38,6 +38,8 @@ export default function AITutor({
   copySubmissionText,
   copiedResponseId,
   copyBotResponse,
+  regenerateResponse,
+  regeneratingId,
   chatLoading,
   chatInput,
   setChatInput,
@@ -660,6 +662,45 @@ export default function AITutor({
                     >
                       {activeCopiedResponseId === (msg.id || idx) ? <Check size={11} color="#10b981" /> : <Copy size={11} />}
                       <span>{activeCopiedResponseId === (msg.id || idx) ? 'Copied!' : 'Copy'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => regenerateResponse && regenerateResponse(msg.id || idx)}
+                      disabled={chatLoading || regeneratingId === (msg.id || idx)}
+                      title="Regenerate this response with live AI (bypass cache)"
+                      aria-label="Regenerate AI response"
+                      style={{
+                        background: 'var(--card-bg)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '6px',
+                        padding: '3px 8px',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: (chatLoading || regeneratingId === (msg.id || idx)) ? 'not-allowed' : 'pointer',
+                        opacity: (chatLoading || regeneratingId === (msg.id || idx)) ? 0.6 : 1,
+                        transition: 'all 0.15s ease'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!chatLoading && regeneratingId !== (msg.id || idx)) {
+                          e.currentTarget.style.color = 'var(--theme-primary)';
+                          e.currentTarget.style.borderColor = 'var(--theme-primary)';
+                          e.currentTarget.style.background = 'var(--highlight-bg)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!chatLoading && regeneratingId !== (msg.id || idx)) {
+                          e.currentTarget.style.color = 'var(--text-secondary)';
+                          e.currentTarget.style.borderColor = 'var(--border-color)';
+                          e.currentTarget.style.background = 'var(--card-bg)';
+                        }
+                      }}
+                    >
+                      <RefreshCw size={11} className={regeneratingId === (msg.id || idx) ? 'animate-spin' : ''} />
+                      <span>{regeneratingId === (msg.id || idx) ? 'Regenerating...' : 'Regenerate'}</span>
                     </button>
 
                     {currentMsgMode === 'learning' && msg.model && (

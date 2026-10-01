@@ -12,10 +12,16 @@ export function useAITutor(activeData, googleUser) {
   const [copiedSubmissionId, setCopiedSubmissionId] = useState(null);
   const [copiedPromptId, setCopiedPromptId] = useState(null);
   const [copiedResponseId, setCopiedResponseId] = useState(null);
+  const [regeneratingId, setRegeneratingId] = useState(null);
   const chatEndRef = useRef(null);
   const chatInputRef = useRef(null);
   const clearedInSessionRef = useRef(false);
   const currentVideoIdRef = useRef(null);
+
+  const activeDataRef = useRef(activeData);
+  useEffect(() => {
+    activeDataRef.current = activeData;
+  }, [activeData]);
 
   // Auto scroll chat to bottom
   useEffect(() => {
@@ -31,8 +37,8 @@ export function useAITutor(activeData, googleUser) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           video_id: videoId,
-          video_title: activeData?.title || '',
-          cues: activeData?.cues || [],
+          video_title: activeDataRef.current?.title || activeData?.title || '',
+          cues: activeDataRef.current?.cues || activeData?.cues || [],
           user_email: userEmail
         })
       });
@@ -93,19 +99,21 @@ export function useAITutor(activeData, googleUser) {
     setSubmissionSummaries({});
   };
 
-  // Sync chat messages and submission summaries whenever the active video changes
+  // Sync chat messages and submission summaries whenever the active video changes or cues load
   useEffect(() => {
     if (activeData?.videoId) {
       if (currentVideoIdRef.current !== activeData.videoId) {
         currentVideoIdRef.current = activeData.videoId;
         clearedInSessionRef.current = false;
+        fetchChatHistory(activeData.videoId, googleUser?.email);
+      } else if (chatMessages.length === 0 && !chatLoading && !clearedInSessionRef.current) {
+        fetchChatHistory(activeData.videoId, googleUser?.email);
       }
-      fetchChatHistory(activeData.videoId, googleUser?.email);
     } else {
       setChatMessages([]);
       setSubmissionSummaries({});
     }
-  }, [activeData?.videoId, googleUser?.email]);
+  }, [activeData?.videoId, activeData?.cues?.length, googleUser?.email]);
 
   const clearChatHistory = async () => {
     if (!activeData?.videoId) return;
@@ -247,6 +255,67 @@ export function useAITutor(activeData, googleUser) {
     setTimeout(() => setCopiedResponseId(null), 2000);
   };
 
+  const regenerateResponse = async (messageId) => {
+    if (!activeData?.videoId || chatLoading || regeneratingId) return;
+
+    // Find the target bot message
+    const botMsgIdx = chatMessages.findIndex((m, idx) => (m.id || idx) === messageId || m.id === messageId);
+    if (botMsgIdx === -1) return;
+
+    // Look backward for the user prompt that generated this answer
+    let promptText = '';
+    for (let i = botMsgIdx - 1; i >= 0; i--) {
+      if (chatMessages[i].sender === 'user' && chatMessages[i].text) {
+        promptText = chatMessages[i].text;
+        break;
+      }
+    }
+    if (!promptText.trim()) return;
+
+    setRegeneratingId(messageId);
+    try {
+      const res = await fetch(`${API_BASE}/api/rag/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: promptText,
+          video_id: activeData.videoId,
+          video_title: activeData.title,
+          cues: activeData.cues || [],
+          enable_web_search: webSearchEnabled,
+          bypass_cache: true,
+          user_email: googleUser?.email || null,
+          chat_history: chatMessages.slice(0, botMsgIdx).slice(-6)
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const updatedMsg = {
+          id: data.message_id || messageId || Date.now().toString(),
+          sender: 'bot',
+          text: data.answer,
+          citations: data.citations || [],
+          model: data.model || 'Groq GPT-OSS 120B',
+          web_sources: data.web_sources || [],
+          submission_text: data.submission_text || null
+        };
+
+        setChatMessages(prev => prev.map((m, i) => (i === botMsgIdx ? updatedMsg : m)));
+
+        if (data.submission_text) {
+          setSubmissionSummaries(prev => ({ ...prev, [updatedMsg.id]: data.submission_text }));
+        } else {
+          generateSubmissionVersion(data.answer, activeData.videoId, updatedMsg.id);
+        }
+      }
+    } catch (err) {
+      console.error("Regenerate response error:", err);
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
   return {
     chatMessages,
     setChatMessages,
@@ -261,6 +330,7 @@ export function useAITutor(activeData, googleUser) {
     copiedSubmissionId,
     copiedPromptId,
     copiedResponseId,
+    regeneratingId,
     chatEndRef,
     chatInputRef,
     fetchChatHistory,
@@ -271,6 +341,7 @@ export function useAITutor(activeData, googleUser) {
     generateSubmissionVersion,
     copySubmissionText,
     copyUserPrompt,
-    copyBotResponse
+    copyBotResponse,
+    regenerateResponse
   };
 }

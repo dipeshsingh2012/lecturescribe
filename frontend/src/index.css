@@ -120,3 +120,26 @@ body {
 .fade-in {
   animation: fadeIn 0.2s ease-out forwards;
 }
+
+/* Algolia Instant Search Highlighting */
+.algolia-highlight,
+mark,
+.transcript-cue mark,
+.transcript-cue em {
+  background-color: #fef08a;
+  color: #854d0e;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.4);
+  font-style: normal;
+}
+
+[data-theme='dark'] .algolia-highlight,
+[data-theme='dark'] mark,
+[data-theme='dark'] .transcript-cue mark,
+[data-theme='dark'] .transcript-cue em {
+  background-color: rgba(234, 179, 8, 0.35);
+  color: #fef08a;
+  box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.6);
+}

@@ -74,11 +74,12 @@ export default function TranscriptSearch({
               
               {cue.highlightHtml ? (
                 <span
+                  className="transcript-cue"
                   style={{ fontSize: '0.9rem', color: 'var(--text-primary)', lineHeight: 1.4 }}
                   dangerouslySetInnerHTML={{ __html: cue.highlightHtml }}
                 />
               ) : (
-                <span style={{ fontSize: '0.9rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>{cue.text}</span>
+                <span className="transcript-cue" style={{ fontSize: '0.9rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>{cue.text}</span>
               )}
             </div>
           ))}

@@ -28,7 +28,7 @@ export function useLecturePlayer(activeData) {
         });
         if (res.ok) {
           const data = await res.json();
-          setSearchResults(data.results || []);
+          setSearchResults(data.hits || data.results || []);
         }
       } catch (err) {
         console.error("Search API Error:", err);
@@ -88,12 +88,34 @@ export function useLecturePlayer(activeData) {
   };
 
   const displayCues = useMemo(() => {
-    if (searchQuery.trim() && searchResults.length > 0) {
-      return searchResults.map(h => ({
-        time: h.timestamp,
-        text: h.text,
-        highlightHtml: h._highlightResult?.text?.value
-      }));
+    if (searchQuery.trim()) {
+      if (searchResults.length > 0) {
+        return searchResults.map(h => {
+          let highlightHtml =
+            h._highlightResult?.text?.value ||
+            h._highlight_result?.text?.value ||
+            h.highlightResult?.text?.value ||
+            h.highlightHtml ||
+            null;
+
+          // Fallback: If backend didn't supply highlight tags, highlight search terms in text directly
+          if (!highlightHtml || !/<mark|<em/i.test(highlightHtml)) {
+            const rawText = h.text || '';
+            const words = searchQuery.trim().split(/\s+/).filter(Boolean);
+            if (words.length > 0) {
+              const pattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+              highlightHtml = rawText.replace(new RegExp(`(${pattern})`, 'gi'), "<mark class='algolia-highlight'>$1</mark>");
+            }
+          }
+
+          return {
+            time: h.timestamp || h.time || '00:00',
+            text: h.text,
+            highlightHtml
+          };
+        });
+      }
+      return [];
     }
     return activeData?.cues || [];
   }, [searchQuery, searchResults, activeData]);

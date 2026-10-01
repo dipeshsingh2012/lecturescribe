@@ -308,7 +308,7 @@ def get_transcript(
 def algolia_search(req: AlgoliaSearchRequest):
     """Sub-10ms instant keyword search with typo tolerance via Algolia."""
     hits = algolia_service.search(req.query, video_id=req.video_id, limit=req.limit or 20)
-    return {"hits": hits, "count": len(hits)}
+    return {"hits": hits, "results": hits, "count": len(hits)}
 
 @app.post("/api/rag/query")
 def rag_query(req: RAGQueryRequest):

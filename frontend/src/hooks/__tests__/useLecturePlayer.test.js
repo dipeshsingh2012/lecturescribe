@@ -60,6 +60,49 @@ describe('useLecturePlayer hook functionality', () => {
     vi.useRealTimers();
   });
 
+  it('maps highlightHtml from backend hits and provides fallback highlighting', async () => {
+    vi.useFakeTimers();
+    const searchHits = [
+      {
+        timestamp: '03:15',
+        text: 'Eigenvalues and eigenvectors in linear systems.',
+        _highlightResult: {
+          text: { value: 'Eigenvalues and <mark class="algolia-highlight">eigenvectors</mark> in linear systems.' }
+        }
+      },
+      {
+        timestamp: '05:40',
+        text: 'Another mention of eigenvectors here.'
+      }
+    ];
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ hits: searchHits, count: 2 })
+    });
+
+    const activeData = { videoId: 'v100', cues: [] };
+    const { result } = renderHook(() => useLecturePlayer(activeData));
+
+    act(() => {
+      result.current.setSearchQuery('eigenvectors');
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(result.current.displayCues.length).toBe(2);
+    // Hit 1 should have backend highlightHtml
+    expect(result.current.displayCues[0].highlightHtml).toContain('<mark class="algolia-highlight">eigenvectors</mark>');
+    expect(result.current.displayCues[0].time).toBe('03:15');
+    // Hit 2 should have frontend fallback highlightHtml
+    expect(result.current.displayCues[1].highlightHtml).toContain("<mark class='algolia-highlight'>eigenvectors</mark>");
+    expect(result.current.displayCues[1].time).toBe('05:40');
+
+    vi.useRealTimers();
+  });
+
   it('handleCopyTranscript formats cues and writes to clipboard', async () => {
     const writeTextMock = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, {

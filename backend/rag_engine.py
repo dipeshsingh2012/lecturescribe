@@ -286,6 +286,21 @@ class Llama3PineconeRAGStore:
         {
             "type": "function",
             "function": {
+                "name": "search_course_lectures",
+                "description": "Search for topics or concepts across all OTHER lectures in this course when not found in the current lecture.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "top_k": {"type": "integer"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_web_context",
                 "description": "Search DuckDuckGo and Wikipedia for external courses, syllabi (e.g. IITs, Stanford, MIT, NPTEL), and technical context.",
                 "parameters": {
@@ -436,6 +451,94 @@ class Llama3PineconeRAGStore:
             citations.append({"timestamp": st, "end_time": et, "text": dialogue[:120] + "..."})
             return json.dumps({"start_time": st, "end_time": et, "transcript": dialogue}), citations, web_sources
 
+        elif tool_name == "search_course_lectures":
+            query = str(arguments.get("query", "")).strip()
+            top_k = int(arguments.get("top_k", 5))
+            current_vid = vid_cache
+
+            # 1. Determine the course name for this lecture
+            course_name = ""
+            if current_vid and current_vid != "active":
+                try:
+                    from backend.database import db_manager, extract_course_name
+                    saved = db_manager.get_saved_video(current_vid)
+                    if saved:
+                        course_name = saved.get("course_name") or extract_course_name(saved.get("title", ""))
+                except Exception:
+                    pass
+            if not course_name and lecture_title:
+                from backend.database import extract_course_name
+                course_name = extract_course_name(lecture_title)
+
+            # 2. Search Algolia across all lectures (without filtering to current_vid)
+            course_matches = []
+            try:
+                from backend.algolia_service import algolia_service
+                hits = algolia_service.search(query, video_id=None, limit=top_k * 4)
+                for h in hits:
+                    hit_vid = str(h.get("video_id", "")).strip()
+                    if hit_vid and hit_vid != current_vid:
+                        hit_title = h.get("video_title") or "Lecture"
+                        hit_course = extract_course_name(hit_title)
+                        if not course_name or hit_course.lower() == course_name.lower():
+                            course_matches.append({
+                                "video_id": hit_vid,
+                                "video_title": hit_title,
+                                "timestamp": h.get("timestamp", "00:00"),
+                                "text": h.get("text", "")
+                            })
+            except Exception as e:
+                print(f"⚠️ [Cross-Lecture Algolia Search Notice]: {e}")
+
+            # 3. If Algolia has no hits, search PostgreSQL cross-lecture cues
+            if not course_matches:
+                try:
+                    from backend.database import db_manager
+                    conn = db_manager._get_connection()
+                    with conn:
+                        with conn.cursor() as cursor:
+                            q_pattern = f"%{query}%"
+                            cursor.execute("""
+                                SELECT c.video_id, v.title as video_title, c.timestamp, c.text
+                                FROM lecturescribe_transcript_cues c
+                                JOIN lecturescribe_videos v ON c.video_id = v.video_id
+                                WHERE c.video_id != %s
+                                  AND c.text ILIKE %s
+                                LIMIT %s;
+                            """, (current_vid, q_pattern, top_k))
+                            rows = cursor.fetchall() or []
+                            for r in rows:
+                                course_matches.append({
+                                    "video_id": r["video_id"],
+                                    "video_title": r.get("video_title") or "Lecture",
+                                    "timestamp": r.get("timestamp") or "00:00",
+                                    "text": r.get("text") or ""
+                                })
+                except Exception as e:
+                    print(f"⚠️ [Cross-Lecture PostgreSQL Notice]: {e}")
+
+            out = []
+            for item in course_matches[:top_k]:
+                st = item.get("timestamp", "00:00")
+                txt = item.get("text", "")
+                vid_item = item.get("video_id", "")
+                title_item = item.get("video_title", "Lecture")
+                citations.append({
+                    "video_id": vid_item,
+                    "video_title": title_item,
+                    "timestamp": st,
+                    "end_time": st,
+                    "text": f"[{title_item}] {txt[:120]}...",
+                    "cross_lecture": True
+                })
+                out.append({
+                    "video_id": vid_item,
+                    "lecture_title": title_item,
+                    "timestamp": f"[{st}]",
+                    "text": txt
+                })
+            return json.dumps(out), citations, web_sources
+
         elif tool_name == "search_web_context":
             sq = str(arguments.get("search_query", "")).strip()
             from backend.web_search import search_web_for_context
@@ -519,17 +622,21 @@ class Llama3PineconeRAGStore:
         ]
 
         web_instruction = (
-            "2. When the user asks to compare this lecture with other university courses (e.g., IITs, Stanford, MIT, NPTEL), standard syllabi, "
-            "external benchmarks, or real-world implementations, you MUST call 'search_web_context' to retrieve "
-            "real course references and include external web links in your answer.\n"
-            "3. If external web sources are used, summarize their findings and cite the source URLs."
+            "2. THREE-TIER WATERFALL PROTOCOL (Strict Non-Hallucination & Mandatory Citations):\n"
+            "   - Tier 1 (Current Lecture): Always search the current lecture first using 'search_transcript'. If found, ground statements with exact [MM:SS] timestamps inline.\n"
+            "   - Tier 2 (Course-Wide Cross-Lecture Search): If the concept is not found in the current lecture (e.g., student asks about an earlier or different session like ELIZA in Session 3), you MUST call 'search_course_lectures' to check if another lecture in this course discusses it. If found in another lecture, explicitly state: 'This concept was not discussed in this lecture, but was covered by the professor in [Lecture Title] at [MM:SS]', and cite that lecture with its timestamp.\n"
+            "   - Tier 3 (Academic Foundations & Web Search): If the concept is absent from all lectures in this course, you MUST call 'search_web_context' to retrieve verified external academic sources. Synthesize a clear, direct, and rigorous academic answer using the retrieved web snippets and grounded academic knowledge. Explicitly state the course boundary notice: '⚠️ **Course Boundary Notice**: This topic is not covered in this lecture or course syllabus. Grounded in standard academic literature:'. You MUST summarize the findings and cite the source URLs.\n"
+            "   - STRICT NON-HALLUCINATION RULE: Never invent timestamps. Never claim a topic was taught in a lecture if it was not. Always provide citations for claims."
             if enable_web_search else
-            "2. Answer student questions using only the retrieved lecture outline and transcript data."
+            "2. TWO-TIER WATERFALL PROTOCOL:\n"
+            "   - Tier 1: Search current lecture using 'search_transcript' and cite [MM:SS].\n"
+            "   - Tier 2: If absent, call 'search_course_lectures' to check other course lectures. If found, cite that lecture.\n"
+            "   - If absent from the course entirely, provide the grounded academic definition with: '⚠️ **Course Boundary Notice**: This topic is not covered in your course lectures. Grounded in standard academic foundations:'."
         )
 
         system_prompt = (
             f"You are an Academic AI Tutor for lecture: '{lecture_title}'.\n"
-            "1. Ground specific statements about this lecture with exact [MM:SS] timestamps inline.\n"
+            "You are helpful, precise, non-hallucinatory, and academically rigorous.\n"
             f"{web_instruction}"
         )
 
@@ -603,6 +710,22 @@ class Llama3PineconeRAGStore:
                         messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
 
                 if not final_answer:
+                    # Autonomous Waterfall Tier 3: If no citations or web sources retrieved yet, trigger web search directly
+                    if enable_web_search and not all_web_sources and not all_citations:
+                        try:
+                            from backend.web_search import search_web_for_context
+                            hits = search_web_for_context(query, max_results=3)
+                            for h in hits:
+                                all_web_sources.append(h)
+                            if hits:
+                                web_summary = "\n".join(f"- {h['title']} ({h['url']}): {h['snippet']}" for h in hits)
+                                messages.append({
+                                    "role": "system",
+                                    "content": f"External Web References retrieved for academic query:\n{web_summary}\n\nGround your answer using these external sources and begin with: '⚠️ **Course Boundary Notice**: This topic is not covered in this lecture. Grounded in standard academic literature:'."
+                                })
+                        except Exception as e_ws:
+                            print(f"⚠️ [Autonomous Web Fallback Notice]: {e_ws}")
+
                     messages.append({
                         "role": "user",
                         "content": "Please synthesize a final, clear academic answer to the original question using the information retrieved above."
@@ -620,7 +743,7 @@ class Llama3PineconeRAGStore:
                         final_answer = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
                 if not final_answer:
-                    final_answer = f"The requested topic was not explicitly identified in the transcript for '{lecture_title}'. Please check the lecture outline or specify a timestamp range."
+                    final_answer = f"⚠️ **Course Boundary Notice**: The topic '{query}' is not covered in '{lecture_title}'. Please verify the concept or check other course lectures."
 
                 return {
                     "answer": final_answer,

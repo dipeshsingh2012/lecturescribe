@@ -589,13 +589,13 @@ export default function AITutor({
                             e.preventDefault();
                             handleCueClick(cite.timestamp);
                           }}
-                          title={cite.text ? `Jump to ${cite.timestamp}: "${cite.text}"` : `Jump to ${cite.timestamp}`}
+                          title={cite.text ? (cite.cross_lecture ? `[${cite.video_title || 'Other lecture'}] ${cite.timestamp}: "${cite.text}"` : `Jump to ${cite.timestamp}: "${cite.text}"`) : (cite.cross_lecture ? `[${cite.video_title || 'Other lecture'}] ${cite.timestamp}` : `Jump to ${cite.timestamp}`)}
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '4px',
-                            background: 'var(--card-bg)',
-                            border: '1px solid var(--border-color)',
+                            background: cite.cross_lecture ? 'rgba(0, 117, 237, 0.08)' : 'var(--card-bg)',
+                            border: '1px solid ' + (cite.cross_lecture ? 'var(--theme-primary)' : 'var(--border-color)'),
                             color: 'var(--theme-primary)',
                             padding: '3px 8px',
                             borderRadius: '6px',
@@ -606,7 +606,7 @@ export default function AITutor({
                           }}
                         >
                           <Play size={10} style={{ fill: 'currentColor' }} />
-                          <span>{cite.timestamp}</span>
+                          <span>{cite.cross_lecture && cite.video_title ? `${cite.video_title.length > 28 ? cite.video_title.slice(0, 26) + '…' : cite.video_title} [${cite.timestamp}]` : cite.timestamp}</span>
                         </button>
                       ))}
                     </div>

@@ -2,13 +2,11 @@ import React from 'react';
 import {
   Box,
   Button,
-  Typography,
-  Tooltip
+  Typography
 } from '@mui/material';
 import {
   Folder,
-  ChevronRight,
-  Upload
+  ChevronRight
 } from 'lucide-react';
 import { normalizeCourseSlug } from '../../utils/routing';
 import LectureResourcesShelf from './LectureResourcesShelf';
@@ -167,43 +165,6 @@ export default function LecturePlayer({
         <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3, margin: 0 }}>{activeData.title}</h1>
       </div>
 
-      <div style={{ marginTop: '8px' }}>
-        <Tooltip title={!googleUser ? "Sign in with Google to upload resources" : "Upload lecture notes, slides, or links"}>
-          <span style={{ display: 'block', width: '100%' }}>
-            <button
-              onClick={() => {
-                if (!googleUser) return;
-                openUploadModal({
-                  courseName: activeCourseData?.course_name || selectedCourse || activeData?.course_name || 'General Lectures',
-                  videoId: activeData.videoId
-                });
-              }}
-              disabled={!googleUser}
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                background: googleUser ? 'var(--card-bg)' : 'rgba(255, 255, 255, 0.04)',
-                color: googleUser ? 'var(--theme-primary)' : 'var(--text-secondary)',
-                border: googleUser ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
-                padding: '10px 14px',
-                borderRadius: '8px',
-                cursor: googleUser ? 'pointer' : 'not-allowed',
-                fontWeight: 600,
-                fontSize: '0.85rem',
-                opacity: googleUser ? 1 : 0.6,
-                whiteSpace: 'nowrap'
-              }}
-            >
-              <Upload size={16} />
-              Upload Resource
-            </button>
-          </span>
-        </Tooltip>
-      </div>
-
       {/* Lecture Resources Shelf */}
       <LectureResourcesShelf
         lectureResources={lectureResources}
@@ -211,8 +172,10 @@ export default function LecturePlayer({
         googleUser={googleUser}
         handleDeleteResource={handleDeleteResource}
         activeData={activeData}
+        activeCourseData={activeCourseData}
         selectedCourse={selectedCourse}
         openPreviewModal={openPreviewModal}
+        openUploadModal={openUploadModal}
       />
     </div>
   );

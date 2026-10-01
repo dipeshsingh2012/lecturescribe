@@ -1,11 +1,12 @@
 import React from 'react';
-import { CircularProgress } from '@mui/material';
+import { CircularProgress, Tooltip } from '@mui/material';
 import {
   Paperclip,
   ExternalLink,
   Download,
   Trash2,
-  Eye
+  Eye,
+  Upload
 } from 'lucide-react';
 import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/formatters';
 
@@ -15,8 +16,10 @@ export default function LectureResourcesShelf({
   googleUser,
   handleDeleteResource,
   activeData,
+  activeCourseData,
   selectedCourse,
-  openPreviewModal
+  openPreviewModal,
+  openUploadModal
 }) {
   return (
     <div style={{
@@ -47,8 +50,45 @@ export default function LectureResourcesShelf({
           }}>
             {lectureResources.length}
           </span>
+          {lectureResourcesLoading && <CircularProgress size={14} sx={{ color: 'var(--theme-primary)' }} />}
         </div>
-        {lectureResourcesLoading && <CircularProgress size={14} sx={{ color: 'var(--theme-primary)' }} />}
+
+        {openUploadModal && (
+          <Tooltip title={!googleUser ? "Sign in with Google to upload resources" : "Upload lecture notes, slides, or links"}>
+            <span>
+              <button
+                onClick={() => {
+                  if (!googleUser) return;
+                  openUploadModal({
+                    courseName: activeCourseData?.course_name || selectedCourse || activeData?.course_name || 'General Lectures',
+                    videoId: activeData?.videoId
+                  });
+                }}
+                disabled={!googleUser}
+                aria-label="Upload Resource"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  background: googleUser ? 'var(--card-bg)' : 'rgba(255, 255, 255, 0.04)',
+                  color: googleUser ? 'var(--theme-primary)' : 'var(--text-secondary)',
+                  border: googleUser ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  cursor: googleUser ? 'pointer' : 'not-allowed',
+                  fontWeight: 600,
+                  fontSize: '0.78rem',
+                  opacity: googleUser ? 1 : 0.6,
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <Upload size={13} />
+                <span>Upload Resource</span>
+              </button>
+            </span>
+          </Tooltip>
+        )}
       </div>
 
       {lectureResources.length === 0 ? (

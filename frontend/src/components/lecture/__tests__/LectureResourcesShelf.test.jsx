@@ -88,4 +88,28 @@ describe('LectureResourcesShelf', () => {
     fireEvent.click(viewBtn);
     expect(openPreviewModal).toHaveBeenCalledWith(resources[0]);
   });
+
+  it('triggers openUploadModal when Upload Resource header button is clicked', () => {
+    const openUploadModal = vi.fn();
+    render(
+      <LectureResourcesShelf
+        lectureResources={[]}
+        lectureResourcesLoading={false}
+        googleUser={{ email: 'student@example.com' }}
+        handleDeleteResource={vi.fn()}
+        activeData={{ videoId: '123' }}
+        activeCourseData={{ course_name: 'CS101' }}
+        selectedCourse="CS101"
+        openUploadModal={openUploadModal}
+      />
+    );
+
+    const uploadBtn = screen.getByRole('button', { name: /Upload Resource/i });
+    expect(uploadBtn).toBeInTheDocument();
+    fireEvent.click(uploadBtn);
+    expect(openUploadModal).toHaveBeenCalledWith({
+      videoId: '123',
+      courseName: 'CS101'
+    });
+  });
 });

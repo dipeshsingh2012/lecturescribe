@@ -150,7 +150,7 @@ export default function CourseLectures({
               }}
               onClick={() => handleTranscribe(item.video_url || item.video_id, true, selectedCourse || item.course_name)}
             >
-              {item.video_title || `Lecture ${item.video_id}`}
+              {item.video_title || item.title || `Lecture ${item.video_id}`}
             </Typography>
 
             <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 'auto' }}>

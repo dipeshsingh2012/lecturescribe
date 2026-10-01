@@ -11,16 +11,58 @@ export function useAITutor(activeData, googleUser) {
   const [submissionSummaries, setSubmissionSummaries] = useState({});
   const [copiedSubmissionId, setCopiedSubmissionId] = useState(null);
   const [copiedPromptId, setCopiedPromptId] = useState(null);
+  const [copiedResponseId, setCopiedResponseId] = useState(null);
   const chatEndRef = useRef(null);
   const chatInputRef = useRef(null);
+  const clearedInSessionRef = useRef(false);
+  const currentVideoIdRef = useRef(null);
 
   // Auto scroll chat to bottom
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, chatLoading]);
 
-  const fetchChatHistory = async (videoId, userEmail = null) => {
+  const autopopulateChat = async (videoId, userEmail = null) => {
     if (!videoId) return;
+    setChatLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/chat/autopopulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: videoId,
+          video_title: activeData?.title || '',
+          cues: activeData?.cues || [],
+          user_email: userEmail
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.messages && data.messages.length > 0) {
+          setChatMessages(data.messages);
+          const summaries = {};
+          data.messages.forEach(m => {
+            if (m.sender === 'bot' && m.submission_text) {
+              summaries[m.id] = m.submission_text;
+            }
+          });
+          setSubmissionSummaries(summaries);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Auto-population error:", err);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const fetchChatHistory = async (videoId, userEmail = null, allowAutopopulate = true) => {
+    if (!videoId) {
+      setChatMessages([]);
+      setSubmissionSummaries({});
+      return;
+    }
     try {
       const emailParam = userEmail ? `&email=${encodeURIComponent(userEmail)}` : '';
       const res = await fetch(`${API_BASE}/api/chat/history?video_id=${encodeURIComponent(videoId)}${emailParam}`);
@@ -34,17 +76,40 @@ export function useAITutor(activeData, googleUser) {
               summaries[m.id] = m.submission_text;
             }
           });
-          setSubmissionSummaries(prev => ({ ...prev, ...summaries }));
+          setSubmissionSummaries(summaries);
           return;
         }
+      }
+
+      // If history is empty and not explicitly cleared in this session, auto-populate the 4 standard prompts
+      if (allowAutopopulate && !clearedInSessionRef.current) {
+        await autopopulateChat(videoId, userEmail);
+        return;
       }
     } catch (e) {
       console.warn("Could not fetch chat history:", e);
     }
+    setChatMessages([]);
+    setSubmissionSummaries({});
   };
+
+  // Sync chat messages and submission summaries whenever the active video changes
+  useEffect(() => {
+    if (activeData?.videoId) {
+      if (currentVideoIdRef.current !== activeData.videoId) {
+        currentVideoIdRef.current = activeData.videoId;
+        clearedInSessionRef.current = false;
+      }
+      fetchChatHistory(activeData.videoId, googleUser?.email);
+    } else {
+      setChatMessages([]);
+      setSubmissionSummaries({});
+    }
+  }, [activeData?.videoId, googleUser?.email]);
 
   const clearChatHistory = async () => {
     if (!activeData?.videoId) return;
+    clearedInSessionRef.current = true;
     try {
       const emailParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
       await fetch(`${API_BASE}/api/chat/history?video_id=${encodeURIComponent(activeData.videoId)}${emailParam}`, {
@@ -60,9 +125,11 @@ export function useAITutor(activeData, googleUser) {
   const initChatMessages = (title, videoId = null) => {
     const targetVid = videoId || activeData?.videoId;
     if (targetVid) {
+      clearedInSessionRef.current = false;
       fetchChatHistory(targetVid, googleUser?.email);
     } else {
       setChatMessages([]);
+      setSubmissionSummaries({});
     }
   };
 
@@ -82,8 +149,11 @@ export function useAITutor(activeData, googleUser) {
         body: JSON.stringify({
           query: textToSend,
           video_id: activeData.videoId,
+          video_title: activeData.title,
+          cues: activeData.cues || [],
           enable_web_search: webSearchEnabled,
-          user_email: googleUser?.email || null
+          user_email: googleUser?.email || null,
+          chat_history: newMessages.slice(-6)
         })
       });
 
@@ -164,6 +234,19 @@ export function useAITutor(activeData, googleUser) {
     setTimeout(() => setCopiedPromptId(null), 2000);
   };
 
+  const copyBotResponse = (text, messageId) => {
+    if (!text) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        navigator.clipboard.writeText(text);
+      }
+    } catch (e) {
+      console.warn("Clipboard write error:", e);
+    }
+    setCopiedResponseId(messageId);
+    setTimeout(() => setCopiedResponseId(null), 2000);
+  };
+
   return {
     chatMessages,
     setChatMessages,
@@ -177,14 +260,17 @@ export function useAITutor(activeData, googleUser) {
     submissionSummaries,
     copiedSubmissionId,
     copiedPromptId,
+    copiedResponseId,
     chatEndRef,
     chatInputRef,
     fetchChatHistory,
+    autopopulateChat,
     clearChatHistory,
     initChatMessages,
     handleSendMessage,
     generateSubmissionVersion,
     copySubmissionText,
-    copyUserPrompt
+    copyUserPrompt,
+    copyBotResponse
   };
 }

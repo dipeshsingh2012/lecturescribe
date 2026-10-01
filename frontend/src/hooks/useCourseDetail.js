@@ -12,31 +12,63 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     }
   });
 
-  const [courseLoading, setCourseLoading] = useState(false);
+  const [courseLoading, setCourseLoading] = useState(() => {
+    try {
+      const initial = typeof window !== 'undefined' ? window.location.pathname : '/';
+      const cName = getCourseNameFromPath(initial);
+      if (!cName) return false;
+      const slug = normalizeCourseSlug(cName);
+      const exists = (effectiveCourses || []).some(c => 
+        c.course_name === cName || 
+        normalizeCourseSlug(c.course_name) === slug ||
+        c.course_slug === slug
+      );
+      return !exists;
+    } catch {
+      return false;
+    }
+  });
   const [directCourseData, setDirectCourseData] = useState(null);
 
   // Direct course fetching when navigated to /course/:courseName directly
   useEffect(() => {
     if (!selectedCourse) {
       setDirectCourseData(null);
+      setCourseLoading(false);
       return;
     }
     const clean = selectedCourse.trim().toLowerCase();
     const slug = normalizeCourseSlug(selectedCourse);
-    const alreadyFound = effectiveCourses.some(c => 
+
+    const alreadyInEffective = (effectiveCourses || []).some(c => 
       c.course_name === selectedCourse || 
       c.course_name.toLowerCase() === clean ||
-      normalizeCourseSlug(c.course_name) === slug
+      normalizeCourseSlug(c.course_name) === slug ||
+      c.course_slug === slug
     );
-    if (alreadyFound) return;
 
-    let isMounted = true;
+    const alreadyInDirect = (
+      directCourseData && (
+        directCourseData.course_name === selectedCourse ||
+        directCourseData.course_name.toLowerCase() === clean ||
+        normalizeCourseSlug(directCourseData.course_name) === slug ||
+        directCourseData.course_slug === slug
+      )
+    );
+
+    if (alreadyInEffective || alreadyInDirect) {
+      setCourseLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
     const fetchDirectCourse = async () => {
       setCourseLoading(true);
       try {
         const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-        const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(selectedCourse)}${emailParam}`);
-        if (res.ok && isMounted) {
+        const queryTarget = slug || selectedCourse;
+        const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(queryTarget)}${emailParam}`);
+        if (res.ok && !isCancelled) {
           const data = await res.json();
           if (data.course) {
             setDirectCourseData(data.course);
@@ -45,11 +77,11 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
       } catch (e) {
         console.warn("Direct course lookup error:", e);
       } finally {
-        if (isMounted) setCourseLoading(false);
+        if (!isCancelled) setCourseLoading(false);
       }
     };
     fetchDirectCourse();
-    return () => { isMounted = false; };
+    return () => { isCancelled = true; };
   }, [selectedCourse, effectiveCourses, userEmail]);
 
   const activeCourseData = useMemo(() => {
@@ -57,15 +89,17 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     const clean = selectedCourse.trim().toLowerCase();
     const slug = normalizeCourseSlug(selectedCourse);
     const found = (
-      effectiveCourses.find(c => c.course_name === selectedCourse) ||
-      effectiveCourses.find(c => c.course_name.toLowerCase() === clean) ||
-      effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === slug)
+      (effectiveCourses || []).find(c => c.course_name === selectedCourse) ||
+      (effectiveCourses || []).find(c => c.course_name.toLowerCase() === clean) ||
+      (effectiveCourses || []).find(c => normalizeCourseSlug(c.course_name) === slug) ||
+      (effectiveCourses || []).find(c => c.course_slug === slug)
     );
     if (found) return found;
     if (directCourseData && (
       directCourseData.course_name === selectedCourse ||
       directCourseData.course_name.toLowerCase() === clean ||
-      normalizeCourseSlug(directCourseData.course_name) === slug
+      normalizeCourseSlug(directCourseData.course_name) === slug ||
+      directCourseData.course_slug === slug
     )) {
       return directCourseData;
     }
@@ -82,7 +116,7 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
   }, [activeCourseData, selectedCourse]);
 
   const filteredCourseLectures = useMemo(() => {
-    if (!activeCourseData) return [];
+    if (!activeCourseData || !Array.isArray(activeCourseData.lectures)) return [];
     if (!librarySearch.trim()) return activeCourseData.lectures;
     const q = librarySearch.toLowerCase();
     return activeCourseData.lectures.filter(item => 

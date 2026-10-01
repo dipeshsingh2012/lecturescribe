@@ -6,6 +6,7 @@
 # ===================================================================
 
 import os
+import re
 import json
 import requests
 from typing import List, Dict, Any, Optional
@@ -34,6 +35,19 @@ def slm_classify_intent(
     """
     if not query or not query.strip():
         return INTENT_CHAT
+
+    clean_q = query.strip().lower()
+    summary_direct_patterns = [
+        r"^create (?:a )?summary",
+        r"^generate (?:a )?summary",
+        r"^summarize\b",
+        r"^summarise\b",
+        r"summary for \d+\s*min",
+        r"summarize (?:the )?(?:main|core )?takeaways",
+    ]
+    if any(re.search(p, clean_q) for p in summary_direct_patterns):
+        print(f"🧭 [Fast Intent Router] Deterministically classified as: {INTENT_SUMMARY}")
+        return INTENT_SUMMARY
 
     groq_key = os.getenv("GROQ_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -118,6 +132,10 @@ def slm_classify_intent(
                     return intent
         except Exception as e:
             print(f"⚠️ [LLM Router Notice] Gemini classification failed ({e})")
+
+    if re.search(r"\b(summary|summarize|summarise|takeaways|study guide|lecture notes)\b", clean_q):
+        print(f"🧭 [Intent Router Fallback] Classified as: {INTENT_SUMMARY} via pattern match.")
+        return INTENT_SUMMARY
 
     print("⚠️ [LLM Router Warning] Router LLMs unavailable. Defaulting to CHAT.")
     return INTENT_CHAT

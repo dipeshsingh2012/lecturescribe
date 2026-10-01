@@ -215,6 +215,8 @@ export default function App() {
             copyUserPrompt={tutor.copyUserPrompt}
             copiedSubmissionId={tutor.copiedSubmissionId}
             copySubmissionText={tutor.copySubmissionText}
+            copiedResponseId={tutor.copiedResponseId}
+            copyBotResponse={tutor.copyBotResponse}
             chatLoading={tutor.chatLoading}
             chatInput={tutor.chatInput}
             setChatInput={tutor.setChatInput}

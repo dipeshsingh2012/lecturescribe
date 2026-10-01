@@ -41,6 +41,8 @@ export default function LectureWorkspace({
   copyUserPrompt,
   copiedSubmissionId,
   copySubmissionText,
+  copiedResponseId,
+  copyBotResponse,
   chatLoading,
   chatInput,
   setChatInput,
@@ -99,6 +101,8 @@ export default function LectureWorkspace({
           copyUserPrompt={copyUserPrompt}
           copiedSubmissionId={copiedSubmissionId}
           copySubmissionText={copySubmissionText}
+          copiedResponseId={copiedResponseId}
+          copyBotResponse={copyBotResponse}
           chatLoading={chatLoading}
           chatInput={chatInput}
           setChatInput={setChatInput}

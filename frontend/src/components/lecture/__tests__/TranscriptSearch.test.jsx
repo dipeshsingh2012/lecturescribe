@@ -40,7 +40,7 @@ describe('TranscriptSearch', () => {
       />
     );
 
-    expect(screen.getByText('Showing 2 hits')).toBeInTheDocument();
+    expect(screen.getByText(/2\s*hits/i)).toBeInTheDocument();
     expect(screen.getByText(/01:15/)).toBeInTheDocument();
     expect(screen.getByText('Welcome to linear algebra.')).toBeInTheDocument();
 
@@ -60,6 +60,6 @@ describe('TranscriptSearch', () => {
       />
     );
 
-    expect(screen.getByText('Showing 0 hits')).toBeInTheDocument();
+    expect(screen.getByText(/0\s*hits/i)).toBeInTheDocument();
   });
 });

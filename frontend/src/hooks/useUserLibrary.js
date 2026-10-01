@@ -18,7 +18,7 @@ export function useUserLibrary(userEmail) {
       ]);
       if (libRes.ok) {
         const data = await libRes.json();
-        setUserLibrary(data.library || []);
+        setUserLibrary(data.lectures || data.library || []);
       }
       if (coursesRes.ok) {
         const cData = await coursesRes.json();

@@ -592,8 +592,10 @@ class RelationalDBManager:
         finally:
             conn.close()
 
-    def backfill_missing_course_names(self):
+    def backfill_missing_course_names(self, force: bool = False):
         """Backfill and repair course_name for library records or videos (including repairing slug names)."""
+        if not force and getattr(self, '_backfill_done', False):
+            return
         conn = self._get_connection()
         try:
             with conn:
@@ -629,6 +631,7 @@ class RelationalDBManager:
                         """, (canonical, sr["id"]))
 
                     conn.commit()
+                    self._backfill_done = True
         finally:
             conn.close()
 
@@ -770,32 +773,40 @@ class RelationalDBManager:
                             FROM lecturescribe_user_library
                             WHERE user_email = %s AND (
                                 course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s
+                                OR title ILIKE %s OR title ILIKE %s
                             )
                             ORDER BY last_viewed_at DESC;
-                        """, (user_email.strip().lower(), clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%"))
+                        """, (user_email.strip().lower(), clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%"))
                         rows = cursor.fetchall() or []
                         if rows:
                             canonical_name = rows[0].get("course_name") or clean_name
-                            lectures = [{
-                                "videoId": r["video_id"],
-                                "video_id": r["video_id"],
-                                "title": r["title"],
-                                "video_title": r["title"],
-                                "duration": r.get("duration") or "Unknown",
-                                "sourceUrl": r.get("source_url") or f"https://vimeo.com/{r['video_id']}",
-                                "video_url": r.get("source_url") or f"https://vimeo.com/{r['video_id']}",
-                                "driveFolderUrl": r.get("drive_folder_url"),
-                                "drive_folder_url": r.get("drive_folder_url"),
-                                "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                "last_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                "created_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                "course_name": canonical_name
-                            } for r in rows]
+                            seen_vids = set()
+                            lectures = []
+                            for r in rows:
+                                vid = r["video_id"]
+                                if vid in seen_vids:
+                                    continue
+                                seen_vids.add(vid)
+                                lectures.append({
+                                    "videoId": vid,
+                                    "video_id": vid,
+                                    "title": r["title"],
+                                    "video_title": r["title"],
+                                    "duration": r.get("duration") or "Unknown",
+                                    "sourceUrl": r.get("source_url") or f"https://vimeo.com/{vid}",
+                                    "video_url": r.get("source_url") or f"https://vimeo.com/{vid}",
+                                    "driveFolderUrl": r.get("drive_folder_url"),
+                                    "drive_folder_url": r.get("drive_folder_url"),
+                                    "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                                    "last_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                                    "created_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                                    "course_name": canonical_name
+                                })
                             return {
                                 "course_name": canonical_name,
                                 "lecture_count": len(lectures),
-                                "latest_viewed_at": lectures[0]["last_viewed_at"],
-                                "thumbnail_video_id": lectures[0]["video_id"],
+                                "latest_viewed_at": lectures[0]["last_viewed_at"] if lectures else None,
+                                "thumbnail_video_id": lectures[0]["video_id"] if lectures else None,
                                 "lectures": lectures
                             }
 
@@ -803,34 +814,41 @@ class RelationalDBManager:
                     cursor.execute("""
                         SELECT video_id, title, duration, source_url, course_name, created_at
                         FROM lecturescribe_videos
-                        WHERE course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR title ILIKE %s
+                        WHERE course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR title ILIKE %s OR title ILIKE %s
                         ORDER BY created_at DESC;
-                    """, (clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%"))
+                    """, (clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%"))
                     vid_rows = cursor.fetchall() or []
                     if not vid_rows:
                         return None
 
                     canonical_name = vid_rows[0].get("course_name") or clean_name
-                    lectures = [{
-                        "videoId": r["video_id"],
-                        "video_id": r["video_id"],
-                        "title": r["title"],
-                        "video_title": r["title"],
-                        "duration": r.get("duration") or "Unknown",
-                        "sourceUrl": r.get("source_url") or f"https://vimeo.com/{r['video_id']}",
-                        "video_url": r.get("source_url") or f"https://vimeo.com/{r['video_id']}",
-                        "driveFolderUrl": None,
-                        "drive_folder_url": None,
-                        "lastViewedAt": str(r["created_at"]) if r.get("created_at") else None,
-                        "last_viewed_at": str(r["created_at"]) if r.get("created_at") else None,
-                        "created_at": str(r["created_at"]) if r.get("created_at") else None,
-                        "course_name": canonical_name
-                    } for r in vid_rows]
+                    seen_vids = set()
+                    lectures = []
+                    for r in vid_rows:
+                        vid = r["video_id"]
+                        if vid in seen_vids:
+                            continue
+                        seen_vids.add(vid)
+                        lectures.append({
+                            "videoId": vid,
+                            "video_id": vid,
+                            "title": r["title"],
+                            "video_title": r["title"],
+                            "duration": r.get("duration") or "Unknown",
+                            "sourceUrl": r.get("source_url") or f"https://vimeo.com/{vid}",
+                            "video_url": r.get("source_url") or f"https://vimeo.com/{vid}",
+                            "driveFolderUrl": None,
+                            "drive_folder_url": None,
+                            "lastViewedAt": str(r["created_at"]) if r.get("created_at") else None,
+                            "last_viewed_at": str(r["created_at"]) if r.get("created_at") else None,
+                            "created_at": str(r["created_at"]) if r.get("created_at") else None,
+                            "course_name": canonical_name
+                        })
                     return {
                         "course_name": canonical_name,
                         "lecture_count": len(lectures),
-                        "latest_viewed_at": lectures[0]["last_viewed_at"],
-                        "thumbnail_video_id": lectures[0]["video_id"],
+                        "latest_viewed_at": lectures[0]["last_viewed_at"] if lectures else None,
+                        "thumbnail_video_id": lectures[0]["video_id"] if lectures else None,
                         "lectures": lectures
                     }
         except Exception:

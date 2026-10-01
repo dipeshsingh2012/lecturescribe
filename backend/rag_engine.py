@@ -307,7 +307,7 @@ class Llama3PineconeRAGStore:
         """Execute agent tool calls."""
         citations = []
         web_sources = []
-        vid_cache = target_video_id or str(arguments.get("video_id", "")).strip()
+        vid_cache = target_video_id.strip() if target_video_id and target_video_id != "active" else str(arguments.get("video_id", "")).strip()
 
         if redis_cache and vid_cache and tool_name in ("get_lecture_outline", "get_transcript_window", "search_transcript"):
             cached_pkg_str = redis_cache.get_tool(vid_cache, tool_name, arguments)
@@ -320,7 +320,7 @@ class Llama3PineconeRAGStore:
 
         if tool_name == "get_lecture_outline":
             vid = vid_cache
-            if not vid:
+            if not vid or vid == "active":
                 raise ValueError("get_lecture_outline requires a valid video_id.")
             from backend.database import db_manager
             saved = db_manager.get_saved_video(vid)
@@ -351,12 +351,16 @@ class Llama3PineconeRAGStore:
             vid = vid_cache
 
             pinecone_matches = []
-            if self.index:
+            if self.index and vid and vid != "active":
                 try:
                     emb = self._generate_embedding(query)
-                    kwargs = {"vector": emb, "top_k": top_k, "namespace": self.namespace, "include_metadata": True}
-                    if vid:
-                        kwargs["filter"] = {"video_id": {"$eq": vid}}
+                    kwargs = {
+                        "vector": emb,
+                        "top_k": top_k,
+                        "namespace": self.namespace,
+                        "include_metadata": True,
+                        "filter": {"video_id": {"$eq": vid}}
+                    }
                     res = self.index.query(**kwargs)
                     if res and res.matches:
                         for m in res.matches:
@@ -366,24 +370,25 @@ class Llama3PineconeRAGStore:
                     pass
 
             algolia_matches = []
-            try:
-                from backend.algolia_service import algolia_service
-                hits = algolia_service.search(query, video_id=vid, limit=top_k)
-                for h in hits:
-                    algolia_matches.append({
-                        "video_id": vid,
-                        "start_time": h.get("timestamp", "00:00"),
-                        "end_time": h.get("timestamp", "00:00"),
-                        "text": h.get("text", "")
-                    })
-            except Exception:
-                pass
+            if vid and vid != "active":
+                try:
+                    from backend.algolia_service import algolia_service
+                    hits = algolia_service.search(query, video_id=vid, limit=top_k)
+                    for h in hits:
+                        algolia_matches.append({
+                            "video_id": vid,
+                            "start_time": h.get("timestamp", "00:00"),
+                            "end_time": h.get("timestamp", "00:00"),
+                            "text": h.get("text", "")
+                        })
+                except Exception:
+                    pass
 
             ranked = [s for s in [pinecone_matches, algolia_matches] if s]
             combined = self.reciprocal_rank_fusion(ranked, k=60)[:top_k] if ranked else []
 
             # Fallback to PostgreSQL transcript cues if vector & sparse return zero hits
-            if not combined and vid:
+            if not combined and vid and vid != "active":
                 from backend.database import db_manager
                 saved = db_manager.get_saved_video(vid)
                 if saved and saved.get("cues"):
@@ -414,6 +419,8 @@ class Llama3PineconeRAGStore:
             st = str(arguments.get("start_time", "00:00")).strip()
             et = str(arguments.get("end_time", "00:00")).strip()
             vid = vid_cache
+            if not vid or vid == "active":
+                raise ValueError("get_transcript_window requires a valid video_id.")
 
             st_sec = self._parse_timestamp(st)
             et_sec = self._parse_timestamp(et)
@@ -455,7 +462,29 @@ class Llama3PineconeRAGStore:
         """Unified Agentic RAG Execution."""
         import requests
         target_video_id = str(video_id).strip() if video_id else ""
-        lecture_title = video_title or self.video_title or "Active Lecture"
+        if not video_title and target_video_id and target_video_id != "active":
+            try:
+                from backend.database import db_manager
+                saved = db_manager.get_saved_video(target_video_id)
+                if saved and saved.get("title"):
+                    video_title = saved["title"]
+            except Exception:
+                pass
+        lecture_title = video_title or (self.video_title if self.video_id == target_video_id else "") or "Active Lecture"
+
+        # Sync singleton state to target video if switching lectures
+        if target_video_id and target_video_id != "active" and target_video_id != self.video_id:
+            target_cues = cues
+            if not target_cues:
+                try:
+                    from backend.database import db_manager
+                    saved = db_manager.get_saved_video(target_video_id)
+                    if saved and saved.get("cues"):
+                        target_cues = saved["cues"]
+                except Exception:
+                    pass
+            if target_cues:
+                self.ingest_transcript(target_video_id, lecture_title, target_cues)
 
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
@@ -814,6 +843,24 @@ class Llama3PineconeRAGStore:
                         return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
                 except Exception as e:
                     print(f"⚠️ [Gemini Summary Notice] {e}")
+        # 3. Fallback: Synthesize from saved summary sections for this specific video
+        if target_video_id and target_video_id != "active":
+            try:
+                from backend.database import db_manager
+                saved = db_manager.get_saved_video(target_video_id)
+                sections = (saved.get("summarySections") or saved.get("summary_sections")) if saved else None
+                if sections and isinstance(sections, list) and len(sections) > 0:
+                    md_lines = [f"# Summary: {title}\n"]
+                    for sec in sections:
+                        sec_title = sec.get("title", "Key Concept")
+                        md_lines.append(f"## {sec_title}")
+                        for pt in sec.get("points", []):
+                            md_lines.append(f"- {pt}")
+                        md_lines.append("")
+                    ans = "\n".join(md_lines).strip()
+                    return self._build_summary_response(ans, "Extracted Lecture Summary", title, target_video_id)
+            except Exception as fe:
+                print(f"⚠️ [Summary Fallback Notice] {fe}")
 
         raise RuntimeError("All LLM providers failed to generate summary.")
 

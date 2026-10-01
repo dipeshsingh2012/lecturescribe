@@ -11,6 +11,7 @@ import re
 import sys
 import time
 import traceback
+import concurrent.futures
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
@@ -142,6 +143,12 @@ class SubmissionRequest(BaseModel):
     word_count: Optional[int] = 100
     user_email: Optional[str] = None
     model_id: Optional[str] = None
+
+class AutoPopulateRequest(BaseModel):
+    video_id: str
+    video_title: Optional[str] = None
+    cues: Optional[List[Dict[str, str]]] = None
+    user_email: Optional[str] = None
 
 class AlgoliaSearchRequest(BaseModel):
     query: str
@@ -307,17 +314,24 @@ def rag_query(req: RAGQueryRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty")
 
+    video_id = str(req.video_id or "").strip()
+    video_title = (req.video_title or "").strip()
+    if video_id and not video_title:
+        saved_vid = db_manager.get_saved_video(video_id)
+        if saved_vid and saved_vid.get("title"):
+            video_title = saved_vid["title"]
+
     t_start = time.time()
     print("\n" + "=" * 60)
     print(f"📥 [API /api/rag/query] === Incoming RAG Query ===")
     print(f"   Query: '{req.query}'")
-    print(f"   Video ID: '{req.video_id}' | Title: '{req.video_title or 'Auto'}'")
+    print(f"   Video ID: '{video_id}' | Title: '{video_title or 'Auto'}'")
     print(f"   Top K: {req.top_k} | Web Search Enabled: {req.enable_web_search} | Bypass Cache: {req.bypass_cache}")
 
     # 1. Check Hosted Redis Cache First
-    if not req.bypass_cache and req.video_id and redis_cache:
-        cached_result = redis_cache.get_query(req.video_id, req.query, "auto")
-        if cached_result:
+    if not req.bypass_cache and video_id and redis_cache:
+        cached_result = redis_cache.get_query(video_id, req.query, "auto")
+        if cached_result and (not cached_result.get("video_id") or cached_result.get("video_id") == video_id):
             elapsed = time.time() - t_start
             print(f"⚡ [API /api/rag/query Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
             print("=" * 60 + "\n")
@@ -327,20 +341,20 @@ def rag_query(req: RAGQueryRequest):
     intent = slm_classify_intent(
         query=req.query,
         chat_history=req.chat_history,
-        video_title=req.video_title,
+        video_title=video_title,
     )
     print(f"🧭 [Intent Router /api/rag/query] Intent classified as: {intent}")
 
     try:
         if intent == INTENT_SUMMARY:
             print("🚀 ROUTING EXECUTION: SUMMARY INTENT — Streaming uncut chronological context straight to Cloud LLM")
-            if not req.video_id:
+            if not video_id:
                 raise ValueError("SUMMARY intent requires a valid video_id to fetch the full transcript.")
-            saved = db_manager.get_saved_video(req.video_id)
-            if not saved or not saved.get("cues"):
-                raise ValueError(f"No transcript cues found in database for video {req.video_id}. SUMMARY requires the full transcript.")
-            cues: List[Dict[str, str]] = saved["cues"]
-            lecture_title = saved.get("title") or req.video_title or "Lecture"
+            saved = db_manager.get_saved_video(video_id)
+            cues = (saved.get("cues") if saved else None) or req.cues
+            if not cues:
+                raise ValueError(f"No transcript cues found in database or request for video {video_id}. SUMMARY requires the full transcript.")
+            lecture_title = (saved.get("title") if saved else None) or video_title or "Lecture"
             full_transcript_with_timestamps = "\n".join(
                 f"[{cue['time']}] {cue['text']}"
                 for cue in cues
@@ -349,7 +363,7 @@ def rag_query(req: RAGQueryRequest):
             result = pinecone_rag_engine.generate_full_transcript_summary(
                 transcript_str=full_transcript_with_timestamps,
                 lecture_title=lecture_title,
-                video_id=req.video_id,
+                video_id=video_id,
                 user_original_request=req.query,
                 user_email=req.user_email,
             )
@@ -357,8 +371,8 @@ def rag_query(req: RAGQueryRequest):
             print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
             result = pinecone_rag_engine.query_rag(
                 req.query,
-                video_id=req.video_id,
-                video_title=req.video_title,
+                video_id=video_id,
+                video_title=video_title,
                 cues=req.cues,
                 top_k=req.top_k or 10,
                 enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
@@ -368,8 +382,8 @@ def rag_query(req: RAGQueryRequest):
         else:
             result = pinecone_rag_engine.query_rag(
                 req.query,
-                video_id=req.video_id,
-                video_title=req.video_title,
+                video_id=video_id,
+                video_title=video_title,
                 cues=req.cues,
                 top_k=req.top_k or 10,
                 enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
@@ -428,28 +442,40 @@ def rag_query(req: RAGQueryRequest):
     print("=" * 60 + "\n")
     return result
 
-@app.post("/api/chat")
-def chat_with_transcript(req: ChatRequest):
-    """Route chat queries through RAG engine and save to DB."""
-    user_prompt = req.message.strip()
+def process_chat_message(
+    user_prompt: str,
+    video_id: str = "active",
+    video_title: str = "",
+    cues: Optional[List[Dict[str, str]]] = None,
+    user_email: Optional[str] = None,
+    bypass_cache: bool = False,
+    chat_history: Optional[List[Dict[str, Any]]] = None,
+    save_to_db: bool = True
+) -> Dict[str, Any]:
+    """Internal core processor for chat queries, RAG retrieval, and full transcript summaries."""
+    user_prompt = (user_prompt or "").strip()
     if not user_prompt:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    cues = req.cues
-    title = req.video_title or "Lecture"
-    video_id = req.video_id or "active"
+    vid = str(video_id or "active").strip()
+    title = (video_title or "").strip()
+    if vid and vid != "active" and not title:
+        saved_vid = db_manager.get_saved_video(vid)
+        if saved_vid and saved_vid.get("title"):
+            title = saved_vid["title"]
+    title = title or "Lecture"
 
     t_start = time.time()
     print("\n" + "=" * 60)
-    print(f"📥 [API /api/chat] === Incoming Chat Query ===")
-    print(f"   Message: '{user_prompt}' | Video ID: '{video_id}' | Title: '{title}' | Bypass Cache: {req.bypass_cache}")
+    print(f"📥 [Chat Engine] === Processing Query ===")
+    print(f"   Message: '{user_prompt}' | Video ID: '{vid}' | Title: '{title}' | Bypass Cache: {bypass_cache}")
 
     # 1. Check Hosted Redis Cache First
-    if not req.bypass_cache and video_id and video_id != "active" and redis_cache:
-        cached_result = redis_cache.get_query(video_id, user_prompt, "auto")
-        if cached_result:
+    if not bypass_cache and vid and vid != "active" and redis_cache:
+        cached_result = redis_cache.get_query(vid, user_prompt, "auto")
+        if cached_result and (not cached_result.get("video_id") or cached_result.get("video_id") == vid):
             elapsed = time.time() - t_start
-            print(f"⚡ [API /api/chat Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
+            print(f"⚡ [Chat Engine Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
             print("=" * 60 + "\n")
             return {
                 "reply": cached_result.get("answer", ""),
@@ -464,25 +490,25 @@ def chat_with_transcript(req: ChatRequest):
     # 2. Structured LLM Intent Router: classify SUMMARY vs CHAT
     intent = slm_classify_intent(
         query=user_prompt,
-        chat_history=req.chat_history,
+        chat_history=chat_history,
         video_title=title,
     )
-    print(f"🧭 [Intent Router /api/chat] Intent classified as: {intent}")
+    print(f"🧭 [Intent Router] Intent classified as: {intent}")
 
-    if req.cues is not None and len(req.cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
-        pinecone_rag_engine.ingest_transcript(video_id, title, req.cues)
-        algolia_service.ingest_cues(video_id, title, req.cues)
+    if cues is not None and len(cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
+        pinecone_rag_engine.ingest_transcript(vid, title, cues)
+        algolia_service.ingest_cues(vid, title, cues)
 
     try:
         if intent == INTENT_SUMMARY:
             print("🚀 ROUTING EXECUTION: SUMMARY INTENT — Streaming uncut chronological context straight to Cloud LLM")
-            if not video_id or video_id == "active":
+            if not vid or vid == "active":
                 raise ValueError("SUMMARY intent requires a valid video_id to fetch the full transcript.")
-            saved = db_manager.get_saved_video(video_id)
-            if not saved or not saved.get("cues"):
-                raise ValueError(f"No transcript cues found in database for video {video_id}. SUMMARY requires the full transcript.")
-            cues_list: List[Dict[str, str]] = saved["cues"]
-            lecture_title = saved.get("title") or title or "Lecture"
+            saved = db_manager.get_saved_video(vid)
+            cues_list = (saved.get("cues") if saved else None) or cues
+            if not cues_list:
+                raise ValueError(f"No transcript cues found in database or request for video {vid}. SUMMARY requires the full transcript.")
+            lecture_title = (saved.get("title") if saved else None) or title or "Lecture"
             full_transcript_with_timestamps = "\n".join(
                 f"[{cue['time']}] {cue['text']}"
                 for cue in cues_list
@@ -491,36 +517,36 @@ def chat_with_transcript(req: ChatRequest):
             rag_res = pinecone_rag_engine.generate_full_transcript_summary(
                 transcript_str=full_transcript_with_timestamps,
                 lecture_title=lecture_title,
-                video_id=video_id,
+                video_id=vid,
                 user_original_request=user_prompt,
-                user_email=req.user_email,
+                user_email=user_email,
             )
         elif intent == INTENT_CHAT:
             print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
             rag_res = pinecone_rag_engine.query_rag(
                 user_prompt,
-                video_id=video_id,
+                video_id=vid,
                 video_title=title,
                 cues=cues,
                 top_k=10,
-                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
-                user_email=req.user_email,
-                chat_history=req.chat_history
+                enable_web_search=True,
+                user_email=user_email,
+                chat_history=chat_history
             )
         else:
             rag_res = pinecone_rag_engine.query_rag(
                 user_prompt,
-                video_id=video_id,
+                video_id=vid,
                 video_title=title,
                 cues=cues,
                 top_k=10,
-                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
-                user_email=req.user_email,
-                chat_history=req.chat_history
+                enable_web_search=True,
+                user_email=user_email,
+                chat_history=chat_history
             )
     except Exception as e:
         elapsed = time.time() - t_start
-        print(f"\n❌ [API /api/chat Error] Failed after {elapsed:.2f}s:")
+        print(f"\n❌ [Chat Engine Error] Failed after {elapsed:.2f}s:")
         traceback.print_exc()
         print("=" * 60 + "\n")
         err_type = type(e).__name__
@@ -540,29 +566,30 @@ def chat_with_transcript(req: ChatRequest):
     # Auto-generate academic submission version
     sub_res = pinecone_rag_engine.generate_submission_version(
         original_text=reply,
-        video_id=video_id,
+        video_id=vid,
         word_count=120
     )
     sub_text = sub_res.get("submission_text", "")
     sub_word_count = sub_res.get("word_count", 0)
 
     # Save to Chat History DB
-    try:
-        db_manager.save_chat_log(
-            video_id=video_id,
-            user_prompt=user_prompt,
-            ai_reply=reply,
-            citations=citations,
-            user_email=req.user_email,
-            submission_text=sub_text,
-            model=rag_res.get("model", ""),
-            web_sources=rag_res.get("web_sources", [])
-        )
-    except Exception as e:
-        print(f"⚠️ [Chat Log Notice]: {e}")
+    if save_to_db:
+        try:
+            db_manager.save_chat_log(
+                video_id=vid,
+                user_prompt=user_prompt,
+                ai_reply=reply,
+                citations=citations,
+                user_email=user_email,
+                submission_text=sub_text,
+                model=rag_res.get("model", ""),
+                web_sources=rag_res.get("web_sources", [])
+            )
+        except Exception as e:
+            print(f"⚠️ [Chat Log Notice]: {e}")
 
     # Store in Hosted Redis Cache
-    if video_id and video_id != "active" and redis_cache:
+    if vid and vid != "active" and redis_cache:
         cache_data = {
             "answer": reply,
             "citations": citations,
@@ -571,12 +598,12 @@ def chat_with_transcript(req: ChatRequest):
             "submission_text": sub_text,
             "submission_word_count": sub_word_count,
             "lecture_title": title,
-            "video_id": video_id
+            "video_id": vid
         }
-        redis_cache.set_query(video_id, user_prompt, "auto", cache_data)
+        redis_cache.set_query(vid, user_prompt, "auto", cache_data)
 
     elapsed = time.time() - t_start
-    print(f"✅ [API /api/chat] Completed in {elapsed:.2f}s | Citations: {len(citations)} | Model: {rag_res.get('model')}")
+    print(f"✅ [Chat Engine] Completed in {elapsed:.2f}s | Citations: {len(citations)} | Model: {rag_res.get('model')}")
     print("=" * 60 + "\n")
 
     return {
@@ -586,6 +613,124 @@ def chat_with_transcript(req: ChatRequest):
         "model": rag_res.get("model", ""),
         "submission_text": sub_text,
         "submission_word_count": sub_word_count
+    }
+
+
+@app.post("/api/chat")
+def chat_with_transcript(req: ChatRequest):
+    """Route chat queries through RAG engine and save to DB."""
+    return process_chat_message(
+        user_prompt=req.message,
+        video_id=req.video_id,
+        video_title=req.video_title,
+        cues=req.cues,
+        user_email=req.user_email,
+        bypass_cache=req.bypass_cache or False,
+        chat_history=req.chat_history,
+        save_to_db=True
+    )
+
+
+AUTOPOPULATE_PROMPTS = [
+    "Create a summary for a 15 min read",
+    "Generate Summary for 30 mins read",
+    "Generate Full Comprehensive Summary",
+    "Explain key concepts and definitions"
+]
+
+
+@app.post("/api/chat/autopopulate")
+def autopopulate_chat(req: AutoPopulateRequest):
+    """
+    Auto-populates the chat box with resultant responses of all 4 standard quick prompts.
+    If chat history already exists for this video in PostgreSQL, returns it immediately (<50ms).
+    Otherwise, executes the 4 prompts concurrently and persists them sequentially in PostgreSQL.
+    """
+    vid = str(req.video_id or "").strip()
+    if not vid or vid == "active":
+        raise HTTPException(status_code=400, detail="A valid video_id is required.")
+
+    # 1. Return immediately if chat logs already exist in PostgreSQL
+    existing = db_manager.get_chat_history(vid, user_email=req.user_email)
+    if existing and len(existing) > 0:
+        return {
+            "status": "success",
+            "video_id": vid,
+            "count": len(existing),
+            "messages": existing
+        }
+
+    # 2. Retrieve video details and cues from DB or request
+    saved_vid = db_manager.get_saved_video(vid)
+    title = (req.video_title or (saved_vid.get("title") if saved_vid else None) or "Lecture").strip()
+    cues = req.cues or (saved_vid.get("cues") if saved_vid else None) or []
+    if not cues:
+        return {
+            "status": "no_cues",
+            "video_id": vid,
+            "count": 0,
+            "messages": []
+        }
+
+    # Ingest cues up front to prime local chunks & Algolia search once
+    if cues and len(pinecone_rag_engine.local_chunks) == 0:
+        pinecone_rag_engine.ingest_transcript(vid, title, cues)
+        algolia_service.ingest_cues(vid, title, cues)
+
+    # 3. Concurrently execute the 4 standard prompts
+    def _execute_prompt(prompt_text: str):
+        try:
+            return process_chat_message(
+                user_prompt=prompt_text,
+                video_id=vid,
+                video_title=title,
+                cues=cues,
+                user_email=req.user_email,
+                bypass_cache=False,
+                chat_history=[],
+                save_to_db=False  # Saved sequentially below to guarantee chronological ordering
+            )
+        except Exception as err:
+            print(f"⚠️ [Autopopulate Worker Error for '{prompt_text}']: {err}")
+            return None
+
+    results = [None] * len(AUTOPOPULATE_PROMPTS)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_idx = {
+            executor.submit(_execute_prompt, prompt): idx 
+            for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS)
+        }
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            results[idx] = future.result()
+
+    # 4. Sequentially persist to PostgreSQL in exact prompt order
+    for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS):
+        res = results[idx]
+        if not res or not res.get("reply"):
+            continue
+        try:
+            db_manager.save_chat_log(
+                video_id=vid,
+                user_prompt=prompt,
+                ai_reply=res["reply"],
+                citations=res.get("citations", []),
+                user_email=req.user_email,
+                submission_text=res.get("submission_text", ""),
+                model=res.get("model", ""),
+                web_sources=res.get("web_sources", [])
+            )
+            time.sleep(0.01)  # 10ms monotonic timestamp spacing
+        except Exception as save_err:
+            print(f"⚠️ [Autopopulate Save Error for prompt {idx}]: {save_err}")
+
+    # 5. Fetch persisted messages from PostgreSQL
+    persisted_messages = db_manager.get_chat_history(vid, user_email=req.user_email)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "count": len(persisted_messages),
+        "messages": persisted_messages
     }
 
 
@@ -623,6 +768,8 @@ def clear_chat_history(
         raise HTTPException(status_code=400, detail="video_id parameter is required.")
 
     success = db_manager.clear_chat_history(vid, user_email=target_email)
+    if redis_cache:
+        redis_cache.invalidate_video(vid)
     return {
         "status": "success" if success else "failed",
         "video_id": vid

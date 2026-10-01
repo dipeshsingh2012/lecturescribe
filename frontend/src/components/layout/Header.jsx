@@ -62,8 +62,8 @@ export default function Header({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
         {activeData && (
           <>
-            <div style={{
-              display: 'flex',
+            <Box sx={{
+              display: { xs: 'none', md: 'flex' },
               gap: '4px',
               background: 'rgba(0, 0, 0, 0.2)',
               padding: '4px',
@@ -108,7 +108,7 @@ export default function Header({
               >
                 <Bot size={16} /> AI Tutor
               </button>
-            </div>
+            </Box>
 
             <button
               onClick={() => openDownloadModal()}
@@ -127,7 +127,7 @@ export default function Header({
                 transition: 'all 0.2s ease'
               }}
             >
-              <Cloud size={15} /> Save to Google Drive
+              <Cloud size={15} /> <span className="hidden sm:inline">Save to Google Drive</span><span className="sm:hidden">Drive</span>
             </button>
           </>
         )}

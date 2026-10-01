@@ -150,7 +150,7 @@ export default function LecturePlayer({
       }}>
         <iframe
           ref={iframeRef}
-          src={`https://player.vimeo.com/video/${activeData.videoId}?autoplay=0&title=0&byline=0&portrait=0`}
+          src={`https://player.vimeo.com/video/${activeData.videoId}?api=1&autoplay=0&title=0&byline=0&portrait=0`}
           width="100%"
           height="100%"
           frameBorder="0"

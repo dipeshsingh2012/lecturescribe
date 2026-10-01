@@ -6,6 +6,9 @@ vi.mock('@vimeo/player', () => {
   return {
     default: vi.fn().mockImplementation(() => ({
       on: vi.fn(),
+      off: vi.fn(),
+      ready: vi.fn().mockResolvedValue(undefined),
+      getCurrentTime: vi.fn().mockResolvedValue(0),
       setCurrentTime: vi.fn().mockResolvedValue(undefined),
       play: vi.fn().mockResolvedValue(undefined),
       destroy: vi.fn()
@@ -124,5 +127,57 @@ describe('useLecturePlayer hook functionality', () => {
       expect.stringContaining('[01:30]** Key theorem statement.')
     );
     expect(result.current.copied).toBe(true);
+  });
+
+  it('updates activeCueIdx when player emits seeking or seeked events', async () => {
+    let eventListeners = {};
+    const mockOn = vi.fn((event, handler) => {
+      eventListeners[event] = handler;
+    });
+
+    const VimeoPlayer = (await import('@vimeo/player')).default;
+    VimeoPlayer.mockImplementationOnce(() => ({
+      on: mockOn,
+      off: vi.fn(),
+      ready: vi.fn().mockResolvedValue(undefined),
+      getCurrentTime: vi.fn().mockResolvedValue(0),
+      setCurrentTime: vi.fn().mockResolvedValue(undefined),
+      play: vi.fn().mockResolvedValue(undefined)
+    }));
+
+    const activeData = {
+      videoId: 'v100',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '02:00', text: 'Middle' },
+        { time: '05:00', text: 'Conclusion' }
+      ]
+    };
+
+    const { result } = renderHook(() => useLecturePlayer(activeData));
+
+    // Simulate attaching iframe
+    act(() => {
+      result.current.iframeRef.current = document.createElement('iframe');
+    });
+
+    // Re-render hook with activeData
+    const { rerender } = renderHook(() => useLecturePlayer(activeData));
+
+    // Verify seeking handler updates cue to Middle (at 130s = 02:10)
+    if (eventListeners['seeking']) {
+      act(() => {
+        eventListeners['seeking']({ seconds: 130 });
+      });
+      expect(result.current.activeCueIdx).toBe(1);
+    }
+
+    // Verify seeked handler updates cue to Conclusion (at 310s = 05:10)
+    if (eventListeners['seeked']) {
+      act(() => {
+        eventListeners['seeked']({ seconds: 310 });
+      });
+      expect(result.current.activeCueIdx).toBe(2);
+    }
   });
 });

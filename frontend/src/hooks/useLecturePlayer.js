@@ -45,21 +45,55 @@ export function useLecturePlayer(activeData) {
         const player = new Player(iframeRef.current);
         playerRef.current = player;
 
-        const onTimeUpdate = (data) => {
-          const currentSec = data.seconds;
+        const updateCueFromSeconds = (currentSec) => {
+          if (typeof currentSec !== 'number') return;
           const cues = activeData.cues || [];
+          if (!cues.length) return;
+          let matchIdx = -1;
           for (let i = cues.length - 1; i >= 0; i--) {
             const cueSec = parseTimestampToSeconds(cues[i].time);
             if (currentSec >= cueSec) {
-              setActiveCueIdx(i);
+              matchIdx = i;
               break;
             }
           }
+          if (matchIdx !== -1) {
+            setActiveCueIdx(matchIdx);
+          } else {
+            setActiveCueIdx(0);
+          }
         };
 
-        player.on('timeupdate', onTimeUpdate);
+        const handleTimeChange = (data) => {
+          if (data && typeof data.seconds === 'number') {
+            updateCueFromSeconds(data.seconds);
+          } else if (player && typeof player.getCurrentTime === 'function') {
+            player.getCurrentTime().then(updateCueFromSeconds).catch(() => {});
+          }
+        };
+
+        player.on('timeupdate', handleTimeChange);
+        player.on('seeking', handleTimeChange);
+        player.on('seeked', handleTimeChange);
+        player.on('play', handleTimeChange);
+        player.on('pause', handleTimeChange);
+
+        if (typeof player.ready === 'function') {
+          player.ready().then(() => {
+            if (typeof player.getCurrentTime === 'function') {
+              player.getCurrentTime().then(updateCueFromSeconds).catch(() => {});
+            }
+          }).catch(() => {});
+        }
+
         return () => {
-          player.off('timeupdate', onTimeUpdate);
+          if (typeof player.off === 'function') {
+            player.off('timeupdate', handleTimeChange);
+            player.off('seeking', handleTimeChange);
+            player.off('seeked', handleTimeChange);
+            player.off('play', handleTimeChange);
+            player.off('pause', handleTimeChange);
+          }
         };
       } catch (err) {
         console.warn("Vimeo Player SDK init warning:", err);
@@ -70,6 +104,11 @@ export function useLecturePlayer(activeData) {
   // Jump to specific timestamp when cue or citation is clicked
   const handleCueClick = (timestampStr) => {
     const secs = parseTimestampToSeconds(timestampStr);
+    const cues = activeData?.cues || [];
+    const clickedIdx = cues.findIndex(c => c.time === timestampStr);
+    if (clickedIdx !== -1) {
+      setActiveCueIdx(clickedIdx);
+    }
     if (playerRef.current) {
       playerRef.current.setCurrentTime(secs).catch(err => console.log("Seek error:", err));
       playerRef.current.play().catch(err => console.log("Autoplay blocked:", err));
@@ -120,11 +159,19 @@ export function useLecturePlayer(activeData) {
     return activeData?.cues || [];
   }, [searchQuery, searchResults, activeData]);
 
+  // When search query is active, resolve the active cue index relative to displayCues
+  const effectiveActiveCueIdx = useMemo(() => {
+    if (!searchQuery.trim()) return activeCueIdx;
+    const currentActiveCue = activeData?.cues?.[activeCueIdx];
+    if (!currentActiveCue) return -1;
+    return displayCues.findIndex(c => c.time === currentActiveCue.time);
+  }, [searchQuery, activeCueIdx, activeData, displayCues]);
+
   return {
     searchQuery,
     setSearchQuery,
     searchResults,
-    activeCueIdx,
+    activeCueIdx: effectiveActiveCueIdx,
     copied,
     iframeRef,
     playerRef,

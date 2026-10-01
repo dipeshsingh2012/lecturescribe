@@ -21,6 +21,7 @@ import {
 import { ProtonThemeSelector } from '@dipesh.singh/proton';
 import { LMS_THEMES } from '../../store/themeStore';
 import GoogleIcon from '../common/GoogleIcon';
+import GoogleDriveIcon from '../common/GoogleDriveIcon';
 
 export default function Header({
   activeData,
@@ -110,25 +111,29 @@ export default function Header({
               </button>
             </Box>
 
-            <button
-              onClick={() => openDownloadModal()}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'rgba(255, 255, 255, 0.16)',
-                color: '#ffffff',
-                border: '1px solid rgba(255, 255, 255, 0.3)',
-                padding: '6px 14px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-                transition: 'all 0.2s ease'
-              }}
-            >
-              <Cloud size={15} /> <span className="hidden sm:inline">Save to Google Drive</span><span className="sm:hidden">Drive</span>
-            </button>
+            <Tooltip title="Save to Google Drive" arrow>
+              <button
+                onClick={() => openDownloadModal()}
+                aria-label="Save to Google Drive"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'rgba(255, 255, 255, 0.16)',
+                  color: '#ffffff',
+                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  height: '34px'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.26)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.16)'; }}
+              >
+                <GoogleDriveIcon size={18} />
+              </button>
+            </Tooltip>
           </>
         )}
 

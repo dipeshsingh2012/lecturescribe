@@ -49,7 +49,7 @@ describe('useLectureQuiz hook', () => {
     expect(result.current.quizError).toBeNull();
     expect(global.fetch).toHaveBeenCalledWith('/api/lecture/vid123/quiz', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ regenerate: false, num_questions: 5 })
+      body: JSON.stringify({ regenerate: false })
     }));
   });
 

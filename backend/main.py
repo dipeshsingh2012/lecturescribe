@@ -200,9 +200,87 @@ def get_lecture_by_id(
     return get_transcript(url=video_id, email=email, course_name=course_name)
 
 
+def determine_lecture_quiz_count(cues: Optional[List[Dict[str, Any]]] = None, duration_str: Optional[str] = None) -> int:
+    """
+    Dynamically scale quiz questions according to lecture duration and cue density.
+    Scales from 5 (short lectures) up to 15 (long university lectures >75 mins).
+    """
+    duration_minutes = None
+
+    # 1. Try parsing duration_str if provided (e.g. '1h 30m', '45m', '5400', '01:30:00')
+    if duration_str and str(duration_str).strip():
+        d_str = str(duration_str).strip().lower()
+        if "h" in d_str or "m" in d_str:
+            import re
+            h_match = re.search(r"(\d+)\s*h", d_str)
+            m_match = re.search(r"(\d+)\s*m", d_str)
+            h = int(h_match.group(1)) if h_match else 0
+            m = int(m_match.group(1)) if m_match else 0
+            total_mins = h * 60 + m
+            if total_mins > 0:
+                duration_minutes = total_mins
+        elif ":" in d_str:
+            parts = [int(p) for p in d_str.split(":") if p.isdigit()]
+            if len(parts) == 3:
+                duration_minutes = parts[0] * 60 + parts[1]
+            elif len(parts) == 2:
+                duration_minutes = parts[0] + parts[1] / 60.0
+        else:
+            try:
+                secs = float(d_str)
+                if secs > 0:
+                    duration_minutes = secs / 60.0
+            except ValueError:
+                pass
+
+    # 2. Try inferring from cues if duration_minutes not resolved
+    if (duration_minutes is None or duration_minutes <= 0) and cues:
+        valid_cues = [c for c in cues if (c.get("text") or "").strip()]
+        if valid_cues:
+            last_cue = valid_cues[-1]
+            if "start" in last_cue and isinstance(last_cue["start"], (int, float)):
+                duration_minutes = float(last_cue["start"]) / 60.0
+            elif "time" in last_cue:
+                ts = str(last_cue["time"]).strip().replace("[", "").replace("]", "")
+                parts = [int(p) for p in ts.split(":") if p.isdigit()]
+                if len(parts) == 3:
+                    duration_minutes = parts[0] * 60 + parts[1]
+                elif len(parts) == 2:
+                    duration_minutes = parts[0] + parts[1] / 60.0
+
+    # 3. Determine count from duration
+    if duration_minutes is not None and duration_minutes > 0:
+        if duration_minutes <= 15:
+            count = 5
+        elif duration_minutes <= 30:
+            count = 7
+        elif duration_minutes <= 50:
+            count = 9
+        elif duration_minutes <= 75:
+            count = 12
+        else:
+            count = 15
+    elif cues:
+        num_cues = len(cues)
+        if num_cues <= 30:
+            count = 5
+        elif num_cues <= 80:
+            count = 8
+        elif num_cues <= 150:
+            count = 10
+        elif num_cues <= 250:
+            count = 12
+        else:
+            count = 15
+    else:
+        count = 5
+
+    return max(5, min(15, count))
+
+
 class QuizGenerateRequest(BaseModel):
     regenerate: bool = False
-    num_questions: int = 5
+    num_questions: Optional[int] = None
 
 
 @app.get("/api/lecture/{video_id}/quiz")
@@ -210,13 +288,13 @@ class QuizGenerateRequest(BaseModel):
 def get_or_generate_lecture_quiz(
     video_id: str,
     regenerate: bool = Query(False, description="Force regenerate without using cache"),
-    num_questions: int = Query(5, description="Number of quiz questions to generate"),
+    num_questions: Optional[int] = Query(None, description="Number of quiz questions to generate (3-15)"),
     body: Optional[QuizGenerateRequest] = None
 ):
     """Retrieve or generate interactive practice quiz with LaTeX math formulas."""
     clean_vid = str(video_id).strip()
     is_regenerate = regenerate or (body.regenerate if body else False)
-    count = (body.num_questions if body else None) or num_questions or 5
+    req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
 
     # 1. Check Redis Cache
     if not is_regenerate and redis_cache:
@@ -245,12 +323,17 @@ def get_or_generate_lecture_quiz(
     title = saved.get("title", f"Lecture {clean_vid}")
     cues = saved.get("cues", [])
 
+    if req_count is not None and req_count > 0:
+        target_count = max(3, min(15, int(req_count)))
+    else:
+        target_count = determine_lecture_quiz_count(cues, saved.get("duration"))
+
     # 4. Generate with LLM / fallback
     quiz_data = pinecone_rag_engine.generate_lecture_quiz(
         video_id=clean_vid,
         lecture_title=title,
         cues=cues,
-        num_questions=count
+        num_questions=target_count
     )
 
     # 5. Persist to Relational Database

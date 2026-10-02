@@ -15,15 +15,19 @@ export default function useLectureQuiz(activeData) {
     setQuizError(null);
   }, [videoId]);
 
-  const fetchOrGenerateQuiz = useCallback(async (regenerate = false) => {
+  const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
     if (!videoId) return;
     setQuizLoading(true);
     setQuizError(null);
     try {
+      const payload = { regenerate };
+      if (numQuestions) {
+        payload.num_questions = numQuestions;
+      }
       const res = await fetch(`/api/lecture/${videoId}/quiz`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ regenerate, num_questions: 5 })
+        body: JSON.stringify(payload)
       });
 
       if (!res.ok) {

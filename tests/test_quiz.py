@@ -181,6 +181,82 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertEqual(data["questions"][0]["question"], "What is $O(n)$?")
         mock_gen.assert_not_called()
 
+    def test_determine_lecture_quiz_count(self):
+        from backend.main import determine_lecture_quiz_count
+
+        # 1. Short lecture <= 15m -> 5 questions
+        self.assertEqual(determine_lecture_quiz_count(duration_str="12m"), 5)
+
+        # 2. 16m - 30m -> 7 questions
+        self.assertEqual(determine_lecture_quiz_count(duration_str="25m"), 7)
+
+        # 3. 31m - 50m -> 9 questions
+        self.assertEqual(determine_lecture_quiz_count(duration_str="45m"), 9)
+
+        # 4. 51m - 75m -> 12 questions
+        self.assertEqual(determine_lecture_quiz_count(duration_str="1h 10m"), 12)
+
+        # 5. > 75m -> 15 questions (max cap)
+        self.assertEqual(determine_lecture_quiz_count(duration_str="1h 35m"), 15)
+
+        # 6. Ultra-long lecture (3h) -> clamped at 15 max
+        self.assertEqual(determine_lecture_quiz_count(duration_str="3h 0m"), 15)
+
+        # 7. Inferred from cue timestamps when duration_str is missing
+        long_cues = [
+            {"time": "00:00", "text": "Intro"},
+            {"time": "01:25:00", "text": "Advanced basis concepts"}
+        ]
+        self.assertEqual(determine_lecture_quiz_count(cues=long_cues), 15)
+
+    def test_generate_lecture_quiz_scaling_and_clamping(self):
+        """Test that generator scales up to 15 questions and clamps over 15."""
+        cues = [{"time": f"{i:02d}:00", "text": f"Lecture segment {i} discussing core theorem {i}."} for i in range(25)]
+
+        with patch("requests.post", side_effect=Exception("Network offline")):
+            # 1. Requesting 15 questions produces exactly 15
+            quiz_15 = pinecone_rag_engine.generate_lecture_quiz(
+                video_id="vid_long",
+                lecture_title="Long Lecture",
+                cues=cues,
+                num_questions=15
+            )
+            self.assertEqual(len(quiz_15["questions"]), 15)
+
+            # 2. Requesting 25 questions clamps to max 15
+            quiz_clamped = pinecone_rag_engine.generate_lecture_quiz(
+                video_id="vid_long",
+                lecture_title="Long Lecture",
+                cues=cues,
+                num_questions=25
+            )
+            self.assertEqual(len(quiz_clamped["questions"]), 15)
+
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("backend.database.db_manager.get_saved_quiz")
+    @patch("backend.rag_engine.pinecone_rag_engine.generate_lecture_quiz")
+    def test_quiz_endpoint_auto_scales_for_long_lecture(self, mock_gen, mock_get_quiz, mock_get_saved):
+        mock_get_quiz.return_value = None  # Force generation
+        mock_get_saved.return_value = {
+            "title": "Full Length University Lecture",
+            "duration": "1h 40m",
+            "cues": [{"time": "01:40:00", "text": "Conclusion of lecture."}]
+        }
+        mock_gen.return_value = {
+            "video_id": "long_lecture_1",
+            "lecture_title": "Full Length University Lecture",
+            "questions": [{"id": i, "question": f"Q{i}", "options": ["A", "B", "C", "D"], "correct_index": 0} for i in range(1, 16)]
+        }
+
+        # Request without specifying num_questions
+        response = self.client.post("/api/lecture/long_lecture_1/quiz", json={"regenerate": True})
+        self.assertEqual(response.status_code, 200)
+
+        # Check that mock_gen was called with num_questions=15
+        self.assertTrue(mock_gen.called)
+        _, kwargs = mock_gen.call_args
+        self.assertEqual(kwargs.get("num_questions"), 15)
+
 
 if __name__ == "__main__":
     unittest.main()

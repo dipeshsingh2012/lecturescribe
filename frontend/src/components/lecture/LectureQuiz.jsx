@@ -90,7 +90,7 @@ export default function LectureQuiz({
             Lecture Practice Quiz
           </Typography>
           <Typography variant="body2" sx={{ color: textSecondary, mb: 3, lineHeight: 1.6 }}>
-            Generate a personalized 5-question multiple-choice quiz grounded in the professor's explanations, mathematical proofs, and timestamps.
+            Generate a personalized practice quiz scaled to the length of this lecture, grounded in the professor's explanations, mathematical proofs, and timestamps.
           </Typography>
 
           {quizError && (

@@ -1176,6 +1176,7 @@ class Llama3PineconeRAGStore:
         title = lecture_title or "Active Lecture"
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
+        target_count = max(3, min(15, int(num_questions or 5)))
 
         valid_cues = [c for c in (cues or []) if (c.get("text") or "").strip()]
         if not valid_cues:
@@ -1194,9 +1195,9 @@ class Llama3PineconeRAGStore:
 
         system_prompt = (
             "You are an expert university professor and exam creator.\n"
-            "Your task is to generate a challenging, educational 5-question multiple-choice quiz testing core concepts from this lecture transcript.\n\n"
+            f"Your task is to generate a challenging, educational {target_count}-question multiple-choice quiz testing core concepts from this lecture transcript.\n\n"
             "Strict Guidelines:\n"
-            f"1. Generate exactly {num_questions} multiple-choice questions covering different chronological segments of the lecture.\n"
+            f"1. Generate exactly {target_count} multiple-choice questions covering different chronological segments of the lecture.\n"
             "2. Formulas & Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$).\n"
             "3. Grounding: Each question must test a concept, theorem, definition, or example actually taught by the instructor.\n"
             "4. Question format:\n"
@@ -1283,7 +1284,7 @@ class Llama3PineconeRAGStore:
                     "difficulty": diff
                 })
 
-            return cleaned_qs if len(cleaned_qs) > 0 else None
+            return cleaned_qs[:target_count] if len(cleaned_qs) > 0 else None
 
         # 1. Groq
         if groq_key:
@@ -1348,8 +1349,8 @@ class Llama3PineconeRAGStore:
 
         # 3. Fallback Synthesizer (offline, test, or API rate limit fallback)
         fallback_questions = []
-        chunk_step = max(1, len(valid_cues) // num_questions)
-        for i in range(min(num_questions, len(valid_cues))):
+        chunk_step = max(1, len(valid_cues) // target_count)
+        for i in range(min(target_count, len(valid_cues))):
             cue = valid_cues[min(i * chunk_step, len(valid_cues) - 1)]
             ts = cue.get("time", "00:00")
             snippet = cue.get("text", "").strip() or f"Introduction to {title}"

@@ -14,6 +14,14 @@ from typing import List, Dict, Any, Optional
 
 import requests
 from requests.auth import HTTPBasicAuth
+from dotenv import load_dotenv
+from pathlib import Path
+
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(dotenv_path=_env_path, override=True)
+else:
+    load_dotenv(override=True)
 
 IST = ZoneInfo("Asia/Kolkata")
 

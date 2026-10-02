@@ -17,6 +17,14 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import requests
 from icalendar import Calendar, Event
+from dotenv import load_dotenv
+from pathlib import Path
+
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(dotenv_path=_env_path, override=True)
+else:
+    load_dotenv(override=True)
 
 # Constants & Timezone
 IST = ZoneInfo("Asia/Kolkata")

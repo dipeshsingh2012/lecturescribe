@@ -14,6 +14,7 @@ import {
 import {
   Search,
   Bot,
+  HelpCircle,
   Cloud,
   Folder,
   LogOut,
@@ -73,25 +74,6 @@ export default function Header({
               border: '1px solid rgba(255, 255, 255, 0.15)'
             }}>
               <button
-                onClick={() => setActiveTab('transcript')}
-                style={{
-                  background: activeTab === 'transcript' ? '#ffffff' : 'transparent',
-                  color: activeTab === 'transcript' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
-                  border: 'none',
-                  padding: '6px 14px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <Search size={15} /> Search Transcript
-              </button>
-              <button
                 onClick={() => setActiveTab('tutor')}
                 style={{
                   background: activeTab === 'tutor' ? '#ffffff' : 'transparent',
@@ -109,6 +91,45 @@ export default function Header({
                 }}
               >
                 <Bot size={16} /> AI Tutor
+              </button>
+              <button
+                onClick={() => setActiveTab('quiz')}
+                style={{
+                  background: activeTab === 'quiz' ? '#ffffff' : 'transparent',
+                  color: activeTab === 'quiz' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
+                  border: 'none',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <HelpCircle size={15} /> Quiz
+              </button>
+              <button
+                aria-label="Search Transcript"
+                onClick={() => setActiveTab('transcript')}
+                style={{
+                  background: activeTab === 'transcript' ? '#ffffff' : 'transparent',
+                  color: activeTab === 'transcript' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
+                  border: 'none',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <Search size={15} /> Search
               </button>
             </Box>
 

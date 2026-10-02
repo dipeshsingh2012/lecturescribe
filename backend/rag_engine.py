@@ -1162,6 +1162,221 @@ class Llama3PineconeRAGStore:
 
         raise RuntimeError("All LLM providers failed to generate summary.")
 
+    def generate_lecture_quiz(
+        self,
+        video_id: str,
+        lecture_title: str,
+        cues: List[Dict[str, str]],
+        num_questions: int = 5
+    ) -> Dict[str, Any]:
+        """Generate structured interactive quiz questions from lecture transcript with LaTeX formulas."""
+        import requests
+
+        clean_vid = str(video_id or "").strip()
+        title = lecture_title or "Active Lecture"
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        valid_cues = [c for c in (cues or []) if (c.get("text") or "").strip()]
+        if not valid_cues:
+            valid_cues = [{"time": "00:00", "text": f"Lecture overview and introduction for {title}."}]
+
+        # Sample cues evenly to cover entire timeline
+        total_valid = len(valid_cues)
+        if total_valid > 150:
+            step = max(1, total_valid // 100)
+            sampled_cues = valid_cues[::step]
+        else:
+            sampled_cues = valid_cues
+
+        transcript_lines = [f"[{c.get('time', '00:00')}] {c.get('text', '').strip()}" for c in sampled_cues]
+        transcript_sample = "\n".join(transcript_lines)[:32000]
+
+        system_prompt = (
+            "You are an expert university professor and exam creator.\n"
+            "Your task is to generate a challenging, educational 5-question multiple-choice quiz testing core concepts from this lecture transcript.\n\n"
+            "Strict Guidelines:\n"
+            f"1. Generate exactly {num_questions} multiple-choice questions covering different chronological segments of the lecture.\n"
+            "2. Formulas & Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$).\n"
+            "3. Grounding: Each question must test a concept, theorem, definition, or example actually taught by the instructor.\n"
+            "4. Question format:\n"
+            "   - 'id': integer (1, 2, 3...)\n"
+            "   - 'question': clear, unambiguous question text with LaTeX math where applicable\n"
+            "   - 'options': array of exactly 4 strings (A, B, C, D)\n"
+            "   - 'correct_index': integer (0, 1, 2, or 3) indicating the single correct option\n"
+            "   - 'explanation': thorough pedagogical explanation of why this answer is correct, citing the exact timestamp (e.g. [43:34]) and including LaTeX math where applicable\n"
+            "   - 'timestamp': timestamp string (e.g. '43:34' or '01:02:13') from the transcript corresponding to this topic\n"
+            "   - 'difficulty': 'easy', 'medium', or 'hard'\n"
+            "5. Return ONLY a single valid JSON object matching this schema:\n"
+            "{\n"
+            '  "questions": [\n'
+            '    {\n'
+            '      "id": 1,\n'
+            '      "question": "...",\n'
+            '      "options": ["...", "...", "...", "..."],\n'
+            '      "correct_index": 0,\n'
+            '      "explanation": "...",\n'
+            '      "timestamp": "MM:SS",\n'
+            '      "difficulty": "medium"\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+        user_prompt = f"Lecture Title: {title}\n\nTranscript Excerpt:\n{transcript_sample}"
+
+        def _clean_and_parse_json(raw_text: str) -> Optional[List[Dict[str, Any]]]:
+            if not raw_text:
+                return None
+            t = raw_text.strip()
+            if t.startswith("```"):
+                lines = t.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                t = "\n".join(lines).strip()
+            try:
+                data = json.loads(t)
+            except Exception:
+                match = re.search(r"\{.*\}", t, re.DOTALL)
+                if match:
+                    try:
+                        data = json.loads(match.group(0))
+                    except Exception:
+                        return None
+                else:
+                    return None
+
+            raw_qs = data.get("questions") if isinstance(data, dict) else (data if isinstance(data, list) else None)
+            if not isinstance(raw_qs, list) or len(raw_qs) == 0:
+                return None
+
+            cleaned_qs = []
+            for idx, q in enumerate(raw_qs):
+                if not isinstance(q, dict):
+                    continue
+                q_text = str(q.get("question") or "").strip()
+                opts = q.get("options")
+                if not q_text or not isinstance(opts, list) or len(opts) != 4:
+                    continue
+                correct_idx = q.get("correct_index", 0)
+                try:
+                    correct_idx = int(correct_idx)
+                    if correct_idx < 0 or correct_idx > 3:
+                        correct_idx = 0
+                except (ValueError, TypeError):
+                    correct_idx = 0
+
+                ts = str(q.get("timestamp") or "00:00").strip().replace("[", "").replace("]", "")
+                explanation = str(q.get("explanation") or f"Discussed at [{ts}].").strip()
+                diff = str(q.get("difficulty") or "medium").lower().strip()
+                if diff not in ("easy", "medium", "hard"):
+                    diff = "medium"
+
+                cleaned_qs.append({
+                    "id": idx + 1,
+                    "question": q_text,
+                    "options": [str(opt).strip() for opt in opts],
+                    "correct_index": correct_idx,
+                    "explanation": explanation,
+                    "timestamp": ts,
+                    "difficulty": diff
+                })
+
+            return cleaned_qs if len(cleaned_qs) > 0 else None
+
+        # 1. Groq
+        if groq_key:
+            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+                try:
+                    payload = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.3,
+                        "max_tokens": 4096
+                    }
+                    r = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json=payload,
+                        timeout=90
+                    )
+                    if r.status_code == 200:
+                        content = r.json()["choices"][0]["message"]["content"]
+                        parsed = _clean_and_parse_json(content)
+                        if parsed:
+                            return {
+                                "video_id": clean_vid,
+                                "lecture_title": title,
+                                "questions": parsed,
+                                "total_questions": len(parsed),
+                                "model": f"Groq {model_name}",
+                                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            }
+                except Exception as e:
+                    print(f"⚠️ [Groq Quiz Warning] {e}")
+
+        # 2. Gemini
+        if gemini_key:
+            for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+                try:
+                    payload = {
+                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                        "systemInstruction": {"parts": [{"text": system_prompt}]},
+                        "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 4096}
+                    }
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                    resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
+                    if resp.status_code == 200:
+                        content = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        parsed = _clean_and_parse_json(content)
+                        if parsed:
+                            return {
+                                "video_id": clean_vid,
+                                "lecture_title": title,
+                                "questions": parsed,
+                                "total_questions": len(parsed),
+                                "model": f"Gemini {model_name}",
+                                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            }
+                except Exception as e:
+                    print(f"⚠️ [Gemini Quiz Warning] {e}")
+
+        # 3. Fallback Synthesizer (offline, test, or API rate limit fallback)
+        fallback_questions = []
+        chunk_step = max(1, len(valid_cues) // num_questions)
+        for i in range(min(num_questions, len(valid_cues))):
+            cue = valid_cues[min(i * chunk_step, len(valid_cues) - 1)]
+            ts = cue.get("time", "00:00")
+            snippet = cue.get("text", "").strip() or f"Introduction to {title}"
+            fallback_questions.append({
+                "id": i + 1,
+                "question": f"At [{ts}], which concept or statement is emphasized regarding {title}?",
+                "options": [
+                    f"{snippet[:80]}...",
+                    "A counterexample showing the condition fails in general spaces.",
+                    "An introductory greeting with no mathematical bearing.",
+                    "A proof relying on an unverified physical assumption."
+                ],
+                "correct_index": 0,
+                "explanation": f"At [{ts}], the professor explains: \"{snippet}\".",
+                "timestamp": ts,
+                "difficulty": "medium"
+            })
+
+        return {
+            "video_id": clean_vid,
+            "lecture_title": title,
+            "questions": fallback_questions,
+            "total_questions": len(fallback_questions),
+            "model": "Deterministic Transcript Synthesizer",
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+
     @staticmethod
     def check_llm_connectivity() -> Dict[str, Any]:
         """Probes Groq and Gemini connectivity and intent router status."""

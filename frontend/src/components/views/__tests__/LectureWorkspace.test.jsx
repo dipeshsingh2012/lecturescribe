@@ -88,5 +88,19 @@ describe('LectureWorkspace', () => {
     deleteBtn.click();
     expect(deleteChatMessage).toHaveBeenCalledWith('msg_user_1');
   });
+
+  it('renders LectureQuiz on the right when activeTab is quiz', () => {
+    const fetchOrGenerateQuiz = vi.fn();
+    render(
+      <LectureWorkspace
+        {...baseProps}
+        activeTab="quiz"
+        fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+      />
+    );
+
+    expect(screen.getByText('Lecture Practice Quiz')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate Quiz/i })).toBeInTheDocument();
+  });
 });
 

@@ -200,6 +200,57 @@ def get_lecture_by_id(
     return get_transcript(url=video_id, email=email, course_name=course_name)
 
 
+class QuizGenerateRequest(BaseModel):
+    regenerate: bool = False
+    num_questions: int = 5
+
+
+@app.get("/api/lecture/{video_id}/quiz")
+@app.post("/api/lecture/{video_id}/quiz")
+def get_or_generate_lecture_quiz(
+    video_id: str,
+    regenerate: bool = Query(False, description="Force regenerate without using cache"),
+    num_questions: int = Query(5, description="Number of quiz questions to generate"),
+    body: Optional[QuizGenerateRequest] = None
+):
+    """Retrieve or generate interactive practice quiz with LaTeX math formulas."""
+    clean_vid = str(video_id).strip()
+    is_regenerate = regenerate or (body.regenerate if body else False)
+    count = (body.num_questions if body else None) or num_questions or 5
+
+    # 1. Check Redis Cache
+    if not is_regenerate and redis_cache:
+        cached_quiz = redis_cache.get_quiz(clean_vid)
+        if cached_quiz:
+            print(f"⚡ [Redis Hit] Returning cached quiz for video '{clean_vid}'.")
+            return cached_quiz
+
+    # 2. Retrieve Saved Video & Cues from DB
+    saved = db_manager.get_saved_video(clean_vid)
+    if not saved or not saved.get("cues"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Lecture '{clean_vid}' transcript not found in database. Ingest lecture first."
+        )
+
+    title = saved.get("title", f"Lecture {clean_vid}")
+    cues = saved.get("cues", [])
+
+    # 3. Generate with LLM / fallback
+    quiz_data = pinecone_rag_engine.generate_lecture_quiz(
+        video_id=clean_vid,
+        lecture_title=title,
+        cues=cues,
+        num_questions=count
+    )
+
+    # 4. Save to Redis Cache (24 hours)
+    if redis_cache:
+        redis_cache.set_quiz(clean_vid, quiz_data, ttl_seconds=86400)
+
+    return quiz_data
+
+
 @app.get("/api/transcript")
 def get_transcript(
     url: str = Query(..., description="Vimeo URL or Video ID"),

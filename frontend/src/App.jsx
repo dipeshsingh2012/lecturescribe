@@ -13,6 +13,7 @@ import { useResources } from './hooks/useResources';
 import { useAITutor } from './hooks/useAITutor';
 import { useLecturePlayer } from './hooks/useLecturePlayer';
 import { useLectureIngestion } from './hooks/useLectureIngestion';
+import useLectureQuiz from './hooks/useLectureQuiz';
 
 import Header from './components/layout/Header';
 import HomeView from './components/views/HomeView';
@@ -26,7 +27,7 @@ export default function App() {
   const [activeTab, setActiveTabState] = useState(() => {
     if (typeof window !== 'undefined') {
       const tabParam = new URLSearchParams(window.location.search).get('tab');
-      if (tabParam === 'tutor' || tabParam === 'transcript') return tabParam;
+      if (tabParam === 'tutor' || tabParam === 'transcript' || tabParam === 'quiz') return tabParam;
     }
     return 'transcript';
   });
@@ -95,6 +96,7 @@ export default function App() {
   const resources = useResources(activeData?.videoId, effectiveCourse, auth.googleUser);
   const tutor = useAITutor(activeData, auth.googleUser);
   const player = useLecturePlayer(activeData);
+  const quiz = useLectureQuiz(activeData);
 
   // Hub / Route Navigation
   const handleBackToHub = () => {
@@ -131,7 +133,7 @@ export default function App() {
 
       if (typeof window !== 'undefined') {
         const tabParam = new URLSearchParams(window.location.search).get('tab');
-        setActiveTabState(tabParam === 'tutor' ? 'tutor' : 'transcript');
+        setActiveTabState(tabParam === 'tutor' ? 'tutor' : tabParam === 'quiz' ? 'quiz' : 'transcript');
       }
 
       if (videoId) {
@@ -153,6 +155,13 @@ export default function App() {
   useEffect(() => {
     if (activeTab === 'tutor' && activeData?.videoId && tutor.chatMessages.length === 0 && !tutor.chatLoading) {
       tutor.fetchChatHistory(activeData.videoId, auth.googleUser?.email);
+    }
+  }, [activeTab, activeData?.videoId]);
+
+  // When user is on or switches to Quiz tab, ensure quiz is loaded or fetched
+  useEffect(() => {
+    if (activeTab === 'quiz' && activeData?.videoId && !quiz.quizData && !quiz.quizLoading) {
+      quiz.fetchOrGenerateQuiz(false);
     }
   }, [activeTab, activeData?.videoId]);
 
@@ -273,6 +282,7 @@ export default function App() {
             chatEndRef={tutor.chatEndRef}
             handleSendMessage={tutor.handleSendMessage}
             currentTheme={currentTheme}
+            quiz={quiz}
           />
         )}
 

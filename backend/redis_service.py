@@ -223,23 +223,71 @@ class RedisCacheService:
             return False
 
     # ---------------------------------------------------------
+    # Quiz Cache Operations
+    # ---------------------------------------------------------
+
+    def get_quiz(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve cached quiz questions for a lecture."""
+        if not self.client or not self.enabled or not video_id:
+            return None
+
+        clean_vid = str(video_id).strip()
+        key = f"ls:quiz:{clean_vid}"
+        try:
+            raw = self.client.get(key)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data["cached"] = True
+                    data["cache_tier"] = "REDIS"
+                    return data
+        except Exception as e:
+            print(f"[Redis Cache Warning] Quiz cache read error: {e}")
+        return None
+
+    def set_quiz(
+        self,
+        video_id: str,
+        quiz_data: Dict[str, Any],
+        ttl_seconds: Optional[int] = 86400
+    ) -> bool:
+        """Store generated quiz questions in Redis (default 24h)."""
+        if not self.client or not self.enabled or not video_id:
+            return False
+
+        clean_vid = str(video_id).strip()
+        key = f"ls:quiz:{clean_vid}"
+        ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl
+        try:
+            val_str = json.dumps(quiz_data)
+            if ttl and ttl > 0:
+                self.client.setex(key, ttl, val_str)
+            else:
+                self.client.set(key, val_str)
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] Quiz cache write error: {e}")
+            return False
+
+    # ---------------------------------------------------------
     # Invalidation & Administration
     # ---------------------------------------------------------
 
     def invalidate_video(self, video_id: str) -> int:
-        """Purge all cached queries and tool results for a specific lecture."""
+        """Purge all cached queries, quizzes, and tool results for a specific lecture."""
         if not self.client or not self.enabled or not video_id:
             return 0
 
         clean_vid = str(video_id).strip()
         deleted_count = 0
         try:
-            # Find and delete both versioned and legacy query and tool keys for this video
+            # Find and delete both versioned and legacy query, quiz, and tool keys for this video
             patterns = [
                 f"ls:rag:*:query:{clean_vid}:*",
                 f"ls:rag:query:{clean_vid}:*",
                 f"ls:rag:*:tool:{clean_vid}:*",
-                f"ls:rag:tool:{clean_vid}:*"
+                f"ls:rag:tool:{clean_vid}:*",
+                f"ls:quiz:{clean_vid}"
             ]
             for pat in patterns:
                 cursor = 0

@@ -2,6 +2,7 @@ import React from 'react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
 import AITutor from '../lecture/AITutor';
+import LectureQuiz from '../lecture/LectureQuiz';
 import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function LectureWorkspace({
@@ -52,7 +53,19 @@ export default function LectureWorkspace({
   chatInputRef,
   chatEndRef,
   handleSendMessage,
-  currentTheme
+  currentTheme,
+  quiz,
+  quizData = quiz?.quizData,
+  quizLoading = quiz?.quizLoading,
+  quizError = quiz?.quizError,
+  selectedAnswers = quiz?.selectedAnswers,
+  isCompleted = quiz?.isCompleted,
+  score = quiz?.score,
+  totalQuestions = quiz?.totalQuestions,
+  answeredCount = quiz?.answeredCount,
+  fetchOrGenerateQuiz = quiz?.fetchOrGenerateQuiz,
+  selectAnswer = quiz?.selectAnswer,
+  resetQuiz = quiz?.resetQuiz
 }) {
   const handleCrossLectureClick = (videoId, timestamp, courseName) => {
     if (!videoId) return;
@@ -103,7 +116,7 @@ export default function LectureWorkspace({
         currentTheme={currentTheme}
       />
 
-      {/* Right Panel: Instant Search Drawer or AI Tutor */}
+      {/* Right Panel: Instant Search Drawer, Practice Quiz, or AI Tutor */}
       {activeTab === 'transcript' ? (
         <TranscriptSearch
           displayCues={displayCues}
@@ -113,6 +126,22 @@ export default function LectureWorkspace({
           activeCueIdx={activeCueIdx}
           copied={copied}
           handleCopyTranscript={handleCopyTranscript}
+        />
+      ) : activeTab === 'quiz' ? (
+        <LectureQuiz
+          quizData={quizData}
+          quizLoading={quizLoading}
+          quizError={quizError}
+          selectedAnswers={selectedAnswers}
+          isCompleted={isCompleted}
+          score={score}
+          totalQuestions={totalQuestions}
+          answeredCount={answeredCount}
+          fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+          selectAnswer={selectAnswer}
+          resetQuiz={resetQuiz}
+          handleCueClick={handleCueClick}
+          currentTheme={currentTheme}
         />
       ) : (
         <AITutor

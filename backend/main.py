@@ -1649,11 +1649,11 @@ def send_test_calendar_alert():
 
 @app.post("/api/cron/trigger-alert")
 def trigger_cron_alert(
-    slot: str = Query(..., description="Target alert slot: '11am', '3pm', or '6pm'"),
+    slot: str = Query(..., description="Target alert slot: '8am', '4pm', '11am', '3pm', or '6pm'"),
     authorization: Optional[str] = Header(None, description="Bearer token matching CRON_SECRET")
 ):
     """
-    Automated Cloud Scheduler endpoint triggered at 11:00 AM, 3:00 PM, and 6:00 PM IST.
+    Automated Cloud Scheduler endpoint triggered at scheduled times (e.g. 8:00 AM and 4:00 PM IST).
     Secured with Bearer token authentication matching CRON_SECRET.
     """
     cron_secret = os.getenv("CRON_SECRET", "").strip()
@@ -1663,8 +1663,9 @@ def trigger_cron_alert(
             raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing Bearer token for cron trigger.")
 
     clean_slot = slot.strip().lower()
-    if clean_slot not in ("11am", "3pm", "6pm", "11:00", "15:00", "18:00"):
-        raise HTTPException(status_code=400, detail=f"Invalid slot '{slot}'. Expected '11am', '3pm', or '6pm'.")
+    valid_slots = ("8am", "4pm", "11am", "3pm", "6pm", "08:00", "8:00", "16:00", "4:00", "11:00", "15:00", "18:00", "morning", "afternoon", "evening")
+    if clean_slot not in valid_slots:
+        raise HTTPException(status_code=400, detail=f"Invalid slot '{slot}'. Expected '8am' or '4pm'.")
 
     try:
         matched_events, slot_label, tomorrow_preview = calendar_service.filter_events_for_slot(clean_slot)

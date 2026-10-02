@@ -82,9 +82,13 @@ def format_whatsapp_message(
     time_str = now.strftime("%I:%M %p")
 
     slot_lower = slot_label.lower()
-    if "11" in slot_lower or "morning" in slot_lower:
+    if "8" in slot_lower or "morning" in slot_lower:
+        header_icon = "🌅"
+    elif "4" in slot_lower or "afternoon" in slot_lower:
+        header_icon = "🌆"
+    elif "11" in slot_lower:
         header_icon = "☀️"
-    elif "3" in slot_lower or "afternoon" in slot_lower:
+    elif "3" in slot_lower:
         header_icon = "☕"
     elif "6" in slot_lower or "evening" in slot_lower:
         header_icon = "🌙"
@@ -92,11 +96,11 @@ def format_whatsapp_message(
         header_icon = "📅"
 
     lines: List[str] = []
-    # if is_test:
-    #     lines.append("🧪 *[TEST DISPATCH]*")
-    # lines.append(f"{header_icon} *LectureScribe Academic Alert*")
-    # lines.append(f"*{slot_label}*")
-    # lines.append(f"📆 `{date_str}` | `{time_str} IST`")
+    if is_test:
+        lines.append("🧪 *[TEST DISPATCH]*")
+    lines.append(f"{header_icon} *LectureScribe Academic Alert*")
+    lines.append(f"*{slot_label}*")
+    lines.append(f"📆 `{date_str}` | `{time_str} IST`")
     lines.append("───────────────────────")
 
     if not events:
@@ -139,10 +143,10 @@ def format_whatsapp_message(
 
             lines.append("")
 
-    # Add Tomorrow's preview if available (for 6pm slot)
+    # Add Tomorrow's preview if available (for 4pm / evening slot)
     if tomorrow_preview and len(tomorrow_preview) > 0:
         lines.append("───────────────────────")
-        lines.append("🌅 *Tomorrow's Morning Preview (8:00 AM – 11:00 AM):*")
+        lines.append("🌅 *Tomorrow's Morning Preview:*")
         for t_evt in tomorrow_preview:
             t_cat = t_evt.get("category", "general")
             t_icon = CATEGORY_ICONS.get(t_cat, "📌")

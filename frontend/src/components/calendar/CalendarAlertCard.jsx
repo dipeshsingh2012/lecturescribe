@@ -294,7 +294,7 @@ export default function CalendarAlertCard({ currentTheme }) {
               />
             </Box>
             <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
-              IIIT Dharwad iCal Feed • Automated WhatsApp Alerts (11 AM, 3 PM, 6 PM IST)
+              IIIT Dharwad iCal Feed • Automated WhatsApp Alerts (8 AM, 4 PM IST)
             </Typography>
           </Box>
         </Box>

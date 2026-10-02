@@ -40,64 +40,45 @@ echo ""
 # 2. Cloud Scheduler Cron Jobs in Asia/Kolkata (IST)
 echo "⏰ Step 2: Configuring Cloud Scheduler daily dispatch jobs (Asia/Kolkata)..."
 
-# Job 1: 11:00 AM IST
-echo "Creating/updating 11:00 AM IST trigger..."
-gcloud scheduler jobs create http lecturescribe-alert-11am \
+# Job 1: 8:00 AM IST (Morning Briefing & Day Schedule)
+echo "Creating/updating 8:00 AM IST trigger..."
+gcloud scheduler jobs create http lecturescribe-alert-8am \
   --location="${REGION}" \
-  --schedule="0 11 * * *" \
+  --schedule="0 8 * * *" \
   --time-zone="Asia/Kolkata" \
-  --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=11am" \
+  --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=8am" \
   --http-method=POST \
   --headers="Authorization=Bearer ${CRON_SECRET}" \
-  --description="LectureScribe 11:00 AM IST Moodle Morning Alert to WhatsApp" \
-  || gcloud scheduler jobs update http lecturescribe-alert-11am \
+  --description="LectureScribe 8:00 AM IST Moodle Morning Alert to WhatsApp" \
+  || gcloud scheduler jobs update http lecturescribe-alert-8am \
        --location="${REGION}" \
-       --schedule="0 11 * * *" \
+       --schedule="0 8 * * *" \
        --time-zone="Asia/Kolkata" \
-       --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=11am" \
+       --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=8am" \
        --http-method=POST \
        --headers="Authorization=Bearer ${CRON_SECRET}"
 
-# Job 2: 3:00 PM IST
-echo "Creating/updating 3:00 PM IST trigger..."
-gcloud scheduler jobs create http lecturescribe-alert-3pm \
+# Job 2: 4:00 PM IST (Evening Sessions, Deadlines & Tomorrow Preview)
+echo "Creating/updating 4:00 PM IST trigger..."
+gcloud scheduler jobs create http lecturescribe-alert-4pm \
   --location="${REGION}" \
-  --schedule="0 15 * * *" \
+  --schedule="0 16 * * *" \
   --time-zone="Asia/Kolkata" \
-  --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=3pm" \
+  --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=4pm" \
   --http-method=POST \
   --headers="Authorization=Bearer ${CRON_SECRET}" \
-  --description="LectureScribe 3:00 PM IST Moodle Afternoon Alert to WhatsApp" \
-  || gcloud scheduler jobs update http lecturescribe-alert-3pm \
+  --description="LectureScribe 4:00 PM IST Moodle Evening & Tomorrow Preview Alert to WhatsApp" \
+  || gcloud scheduler jobs update http lecturescribe-alert-4pm \
        --location="${REGION}" \
-       --schedule="0 15 * * *" \
+       --schedule="0 16 * * *" \
        --time-zone="Asia/Kolkata" \
-       --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=3pm" \
-       --http-method=POST \
-       --headers="Authorization=Bearer ${CRON_SECRET}"
-
-# Job 3: 6:00 PM IST
-echo "Creating/updating 6:00 PM IST trigger..."
-gcloud scheduler jobs create http lecturescribe-alert-6pm \
-  --location="${REGION}" \
-  --schedule="0 18 * * *" \
-  --time-zone="Asia/Kolkata" \
-  --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=6pm" \
-  --http-method=POST \
-  --headers="Authorization=Bearer ${CRON_SECRET}" \
-  --description="LectureScribe 6:00 PM IST Moodle Evening & Tomorrow Preview Alert to WhatsApp" \
-  || gcloud scheduler jobs update http lecturescribe-alert-6pm \
-       --location="${REGION}" \
-       --schedule="0 18 * * *" \
-       --time-zone="Asia/Kolkata" \
-       --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=6pm" \
+       --uri="${SERVICE_URL}/api/cron/trigger-alert?slot=4pm" \
        --http-method=POST \
        --headers="Authorization=Bearer ${CRON_SECRET}"
 
 echo ""
 echo "======================================================================"
-echo "🎉 Setup complete! 3 Cloud Scheduler cron triggers are active:"
-echo "  1. 11:00 AM IST -> ${SERVICE_URL}/api/cron/trigger-alert?slot=11am"
-echo "  2.  3:00 PM IST -> ${SERVICE_URL}/api/cron/trigger-alert?slot=3pm"
-echo "  3.  6:00 PM IST -> ${SERVICE_URL}/api/cron/trigger-alert?slot=6pm"
+echo "🎉 Setup complete! 2 Cloud Scheduler cron triggers are active:"
+echo "  1.  8:00 AM IST -> ${SERVICE_URL}/api/cron/trigger-alert?slot=8am"
+echo "  2.  4:00 PM IST -> ${SERVICE_URL}/api/cron/trigger-alert?slot=4pm"
 echo "======================================================================"

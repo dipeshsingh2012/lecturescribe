@@ -100,20 +100,24 @@ class TestCalendarAlerts(unittest.TestCase):
             # Reset cache
             calendar_service._memory_cache = None
 
-            # 1. 11am slot (11:00 AM - 3:30 PM): should match Quiz (11:30 AM - 1:00 PM) and All-Day event
+            # 1. 8am slot (8:00 AM - 4:30 PM): should match Linear Algebra Quiz 3 (11:30 AM) & All-Day event
+            events_8am, label_8am, _ = calendar_service.filter_events_for_slot("8am", now=ref_time)
+            self.assertIn("8:00 AM", label_8am)
+            titles_8am = [e["title"] for e in events_8am]
+            self.assertIn("Linear Algebra Quiz 3", titles_8am)
+
+            # 2. 4pm slot (4:00 PM - 11:59 PM): should match Assignment due at 11:59 PM
+            # and tomorrow morning preview (8:00 AM - 12:00 PM) should match Midsem Exam at 04:00 UTC = 09:30 AM IST
+            events_4pm, label_4pm, preview_4pm = calendar_service.filter_events_for_slot("4pm", now=ref_time)
+            self.assertIn("4:00 PM", label_4pm)
+            titles_4pm = [e["title"] for e in events_4pm]
+            self.assertIn("Machine Learning Assignment 2 Due", titles_4pm)
+            self.assertIsNotNone(preview_4pm)
+            self.assertTrue(any("Midsem Exam" in p["title"] for p in preview_4pm))
+
+            # 3. 11am slot (legacy)
             events_11am, label_11am, _ = calendar_service.filter_events_for_slot("11am", now=ref_time)
             self.assertIn("11:00 AM", label_11am)
-            titles_11am = [e["title"] for e in events_11am]
-            self.assertIn("Linear Algebra Quiz 3", titles_11am)
-
-            # 2. 6pm slot (6:00 PM - 11:59 PM): should match Assignment due at 11:59 PM
-            # and tomorrow morning preview (8:00 AM - 11:00 AM) should match Midsem Exam at 04:00 UTC = 09:30 AM IST
-            events_6pm, label_6pm, preview = calendar_service.filter_events_for_slot("6pm", now=ref_time)
-            self.assertIn("6:00 PM", label_6pm)
-            titles_6pm = [e["title"] for e in events_6pm]
-            self.assertIn("Machine Learning Assignment 2 Due", titles_6pm)
-            self.assertIsNotNone(preview)
-            self.assertTrue(any("Midsem Exam" in p["title"] for p in preview))
 
     def test_format_whatsapp_message(self):
         events = [
@@ -203,16 +207,25 @@ class TestCalendarAlerts(unittest.TestCase):
             )
             self.assertEqual(res_bad_slot.status_code, 400)
 
-            # 4. Valid token and slot -> 200
+            # 4. Valid token and slot -> 200 (test 8am and 4pm)
             with patch.object(calendar_service, "fetch_raw_feed", return_value=SAMPLE_ICS_CONTENT.decode("utf-8")):
-                res_ok = self.client.post(
-                    "/api/cron/trigger-alert?slot=11am",
+                res_8am = self.client.post(
+                    "/api/cron/trigger-alert?slot=8am",
                     headers={"Authorization": "Bearer my_super_secret_cron_key"}
                 )
-                self.assertEqual(res_ok.status_code, 200)
-                data = res_ok.json()
-                self.assertEqual(data["status"], "success")
-                self.assertEqual(data["slot"], "11am")
+                self.assertEqual(res_8am.status_code, 200)
+                data_8am = res_8am.json()
+                self.assertEqual(data_8am["status"], "success")
+                self.assertEqual(data_8am["slot"], "8am")
+
+                res_4pm = self.client.post(
+                    "/api/cron/trigger-alert?slot=4pm",
+                    headers={"Authorization": "Bearer my_super_secret_cron_key"}
+                )
+                self.assertEqual(res_4pm.status_code, 200)
+                data_4pm = res_4pm.json()
+                self.assertEqual(data_4pm["status"], "success")
+                self.assertEqual(data_4pm["slot"], "4pm")
 
 
 if __name__ == "__main__":

@@ -302,7 +302,39 @@ class MoodleCalendarService:
         matched: List[Dict[str, Any]] = []
         tomorrow_preview: Optional[List[Dict[str, Any]]] = None
 
-        if slot_norm in ("11am", "11:00", "morning"):
+        if slot_norm in ("8am", "08:00", "8:00", "morning"):
+            slot_label = "8:00 AM Morning Briefing & Day Schedule"
+            window_start = datetime.datetime.combine(today, datetime.time(8, 0), tzinfo=IST)
+            window_end = datetime.datetime.combine(today, datetime.time(16, 30), tzinfo=IST)
+
+            for e in events:
+                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
+                e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
+                # Matches if start falls in window OR ongoing during window OR all-day event today
+                if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start) or (e.get("is_all_day") and e_start.date() == today):
+                    matched.append(e)
+
+        elif slot_norm in ("4pm", "16:00", "4:00", "afternoon", "evening"):
+            slot_label = "4:00 PM Evening Deadlines & Tomorrow Preview"
+            window_start = datetime.datetime.combine(today, datetime.time(16, 0), tzinfo=IST)
+            window_end = datetime.datetime.combine(today, datetime.time(23, 59, 59), tzinfo=IST)
+
+            for e in events:
+                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
+                e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
+                if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start):
+                    matched.append(e)
+
+            # Tomorrow Morning Preview: 8:00 AM - 12:00 PM IST
+            t_start = datetime.datetime.combine(tomorrow, datetime.time(8, 0), tzinfo=IST)
+            t_end = datetime.datetime.combine(tomorrow, datetime.time(12, 0), tzinfo=IST)
+            tomorrow_preview = []
+            for e in events:
+                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
+                if t_start <= e_start <= t_end:
+                    tomorrow_preview.append(e)
+
+        elif slot_norm in ("11am", "11:00"):
             slot_label = "11:00 AM Morning & Midday Alert"
             window_start = datetime.datetime.combine(today, datetime.time(11, 0), tzinfo=IST)
             window_end = datetime.datetime.combine(today, datetime.time(15, 30), tzinfo=IST)
@@ -310,11 +342,10 @@ class MoodleCalendarService:
             for e in events:
                 e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
                 e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
-                # Matches if start falls in window OR ongoing during window
                 if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start):
                     matched.append(e)
 
-        elif slot_norm in ("3pm", "15:00", "afternoon"):
+        elif slot_norm in ("3pm", "15:00"):
             slot_label = "3:00 PM Afternoon Sessions & Upcoming Deadlines"
             window_start = datetime.datetime.combine(today, datetime.time(15, 0), tzinfo=IST)
             window_end = datetime.datetime.combine(today, datetime.time(19, 0), tzinfo=IST)
@@ -325,7 +356,7 @@ class MoodleCalendarService:
                 if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start):
                     matched.append(e)
 
-        elif slot_norm in ("6pm", "18:00", "evening"):
+        elif slot_norm in ("6pm", "18:00"):
             slot_label = "6:00 PM Evening Deadlines & Tomorrow Preview"
             window_start = datetime.datetime.combine(today, datetime.time(18, 0), tzinfo=IST)
             window_end = datetime.datetime.combine(today, datetime.time(23, 59, 59), tzinfo=IST)

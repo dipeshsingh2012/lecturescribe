@@ -1,7 +1,16 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import { gfmTable } from 'micromark-extension-gfm-table';
+import { gfmTableFromMarkdown, gfmTableToMarkdown } from 'mdast-util-gfm-table';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+
+function remarkGfmTable() {
+  const data = this.data();
+  (data.micromarkExtensions || (data.micromarkExtensions = [])).push(gfmTable());
+  (data.fromMarkdownExtensions || (data.fromMarkdownExtensions = [])).push(gfmTableFromMarkdown());
+  (data.toMarkdownExtensions || (data.toMarkdownExtensions = [])).push(gfmTableToMarkdown());
+}
 
 export default function MarkdownWithTimestamps({
   content,
@@ -218,14 +227,21 @@ export default function MarkdownWithTimestamps({
   const sanitizedContent = React.useMemo(() => {
     if (!content) return '';
     return content
+      // Normalize LaTeX display math \[ ... \] to $$ ... $$
+      .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
+      // Normalize LaTeX inline math \( ... \) to $ ... $
+      .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')
+      // Unescape escaped hashes
       .replace(/\\(#+)/g, '$1')
+      // Normalize unicode spaces after hashes
       .replace(/^(#{1,6})[\u00a0\u2000-\u200b\u202f]+/gm, '$1 ')
+      // Ensure blank line before headers if preceded immediately by text
       .replace(/([^\n])\n(#{1,6}\s+)/g, '$1\n\n$2');
   }, [content]);
 
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkMath]}
+      remarkPlugins={[remarkGfmTable, remarkMath]}
       rehypePlugins={[rehypeKatex]}
       components={{
         p: ({ children }) => (
@@ -283,6 +299,63 @@ export default function MarkdownWithTimestamps({
           >
             {children}
           </a>
+        ),
+        table: ({ children }) => (
+          <div style={{
+            overflowX: 'auto',
+            margin: '0.8rem 0',
+            borderRadius: '8px',
+            border: '1px solid var(--border-color)',
+            background: 'var(--card-bg)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+          }}>
+            <table style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: '0.82rem',
+              textAlign: 'left'
+            }}>
+              {children}
+            </table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead style={{
+            background: 'var(--panel-bg)',
+            borderBottom: '2px solid var(--border-color)'
+          }}>
+            {children}
+          </thead>
+        ),
+        tbody: ({ children }) => (
+          <tbody>{children}</tbody>
+        ),
+        tr: ({ children }) => (
+          <tr style={{
+            borderBottom: '1px solid var(--border-color)'
+          }}>
+            {children}
+          </tr>
+        ),
+        th: ({ children }) => (
+          <th style={{
+            padding: '8px 12px',
+            fontWeight: 700,
+            color: 'var(--text-primary)',
+            whiteSpace: 'nowrap'
+          }}>
+            {renderChildrenWithTimestamps(children)}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td style={{
+            padding: '8px 12px',
+            color: 'var(--text-secondary)',
+            verticalAlign: 'top',
+            lineHeight: 1.5
+          }}>
+            {renderChildrenWithTimestamps(children)}
+          </td>
         )
       }}
     >

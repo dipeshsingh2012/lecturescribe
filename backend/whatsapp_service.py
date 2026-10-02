@@ -96,8 +96,6 @@ def format_whatsapp_message(
         header_icon = "📅"
 
     lines: List[str] = []
-    if is_test:
-        lines.append("🧪 *[TEST DISPATCH]*")
     lines.append(f"📅 *Schedule for Today ({date_str})*")
     lines.append(f"{header_icon} _{slot_label}_")
     lines.append("───────────────────────")
@@ -286,12 +284,11 @@ class TwilioWhatsAppService:
         return self.send_whatsapp_message(message_text)
 
     def dispatch_test_alert(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Send immediate test alert containing today's schedule."""
+        """Send immediate alert containing today's schedule."""
         message_text = format_whatsapp_message(
             events=events,
-            slot_label="Immediate Test Alert",
-            tomorrow_preview=None,
-            is_test=True
+            slot_label="Academic Schedule Preview",
+            tomorrow_preview=None
         )
         return self.send_whatsapp_message(message_text)
 

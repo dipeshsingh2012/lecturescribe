@@ -104,3 +104,10 @@ export const cleanSubmissionFallback = (text, targetWords = 120, query = '') => 
   }
   return cleaned;
 };
+
+export const truncateEnd = (str, maxLength = 30) => {
+  if (!str || typeof str !== 'string') return '';
+  const trimmed = str.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, maxLength).trimEnd()}...`;
+};

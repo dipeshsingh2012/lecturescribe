@@ -2,7 +2,8 @@ import React from 'react';
 import {
   Box,
   Button,
-  Typography
+  Typography,
+  Tooltip
 } from '@mui/material';
 import {
   Folder,
@@ -64,31 +65,36 @@ export default function LecturePlayer({
           display: 'flex',
           alignItems: 'center',
           gap: 1,
-          flexWrap: 'wrap',
+          flexWrap: 'nowrap',
+          overflow: 'hidden',
+          minWidth: 0,
           py: 0.5
         }}
       >
-        <Button
-          variant="text"
-          size="small"
-          onClick={() => {
-            setSelectedCourse(null);
-            setActiveData(null);
-            navigateTo('/');
-          }}
-          startIcon={<Folder size={15} color={currentTheme.palette.primary} />}
-          sx={{
-            p: 0,
-            minWidth: 'auto',
-            textTransform: 'none',
-            fontWeight: 600,
-            fontSize: '0.84rem',
-            color: currentTheme.palette.textSecondary,
-            '&:hover': { color: currentTheme.palette.primary, bgcolor: 'transparent' }
-          }}
-        >
-          Courses
-        </Button>
+        <Tooltip title="All Courses" arrow placement="top" enterDelay={200}>
+          <Button
+            variant="text"
+            size="small"
+            onClick={() => {
+              setSelectedCourse(null);
+              setActiveData(null);
+              navigateTo('/');
+            }}
+            startIcon={<Folder size={15} color={currentTheme.palette.primary} />}
+            sx={{
+              p: 0,
+              minWidth: 'auto',
+              flexShrink: 0,
+              textTransform: 'none',
+              fontWeight: 600,
+              fontSize: '0.84rem',
+              color: currentTheme.palette.textSecondary,
+              '&:hover': { color: currentTheme.palette.primary, bgcolor: 'transparent' }
+            }}
+          >
+            Courses
+          </Button>
+        </Tooltip>
 
         <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
 
@@ -103,51 +109,66 @@ export default function LecturePlayer({
               : effectiveCourse)
           );
           return (
-            <Button
-              variant="text"
-              size="small"
-              onClick={() => {
-                setSelectedCourse(displayCourseName);
-                setActiveData(null);
-                navigateTo(`/course/${courseSlug}`);
-              }}
-              sx={{
-                p: 0,
-                minWidth: 'auto',
-                textTransform: 'none',
-                fontWeight: 700,
-                fontSize: '0.84rem',
-                color: currentTheme.palette.primary,
-                maxWidth: { xs: 160, sm: 240 },
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                '&:hover': { textDecoration: 'underline', bgcolor: 'transparent' }
-              }}
-              title={`Back to course: ${displayCourseName}`}
-            >
-              {displayCourseName}
-            </Button>
+            <Tooltip title={displayCourseName} arrow placement="top" enterDelay={150}>
+              <Button
+                variant="text"
+                size="small"
+                onClick={() => {
+                  setSelectedCourse(displayCourseName);
+                  setActiveData(null);
+                  navigateTo(`/course/${courseSlug}`);
+                }}
+                sx={{
+                  p: 0,
+                  minWidth: 0,
+                  maxWidth: { xs: 130, sm: 200, md: 280 },
+                  flexShrink: 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.84rem',
+                  color: currentTheme.palette.primary,
+                  '&:hover': { textDecoration: 'underline', bgcolor: 'transparent' }
+                }}
+              >
+                <Box
+                  component="span"
+                  sx={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    display: 'block',
+                    maxWidth: '100%'
+                  }}
+                >
+                  {displayCourseName}
+                </Box>
+              </Button>
+            </Tooltip>
           );
         })()}
 
         <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
 
-        <Typography
-          variant="body2"
-          sx={{
-            fontWeight: 700,
-            fontSize: '0.84rem',
-            color: currentTheme.palette.textPrimary,
-            maxWidth: { xs: 160, sm: 260, md: 360 },
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
-          }}
-          title={activeData.title}
-        >
-          {activeData.title}
-        </Typography>
+        <Tooltip title={activeData.title} arrow placement="top" enterDelay={150}>
+          <Typography
+            variant="body2"
+            sx={{
+              fontWeight: 700,
+              fontSize: '0.84rem',
+              color: currentTheme.palette.textPrimary,
+              minWidth: 0,
+              flexShrink: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              cursor: 'default'
+            }}
+          >
+            {activeData.title}
+          </Typography>
+        </Tooltip>
       </Box>
 
       {/* Embedded Vimeo Player */}

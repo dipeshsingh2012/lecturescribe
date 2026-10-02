@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import LecturePlayer from '../LecturePlayer';
 import { LMS_THEMES } from '../../../store/themeStore';
 
@@ -105,5 +105,49 @@ describe('LecturePlayer', () => {
     expect(driveBadge).toHaveAttribute('href', 'https://drive.google.com/drive/folders/folder-xyz');
     expect(driveBadge).toHaveAttribute('target', '_blank');
     expect(screen.getByText('Saved in Drive')).toBeInTheDocument();
+  });
+
+  it('renders breadcrumb with hovers and truncated styles for long course and lecture names', () => {
+    const longData = {
+      videoId: '998877',
+      title: 'Applied Mathematics for Data Science and AI – Live Session 5 (30 / 9 / 2026)',
+      course_name: 'Applied Mathematics for Data Science and AI',
+      duration: '1:30:00',
+      total_cues: 200
+    };
+
+    render(
+      <LecturePlayer
+        activeData={longData}
+        activeCourseData={{ course_name: 'Applied Mathematics for Data Science and AI' }}
+        selectedCourse="Applied Mathematics for Data Science and AI"
+        setSelectedCourse={vi.fn()}
+        userLibrary={[]}
+        effectiveCourses={[]}
+        setActiveData={vi.fn()}
+        navigateTo={vi.fn()}
+        iframeRef={{ current: null }}
+        copied={false}
+        handleCopyTranscript={vi.fn()}
+        googleUser={null}
+        openUploadModal={vi.fn()}
+        lectureResources={[]}
+        lectureResourcesLoading={false}
+        handleDeleteResource={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const breadcrumbs = screen.getByRole('navigation', { name: /Breadcrumbs/i });
+    expect(breadcrumbs).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Courses/i })).toBeInTheDocument();
+
+    const courseBtn = screen.getByRole('button', { name: /Applied Mathematics for Data Science and AI/i });
+    expect(courseBtn).toBeInTheDocument();
+    expect(courseBtn).toHaveAttribute('aria-label', 'Applied Mathematics for Data Science and AI');
+
+    const lectureTitle = within(breadcrumbs).getByText('Applied Mathematics for Data Science and AI – Live Session 5 (30 / 9 / 2026)');
+    expect(lectureTitle).toBeInTheDocument();
+    expect(lectureTitle).toHaveAttribute('aria-label', 'Applied Mathematics for Data Science and AI – Live Session 5 (30 / 9 / 2026)');
   });
 });

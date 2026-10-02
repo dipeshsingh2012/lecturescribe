@@ -5,7 +5,8 @@ import {
   getFileTypeBadge,
   extractVideoId,
   parseTimestampToSeconds,
-  cleanSubmissionFallback
+  cleanSubmissionFallback,
+  truncateEnd
 } from '../formatters';
 
 describe('formatters utility functions', () => {
@@ -161,6 +162,26 @@ describe('formatters utility functions', () => {
       const cleaned = cleanSubmissionFallback(longText, 120, 'Generate Full Comprehensive Summary');
       const wordCount = cleaned.split(/\s+/).length;
       expect(wordCount).toBeGreaterThan(250);
+    });
+  });
+
+  describe('truncateEnd', () => {
+    it('returns empty string for null, undefined, or non-string', () => {
+      expect(truncateEnd(null)).toBe('');
+      expect(truncateEnd(undefined)).toBe('');
+      expect(truncateEnd(123)).toBe('');
+    });
+
+    it('returns original string if length is within maxLength', () => {
+      expect(truncateEnd('Short text', 20)).toBe('Short text');
+      expect(truncateEnd('Exact length', 12)).toBe('Exact length');
+    });
+
+    it('truncates at maxLength and appends ellipsis at the end', () => {
+      const longCourse = 'Applied Mathematics for Data Science and AI';
+      const truncated = truncateEnd(longCourse, 25);
+      expect(truncated).toBe('Applied Mathematics for D...');
+      expect(truncated.endsWith('...')).toBe(true);
     });
   });
 });

@@ -87,7 +87,12 @@ describe('AITutor', () => {
     fireEvent.change(input, { target: { value: 'How about Adam optimizer?' } });
     expect(setChatInput).toHaveBeenCalledWith('How about Adam optimizer?');
 
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    // Shift + Enter should NOT send message (allows multiline input)
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', shiftKey: true });
+    expect(handleSendMessage).toHaveBeenCalledTimes(0);
+
+    // Regular Enter sends message
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', shiftKey: false });
     expect(handleSendMessage).toHaveBeenCalledTimes(1);
   });
 

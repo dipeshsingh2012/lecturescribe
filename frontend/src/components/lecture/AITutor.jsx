@@ -52,6 +52,15 @@ export default function AITutor({
   const messagesContainerRef = React.useRef(null);
   const activeCopiedResponseId = copiedResponseId !== undefined && copiedResponseId !== null ? copiedResponseId : internalCopiedResponseId;
 
+  React.useEffect(() => {
+    if (chatInputRef?.current) {
+      chatInputRef.current.style.height = 'auto';
+      if (chatInput) {
+        chatInputRef.current.style.height = `${Math.min(chatInputRef.current.scrollHeight, 160)}px`;
+      }
+    }
+  }, [chatInput, chatInputRef]);
+
   const handleScroll = (e) => {
     const el = e.currentTarget;
     const isUp = el.scrollHeight - el.scrollTop - el.clientHeight > 140;
@@ -1026,6 +1035,7 @@ export default function AITutor({
 
         <div style={{
           display: 'flex',
+          alignItems: 'flex-end',
           gap: '8px',
           background: 'var(--card-bg)',
           border: '1px solid var(--border-color)',
@@ -1033,20 +1043,34 @@ export default function AITutor({
           padding: '6px 6px 6px 14px',
           boxShadow: '0 1px 4px rgba(0,0,0,0.04)'
         }}>
-          <input
+          <textarea
             ref={chatInputRef}
-            type="text"
+            rows={1}
             placeholder="Ask AI tutor anything about this lecture..."
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent?.isComposing) {
+                e.preventDefault();
+                if (chatInput.trim() && !chatLoading) {
+                  handleSendMessage();
+                }
+              }
+            }}
             style={{
               flex: 1,
               background: 'transparent',
               border: 'none',
               outline: 'none',
               color: 'var(--text-primary)',
-              fontSize: '0.9rem'
+              fontSize: '0.9rem',
+              fontFamily: 'inherit',
+              lineHeight: '1.45',
+              padding: '6px 0',
+              resize: 'none',
+              minHeight: '22px',
+              maxHeight: '160px',
+              overflowY: 'auto'
             }}
           />
           <button
@@ -1064,7 +1088,9 @@ export default function AITutor({
               justifyContent: 'center',
               cursor: !chatInput.trim() || chatLoading ? 'not-allowed' : 'pointer',
               opacity: !chatInput.trim() || chatLoading ? 0.4 : 1,
-              transition: 'all 0.2s ease'
+              transition: 'all 0.2s ease',
+              flexShrink: 0,
+              marginBottom: '2px'
             }}
           >
             <Send size={16} />

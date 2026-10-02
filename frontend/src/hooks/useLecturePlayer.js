@@ -80,6 +80,17 @@ export function useLecturePlayer(activeData) {
 
         if (typeof player.ready === 'function') {
           player.ready().then(() => {
+            if (typeof window !== 'undefined') {
+              const urlParams = new URLSearchParams(window.location.search);
+              const tParam = urlParams.get('t') || (window.location.hash.startsWith('#t=') ? window.location.hash.slice(3) : null);
+              if (tParam) {
+                const sec = isNaN(tParam) ? parseTimestampToSeconds(tParam) : Number(tParam);
+                if (sec > 0) {
+                  player.setCurrentTime(sec).catch(() => {});
+                  updateCueFromSeconds(sec);
+                }
+              }
+            }
             if (typeof player.getCurrentTime === 'function') {
               player.getCurrentTime().then(updateCueFromSeconds).catch(() => {});
             }

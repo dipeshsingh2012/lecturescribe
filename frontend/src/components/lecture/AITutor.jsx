@@ -31,6 +31,7 @@ export default function AITutor({
   submissionSummaries = {},
   cleanSubmissionFallback,
   handleCueClick,
+  handleCrossLectureClick,
   copiedPromptId,
   copyUserPrompt,
   copiedSubmissionId,
@@ -446,7 +447,12 @@ export default function AITutor({
                   {msg.sender === 'user' ? (
                     <div style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</div>
                   ) : currentMsgMode === 'learning' ? (
-                    <MarkdownWithTimestamps content={msg.text} onCueClick={handleCueClick} />
+                    <MarkdownWithTimestamps
+                      content={msg.text}
+                      citations={msg.citations}
+                      onCueClick={handleCueClick}
+                      onCrossLectureClick={handleCrossLectureClick}
+                    />
                   ) : (
                     /* Submission Mode View: Clean human academic prose */
                     <div>
@@ -644,7 +650,11 @@ export default function AITutor({
                           key={cIdx}
                           onClick={(e) => {
                             e.preventDefault();
-                            handleCueClick(cite.timestamp);
+                            if (cite.cross_lecture && cite.video_id && typeof handleCrossLectureClick === 'function') {
+                              handleCrossLectureClick(cite.video_id, cite.timestamp, cite.video_title);
+                            } else {
+                              handleCueClick(cite.timestamp);
+                            }
                           }}
                           title={cite.text ? (cite.cross_lecture ? `[${cite.video_title || 'Other lecture'}] ${cite.timestamp}: "${cite.text}"` : `Jump to ${cite.timestamp}: "${cite.text}"`) : (cite.cross_lecture ? `[${cite.video_title || 'Other lecture'}] ${cite.timestamp}` : `Jump to ${cite.timestamp}`)}
                           style={{

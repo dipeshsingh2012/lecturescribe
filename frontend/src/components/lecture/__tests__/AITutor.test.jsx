@@ -362,4 +362,59 @@ describe('AITutor', () => {
     fireEvent.click(deleteBotBtn);
     expect(deleteChatMessage).toHaveBeenCalledWith('msg_bot_99');
   });
+
+  it('triggers handleCrossLectureClick when a cross-lecture citation is clicked', () => {
+    const handleCrossLectureClick = vi.fn();
+    const handleCueClick = vi.fn();
+    const messages = [
+      {
+        id: 'msg_cross_1',
+        sender: 'bot',
+        text: 'The professor covered np.arange in Session 2 at [37:46]【search_course_lectures】.',
+        citations: [
+          {
+            video_id: '1229247139',
+            video_title: 'Data Science Lab Live session - 2',
+            timestamp: '37:46',
+            cross_lecture: true
+          }
+        ]
+      }
+    ];
+
+    render(
+      <AITutor
+        webSearchEnabled={true}
+        setWebSearchEnabled={vi.fn()}
+        clearChatHistory={vi.fn()}
+        deleteChatMessage={vi.fn()}
+        chatMessages={messages}
+        setChatMessages={vi.fn()}
+        viewMode="learning"
+        submissionSummaries={{}}
+        cleanSubmissionFallback={vi.fn()}
+        handleCueClick={handleCueClick}
+        handleCrossLectureClick={handleCrossLectureClick}
+        copiedPromptId={null}
+        copyUserPrompt={vi.fn()}
+        copiedSubmissionId={null}
+        copySubmissionText={vi.fn()}
+        copiedResponseId={null}
+        copyBotResponse={vi.fn()}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        chatInputRef={{ current: null }}
+        chatEndRef={{ current: null }}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    // Click the citation in the citations bar
+    const citePill = screen.getByTitle(/\[Data Science Lab Live session - 2\] 37:46/i);
+    expect(citePill).toBeInTheDocument();
+    fireEvent.click(citePill);
+    expect(handleCrossLectureClick).toHaveBeenCalledWith('1229247139', '37:46', 'Data Science Lab Live session - 2');
+    expect(handleCueClick).not.toHaveBeenCalled();
+  });
 });

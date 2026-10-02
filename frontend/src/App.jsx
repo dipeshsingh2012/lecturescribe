@@ -232,6 +232,7 @@ export default function App() {
             effectiveCourses={library.effectiveCourses}
             setActiveData={setActiveData}
             navigateTo={navigateTo}
+            handleTranscribe={handleTranscribe}
             iframeRef={player.iframeRef}
             copied={player.copied}
             handleCopyTranscript={player.handleCopyTranscript}

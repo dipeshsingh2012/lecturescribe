@@ -2,6 +2,7 @@ import React from 'react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
 import AITutor from '../lecture/AITutor';
+import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function LectureWorkspace({
   activeData,
@@ -12,6 +13,7 @@ export default function LectureWorkspace({
   effectiveCourses,
   setActiveData,
   navigateTo,
+  handleTranscribe,
   iframeRef,
   copied,
   handleCopyTranscript,
@@ -52,6 +54,31 @@ export default function LectureWorkspace({
   handleSendMessage,
   currentTheme
 }) {
+  const handleCrossLectureClick = (videoId, timestamp, courseName) => {
+    if (!videoId) return;
+    if (activeData?.videoId === videoId) {
+      if (timestamp) handleCueClick(timestamp);
+      return;
+    }
+    const finalCourse = courseName || activeCourseData?.course_name || selectedCourse;
+    const courseSlug = finalCourse ? normalizeCourseSlug(finalCourse) : '';
+    const query = timestamp ? `?t=${encodeURIComponent(timestamp)}` : '';
+    const path = courseSlug ? `/course/${courseSlug}/lecture/${videoId}${query}` : `/lecture/${videoId}${query}`;
+
+    if (typeof handleTranscribe === 'function') {
+      handleTranscribe(videoId, true, finalCourse);
+      if (typeof window !== 'undefined' && timestamp) {
+        try {
+          window.history.replaceState({}, '', path);
+        } catch (e) {
+          console.warn("Cross lecture history state warning:", e);
+        }
+      }
+    } else if (typeof navigateTo === 'function') {
+      navigateTo(path);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden' }}>
       {/* Left Panel: Real Embedded Vimeo Player */}
@@ -99,6 +126,7 @@ export default function LectureWorkspace({
           submissionSummaries={submissionSummaries}
           cleanSubmissionFallback={cleanSubmissionFallback}
           handleCueClick={handleCueClick}
+          handleCrossLectureClick={handleCrossLectureClick}
           copiedPromptId={copiedPromptId}
           copyUserPrompt={copyUserPrompt}
           copiedSubmissionId={copiedSubmissionId}

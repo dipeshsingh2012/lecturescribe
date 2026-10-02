@@ -35,4 +35,52 @@ describe('MarkdownWithTimestamps', () => {
     const { container } = render(<MarkdownWithTimestamps content="" />);
     expect(container.firstChild).toBeNull();
   });
+
+  it('converts tool citation brackets 【search_course_lectures】 into clickable buttons', () => {
+    const onCueClick = vi.fn();
+    const onCrossLectureClick = vi.fn();
+    const citations = [
+      {
+        video_id: '1229247139',
+        video_title: 'Data Science Lab Live session - 2',
+        timestamp: '37:46',
+        cross_lecture: true
+      }
+    ];
+
+    render(
+      <MarkdownWithTimestamps
+        content="The term appears at **[37:46]** in the transcript【search_course_lectures】."
+        onCueClick={onCueClick}
+        citations={citations}
+        onCrossLectureClick={onCrossLectureClick}
+      />
+    );
+
+    // The tool bracket 【search_course_lectures】 should be rendered as a button, not plain text
+    const searchBtn = screen.getByTitle(/Jump to Data Science Lab Live session - 2 at 37:46/i);
+    expect(searchBtn).toBeInTheDocument();
+    fireEvent.click(searchBtn);
+    expect(onCrossLectureClick).toHaveBeenCalledWith('1229247139', '37:46', 'Data Science Lab Live session - 2');
+
+    // The timestamp [37:46] for a cross-lecture citation should also call onCrossLectureClick
+    const timestampBtn = screen.getByTitle(/Open Data Science Lab Live session - 2 at 37:46/i);
+    expect(timestampBtn).toBeInTheDocument();
+    fireEvent.click(timestampBtn);
+    expect(onCrossLectureClick).toHaveBeenCalledWith('1229247139', '37:46', 'Data Science Lab Live session - 2');
+    expect(onCueClick).not.toHaveBeenCalled();
+  });
+
+  it('converts bracketed web result citations with URLs into clickable web links', () => {
+    render(
+      <MarkdownWithTimestamps
+        content='Explanation of default newline【"Web Result 1","url":"https://www.geeksforgeeks.org/python/python-new-line-add-print-a-new-line/"}】'
+      />
+    );
+
+    const link = screen.getByRole('link', { name: /geeksforgeeks\.org/i });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', 'https://www.geeksforgeeks.org/python/python-new-line-add-print-a-new-line/');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
 });

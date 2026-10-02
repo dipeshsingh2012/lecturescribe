@@ -26,6 +26,7 @@ import CourseGrid from '../course/CourseGrid';
 import CourseMaterials from '../course/CourseMaterials';
 import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
+import CalendarAlertCard from '../calendar/CalendarAlertCard';
 import useCourseQuiz from '../../hooks/useCourseQuiz';
 
 export default function HomeView({
@@ -301,14 +302,17 @@ export default function HomeView({
         </Box>
       )}
 
-      {/* LEVEL 1: COURSE CARDS VIEW */}
+      {/* LEVEL 1: COURSE CARDS VIEW & ACADEMIC CALENDAR */}
       {!selectedCourse ? (
-        <CourseGrid
-          filteredCourses={filteredCourses}
-          handleSelectCourse={handleSelectCourse}
-          librarySearch={librarySearch}
-          currentTheme={currentTheme}
-        />
+        <>
+          <CalendarAlertCard currentTheme={currentTheme} />
+          <CourseGrid
+            filteredCourses={filteredCourses}
+            handleSelectCourse={handleSelectCourse}
+            librarySearch={librarySearch}
+            currentTheme={currentTheme}
+          />
+        </>
       ) : courseViewTab === 'quiz' ? (
         /* LEVEL 2C: COURSE COMPREHENSIVE PRACTICE EXAM */
         <CourseQuiz

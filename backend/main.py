@@ -26,12 +26,17 @@ if _env_path.exists():
 else:
     load_dotenv(override=True)
 
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
+import datetime
+from zoneinfo import ZoneInfo
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from contextlib import asynccontextmanager
+
+from backend.calendar_parser import calendar_service
+from backend.whatsapp_service import whatsapp_service
 
 # Import extraction and service modules
 from backend.vimeo_client import (
@@ -1600,6 +1605,86 @@ def get_cloud_job_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+
+# ==============================================================================
+# Moodle Calendar & Automated WhatsApp Alert Endpoints
+# ==============================================================================
+
+@app.get("/api/calendar/events")
+def get_calendar_events(
+    refresh: bool = Query(False, description="Bypass cache and fetch fresh feed from Moodle"),
+    days: int = Query(7, description="Number of upcoming days to include")
+):
+    """Retrieve categorized today and upcoming events from Moodle iCal feed."""
+    try:
+        agenda = calendar_service.get_dashboard_agenda(days=days, refresh=refresh)
+        return agenda
+    except Exception as e:
+        print(f"❌ [Calendar API Error]: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch calendar agenda: {str(e)}")
+
+
+@app.post("/api/calendar/test-alert")
+def send_test_calendar_alert():
+    """Trigger an immediate test WhatsApp alert containing today's agenda."""
+    try:
+        events = calendar_service.get_events(refresh=False)
+        today = datetime.datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        today_events = [
+            e for e in events 
+            if datetime.datetime.fromisoformat(e["start"]).astimezone(ZoneInfo("Asia/Kolkata")).date() == today
+        ]
+        result = whatsapp_service.dispatch_test_alert(today_events)
+        return {
+            "status": "success",
+            "events_included": len(today_events),
+            "dispatch_result": result
+        }
+    except Exception as e:
+        print(f"❌ [Test Alert Error]: {e}")
+        raise HTTPException(status_code=500, detail=f"Test alert failed: {str(e)}")
+
+
+@app.post("/api/cron/trigger-alert")
+def trigger_cron_alert(
+    slot: str = Query(..., description="Target alert slot: '11am', '3pm', or '6pm'"),
+    authorization: Optional[str] = Header(None, description="Bearer token matching CRON_SECRET")
+):
+    """
+    Automated Cloud Scheduler endpoint triggered at 11:00 AM, 3:00 PM, and 6:00 PM IST.
+    Secured with Bearer token authentication matching CRON_SECRET.
+    """
+    cron_secret = os.getenv("CRON_SECRET", "").strip()
+    if cron_secret:
+        expected_bearer = f"Bearer {cron_secret}"
+        if not authorization or authorization.strip() != expected_bearer:
+            raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing Bearer token for cron trigger.")
+
+    clean_slot = slot.strip().lower()
+    if clean_slot not in ("11am", "3pm", "6pm", "11:00", "15:00", "18:00"):
+        raise HTTPException(status_code=400, detail=f"Invalid slot '{slot}'. Expected '11am', '3pm', or '6pm'.")
+
+    try:
+        matched_events, slot_label, tomorrow_preview = calendar_service.filter_events_for_slot(clean_slot)
+        result = whatsapp_service.dispatch_slot_alert(
+            slot=clean_slot,
+            events=matched_events,
+            slot_label=slot_label,
+            tomorrow_preview=tomorrow_preview,
+            force_send_empty=False
+        )
+        return {
+            "status": "success",
+            "slot": clean_slot,
+            "events_count": len(matched_events),
+            "tomorrow_preview_count": len(tomorrow_preview) if tomorrow_preview else 0,
+            "dispatch": result
+        }
+    except Exception as e:
+        print(f"❌ [Cron Trigger Alert Error]: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute cron alert: {str(e)}")
 
 
 # -------------------------------------------------------------

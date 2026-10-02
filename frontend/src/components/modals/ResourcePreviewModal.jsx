@@ -34,8 +34,8 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
     const isText = ['txt', 'md', 'json', 'py', 'js', 'jsx', 'ts', 'tsx', 'html', 'css', 'csv'].includes(ext);
 
     // If it's a small text/code file, fetch and display cleanly
-    if (isText && (resource.view_url || resource.download_url)) {
-      const url = resource.view_url || resource.download_url;
+    if (isText && (resource.view_url || resource.download_url || resource.file_url)) {
+      const url = resource.view_url || resource.download_url || resource.file_url;
       fetch(url)
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -58,8 +58,8 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
 
   if (!open || !resource) return null;
 
-  const viewUrl = resource.view_url || resource.download_url || '';
-  const downloadUrl = resource.download_url || resource.view_url || '';
+  const viewUrl = resource.view_url || resource.download_url || resource.file_url || '';
+  const downloadUrl = resource.download_url || resource.view_url || resource.file_url || '';
   const ext = (resource.filename?.split('.').pop() || resource.file_type || '').toLowerCase();
 
   const isPdf = ext === 'pdf';

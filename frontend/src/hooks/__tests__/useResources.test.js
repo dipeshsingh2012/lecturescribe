@@ -59,4 +59,54 @@ describe('useResources hook functionality', () => {
 
     expect(result.current.lectureResources.map(r => r.id)).toEqual(['res-keep-2']);
   });
+
+  it('openPreviewModal sets previewResource for non-link file resources with fallbacks', () => {
+    const { result } = renderHook(() => useResources(null, null, null));
+    expect(result.current.previewResource).toBeNull();
+
+    const fileRes = {
+      id: 'res-pdf-1',
+      title: 'Course Syllabus',
+      filename: 'syllabus.pdf',
+      file_type: 'pdf',
+      file_url: 'https://storage.googleapis.com/test/syllabus.pdf'
+    };
+
+    act(() => {
+      result.current.openPreviewModal(fileRes);
+    });
+
+    expect(result.current.previewResource).toBeTruthy();
+    expect(result.current.previewResource.id).toBe('res-pdf-1');
+    expect(result.current.previewResource.view_url).toBe('https://storage.googleapis.com/test/syllabus.pdf');
+
+    act(() => {
+      result.current.closePreviewModal();
+    });
+    expect(result.current.previewResource).toBeNull();
+  });
+
+  it('openPreviewModal opens target URL in new tab for link and gdrive resources', () => {
+    const windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => {});
+    const { result } = renderHook(() => useResources(null, null, null));
+
+    const linkRes = {
+      id: 'res-link-1',
+      title: 'Google Doc Notes',
+      file_type: 'gdrive',
+      download_url: 'https://docs.google.com/document/d/123'
+    };
+
+    act(() => {
+      result.current.openPreviewModal(linkRes);
+    });
+
+    expect(result.current.previewResource).toBeNull();
+    expect(windowOpenSpy).toHaveBeenCalledWith(
+      'https://docs.google.com/document/d/123',
+      '_blank',
+      'noopener,noreferrer'
+    );
+    windowOpenSpy.mockRestore();
+  });
 });

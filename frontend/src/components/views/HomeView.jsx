@@ -207,6 +207,7 @@ export default function HomeView({
               size="small"
               startIcon={<Video size={15} />}
               onClick={() => setCourseViewTab('lectures')}
+              aria-label="Course Lectures"
               sx={{
                 textTransform: 'none',
                 fontWeight: 700,
@@ -224,6 +225,7 @@ export default function HomeView({
               size="small"
               startIcon={<Paperclip size={15} />}
               onClick={() => setCourseViewTab('resources')}
+              aria-label="Course Materials"
               sx={{
                 textTransform: 'none',
                 fontWeight: 700,

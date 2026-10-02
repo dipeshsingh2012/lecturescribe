@@ -106,4 +106,37 @@ describe('CourseMaterials', () => {
     fireEvent.click(viewBtn);
     expect(openPreviewModal).toHaveBeenCalledWith(resources[0]);
   });
+
+  it('falls back to window.open when openPreviewModal is omitted and View is clicked', () => {
+    const windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => {});
+    const resources = [
+      {
+        id: 'res-3',
+        title: 'Project Guidelines',
+        filename: 'guidelines.pdf',
+        file_type: 'pdf',
+        view_url: 'https://storage.googleapis.com/test/guidelines.pdf',
+        created_at: '2026-09-03T00:00:00Z'
+      }
+    ];
+
+    render(
+      <CourseMaterials
+        courseResourcesLoading={false}
+        courseResources={resources}
+        googleUser={null}
+        selectedCourse="AI 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    const viewBtn = screen.getByRole('button', { name: /View/i });
+    fireEvent.click(viewBtn);
+    expect(windowOpenSpy).toHaveBeenCalledWith(
+      'https://storage.googleapis.com/test/guidelines.pdf',
+      '_blank',
+      'noopener,noreferrer'
+    );
+    windowOpenSpy.mockRestore();
+  });
 });

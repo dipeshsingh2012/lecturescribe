@@ -98,6 +98,9 @@ export default function CourseMaterials({
           ? (userLibrary.find(l => l.video_id === res.video_id)?.video_title || `Lecture ${res.video_id}`)
           : null;
 
+        const ft = (res.file_type || res.filename?.split('.').pop() || '').toLowerCase();
+        const isLink = ft === 'link' || ft === 'gdrive' || ft === 'drive' || ft === 'url';
+
         return (
           <Paper
             key={res.id}
@@ -148,12 +151,12 @@ export default function CourseMaterials({
             </Box>
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-              {res.file_type === 'link' || res.file_type === 'gdrive' ? (
+              {isLink ? (
                 <Button
                   variant="outlined"
                   size="small"
                   component="a"
-                  href={res.view_url || res.download_url}
+                  href={res.view_url || res.download_url || res.file_url}
                   target="_blank"
                   rel="noopener noreferrer"
                   startIcon={<ExternalLink size={14} />}
@@ -174,7 +177,18 @@ export default function CourseMaterials({
                   <Button
                     variant="contained"
                     size="small"
-                    onClick={() => openPreviewModal && openPreviewModal(res)}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (typeof openPreviewModal === 'function') {
+                        openPreviewModal(res);
+                      } else {
+                        const targetUrl = res.view_url || res.download_url || res.file_url;
+                        if (targetUrl) {
+                          window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                        }
+                      }
+                    }}
                     startIcon={<Eye size={14} />}
                     sx={{
                       textTransform: 'none',
@@ -183,6 +197,7 @@ export default function CourseMaterials({
                       borderRadius: 2,
                       bgcolor: currentTheme.palette.primary,
                       color: '#ffffff',
+                      cursor: 'pointer',
                       '&:hover': { bgcolor: currentTheme.palette.primary, opacity: 0.9 }
                     }}
                   >

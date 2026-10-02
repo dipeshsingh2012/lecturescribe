@@ -233,14 +233,20 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
 
   const openPreviewModal = (resource) => {
     if (!resource) return;
-    if (resource.file_type === 'link' || resource.file_type === 'gdrive') {
-      const targetUrl = resource.view_url || resource.download_url;
+    const resCopy = {
+      ...resource,
+      view_url: resource.view_url || resource.file_url || resource.download_url || '',
+      download_url: resource.download_url || resource.view_url || resource.file_url || ''
+    };
+    const ft = (resCopy.file_type || resCopy.filename?.split('.').pop() || '').toLowerCase();
+    if (ft === 'link' || ft === 'gdrive' || ft === 'drive' || ft === 'url') {
+      const targetUrl = resCopy.view_url || resCopy.download_url;
       if (targetUrl) {
         window.open(targetUrl, '_blank', 'noopener,noreferrer');
       }
       return;
     }
-    setPreviewResource(resource);
+    setPreviewResource(resCopy);
   };
 
   const closePreviewModal = () => {

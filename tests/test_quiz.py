@@ -108,6 +108,79 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertTrue(cached.get("cached"))
         self.assertEqual(cached["video_id"], "test_123")
 
+    def test_database_quiz_persistence(self):
+        from backend.database import RelationalDBManager
+        db = RelationalDBManager(postgres_url="")
+
+        quiz_data = {
+            "video_id": "math_201",
+            "lecture_title": "Applied Mathematics",
+            "questions": [
+                {
+                    "id": 1,
+                    "question": "What is the rank of matrix $A$?",
+                    "options": ["Dimension of column space", "Number of zeroes", "Trace", "Determinant"],
+                    "correct_index": 0,
+                    "explanation": "At [12:00], rank is defined.",
+                    "timestamp": "12:00"
+                }
+            ]
+        }
+
+        # 1. Test save_quiz
+        saved = db.save_quiz("math_201", quiz_data)
+        self.assertTrue(saved)
+
+        # 2. Test get_saved_quiz hit
+        retrieved = db.get_saved_quiz("math_201")
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved["video_id"], "math_201")
+        self.assertEqual(len(retrieved["questions"]), 1)
+        self.assertTrue(retrieved.get("persisted"))
+
+    @patch("backend.database.RelationalDBManager._get_connection")
+    def test_database_quiz_postgres_query(self, mock_conn_func):
+        from backend.database import RelationalDBManager
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn_func.return_value = mock_conn
+
+        db = RelationalDBManager(postgres_url="postgresql://user:pass@localhost:5432/testdb")
+
+        quiz_data = {
+            "video_id": "cs50",
+            "questions": [{"id": 1, "question": "Q?", "options": ["A", "B", "C", "D"], "correct_index": 0}]
+        }
+        res = db.save_quiz("cs50", quiz_data)
+        self.assertTrue(res)
+        self.assertTrue(mock_cursor.execute.called)
+        executed_sql = mock_cursor.execute.call_args[0][0]
+        self.assertIn("INSERT INTO lecturescribe_quizzes", executed_sql)
+
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("backend.database.db_manager.get_saved_quiz")
+    @patch("backend.rag_engine.pinecone_rag_engine.generate_lecture_quiz")
+    def test_quiz_endpoint_returns_persisted_quiz(self, mock_gen, mock_get_quiz, mock_get_saved):
+        mock_get_saved.return_value = {
+            "title": "Algorithms",
+            "cues": [{"time": "01:00", "text": "Asymptotic analysis."}]
+        }
+        mock_get_quiz.return_value = {
+            "video_id": "algo_101",
+            "lecture_title": "Algorithms",
+            "questions": [{"id": 1, "question": "What is $O(n)$?", "options": ["Linear", "Quadratic", "Log", "Const"], "correct_index": 0}]
+        }
+
+        # Calling without regenerate should hit DB and NOT call generator
+        response = self.client.post("/api/lecture/algo_101/quiz", json={"regenerate": False})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["video_id"], "algo_101")
+        self.assertEqual(data["questions"][0]["question"], "What is $O(n)$?")
+        mock_gen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

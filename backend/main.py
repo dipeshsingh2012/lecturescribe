@@ -225,7 +225,16 @@ def get_or_generate_lecture_quiz(
             print(f"⚡ [Redis Hit] Returning cached quiz for video '{clean_vid}'.")
             return cached_quiz
 
-    # 2. Retrieve Saved Video & Cues from DB
+    # 2. Check Relational Database Persistence
+    if not is_regenerate:
+        db_quiz = db_manager.get_saved_quiz(clean_vid)
+        if db_quiz and db_quiz.get("questions"):
+            print(f"💾 [PostgreSQL Hit] Returning persisted quiz for video '{clean_vid}'.")
+            if redis_cache:
+                redis_cache.set_quiz(clean_vid, db_quiz, ttl_seconds=86400)
+            return db_quiz
+
+    # 3. Retrieve Saved Video & Cues from DB
     saved = db_manager.get_saved_video(clean_vid)
     if not saved or not saved.get("cues"):
         raise HTTPException(
@@ -236,7 +245,7 @@ def get_or_generate_lecture_quiz(
     title = saved.get("title", f"Lecture {clean_vid}")
     cues = saved.get("cues", [])
 
-    # 3. Generate with LLM / fallback
+    # 4. Generate with LLM / fallback
     quiz_data = pinecone_rag_engine.generate_lecture_quiz(
         video_id=clean_vid,
         lecture_title=title,
@@ -244,7 +253,10 @@ def get_or_generate_lecture_quiz(
         num_questions=count
     )
 
-    # 4. Save to Redis Cache (24 hours)
+    # 5. Persist to Relational Database
+    db_manager.save_quiz(clean_vid, quiz_data)
+
+    # 6. Save to Redis Cache (24 hours)
     if redis_cache:
         redis_cache.set_quiz(clean_vid, quiz_data, ttl_seconds=86400)
 

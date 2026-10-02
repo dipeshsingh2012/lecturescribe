@@ -70,6 +70,7 @@ class RelationalDBManager:
         self._explicit_url = postgres_url
         self._memory_cache: Dict[str, Dict[str, Any]] = {}
         self._resources_memory_cache: List[Dict[str, Any]] = []
+        self._quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -88,7 +89,9 @@ class RelationalDBManager:
 
     @property
     def postgres_url(self) -> Optional[str]:
-        return self._explicit_url or os.getenv("DATABASE_URL")
+        if self._explicit_url is not None:
+            return self._explicit_url
+        return os.getenv("DATABASE_URL")
 
     def _get_connection(self):
         """Create and return a new PostgreSQL connection with RealDictCursor."""
@@ -227,6 +230,17 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_res_vid ON lecturescribe_resources(video_id);
                         CREATE INDEX IF NOT EXISTS idx_res_course ON lecturescribe_resources(course_name);
                         CREATE INDEX IF NOT EXISTS idx_res_email ON lecturescribe_resources(user_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_quizzes (
+                            id SERIAL PRIMARY KEY,
+                            video_id VARCHAR(128) REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            quiz_json JSONB NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_lecturescribe_quizzes_video_id UNIQUE (video_id)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_quiz_vid ON lecturescribe_quizzes(video_id);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -331,6 +345,81 @@ class RelationalDBManager:
 
         if video_id in self._memory_cache:
             self._memory_cache[video_id]["summarySections"] = summary_sections
+
+    def save_quiz(self, video_id: str, quiz_data: Dict[str, Any]) -> bool:
+        """Persist generated quiz questions and metadata to PostgreSQL and In-Memory cache."""
+        if not video_id or not quiz_data:
+            return False
+
+        clean_vid = str(video_id).strip()
+        self._quiz_memory_cache[clean_vid] = quiz_data
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    quiz_json_str = json.dumps(quiz_data)
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_quizzes (video_id, quiz_json, updated_at)
+                        VALUES (%s, %s::jsonb, CURRENT_TIMESTAMP)
+                        ON CONFLICT (video_id)
+                        DO UPDATE SET
+                            quiz_json = EXCLUDED.quiz_json,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (clean_vid, quiz_json_str))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_quiz error for video '{clean_vid}': {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_saved_quiz(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve persisted quiz from In-Memory cache or PostgreSQL."""
+        if not video_id:
+            return None
+
+        clean_vid = str(video_id).strip()
+        if clean_vid in self._quiz_memory_cache:
+            data = self._quiz_memory_cache[clean_vid]
+            if isinstance(data, dict):
+                data["persisted"] = True
+            return data
+
+        if not self.postgres_url:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT quiz_json 
+                        FROM lecturescribe_quizzes 
+                        WHERE video_id = %s 
+                        LIMIT 1;
+                    """, (clean_vid,))
+                    row = cursor.fetchone()
+                    if row and row.get("quiz_json"):
+                        raw = row["quiz_json"]
+                        data = raw if isinstance(raw, dict) else json.loads(raw)
+                        data["persisted"] = True
+                        self._quiz_memory_cache[clean_vid] = data
+                        return data
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_saved_quiz error for video '{clean_vid}': {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+        return None
 
     def get_saved_video(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Fetch video transcript from In-Memory Cache or PostgreSQL.

@@ -213,6 +213,14 @@ export default function MarkdownWithTimestamps({
     return children;
   };
 
+  const sanitizedContent = React.useMemo(() => {
+    if (!content) return '';
+    return content
+      .replace(/\\(#+)/g, '$1')
+      .replace(/^(#{1,6})[\u00a0\u2000-\u200b\u202f]+/gm, '$1 ')
+      .replace(/([^\n])\n(#{1,6}\s+)/g, '$1\n\n$2');
+  }, [content]);
+
   return (
     <ReactMarkdown
       components={{
@@ -229,13 +237,13 @@ export default function MarkdownWithTimestamps({
           <em style={{ fontStyle: 'italic', color: 'var(--text-secondary)' }}>{renderChildrenWithTimestamps(children)}</em>
         ),
         h1: ({ children }) => (
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: '0.6rem 0 0.3rem', color: 'var(--text-primary)' }}>{children}</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: '0.6rem 0 0.3rem', color: 'var(--text-primary)' }}>{renderChildrenWithTimestamps(children)}</h1>
         ),
         h2: ({ children }) => (
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, margin: '0.5rem 0 0.25rem', color: 'var(--text-primary)' }}>{children}</h2>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, margin: '0.5rem 0 0.25rem', color: 'var(--text-primary)' }}>{renderChildrenWithTimestamps(children)}</h2>
         ),
         h3: ({ children }) => (
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 600, margin: '0.4rem 0 0.2rem', color: 'var(--text-primary)' }}>{children}</h3>
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 600, margin: '0.4rem 0 0.2rem', color: 'var(--text-primary)' }}>{renderChildrenWithTimestamps(children)}</h3>
         ),
         ul: ({ children }) => (
           <ul style={{ paddingLeft: '1.3rem', margin: '0.4rem 0' }}>{children}</ul>
@@ -274,7 +282,7 @@ export default function MarkdownWithTimestamps({
         )
       }}
     >
-      {content}
+      {sanitizedContent}
     </ReactMarkdown>
   );
 }

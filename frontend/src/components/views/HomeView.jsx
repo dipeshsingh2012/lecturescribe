@@ -14,10 +14,10 @@ import {
   Search,
   RefreshCw,
   AlertCircle,
-  Check,
   Video,
   Paperclip,
-  Upload
+  Upload,
+  Award
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -25,6 +25,8 @@ import QuickAddBar from '../home/QuickAddBar';
 import CourseGrid from '../course/CourseGrid';
 import CourseMaterials from '../course/CourseMaterials';
 import CourseLectures from '../course/CourseLectures';
+import CourseQuiz from '../course/CourseQuiz';
+import useCourseQuiz from '../../hooks/useCourseQuiz';
 
 export default function HomeView({
   selectedCourse,
@@ -59,6 +61,11 @@ export default function HomeView({
   handleDeleteFromLibrary,
   currentTheme
 }) {
+  const courseQuiz = useCourseQuiz(
+    activeCourseData?.course_name || selectedCourse,
+    googleUser?.email
+  );
+
   return (
     <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>
       {!selectedCourse && (
@@ -198,10 +205,10 @@ export default function HomeView({
         />
       </Box>
 
-      {/* Course View Tabs (Lectures vs Course Materials) */}
+      {/* Course View Tabs (Lectures vs Course Quiz vs Course Materials) */}
       {selectedCourse && (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3, flexWrap: 'wrap', gap: 1.5 }}>
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
             <Button
               variant={courseViewTab === 'lectures' ? 'contained' : 'outlined'}
               size="small"
@@ -219,6 +226,24 @@ export default function HomeView({
               }}
             >
               Lectures ({filteredCourseLectures.length})
+            </Button>
+            <Button
+              variant={courseViewTab === 'quiz' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<Award size={15} />}
+              onClick={() => setCourseViewTab('quiz')}
+              aria-label="Course Quiz"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'quiz'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Course Quiz
             </Button>
             <Button
               variant={courseViewTab === 'resources' ? 'contained' : 'outlined'}
@@ -275,6 +300,26 @@ export default function HomeView({
           filteredCourses={filteredCourses}
           handleSelectCourse={handleSelectCourse}
           librarySearch={librarySearch}
+          currentTheme={currentTheme}
+        />
+      ) : courseViewTab === 'quiz' ? (
+        /* LEVEL 2C: COURSE COMPREHENSIVE PRACTICE EXAM */
+        <CourseQuiz
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          lectureCount={filteredCourseLectures.length || activeCourseData?.lecture_count || 0}
+          quizData={courseQuiz.quizData}
+          quizLoading={courseQuiz.quizLoading}
+          quizError={courseQuiz.quizError}
+          selectedAnswers={courseQuiz.selectedAnswers}
+          isCompleted={courseQuiz.isCompleted}
+          score={courseQuiz.score}
+          totalQuestions={courseQuiz.totalQuestions}
+          answeredCount={courseQuiz.answeredCount}
+          lectureBreakdown={courseQuiz.lectureBreakdown}
+          fetchOrGenerateQuiz={courseQuiz.fetchOrGenerateQuiz}
+          selectAnswer={courseQuiz.selectAnswer}
+          resetQuiz={courseQuiz.resetQuiz}
+          handleSelectLecture={(vid, cName) => handleTranscribe(`https://vimeo.com/${vid}`, false, cName)}
           currentTheme={currentTheme}
         />
       ) : courseViewTab === 'resources' ? (

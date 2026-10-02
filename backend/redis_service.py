@@ -269,6 +269,49 @@ class RedisCacheService:
             print(f"[Redis Cache Warning] Quiz cache write error: {e}")
             return False
 
+    def get_course_quiz(self, course_slug: str) -> Optional[Dict[str, Any]]:
+        """Retrieve cached course-level quiz questions."""
+        if not self.client or not self.enabled or not course_slug:
+            return None
+
+        clean_slug = str(course_slug).strip().lower()
+        key = f"ls:course_quiz:{clean_slug}"
+        try:
+            raw = self.client.get(key)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data["cached"] = True
+                    data["cache_tier"] = "REDIS"
+                    return data
+        except Exception as e:
+            print(f"[Redis Cache Warning] Course quiz cache read error: {e}")
+        return None
+
+    def set_course_quiz(
+        self,
+        course_slug: str,
+        quiz_data: Dict[str, Any],
+        ttl_seconds: Optional[int] = 86400
+    ) -> bool:
+        """Store generated course-level quiz questions in Redis (default 24h)."""
+        if not self.client or not self.enabled or not course_slug:
+            return False
+
+        clean_slug = str(course_slug).strip().lower()
+        key = f"ls:course_quiz:{clean_slug}"
+        ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl
+        try:
+            val_str = json.dumps(quiz_data)
+            if ttl and ttl > 0:
+                self.client.setex(key, ttl, val_str)
+            else:
+                self.client.set(key, val_str)
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] Course quiz cache write error: {e}")
+            return False
+
     # ---------------------------------------------------------
     # Invalidation & Administration
     # ---------------------------------------------------------

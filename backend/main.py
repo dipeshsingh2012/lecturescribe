@@ -1071,6 +1071,91 @@ def get_course_details(
     return {"status": "success", "course": course}
 
 
+@app.get("/api/course/{course_name}/quiz")
+@app.post("/api/course/{course_name}/quiz")
+def get_or_generate_course_quiz(
+    course_name: str,
+    regenerate: bool = Query(False, description="Force regenerate without using cache"),
+    num_questions: Optional[int] = Query(None, description="Number of quiz questions to generate"),
+    email: Optional[str] = Query(None, description="Signed-in user email"),
+    body: Optional[QuizGenerateRequest] = None
+):
+    """Retrieve or generate course-wide practice quiz covering all lectures in the course."""
+    clean_course = str(course_name).strip()
+    if not clean_course:
+        raise HTTPException(status_code=400, detail="course_name parameter is required.")
+
+    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+    is_regenerate = regenerate or (body.regenerate if body else False)
+    req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
+
+    # 1. Check Redis Cache
+    if not is_regenerate and redis_cache:
+        cached_quiz = redis_cache.get_course_quiz(course_slug)
+        if cached_quiz:
+            print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
+            return cached_quiz
+
+    # 2. Check Database Persistence
+    if not is_regenerate:
+        db_quiz = db_manager.get_saved_course_quiz(clean_course)
+        if db_quiz and db_quiz.get("questions"):
+            print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
+            if redis_cache:
+                redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)
+            return db_quiz
+
+    # 3. Retrieve Course & Lecture list from DB
+    course_info = db_manager.get_course_details(clean_course, user_email=email)
+    if not course_info or not course_info.get("lectures"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Course '{clean_course}' not found or has no recorded lectures."
+        )
+
+    canonical_title = course_info.get("course_name") or clean_course
+    lectures = course_info.get("lectures", [])
+
+    # 4. Fetch transcript cues for each lecture in the course
+    lectures_with_cues = []
+    for lect in lectures:
+        vid = lect.get("video_id") or lect.get("videoId")
+        if not vid:
+            continue
+        saved_vid = db_manager.get_saved_video(vid)
+        cues = (saved_vid.get("cues") if saved_vid else None) or []
+        lectures_with_cues.append({
+            "video_id": vid,
+            "title": lect.get("title") or lect.get("video_title") or (saved_vid.get("title") if saved_vid else None) or f"Lecture {vid}",
+            "cues": cues
+        })
+
+    valid_lectures = [l for l in lectures_with_cues if l.get("cues")]
+    if not valid_lectures:
+        valid_lectures = lectures_with_cues
+    if not valid_lectures:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No lectures in course '{canonical_title}' have transcripts available to generate a quiz."
+        )
+
+    # 5. Generate Course Quiz
+    quiz_data = pinecone_rag_engine.generate_course_quiz(
+        course_name=canonical_title,
+        lectures_data=valid_lectures,
+        num_questions=req_count
+    )
+
+    # 6. Persist to Relational Database
+    db_manager.save_course_quiz(canonical_title, quiz_data, lecture_count=len(valid_lectures))
+
+    # 7. Cache in Redis (24 hours)
+    if redis_cache:
+        redis_cache.set_course_quiz(course_slug, quiz_data, ttl_seconds=86400)
+
+    return quiz_data
+
+
 @app.post("/api/user/library/record")
 def record_user_lecture(req: UserLibraryRecordRequest):
     """Add or update a lecture in the user's LMS library."""

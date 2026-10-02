@@ -1378,6 +1378,271 @@ class Llama3PineconeRAGStore:
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         }
 
+    def generate_course_quiz(
+        self,
+        course_name: str,
+        lectures_data: List[Dict[str, Any]],
+        num_questions: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate comprehensive, multi-lecture practice quiz testing concepts
+        across all lectures in the course with LaTeX formulas and lecture attribution.
+        """
+        import requests
+
+        clean_course = str(course_name or "Course").strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        valid_lectures = []
+        for l in (lectures_data or []):
+            vid = str(l.get("video_id") or l.get("videoId") or "").strip()
+            ltitle = str(l.get("title") or l.get("video_title") or f"Lecture {vid}").strip()
+            cues = [c for c in (l.get("cues") or []) if (c.get("text") or "").strip()]
+            if not cues:
+                cues = [{"time": "00:00", "text": f"Overview of {ltitle}."}]
+            valid_lectures.append({
+                "video_id": vid,
+                "title": ltitle,
+                "cues": cues
+            })
+
+        if not valid_lectures:
+            valid_lectures = [{
+                "video_id": "overview",
+                "title": f"{clean_course} Overview",
+                "cues": [{"time": "00:00", "text": f"Foundations of {clean_course}."}]
+            }]
+
+        num_lectures = len(valid_lectures)
+        if num_questions is not None and int(num_questions) > 0:
+            target_count = max(3, min(25, int(num_questions)))
+        else:
+            # Dynamically scale: 1 lecture -> 6, 2 -> 8, 3 -> 10, 4 -> 12, etc., up to 20 max
+            target_count = max(5, min(20, max(6, num_lectures * 3)))
+
+        # Build chronological multi-lecture transcript sample
+        lecture_summaries = []
+        for l_idx, lect in enumerate(valid_lectures):
+            cues = lect["cues"]
+            step = max(1, len(cues) // 25)
+            sampled = cues[::step][:25]
+            cue_lines = [f"  [{c.get('time', '00:00')}] {c.get('text', '').strip()}" for c in sampled]
+            lecture_summaries.append(
+                f"=== LECTURE {l_idx + 1}: {lect['title']} (Video ID: {lect['video_id']}) ===\n" + "\n".join(cue_lines)
+            )
+
+        transcript_sample = "\n\n".join(lecture_summaries)[:32000]
+
+        system_prompt = (
+            "You are an expert university professor and comprehensive exam creator.\n"
+            f"Your task is to generate a challenging, educational {target_count}-question multiple-choice course exam testing core concepts across ALL {num_lectures} lectures in the course '{clean_course}'.\n\n"
+            "Strict Guidelines:\n"
+            f"1. Coverage & Balance: The questions MUST be distributed across all the lectures in this course so far. Ensure every lecture is represented.\n"
+            "2. Formulas & Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$).\n"
+            "3. Grounding: Each question must test a concept, theorem, definition, or example actually taught by the instructor in that lecture.\n"
+            "4. Question format:\n"
+            "   - 'id': integer (1, 2, 3...)\n"
+            "   - 'question': clear, unambiguous question text with LaTeX math where applicable\n"
+            "   - 'options': array of exactly 4 strings (A, B, C, D)\n"
+            "   - 'correct_index': integer (0, 1, 2, or 3) indicating the single correct option\n"
+            "   - 'explanation': thorough pedagogical explanation citing the lecture title and timestamp, with LaTeX math\n"
+            "   - 'lecture_id': exact video_id of the lecture this question tests\n"
+            "   - 'lecture_title': title of the lecture this question tests\n"
+            "   - 'timestamp': timestamp string (e.g. '43:34') from that lecture\n"
+            "   - 'difficulty': 'easy', 'medium', or 'hard'\n"
+            "5. Return ONLY a single valid JSON object matching this schema:\n"
+            "{\n"
+            '  "questions": [\n'
+            '    {\n'
+            '      "id": 1,\n'
+            '      "question": "...",\n'
+            '      "options": ["...", "...", "...", "..."],\n'
+            '      "correct_index": 0,\n'
+            '      "explanation": "...",\n'
+            '      "lecture_id": "...",\n'
+            '      "lecture_title": "...",\n'
+            '      "timestamp": "MM:SS",\n'
+            '      "difficulty": "medium"\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+        user_prompt = f"Course: {clean_course}\nTotal Lectures: {num_lectures}\n\nMulti-Lecture Transcripts:\n{transcript_sample}"
+
+        def _clean_and_parse_course_json(raw_text: str) -> Optional[List[Dict[str, Any]]]:
+            if not raw_text:
+                return None
+            t = raw_text.strip()
+            if t.startswith("```"):
+                lines = t.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                t = "\n".join(lines).strip()
+            try:
+                data = json.loads(t)
+            except Exception:
+                match = re.search(r"\{.*\}", t, re.DOTALL)
+                if match:
+                    try:
+                        data = json.loads(match.group(0))
+                    except Exception:
+                        return None
+                else:
+                    return None
+
+            raw_qs = data.get("questions") if isinstance(data, dict) else (data if isinstance(data, list) else None)
+            if not isinstance(raw_qs, list) or len(raw_qs) == 0:
+                return None
+
+            cleaned_qs = []
+            for idx, q in enumerate(raw_qs):
+                if not isinstance(q, dict):
+                    continue
+                q_text = str(q.get("question") or "").strip()
+                opts = q.get("options")
+                if not q_text or not isinstance(opts, list) or len(opts) != 4:
+                    continue
+                correct_idx = q.get("correct_index", 0)
+                try:
+                    correct_idx = int(correct_idx)
+                    if correct_idx < 0 or correct_idx > 3:
+                        correct_idx = 0
+                except (ValueError, TypeError):
+                    correct_idx = 0
+
+                ts = str(q.get("timestamp") or "00:00").strip().replace("[", "").replace("]", "")
+                lect_id = str(q.get("lecture_id") or "").strip()
+                lect_title = str(q.get("lecture_title") or "").strip()
+
+                if not lect_id or not lect_title:
+                    fallback_lect = valid_lectures[idx % len(valid_lectures)]
+                    lect_id = lect_id or fallback_lect["video_id"]
+                    lect_title = lect_title or fallback_lect["title"]
+
+                explanation = str(q.get("explanation") or f"Taught in '{lect_title}' at [{ts}].").strip()
+                diff = str(q.get("difficulty") or "medium").lower().strip()
+                if diff not in ("easy", "medium", "hard"):
+                    diff = "medium"
+
+                cleaned_qs.append({
+                    "id": idx + 1,
+                    "question": q_text,
+                    "options": [str(opt).strip() for opt in opts],
+                    "correct_index": correct_idx,
+                    "explanation": explanation,
+                    "lecture_id": lect_id,
+                    "lecture_title": lect_title,
+                    "timestamp": ts,
+                    "difficulty": diff
+                })
+
+            return cleaned_qs[:target_count] if len(cleaned_qs) > 0 else None
+
+        # 1. Groq
+        if groq_key:
+            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+                try:
+                    payload = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.3,
+                        "max_tokens": 4096
+                    }
+                    r = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json=payload,
+                        timeout=90
+                    )
+                    if r.status_code == 200:
+                        content = r.json()["choices"][0]["message"]["content"]
+                        parsed = _clean_and_parse_course_json(content)
+                        if parsed:
+                            return {
+                                "course_name": clean_course,
+                                "course_slug": course_slug,
+                                "lecture_count": num_lectures,
+                                "questions": parsed,
+                                "total_questions": len(parsed),
+                                "model": f"Groq {model_name}",
+                                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            }
+                except Exception as e:
+                    print(f"⚠️ [Groq Course Quiz Warning] {e}")
+
+        # 2. Gemini
+        if gemini_key:
+            for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+                try:
+                    payload = {
+                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                        "systemInstruction": {"parts": [{"text": system_prompt}]},
+                        "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 4096}
+                    }
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                    resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
+                    if resp.status_code == 200:
+                        content = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        parsed = _clean_and_parse_course_json(content)
+                        if parsed:
+                            return {
+                                "course_name": clean_course,
+                                "course_slug": course_slug,
+                                "lecture_count": num_lectures,
+                                "questions": parsed,
+                                "total_questions": len(parsed),
+                                "model": f"Gemini {model_name}",
+                                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            }
+                except Exception as e:
+                    print(f"⚠️ [Gemini Course Quiz Warning] {e}")
+
+        # 3. Fallback Round-Robin Synthesizer
+        fallback_questions = []
+        for i in range(target_count):
+            lect = valid_lectures[i % len(valid_lectures)]
+            cues = lect.get("cues", [])
+            cue_step = max(1, len(cues) // max(1, (target_count // len(valid_lectures)) + 1))
+            cue_idx = min(len(cues) - 1, (i // len(valid_lectures)) * cue_step)
+            cue = cues[cue_idx] if cues else {"time": "00:00", "text": lect["title"]}
+            ts = cue.get("time", "00:00")
+            snippet = cue.get("text", "").strip() or f"Foundational theorem in {lect['title']}"
+
+            fallback_questions.append({
+                "id": i + 1,
+                "question": f"In '{lect['title']}' at [{ts}], which concept or statement is emphasized regarding {clean_course}?",
+                "options": [
+                    f"{snippet[:80]}...",
+                    "A counterexample showing the condition fails in general vector spaces.",
+                    "An introductory greeting with no mathematical bearing.",
+                    "A proof relying on an unverified physical assumption."
+                ],
+                "correct_index": 0,
+                "explanation": f"In lecture '{lect['title']}' at [{ts}], the professor explains: \"{snippet}\".",
+                "lecture_id": lect["video_id"],
+                "lecture_title": lect["title"],
+                "timestamp": ts,
+                "difficulty": "medium"
+            })
+
+        return {
+            "course_name": clean_course,
+            "course_slug": course_slug,
+            "lecture_count": num_lectures,
+            "questions": fallback_questions,
+            "total_questions": len(fallback_questions),
+            "model": "Deterministic Multi-Lecture Synthesizer",
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+
     @staticmethod
     def check_llm_connectivity() -> Dict[str, Any]:
         """Probes Groq and Gemini connectivity and intent router status."""

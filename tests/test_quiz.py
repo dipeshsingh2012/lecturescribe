@@ -257,6 +257,100 @@ class TestLectureQuiz(unittest.TestCase):
         _, kwargs = mock_gen.call_args
         self.assertEqual(kwargs.get("num_questions"), 15)
 
+    def test_generate_course_quiz_covers_all_lectures(self):
+        """Test that generate_course_quiz distributes questions across all course lectures."""
+        lectures_data = [
+            {
+                "video_id": "lec_1",
+                "title": "Lecture 1: Vector Spaces",
+                "cues": [{"time": "02:00", "text": "Linear combinations of vectors."}]
+            },
+            {
+                "video_id": "lec_2",
+                "title": "Lecture 2: Eigenvalues",
+                "cues": [{"time": "15:30", "text": "Characteristic polynomials and det(A - lambda I)."}]
+            },
+            {
+                "video_id": "lec_3",
+                "title": "Lecture 3: Singular Value Decomposition",
+                "cues": [{"time": "30:00", "text": "Orthogonal matrices and singular values."}]
+            }
+        ]
+
+        with patch("requests.post", side_effect=Exception("Network offline")):
+            quiz = pinecone_rag_engine.generate_course_quiz(
+                course_name="Applied Linear Algebra",
+                lectures_data=lectures_data,
+                num_questions=6
+            )
+
+        self.assertEqual(quiz["course_name"], "Applied Linear Algebra")
+        self.assertEqual(quiz["lecture_count"], 3)
+        self.assertEqual(len(quiz["questions"]), 6)
+
+        # Verify that questions cover all 3 lectures
+        covered_lectures = {q["lecture_id"] for q in quiz["questions"]}
+        self.assertEqual(covered_lectures, {"lec_1", "lec_2", "lec_3"})
+        for q in quiz["questions"]:
+            self.assertIn("lecture_title", q)
+            self.assertIn("timestamp", q)
+            self.assertEqual(len(q["options"]), 4)
+
+    @patch("backend.database.db_manager.get_course_details")
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("backend.database.db_manager.get_saved_course_quiz")
+    @patch("backend.rag_engine.pinecone_rag_engine.generate_course_quiz")
+    def test_course_quiz_endpoint(self, mock_gen, mock_get_quiz, mock_get_video, mock_get_course):
+        mock_get_quiz.return_value = None  # Force generation
+        mock_get_course.return_value = {
+            "course_name": "Machine Learning",
+            "lecture_count": 2,
+            "lectures": [
+                {"video_id": "ml_1", "title": "Supervised Learning"},
+                {"video_id": "ml_2", "title": "Neural Networks"}
+            ]
+        }
+        mock_get_video.side_effect = lambda vid: {
+            "title": f"Title {vid}",
+            "cues": [{"time": "05:00", "text": f"Concepts in {vid}"}]
+        }
+        mock_gen.return_value = {
+            "course_name": "Machine Learning",
+            "course_slug": "machine-learning",
+            "lecture_count": 2,
+            "total_questions": 4,
+            "questions": [
+                {
+                    "id": 1,
+                    "question": "What is gradient descent?",
+                    "options": ["Opt", "Loss", "Rate", "Step"],
+                    "correct_index": 0,
+                    "lecture_id": "ml_1",
+                    "lecture_title": "Supervised Learning",
+                    "timestamp": "05:00",
+                    "difficulty": "medium",
+                    "explanation": "At [05:00] in Supervised Learning."
+                }
+            ]
+        }
+
+        # 1. Fetching generates quiz
+        res = self.client.post("/api/course/Machine%20Learning/quiz", json={"regenerate": True})
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["course_name"], "Machine Learning")
+        self.assertEqual(len(data["questions"]), 1)
+        self.assertEqual(data["questions"][0]["lecture_id"], "ml_1")
+
+        # 2. Test course quiz database persistence
+        from backend.database import RelationalDBManager
+        db = RelationalDBManager(postgres_url="")
+        db.save_course_quiz("Machine Learning", data, lecture_count=2)
+        saved = db.get_saved_course_quiz("Machine Learning")
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved["course_slug"], "machine-learning")
+        self.assertTrue(saved.get("persisted"))
+
 
 if __name__ == "__main__":
     unittest.main()

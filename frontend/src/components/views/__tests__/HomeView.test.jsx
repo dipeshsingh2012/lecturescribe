@@ -95,4 +95,21 @@ describe('HomeView', () => {
     fireEvent.click(viewButton);
     expect(openPreviewModal).toHaveBeenCalledWith(testResource);
   });
+
+  it('renders Course Quiz tab button and switches to course quiz when clicked', () => {
+    const setCourseViewTab = vi.fn();
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        courseViewTab="lectures"
+        setCourseViewTab={setCourseViewTab}
+      />
+    );
+
+    const quizTabBtn = screen.getByRole('button', { name: /Course Quiz/i });
+    expect(quizTabBtn).toBeInTheDocument();
+    fireEvent.click(quizTabBtn);
+    expect(setCourseViewTab).toHaveBeenCalledWith('quiz');
+  });
 });

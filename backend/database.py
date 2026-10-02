@@ -71,6 +71,7 @@ class RelationalDBManager:
         self._memory_cache: Dict[str, Dict[str, Any]] = {}
         self._resources_memory_cache: List[Dict[str, Any]] = []
         self._quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._course_quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -241,6 +242,19 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_quiz_vid ON lecturescribe_quizzes(video_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_quizzes (
+                            id SERIAL PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            quiz_json JSONB NOT NULL,
+                            lecture_count INT DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_course_quizzes_course_slug UNIQUE (course_slug)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_slug ON lecturescribe_course_quizzes(course_slug);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -415,6 +429,85 @@ class RelationalDBManager:
                         return data
         except Exception as e:
             print(f"[PostgreSQL Warning] get_saved_quiz error for video '{clean_vid}': {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+        return None
+
+    def save_course_quiz(self, course_name: str, quiz_data: Dict[str, Any], lecture_count: int = 0) -> bool:
+        """Persist generated course-wide quiz into PostgreSQL and L1 In-Memory Cache."""
+        if not course_name:
+            return False
+
+        clean_name = str(course_name).strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_name.lower()).strip('-') or "general"
+        self._course_quiz_memory_cache[course_slug] = quiz_data
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    quiz_json_str = json.dumps(quiz_data)
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_quizzes (course_slug, course_name, quiz_json, lecture_count, updated_at)
+                        VALUES (%s, %s, %s::jsonb, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (course_slug)
+                        DO UPDATE SET
+                            course_name = EXCLUDED.course_name,
+                            quiz_json = EXCLUDED.quiz_json,
+                            lecture_count = EXCLUDED.lecture_count,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (course_slug, clean_name, quiz_json_str, lecture_count))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_course_quiz error for '{course_slug}': {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_saved_course_quiz(self, course_name: str) -> Optional[Dict[str, Any]]:
+        """Retrieve persisted course-wide quiz from In-Memory cache or PostgreSQL."""
+        if not course_name:
+            return None
+
+        clean_name = str(course_name).strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_name.lower()).strip('-') or "general"
+        if course_slug in self._course_quiz_memory_cache:
+            data = self._course_quiz_memory_cache[course_slug]
+            if isinstance(data, dict):
+                data["persisted"] = True
+            return data
+
+        if not self.postgres_url:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT quiz_json 
+                        FROM lecturescribe_course_quizzes 
+                        WHERE course_slug = %s 
+                        LIMIT 1;
+                    """, (course_slug,))
+                    row = cursor.fetchone()
+                    if row and row.get("quiz_json"):
+                        raw = row["quiz_json"]
+                        data = raw if isinstance(raw, dict) else json.loads(raw)
+                        data["persisted"] = True
+                        self._course_quiz_memory_cache[course_slug] = data
+                        return data
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_saved_course_quiz error for '{course_slug}': {e}")
             return None
         finally:
             if conn:

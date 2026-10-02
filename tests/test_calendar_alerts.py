@@ -132,7 +132,7 @@ class TestCalendarAlerts(unittest.TestCase):
             }
         ]
         msg = format_whatsapp_message(events, slot_label="6:00 PM Evening Deadlines")
-        self.assertIn("LectureScribe Academic Alert", msg)
+        self.assertIn("Schedule for Today", msg)
         self.assertIn("ASSIGNMENT DUE", msg)
         self.assertIn("Machine Learning Assignment 2", msg)
         self.assertIn("06:30 PM", msg)

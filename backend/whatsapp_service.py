@@ -98,9 +98,8 @@ def format_whatsapp_message(
     lines: List[str] = []
     if is_test:
         lines.append("🧪 *[TEST DISPATCH]*")
-    lines.append(f"{header_icon} *LectureScribe Academic Alert*")
-    lines.append(f"*{slot_label}*")
-    lines.append(f"📆 `{date_str}` | `{time_str} IST`")
+    lines.append(f"📅 *Schedule for Today ({date_str})*")
+    lines.append(f"{header_icon} _{slot_label}_")
     lines.append("───────────────────────")
 
     if not events:
@@ -145,8 +144,9 @@ def format_whatsapp_message(
 
     # Add Tomorrow's preview if available (for 4pm / evening slot)
     if tomorrow_preview and len(tomorrow_preview) > 0:
+        tomorrow_date = (now.date() + datetime.timedelta(days=1)).strftime("%A, %d %B %Y")
         lines.append("───────────────────────")
-        lines.append("🌅 *Tomorrow's Morning Preview:*")
+        lines.append(f"🌅 *Schedule for Tomorrow ({tomorrow_date}):*")
         for t_evt in tomorrow_preview:
             t_cat = t_evt.get("category", "general")
             t_icon = CATEGORY_ICONS.get(t_cat, "📌")

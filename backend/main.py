@@ -1072,12 +1072,12 @@ def create_link_resource(req: CreateLinkResourceRequest):
 
 
 @app.get("/api/lecture/{video_id}/resources")
-def get_lecture_resources(video_id: str):
-    """Retrieve all resources attached to a specific lecture with fresh signed download URLs."""
+def get_lecture_resources(video_id: str, course_name: Optional[str] = Query(None)):
+    """Retrieve all resources attached to a specific lecture and across its course with fresh signed download URLs."""
     vid = video_id.strip()
     if not vid:
         raise HTTPException(status_code=400, detail="video_id is required.")
-    items = db_manager.get_lecture_resources(vid)
+    items = db_manager.get_lecture_resources(vid, course_name=course_name)
     for r in items:
         if r.get("blob_name"):
             r["view_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"], disposition="inline")
@@ -1085,7 +1085,7 @@ def get_lecture_resources(video_id: str):
         elif r.get("file_url"):
             r["view_url"] = r["file_url"]
             r["download_url"] = r["file_url"]
-    return {"status": "success", "video_id": vid, "resources": items, "count": len(items)}
+    return {"status": "success", "video_id": vid, "course_name": course_name, "resources": items, "count": len(items)}
 
 
 @app.get("/api/course/{course_name}/resources")

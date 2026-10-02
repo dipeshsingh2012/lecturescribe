@@ -117,5 +117,51 @@ class TestResourceEndpoints(unittest.TestCase):
         self.assertEqual(data["file_url"], "https://pytorch.org/docs/stable/index.html")
 
 
+    def test_course_level_resources_available_in_lectures(self):
+        # 1. Upload a course-wide resource with video_id=None or empty
+        confirm_res = self.client.post("/api/resources/confirm-upload", json={
+            "filename": "Course_Syllabus.pdf",
+            "blob_name": "courses/ai-101/general/syllabus.pdf",
+            "file_type": "pdf",
+            "file_size_bytes": 20480,
+            "course_name": "AI 101",
+            "video_id": None,
+            "title": "Comprehensive Syllabus & Schedule",
+            "user_email": "instructor@example.com"
+        })
+        self.assertEqual(confirm_res.status_code, 200)
+        course_res_id = confirm_res.json()["resource"]["id"]
+
+        # 2. Upload a lecture-specific resource for Lecture A
+        confirm_lecture = self.client.post("/api/resources/confirm-upload", json={
+            "filename": "lecture1_notes.docx",
+            "blob_name": "courses/ai-101/lectures/lecture_a/lecture1_notes.docx",
+            "file_type": "docx",
+            "file_size_bytes": 10240,
+            "course_name": "AI 101",
+            "video_id": "lecture_a",
+            "title": "Lecture A Notes",
+            "user_email": "instructor@example.com"
+        })
+        self.assertEqual(confirm_lecture.status_code, 200)
+        lecture_res_id = confirm_lecture.json()["resource"]["id"]
+
+        # 3. Query Lecture A resources passing course_name -> should contain BOTH lecture note and course syllabus
+        res_a = self.client.get("/api/lecture/lecture_a/resources?course_name=AI%20101")
+        self.assertEqual(res_a.status_code, 200)
+        items_a = res_a.json()["resources"]
+        ids_a = [it["id"] for it in items_a]
+        self.assertIn(lecture_res_id, ids_a)
+        self.assertIn(course_res_id, ids_a)
+
+        # 4. Query Lecture B (a different lecture in AI 101) -> should ALSO include the course syllabus
+        res_b = self.client.get("/api/lecture/lecture_b/resources?course_name=AI%20101")
+        self.assertEqual(res_b.status_code, 200)
+        items_b = res_b.json()["resources"]
+        ids_b = [it["id"] for it in items_b]
+        self.assertIn(course_res_id, ids_b)
+        self.assertNotIn(lecture_res_id, ids_b)
+
+
 if __name__ == "__main__":
     unittest.main()

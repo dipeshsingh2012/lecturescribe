@@ -109,4 +109,31 @@ describe('useResources hook functionality', () => {
     );
     windowOpenSpy.mockRestore();
   });
+
+  it('merges course-wide materials into lectureResources for any lecture in the course', async () => {
+    const lectureRes = [{ id: 'res-lec-1', video_id: 'vid-1', title: 'Lecture 1 Slides' }];
+    const courseRes = [
+      { id: 'res-course-1', video_id: null, title: 'Full Course Syllabus' },
+      { id: 'res-lec-2', video_id: 'vid-2', title: 'Lecture 2 Notes' }
+    ];
+
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/lecture/vid-1/resources')) {
+        return Promise.resolve({ ok: true, json: async () => ({ resources: lectureRes }) });
+      }
+      if (url.includes('/api/course/CS101/resources')) {
+        return Promise.resolve({ ok: true, json: async () => ({ resources: courseRes }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ resources: [] }) });
+    });
+
+    const { result } = renderHook(() => useResources('vid-1', 'CS101', null));
+    await act(async () => {});
+
+    // Should include both lecture-specific resource and course-level resource, but not lecture 2 resource
+    const ids = result.current.lectureResources.map(r => r.id);
+    expect(ids).toContain('res-lec-1');
+    expect(ids).toContain('res-course-1');
+    expect(ids).not.toContain('res-lec-2');
+  });
 });

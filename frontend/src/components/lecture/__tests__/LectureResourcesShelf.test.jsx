@@ -112,4 +112,35 @@ describe('LectureResourcesShelf', () => {
       courseName: 'CS101'
     });
   });
+
+  it('renders Course Material badge for course-level resources', () => {
+    const resources = [
+      {
+        id: 'res-course-1',
+        title: 'Full Course Syllabus',
+        filename: 'syllabus.pdf',
+        file_type: 'pdf',
+        file_size_bytes: 512000,
+        view_url: 'https://storage.googleapis.com/test/syllabus.pdf',
+        video_id: null,
+        course_name: 'AI 101',
+        created_at: '2026-09-15T08:00:00Z',
+        user_email: 'prof@example.com'
+      }
+    ];
+
+    render(
+      <LectureResourcesShelf
+        lectureResources={resources}
+        lectureResourcesLoading={false}
+        googleUser={{ email: 'student@example.com' }}
+        handleDeleteResource={vi.fn()}
+        activeData={{ videoId: '123' }}
+        selectedCourse="AI 101"
+      />
+    );
+
+    expect(screen.getByText('Full Course Syllabus')).toBeInTheDocument();
+    expect(screen.getByText('Course Material')).toBeInTheDocument();
+  });
 });

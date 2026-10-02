@@ -91,7 +91,8 @@ export default function App() {
     setActiveLectureRef(activeData);
   }, [activeData]);
 
-  const resources = useResources(activeData?.videoId, selectedCourse, auth.googleUser);
+  const effectiveCourse = selectedCourse || course.activeCourseData?.course_name || activeData?.course_name || null;
+  const resources = useResources(activeData?.videoId, effectiveCourse, auth.googleUser);
   const tutor = useAITutor(activeData, auth.googleUser);
   const player = useLecturePlayer(activeData);
 

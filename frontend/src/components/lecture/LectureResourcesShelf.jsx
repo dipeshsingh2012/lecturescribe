@@ -129,6 +129,21 @@ export default function LectureResourcesShelf({
                   }}>
                     {badge.label}
                   </span>
+                  {(!res.video_id || res.video_id === 'general' || res.video_id === 'null') && (
+                    <span style={{
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.3px',
+                      color: 'var(--theme-primary)',
+                      background: 'var(--highlight-bg)',
+                      border: '1px solid rgba(0, 117, 237, 0.25)',
+                      flexShrink: 0
+                    }}>
+                      Course Material
+                    </span>
+                  )}
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{
                       fontWeight: 600,
@@ -214,7 +229,7 @@ export default function LectureResourcesShelf({
                   )}
                   {isOwner && (
                     <button
-                      onClick={() => handleDeleteResource(res.id, activeData?.videoId, selectedCourse)}
+                      onClick={() => handleDeleteResource(res.id, res.video_id || activeData?.videoId, selectedCourse || res.course_name)}
                       title="Delete Resource"
                       style={{
                         display: 'inline-flex',

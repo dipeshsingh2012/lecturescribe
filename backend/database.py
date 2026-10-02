@@ -1117,25 +1117,74 @@ class RelationalDBManager:
         self._resources_memory_cache.append(record)
         return record
 
-    def get_lecture_resources(self, video_id: str) -> List[Dict[str, Any]]:
-        """Fetch all resources attached to a specific lecture."""
+    def get_lecture_resources(self, video_id: str, course_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch all resources attached to a specific lecture and its course (e.g. PDFs, docs, syllabus)."""
         if not video_id:
             return []
         vid = str(video_id).strip()
+        cname = (course_name or "").strip()
         conn = None
         try:
             conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("""
-                        SELECT id, video_id, course_name, user_email, title, filename, blob_name, file_type, file_size_bytes, file_url, created_at
-                        FROM lecturescribe_resources
-                        WHERE video_id = %s
-                        ORDER BY created_at ASC;
-                    """, (vid,))
+                    if not cname:
+                        # Auto-resolve course_name if not explicitly passed
+                        try:
+                            cursor.execute("""
+                                SELECT course_name FROM lecturescribe_user_library 
+                                WHERE video_id = %s AND course_name IS NOT NULL AND course_name != '' AND course_name != 'General Lectures'
+                                LIMIT 1;
+                            """, (vid,))
+                            r_course = cursor.fetchone()
+                            if r_course and r_course.get("course_name"):
+                                cname = r_course["course_name"].strip()
+                        except Exception:
+                            pass
+                    if not cname:
+                        try:
+                            cursor.execute("""
+                                SELECT course_name FROM lecturescribe_resources 
+                                WHERE video_id = %s AND course_name IS NOT NULL AND course_name != '' AND course_name != 'General Lectures'
+                                LIMIT 1;
+                            """, (vid,))
+                            r_res = cursor.fetchone()
+                            if r_res and r_res.get("course_name"):
+                                cname = r_res["course_name"].strip()
+                        except Exception:
+                            pass
+
+                    if cname and cname.lower() != "general lectures":
+                        slug_as_space = cname.replace("-", " ")
+                        slug_as_wildcard = cname.replace("-", "%")
+                        cursor.execute("""
+                            SELECT id, video_id, course_name, user_email, title, filename, blob_name, file_type, file_size_bytes, file_url, created_at
+                            FROM lecturescribe_resources
+                            WHERE video_id = %s 
+                               OR (
+                                   (course_name ILIKE %s 
+                                    OR course_name ILIKE %s 
+                                    OR course_name ILIKE %s 
+                                    OR course_name ILIKE %s)
+                                   AND (video_id IS NULL OR video_id = '' OR video_id = 'general' OR video_id = 'null')
+                               )
+                            ORDER BY created_at ASC;
+                        """, (vid, cname, f"%{cname}%", slug_as_space, f"%{slug_as_wildcard}%"))
+                    else:
+                        cursor.execute("""
+                            SELECT id, video_id, course_name, user_email, title, filename, blob_name, file_type, file_size_bytes, file_url, created_at
+                            FROM lecturescribe_resources
+                            WHERE video_id = %s
+                            ORDER BY created_at ASC;
+                        """, (vid,))
+
                     rows = cursor.fetchall() or []
                     results = []
+                    seen_ids = set()
                     for r in rows:
+                        if r["id"] in seen_ids:
+                            continue
+                        seen_ids.add(r["id"])
                         results.append({
                             "id": r["id"],
                             "video_id": r["video_id"],
@@ -1152,7 +1201,28 @@ class RelationalDBManager:
                     return results
         except Exception as e:
             print(f"[PostgreSQL Resources Warning] Could not fetch lecture resources: {e}")
-            return [r for r in self._resources_memory_cache if r.get("video_id") == vid]
+            seen = set()
+            res = []
+            clean_l = cname.lower() if cname else ""
+            if not clean_l:
+                for r in self._resources_memory_cache:
+                    if r.get("video_id") == vid and r.get("course_name") and r.get("course_name").lower() != "general lectures":
+                        clean_l = r.get("course_name").lower()
+                        break
+            for r in self._resources_memory_cache:
+                is_match = False
+                if r.get("video_id") == vid:
+                    is_match = True
+                elif clean_l and clean_l != "general lectures":
+                    rc = r.get("course_name", "").lower()
+                    r_vid = str(r.get("video_id") or "").strip().lower()
+                    is_course_level = (not r_vid) or r_vid in ("none", "null", "general")
+                    if is_course_level and (clean_l in rc or rc.replace("-", " ") == clean_l.replace("-", " ")):
+                        is_match = True
+                if is_match and r.get("id") not in seen:
+                    seen.add(r.get("id"))
+                    res.append(r)
+            return res
         finally:
             if conn:
                 conn.close()

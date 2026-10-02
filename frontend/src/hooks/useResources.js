@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { API_BASE } from '../utils/constants';
 
 export function useResources(activeVideoId, selectedCourse, googleUser) {
-  const [lectureResources, setLectureResources] = useState([]);
+  const [rawLectureResources, setRawLectureResources] = useState([]);
   const [lectureResourcesLoading, setLectureResourcesLoading] = useState(false);
   const [courseResources, setCourseResources] = useState([]);
   const [courseResourcesLoading, setCourseResourcesLoading] = useState(false);
@@ -16,22 +16,23 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
 
-  const fetchLectureResources = async (videoId) => {
+  const fetchLectureResources = async (videoId, courseName) => {
     if (!videoId) {
-      setLectureResources([]);
+      setRawLectureResources([]);
       return;
     }
     setLectureResourcesLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
     try {
-      const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/resources`, {
+      const courseQuery = courseName ? `?course_name=${encodeURIComponent(courseName)}` : '';
+      const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/resources${courseQuery}`, {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
-        setLectureResources(data.resources || []);
+        setRawLectureResources(data.resources || []);
       }
     } catch (err) {
       console.warn("Failed to load lecture resources:", err);
@@ -43,11 +44,28 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
 
   useEffect(() => {
     if (activeVideoId) {
-      fetchLectureResources(activeVideoId);
+      fetchLectureResources(activeVideoId, selectedCourse);
     } else {
-      setLectureResources([]);
+      setRawLectureResources([]);
     }
-  }, [activeVideoId]);
+  }, [activeVideoId, selectedCourse]);
+
+  const lectureResources = useMemo(() => {
+    const map = new Map();
+    (rawLectureResources || []).forEach(r => {
+      if (r && r.id) map.set(r.id, r);
+    });
+    (courseResources || []).forEach(r => {
+      if (r && r.id) {
+        const vid = r.video_id;
+        const isCourseWide = !vid || vid === 'general' || vid === 'null' || String(vid).trim() === '';
+        if (isCourseWide && !map.has(r.id)) {
+          map.set(r.id, r);
+        }
+      }
+    });
+    return Array.from(map.values());
+  }, [rawLectureResources, courseResources]);
 
   const fetchCourseResources = async (courseName) => {
     if (!courseName) {
@@ -166,9 +184,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
         }
 
         const confirmed = await confirmRes.json();
-        if (uploadTarget.videoId) {
-          setLectureResources(prev => [confirmed.resource, ...prev]);
-        }
+        setRawLectureResources(prev => [confirmed.resource, ...prev]);
         setCourseResources(prev => [confirmed.resource, ...prev]);
         setUploadModalOpen(false);
 
@@ -195,9 +211,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
         }
 
         const linkData = await linkRes.json();
-        if (uploadTarget.videoId) {
-          setLectureResources(prev => [linkData.resource, ...prev]);
-        }
+        setRawLectureResources(prev => [linkData.resource, ...prev]);
         setCourseResources(prev => [linkData.resource, ...prev]);
         setUploadModalOpen(false);
       }
@@ -218,7 +232,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
         method: 'DELETE'
       });
       if (res.ok) {
-        setLectureResources(prev => prev.filter(r => r.id !== resourceId));
+        setRawLectureResources(prev => prev.filter(r => r.id !== resourceId));
         setCourseResources(prev => prev.filter(r => r.id !== resourceId));
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -255,7 +269,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
 
   return {
     lectureResources,
-    setLectureResources,
+    setLectureResources: setRawLectureResources,
     lectureResourcesLoading,
     courseResources,
     setCourseResources,

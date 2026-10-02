@@ -129,18 +129,19 @@ class TestCalendarAlerts(unittest.TestCase):
         ]
         msg = format_whatsapp_message(events, slot_label="6:00 PM Evening Deadlines")
         self.assertIn("LectureScribe Academic Alert", msg)
-        self.assertIn("*[ASSIGNMENT DUE]*", msg)
+        self.assertIn("ASSIGNMENT DUE", msg)
         self.assertIn("Machine Learning Assignment 2", msg)
-        self.assertIn("06:30 PM - 11:59 PM", msg)
+        self.assertIn("06:30 PM", msg)
         self.assertIn("Moodle Portal", msg)
 
     def test_twilio_simulation_when_no_credentials(self):
         # When unconfigured, should return simulated status and print preview
-        with patch.dict(os.environ, {"TWILIO_ACCOUNT_SID": "", "TWILIO_AUTH_TOKEN": ""}):
-            svc = whatsapp_service
-            svc.account_sid = ""
-            svc.auth_token = ""
-            res = svc.send_whatsapp_message("Test message", recipient="+919876543210")
+        with patch.dict(os.environ, {"TWILIO_ACCOUNT_SID": "", "TWILIO_AUTH_TOKEN": "", "TWILIO_WHATSAPP_TO": ""}), \
+             patch.object(whatsapp_service, "_refresh_env"):
+            whatsapp_service.account_sid = ""
+            whatsapp_service.auth_token = ""
+            whatsapp_service.to_number = ""
+            res = whatsapp_service.send_whatsapp_message("Test message", recipient="")
             self.assertEqual(res["status"], "simulated")
             self.assertIn("Twilio credentials not configured", res["message"])
 

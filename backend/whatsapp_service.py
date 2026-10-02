@@ -23,16 +23,51 @@ if _env_path.exists():
 else:
     load_dotenv(override=True)
 
+import re
+
 IST = ZoneInfo("Asia/Kolkata")
 
-CATEGORY_EMOJIS = {
-    "exam": "🚨 *[EXAM / VIVA]*",
-    "quiz": "🎯 *[QUIZ / TEST]*",
-    "assignment": "📝 *[ASSIGNMENT DUE]*",
-    "lab": "🔬 *[LAB SESSION]*",
-    "lecture": "📚 *[LECTURE]*",
-    "general": "📌 *[SCHEDULE]*"
+CATEGORY_ICONS = {
+    "exam": "🚨",
+    "quiz": "🎯",
+    "assignment": "📝",
+    "lab": "🔬",
+    "lecture": "📚",
+    "general": "📌"
 }
+
+CATEGORY_LABELS = {
+    "exam": "EXAM / VIVA",
+    "quiz": "QUIZ / TEST",
+    "assignment": "ASSIGNMENT DUE",
+    "lab": "LAB SESSION",
+    "lecture": "LECTURE",
+    "general": "EVENT"
+}
+
+
+def _extract_url_and_clean_desc(description: str) -> tuple[Optional[str], Optional[str]]:
+    """Extract clean meeting/portal URL and remove Moodle markdown noise."""
+    if not description:
+        return None, None
+
+    url_match = re.search(r'https?://[^\s\)\]\}]+', description)
+    direct_url = url_match.group(0) if url_match else None
+
+    # Remove Moodle link indices e.g. [1], Links:\n------\n[1], etc.
+    clean = re.sub(r'Links:\s*-+.*', '', description, flags=re.DOTALL)
+    clean = re.sub(r'Join Zoom Meeting\s*(\[\d+\])?', '', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'\[\d+\]', '', clean)
+    clean = re.sub(r'https?://[^\s]+', '', clean)
+    clean = clean.replace('\n', ' ').strip()
+    clean = re.sub(r'\s+', ' ', clean)
+
+    if not clean or clean.lower() in ("join zoom meeting", "assignment", "attendance"):
+        clean = None
+    elif len(clean) > 85:
+        clean = clean[:82] + "..."
+
+    return direct_url, clean
 
 
 def format_whatsapp_message(
@@ -46,7 +81,6 @@ def format_whatsapp_message(
     date_str = now.strftime("%A, %d %B %Y")
     time_str = now.strftime("%I:%M %p")
 
-    # Header emoji based on time / slot
     slot_lower = slot_label.lower()
     if "11" in slot_lower or "morning" in slot_lower:
         header_icon = "☀️"
@@ -58,56 +92,70 @@ def format_whatsapp_message(
         header_icon = "📅"
 
     lines: List[str] = []
-    if is_test:
-        lines.append("🧪 *[TEST DISPATCH] LectureScribe Alert*")
-    lines.append(f"{header_icon} *LectureScribe Academic Alert*")
-    lines.append(f"_{slot_label}_")
-    lines.append(f"📆 `{date_str}` | `{time_str} IST`")
-    lines.append("─────────────────────")
+    # if is_test:
+    #     lines.append("🧪 *[TEST DISPATCH]*")
+    # lines.append(f"{header_icon} *LectureScribe Academic Alert*")
+    # lines.append(f"*{slot_label}*")
+    # lines.append(f"📆 `{date_str}` | `{time_str} IST`")
+    lines.append("───────────────────────")
 
     if not events:
-        lines.append("✨ *No classes, quizzes, or pending submissions for this window!*")
+        lines.append("✨ *No classes, quizzes, or pending submissions!*")
         lines.append("Enjoy your focus time or revision. 🎓")
     else:
         for idx, evt in enumerate(events, 1):
             category = evt.get("category", "general")
-            badge = CATEGORY_EMOJIS.get(category, "📌 *[EVENT]*")
+            icon = CATEGORY_ICONS.get(category, "📌")
+            cat_label = CATEGORY_LABELS.get(category, "EVENT")
             title = evt.get("title", "Untitled Event")
             start_str = evt.get("start_time_formatted", "")
             end_str = evt.get("end_time_formatted", "")
             is_all_day = evt.get("is_all_day", False)
             location = (evt.get("location") or "").strip()
-            desc = (evt.get("description") or "").strip()
+            raw_desc = (evt.get("description") or "").strip()
 
-            timing = "All Day" if is_all_day else f"{start_str} - {end_str}"
+            url, clean_desc = _extract_url_and_clean_desc(raw_desc)
 
-            lines.append(f"{badge}")
-            lines.append(f"*{idx}. {title}*")
-            lines.append(f"⏰ `{timing}`")
+            # Smart timing display (avoid 11:55 PM - 11:55 PM)
+            if is_all_day:
+                timing = "All Day"
+            elif start_str == end_str:
+                timing = f"Due at {end_str}"
+            elif category in ("assignment", "quiz") and any(k in title.lower() for k in ["due", "close", "closes", "deadline"]):
+                timing = f"Due by {end_str}"
+            else:
+                timing = f"{start_str} – {end_str}"
+
+            lines.append(f"{icon} *{idx}. {title}*")
+            lines.append(f"   🏷️ _{cat_label}_  •  ⏰ `{timing}`")
+
             if location:
-                lines.append(f"📍 _{location}_")
-            if desc and len(desc) > 0:
-                # Strip HTML tags or clean up newlines for brief excerpt
-                clean_desc = desc.replace("\n", " ").strip()
-                if len(clean_desc) > 90:
-                    clean_desc = clean_desc[:87] + "..."
-                lines.append(f"ℹ️ {clean_desc}")
+                lines.append(f"   📍 _{location}_")
+            if url:
+                link_label = "Join Class" if ("zoom" in url.lower() or category in ("lecture", "lab")) else "View / Submit"
+                lines.append(f"   🔗 *{link_label}:* {url}")
+            elif clean_desc:
+                lines.append(f"   ℹ️ {clean_desc}")
+
             lines.append("")
 
     # Add Tomorrow's preview if available (for 6pm slot)
     if tomorrow_preview and len(tomorrow_preview) > 0:
-        lines.append("─────────────────────")
-        lines.append("🌅 *Tomorrow Morning Preview (8:00 AM – 11:00 AM):*")
+        lines.append("───────────────────────")
+        lines.append("🌅 *Tomorrow's Morning Preview (8:00 AM – 11:00 AM):*")
         for t_evt in tomorrow_preview:
+            t_cat = t_evt.get("category", "general")
+            t_icon = CATEGORY_ICONS.get(t_cat, "📌")
             t_title = t_evt.get("title", "Event")
             t_start = t_evt.get("start_time_formatted", "")
-            lines.append(f"• *{t_title}* at `{t_start}`")
+            lines.append(f"• {t_icon} *{t_title}* at `{t_start}`")
         lines.append("")
 
-    lines.append("─────────────────────")
-    lines.append("🤖 _LectureScribe Intelligent Academic Assistant_")
+    lines.append("───────────────────────")
+    lines.append("🤖 _LectureScribe AI Assistant_")
 
     return "\n".join(lines).strip()
+
 
 
 class TwilioWhatsAppService:

@@ -280,6 +280,18 @@ export default function CalendarAlertCard({ currentTheme }) {
               <Typography variant="h6" sx={{ fontWeight: 800, fontSize: { xs: '1rem', md: '1.15rem' }, color: currentTheme.palette.textPrimary }}>
                 Academic Schedule & Alerts
               </Typography>
+              <Chip
+                label="Moodle Live"
+                size="small"
+                sx={{
+                  height: 20,
+                  fontSize: '0.65rem',
+                  fontWeight: 700,
+                  bgcolor: 'rgba(16, 185, 129, 0.1)',
+                  color: '#10b981',
+                  border: '1px solid rgba(16, 185, 129, 0.3)'
+                }}
+              />
             </Box>
             <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
               IIIT Dharwad iCal Feed • Automated WhatsApp Alerts (11 AM, 3 PM, 6 PM IST)

@@ -662,6 +662,8 @@ class Llama3PineconeRAGStore:
         system_prompt = (
             f"You are an Academic AI Tutor for lecture: '{lecture_title}'.\n"
             "You are helpful, precise, non-hallucinatory, and academically rigorous.\n"
+            "Always format mathematical and scientific formulas using standard LaTeX notation: "
+            "use single dollar signs for inline formulas like $E=mc^2$ or $\\sigma(z)$, and double dollar signs for standalone block equations like $$\\text{MSE} = \\frac{1}{n} \\sum_{i=1}^{n} (y_i - \\hat{y}_i)^2$$.\n"
             f"{web_instruction}"
         )
 

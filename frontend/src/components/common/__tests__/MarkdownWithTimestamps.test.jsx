@@ -83,4 +83,17 @@ describe('MarkdownWithTimestamps', () => {
     expect(link).toHaveAttribute('href', 'https://www.geeksforgeeks.org/python/python-new-line-add-print-a-new-line/');
     expect(link).toHaveAttribute('target', '_blank');
   });
+
+  it('renders mathematical formulas with KaTeX typesetting', () => {
+    const { container } = render(
+      <MarkdownWithTimestamps
+        content="The foundational baseline is $E=mc^2$ and the sigmoid is $$\sigma(z) = \frac{1}{1 + e^{-z}}$$"
+      />
+    );
+
+    const katexSpans = container.querySelectorAll('.katex');
+    expect(katexSpans.length).toBeGreaterThan(0);
+    expect(container.querySelector('.katex-mathml')).toBeInTheDocument();
+  });
 });
+

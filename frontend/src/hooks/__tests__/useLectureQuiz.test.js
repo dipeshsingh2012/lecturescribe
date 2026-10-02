@@ -5,7 +5,6 @@ import useLectureQuiz from '../useLectureQuiz';
 describe('useLectureQuiz hook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.clear();
   });
 
   it('initializes with default empty state', () => {
@@ -16,6 +15,42 @@ describe('useLectureQuiz hook', () => {
     expect(result.current.selectedAnswers).toEqual({});
     expect(result.current.score).toBe(0);
     expect(result.current.isCompleted).toBe(false);
+  });
+
+  it('hydrates persisted quiz and user answers from API response', async () => {
+    const mockQuizWithAttempts = {
+      video_id: 'vid123',
+      lecture_title: 'Vector Spaces',
+      questions: [
+        {
+          id: 1,
+          question: 'What is a basis?',
+          options: ['Option A', 'Option B', 'Option C', 'Option D'],
+          correct_index: 0,
+          explanation: 'Explained at [01:32:00].',
+          timestamp: '01:32:00'
+        }
+      ],
+      user_answers: { 1: 0 },
+      user_score: 1,
+      is_completed: true
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockQuizWithAttempts
+    });
+
+    const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }, 'student@example.com'));
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false);
+    });
+
+    expect(result.current.quizData).toEqual(mockQuizWithAttempts);
+    expect(result.current.selectedAnswers).toEqual({ 1: 0 });
+    expect(result.current.score).toBe(1);
+    expect(result.current.isCompleted).toBe(true);
   });
 
   it('fetchOrGenerateQuiz fetches quiz from API and updates state', async () => {
@@ -75,7 +110,7 @@ describe('useLectureQuiz hook', () => {
     expect(result.current.quizData).toBeNull();
   });
 
-  it('selectAnswer records answers and tracks score and completion', async () => {
+  it('selectAnswer records answers and tracks score and completion, syncing with DB', async () => {
     const mockQuiz = {
       video_id: 'vid123',
       questions: [
@@ -89,7 +124,7 @@ describe('useLectureQuiz hook', () => {
       json: async () => mockQuiz
     });
 
-    const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }));
+    const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }, 'student@example.com'));
 
     await act(async () => {
       await result.current.fetchOrGenerateQuiz(false);
@@ -107,6 +142,21 @@ describe('useLectureQuiz hook', () => {
     expect(result.current.answeredCount).toBe(1);
     expect(result.current.isCompleted).toBe(false);
 
+    // Verify DB sync call was made
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/vid123/quiz/answers'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_email: 'student@example.com',
+          answers: { 1: 1 },
+          score: 1,
+          completed: false
+        })
+      })
+    );
+
     // Answer Q2 incorrectly (index 0 instead of 2)
     act(() => {
       result.current.selectAnswer(2, 0);
@@ -123,12 +173,19 @@ describe('useLectureQuiz hook', () => {
     });
     expect(result.current.selectedAnswers[1]).toBe(1);
 
-    // Resetting quiz clears answers
-    act(() => {
-      result.current.resetQuiz();
+    // Resetting quiz clears answers and calls DELETE on DB endpoint
+    await act(async () => {
+      await result.current.resetQuiz();
     });
     expect(result.current.selectedAnswers).toEqual({});
     expect(result.current.score).toBe(0);
     expect(result.current.isCompleted).toBe(false);
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/vid123/quiz/answers?email=student%40example.com'),
+      expect.objectContaining({
+        method: 'DELETE'
+      })
+    );
   });
 });

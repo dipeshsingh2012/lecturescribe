@@ -6,53 +6,12 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const cleanCourse = (courseName || '').trim();
   const courseSlug = normalizeCourseSlug(cleanCourse);
 
-  const [quizData, setQuizData] = useState(() => {
-    if (!courseSlug || typeof window === 'undefined') return null;
-    try {
-      const cached = localStorage.getItem(`ls_course_quiz_${courseSlug}`);
-      return cached ? JSON.parse(cached) : null;
-    } catch {
-      return null;
-    }
-  });
-
+  const [quizData, setQuizData] = useState(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizError, setQuizError] = useState(null);
-
-  const [selectedAnswers, setSelectedAnswers] = useState(() => {
-    if (!courseSlug || typeof window === 'undefined') return {};
-    try {
-      const cached = localStorage.getItem(`ls_course_quiz_answers_${courseSlug}`);
-      return cached ? JSON.parse(cached) : {};
-    } catch {
-      return {};
-    }
-  });
+  const [selectedAnswers, setSelectedAnswers] = useState({});
 
   const lastSlugRef = useRef(courseSlug);
-
-  // Switch quiz state ONLY when truly switching to a different course
-  useEffect(() => {
-    if (lastSlugRef.current !== courseSlug) {
-      lastSlugRef.current = courseSlug;
-      if (!courseSlug) {
-        setQuizData(null);
-        setSelectedAnswers({});
-        setQuizError(null);
-      } else {
-        try {
-          const cachedQuiz = localStorage.getItem(`ls_course_quiz_${courseSlug}`);
-          const cachedAns = localStorage.getItem(`ls_course_quiz_answers_${courseSlug}`);
-          setQuizData(cachedQuiz ? JSON.parse(cachedQuiz) : null);
-          setSelectedAnswers(cachedAns ? JSON.parse(cachedAns) : {});
-        } catch {
-          setQuizData(null);
-          setSelectedAnswers({});
-        }
-        setQuizError(null);
-      }
-    }
-  }, [courseSlug]);
 
   const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
     if (!cleanCourse) return;
@@ -77,50 +36,79 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
       const data = await res.json();
       setQuizData(data);
-      if (courseSlug && typeof window !== 'undefined') {
-        try {
-          localStorage.setItem(`ls_course_quiz_${courseSlug}`, JSON.stringify(data));
-        } catch {}
-      }
 
       if (regenerate) {
         setSelectedAnswers({});
-        if (courseSlug && typeof window !== 'undefined') {
-          try {
-            localStorage.removeItem(`ls_course_quiz_answers_${courseSlug}`);
-          } catch {}
-        }
+        // Reset answers in database if regenerating
+        const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
+        fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/answers${delEmail}`, {
+          method: 'DELETE'
+        }).catch(() => {});
+      } else if (data.user_answers && Object.keys(data.user_answers).length > 0) {
+        // Restore user's persisted answers directly from database
+        setSelectedAnswers(data.user_answers);
       }
     } catch (err) {
-      console.error('Failed to generate course quiz:', err);
-      setQuizError(err.message || 'Unable to generate course quiz. Please try again.');
+      console.error('Failed to retrieve course quiz from database:', err);
+      setQuizError(err.message || 'Unable to load course quiz. Please try again.');
     } finally {
       setQuizLoading(false);
     }
-  }, [cleanCourse, courseSlug, userEmail]);
+  }, [cleanCourse, userEmail]);
+
+  // Switch quiz state ONLY when truly switching to a different course
+  useEffect(() => {
+    if (lastSlugRef.current !== courseSlug) {
+      lastSlugRef.current = courseSlug;
+      setQuizData(null);
+      setSelectedAnswers({});
+      setQuizError(null);
+      if (courseSlug) {
+        fetchOrGenerateQuiz(false);
+      }
+    }
+  }, [courseSlug, fetchOrGenerateQuiz]);
 
   const selectAnswer = useCallback((questionId, optionIndex) => {
     setSelectedAnswers((prev) => {
       // Once answered, do not allow changing to preserve initial test score
       if (prev[questionId] !== undefined) return prev;
       const next = { ...prev, [questionId]: optionIndex };
-      if (courseSlug && typeof window !== 'undefined') {
-        try {
-          localStorage.setItem(`ls_course_quiz_answers_${courseSlug}`, JSON.stringify(next));
-        } catch {}
+
+      // Persist directly to Relational Database
+      if (cleanCourse) {
+        const total = quizData?.questions?.length || 0;
+        const currentScore = (quizData?.questions || []).reduce((acc, q) => {
+          const choice = next[q.id];
+          return choice === q.correct_index ? acc + 1 : acc;
+        }, 0);
+        const isDone = total > 0 && Object.keys(next).length === total;
+
+        fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/answers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_email: userEmail || 'anonymous',
+            answers: next,
+            score: currentScore,
+            completed: isDone
+          })
+        }).catch((e) => console.warn('Database answer save error:', e));
       }
+
       return next;
     });
-  }, [courseSlug]);
+  }, [cleanCourse, quizData, userEmail]);
 
   const resetQuiz = useCallback(() => {
     setSelectedAnswers({});
-    if (courseSlug && typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem(`ls_course_quiz_answers_${courseSlug}`);
-      } catch {}
+    if (cleanCourse) {
+      const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
+      fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/answers${delEmail}`, {
+        method: 'DELETE'
+      }).catch(() => {});
     }
-  }, [courseSlug]);
+  }, [cleanCourse, userEmail]);
 
   const totalQuestions = quizData?.questions?.length || 0;
   const answeredCount = Object.keys(selectedAnswers).length;

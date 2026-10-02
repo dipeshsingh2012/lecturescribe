@@ -1,56 +1,16 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
 
-export default function useLectureQuiz(activeData) {
+export default function useLectureQuiz(activeData, userEmail = null) {
   const videoId = activeData?.videoId || activeData?.video_id || '';
+  const email = userEmail || activeData?.user_email || null;
 
-  const [quizData, setQuizData] = useState(() => {
-    if (!videoId || typeof window === 'undefined') return null;
-    try {
-      const cached = localStorage.getItem(`ls_lecture_quiz_${videoId}`);
-      return cached ? JSON.parse(cached) : null;
-    } catch {
-      return null;
-    }
-  });
-
+  const [quizData, setQuizData] = useState(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizError, setQuizError] = useState(null);
-
-  const [selectedAnswers, setSelectedAnswers] = useState(() => {
-    if (!videoId || typeof window === 'undefined') return {};
-    try {
-      const cached = localStorage.getItem(`ls_lecture_quiz_answers_${videoId}`);
-      return cached ? JSON.parse(cached) : {};
-    } catch {
-      return {};
-    }
-  });
+  const [selectedAnswers, setSelectedAnswers] = useState({});
 
   const lastVidRef = useRef(videoId);
-
-  // Reset/switch quiz state when switching to a different lecture
-  useEffect(() => {
-    if (lastVidRef.current !== videoId) {
-      lastVidRef.current = videoId;
-      if (!videoId) {
-        setQuizData(null);
-        setSelectedAnswers({});
-        setQuizError(null);
-      } else {
-        try {
-          const cachedQuiz = localStorage.getItem(`ls_lecture_quiz_${videoId}`);
-          const cachedAns = localStorage.getItem(`ls_lecture_quiz_answers_${videoId}`);
-          setQuizData(cachedQuiz ? JSON.parse(cachedQuiz) : null);
-          setSelectedAnswers(cachedAns ? JSON.parse(cachedAns) : {});
-        } catch {
-          setQuizData(null);
-          setSelectedAnswers({});
-        }
-        setQuizError(null);
-      }
-    }
-  }, [videoId]);
 
   const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
     if (!videoId) return;
@@ -61,7 +21,8 @@ export default function useLectureQuiz(activeData) {
       if (numQuestions) {
         payload.num_questions = numQuestions;
       }
-      const res = await fetch(`${API_BASE}/api/lecture/${videoId}/quiz`, {
+      const emailParam = email ? `?email=${encodeURIComponent(email)}` : '';
+      const res = await fetch(`${API_BASE}/api/lecture/${videoId}/quiz${emailParam}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -74,25 +35,32 @@ export default function useLectureQuiz(activeData) {
 
       const data = await res.json();
       setQuizData(data);
-      if (videoId && typeof window !== 'undefined') {
-        try {
-          localStorage.setItem(`ls_lecture_quiz_${videoId}`, JSON.stringify(data));
-        } catch {}
-      }
 
       if (regenerate) {
         setSelectedAnswers({});
-        if (videoId && typeof window !== 'undefined') {
-          try {
-            localStorage.removeItem(`ls_lecture_quiz_answers_${videoId}`);
-          } catch {}
-        }
+        const delEmail = email ? `?email=${encodeURIComponent(email)}` : '';
+        fetch(`${API_BASE}/api/lecture/${videoId}/quiz/answers${delEmail}`, {
+          method: 'DELETE'
+        }).catch(() => {});
+      } else if (data.user_answers && Object.keys(data.user_answers).length > 0) {
+        // Restore user's persisted answers directly from database
+        setSelectedAnswers(data.user_answers);
       }
     } catch (err) {
-      console.error('Failed to generate quiz:', err);
-      setQuizError(err.message || 'Unable to generate quiz. Please try again.');
+      console.error('Failed to retrieve lecture quiz from database:', err);
+      setQuizError(err.message || 'Unable to load quiz. Please try again.');
     } finally {
       setQuizLoading(false);
+    }
+  }, [videoId, email]);
+
+  // Reset/switch quiz state when switching to a different lecture
+  useEffect(() => {
+    if (lastVidRef.current !== videoId) {
+      lastVidRef.current = videoId;
+      setQuizData(null);
+      setSelectedAnswers({});
+      setQuizError(null);
     }
   }, [videoId]);
 
@@ -101,23 +69,41 @@ export default function useLectureQuiz(activeData) {
       // Once answered, do not allow changing to preserve initial test score
       if (prev[questionId] !== undefined) return prev;
       const next = { ...prev, [questionId]: optionIndex };
-      if (videoId && typeof window !== 'undefined') {
-        try {
-          localStorage.setItem(`ls_lecture_quiz_answers_${videoId}`, JSON.stringify(next));
-        } catch {}
+
+      // Persist directly to Relational Database
+      if (videoId) {
+        const total = quizData?.questions?.length || 0;
+        const currentScore = (quizData?.questions || []).reduce((acc, q) => {
+          const choice = next[q.id];
+          return choice === q.correct_index ? acc + 1 : acc;
+        }, 0);
+        const isDone = total > 0 && Object.keys(next).length === total;
+
+        fetch(`${API_BASE}/api/lecture/${videoId}/quiz/answers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_email: email || 'anonymous',
+            answers: next,
+            score: currentScore,
+            completed: isDone
+          })
+        }).catch((e) => console.warn('Database lecture answer save error:', e));
       }
+
       return next;
     });
-  }, [videoId]);
+  }, [videoId, email, quizData]);
 
   const resetQuiz = useCallback(() => {
     setSelectedAnswers({});
-    if (videoId && typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem(`ls_lecture_quiz_answers_${videoId}`);
-      } catch {}
+    if (videoId) {
+      const delEmail = email ? `?email=${encodeURIComponent(email)}` : '';
+      fetch(`${API_BASE}/api/lecture/${videoId}/quiz/answers${delEmail}`, {
+        method: 'DELETE'
+      }).catch(() => {});
     }
-  }, [videoId]);
+  }, [videoId, email]);
 
   const totalQuestions = quizData?.questions?.length || 0;
   const answeredCount = Object.keys(selectedAnswers).length;

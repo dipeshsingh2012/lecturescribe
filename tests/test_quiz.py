@@ -1,18 +1,21 @@
+import os
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.main import app, determine_lecture_quiz_count
 from backend.rag_engine import pinecone_rag_engine
 from backend.redis_service import RedisCacheService
+from backend.database import RelationalDBManager
 
 
 class TestLectureQuiz(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app, raise_server_exceptions=False)
 
-    def test_generate_lecture_quiz_fallback(self):
-        """Test deterministic quiz generation when LLMs are not called."""
+    def test_generate_lecture_quiz_raises_without_llm(self):
+        """Verify that generator raises RuntimeError when LLMs fail, with NO fallback synthesizers."""
         cues = [
             {"time": "00:00", "text": "Welcome to Linear Algebra. Today we study vector spaces."},
             {"time": "43:34", "text": "Slope is a geometric interpretation of vector ratios alpha u + beta v."},
@@ -21,27 +24,70 @@ class TestLectureQuiz(unittest.TestCase):
             {"time": "01:32:00", "text": "A basis is a linearly independent spanning set."},
         ]
 
-        # Patch requests.post so it triggers fallback
+        # Patch requests.post to fail so all LLM attempts fail
         with patch("requests.post", side_effect=Exception("Network offline")):
+            with self.assertRaises(RuntimeError) as cm:
+                pinecone_rag_engine.generate_lecture_quiz(
+                    video_id="101010",
+                    lecture_title="Linear Algebra Session 5",
+                    cues=cues,
+                    num_questions=5
+                )
+            self.assertIn("All configured AI models failed", str(cm.exception))
+
+    def test_generate_lecture_quiz_llm_success(self):
+        """Test deterministic parsing of LLM response into quiz schema."""
+        cues = [
+            {"time": "00:00", "text": "Welcome to Linear Algebra. Today we study vector spaces."},
+            {"time": "43:34", "text": "Slope is a geometric interpretation of vector ratios alpha u + beta v."}
+        ]
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "questions": [
+                            {
+                                "id": 1,
+                                "question": "What is a vector space?",
+                                "options": [
+                                    "A set closed under vector addition and scalar multiplication",
+                                    "A single real number",
+                                    "A geometric ray in Euclidean space",
+                                    "An empty collection of matrices"
+                                ],
+                                "correct_index": 0,
+                                "explanation": "Defined at [00:00].",
+                                "timestamp": "00:00",
+                                "difficulty": "easy"
+                            }
+                        ]
+                    })
+                }
+            }]
+        }
+
+        with patch.dict(os.environ, {"GROQ_API_KEY": "fake_groq_key"}), patch("requests.post", return_value=mock_resp):
             quiz = pinecone_rag_engine.generate_lecture_quiz(
                 video_id="101010",
                 lecture_title="Linear Algebra Session 5",
                 cues=cues,
-                num_questions=5
+                num_questions=1
             )
 
         self.assertEqual(quiz["video_id"], "101010")
         self.assertEqual(quiz["lecture_title"], "Linear Algebra Session 5")
-        self.assertEqual(len(quiz["questions"]), 5)
-        for q in quiz["questions"]:
-            self.assertIn("question", q)
-            self.assertEqual(len(q["options"]), 4)
-            self.assertIn("correct_index", q)
-            self.assertIn("explanation", q)
-            self.assertIn("timestamp", q)
+        self.assertEqual(len(quiz["questions"]), 1)
+        q = quiz["questions"][0]
+        self.assertEqual(q["question"], "What is a vector space?")
+        self.assertEqual(len(q["options"]), 4)
+        self.assertEqual(q["correct_index"], 0)
+        self.assertEqual(q["timestamp"], "00:00")
+        self.assertEqual(q["difficulty"], "easy")
 
     def test_quiz_filters_greetings_and_filler(self):
-        """Verify that greetings, roll-calls, and pleasantries are excluded from questions."""
+        """Verify that greetings, roll-calls, and pleasantries are excluded by _filter_substantive_cues."""
         cues = [
             {"time": "00:00", "text": "Namaste,"},
             {"time": "01:30", "text": "Namaste to all of you. Are people there?"},
@@ -51,20 +97,14 @@ class TestLectureQuiz(unittest.TestCase):
             {"time": "25:00", "text": "Gram-Schmidt orthogonalization produces an orthonormal basis spanning the same subspace."}
         ]
 
-        with patch("requests.post", side_effect=Exception("Network offline")):
-            quiz = pinecone_rag_engine.generate_lecture_quiz(
-                video_id="math_test",
-                lecture_title="Advanced Linear Algebra",
-                cues=cues,
-                num_questions=3
-            )
-
-        for q in quiz["questions"]:
-            full_content = q["question"] + " " + " ".join(q["options"]) + " " + q["explanation"]
-            self.assertNotIn("Namaste", full_content)
-            self.assertNotIn("Girish", full_content)
-            self.assertNotIn("Are people there", full_content)
-            self.assertNotIn("introductory greeting with no mathematical bearing", full_content.lower())
+        substantive = pinecone_rag_engine._filter_substantive_cues(cues)
+        combined = " ".join(c.get("text", "") for c in substantive)
+        self.assertNotIn("Namaste,", combined)
+        self.assertNotIn("Are people there", combined)
+        self.assertNotIn("Good morning, Girish.", combined)
+        self.assertIn("spectral theorem", combined)
+        self.assertIn("Singular value decomposition", combined)
+        self.assertIn("Gram-Schmidt", combined)
 
     @patch("backend.database.db_manager.get_saved_video")
     def test_quiz_endpoint_404_when_missing(self, mock_get_saved):
@@ -127,7 +167,6 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertTrue(mock_redis.setex.called or mock_redis.set.called)
 
         # Test get_quiz hit
-        import json
         mock_redis.get.return_value = json.dumps(quiz_payload)
         cached = service.get_quiz("test_123")
         self.assertIsNotNone(cached)
@@ -135,7 +174,6 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertEqual(cached["video_id"], "test_123")
 
     def test_database_quiz_persistence(self):
-        from backend.database import RelationalDBManager
         db = RelationalDBManager(postgres_url="")
 
         quiz_data = {
@@ -166,7 +204,6 @@ class TestLectureQuiz(unittest.TestCase):
 
     @patch("backend.database.RelationalDBManager._get_connection")
     def test_database_quiz_postgres_query(self, mock_conn_func):
-        from backend.database import RelationalDBManager
         mock_cursor = MagicMock()
         mock_conn = MagicMock()
         mock_conn.__enter__.return_value = mock_conn
@@ -208,8 +245,6 @@ class TestLectureQuiz(unittest.TestCase):
         mock_gen.assert_not_called()
 
     def test_determine_lecture_quiz_count(self):
-        from backend.main import determine_lecture_quiz_count
-
         # 1. Short lecture <= 15m -> 5 questions
         self.assertEqual(determine_lecture_quiz_count(duration_str="12m"), 5)
 
@@ -236,11 +271,28 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertEqual(determine_lecture_quiz_count(cues=long_cues), 15)
 
     def test_generate_lecture_quiz_scaling_and_clamping(self):
-        """Test that generator scales up to 15 questions and clamps over 15."""
+        """Test that generator clamps questions at target count (max 15)."""
         cues = [{"time": f"{i:02d}:00", "text": f"Lecture segment {i} discussing core theorem {i}."} for i in range(25)]
 
-        with patch("requests.post", side_effect=Exception("Network offline")):
-            # 1. Requesting 15 questions produces exactly 15
+        generated_qs = [
+            {
+                "id": i,
+                "question": f"Question {i}?",
+                "options": ["A", "B", "C", "D"],
+                "correct_index": 0,
+                "explanation": f"Exp {i}",
+                "timestamp": f"{i:02d}:00",
+                "difficulty": "medium"
+            }
+            for i in range(1, 25)
+        ]
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({"questions": generated_qs})}}]
+        }
+
+        with patch.dict(os.environ, {"GROQ_API_KEY": "fake_groq_key"}), patch("requests.post", return_value=mock_resp):
             quiz_15 = pinecone_rag_engine.generate_lecture_quiz(
                 video_id="vid_long",
                 lecture_title="Long Lecture",
@@ -249,7 +301,6 @@ class TestLectureQuiz(unittest.TestCase):
             )
             self.assertEqual(len(quiz_15["questions"]), 15)
 
-            # 2. Requesting 25 questions clamps to max 15
             quiz_clamped = pinecone_rag_engine.generate_lecture_quiz(
                 video_id="vid_long",
                 lecture_title="Long Lecture",
@@ -283,8 +334,22 @@ class TestLectureQuiz(unittest.TestCase):
         _, kwargs = mock_gen.call_args
         self.assertEqual(kwargs.get("num_questions"), 15)
 
-    def test_generate_course_quiz_covers_all_lectures(self):
-        """Test that generate_course_quiz distributes questions across all course lectures."""
+    def test_generate_course_quiz_raises_without_llm(self):
+        """Verify course quiz generator raises RuntimeError when LLMs fail, with NO fallback synthesizers."""
+        lectures_data = [
+            {"video_id": "lec_1", "title": "Lecture 1", "cues": [{"time": "01:00", "text": "Intro"}]}
+        ]
+        with patch("requests.post", side_effect=Exception("Network offline")):
+            with self.assertRaises(RuntimeError) as cm:
+                pinecone_rag_engine.generate_course_quiz(
+                    course_name="Applied Linear Algebra",
+                    lectures_data=lectures_data,
+                    num_questions=5
+                )
+            self.assertIn("All configured AI models failed", str(cm.exception))
+
+    def test_generate_course_quiz_covers_all_lectures_llm(self):
+        """Test that generate_course_quiz parses multi-lecture questions from LLM."""
         lectures_data = [
             {
                 "video_id": "lec_1",
@@ -303,24 +368,60 @@ class TestLectureQuiz(unittest.TestCase):
             }
         ]
 
-        with patch("requests.post", side_effect=Exception("Network offline")):
+        mock_qs = [
+            {
+                "id": 1,
+                "question": "What is linear combination?",
+                "options": ["A", "B", "C", "D"],
+                "correct_index": 0,
+                "lecture_id": "lec_1",
+                "lecture_title": "Lecture 1: Vector Spaces",
+                "timestamp": "02:00",
+                "difficulty": "medium",
+                "explanation": "At [02:00]."
+            },
+            {
+                "id": 2,
+                "question": "What is an eigenvalue?",
+                "options": ["A", "B", "C", "D"],
+                "correct_index": 1,
+                "lecture_id": "lec_2",
+                "lecture_title": "Lecture 2: Eigenvalues",
+                "timestamp": "15:30",
+                "difficulty": "medium",
+                "explanation": "At [15:30]."
+            },
+            {
+                "id": 3,
+                "question": "What is SVD?",
+                "options": ["A", "B", "C", "D"],
+                "correct_index": 2,
+                "lecture_id": "lec_3",
+                "lecture_title": "Lecture 3: Singular Value Decomposition",
+                "timestamp": "30:00",
+                "difficulty": "hard",
+                "explanation": "At [30:00]."
+            }
+        ]
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({"questions": mock_qs})}}]
+        }
+
+        with patch.dict(os.environ, {"GROQ_API_KEY": "fake_groq_key"}), patch("requests.post", return_value=mock_resp):
             quiz = pinecone_rag_engine.generate_course_quiz(
                 course_name="Applied Linear Algebra",
                 lectures_data=lectures_data,
-                num_questions=6
+                num_questions=3
             )
 
         self.assertEqual(quiz["course_name"], "Applied Linear Algebra")
         self.assertEqual(quiz["lecture_count"], 3)
-        self.assertEqual(len(quiz["questions"]), 6)
-
-        # Verify that questions cover all 3 lectures
+        self.assertEqual(len(quiz["questions"]), 3)
         covered_lectures = {q["lecture_id"] for q in quiz["questions"]}
         self.assertEqual(covered_lectures, {"lec_1", "lec_2", "lec_3"})
-        for q in quiz["questions"]:
-            self.assertIn("lecture_title", q)
-            self.assertIn("timestamp", q)
-            self.assertEqual(len(q["options"]), 4)
 
     @patch("backend.database.db_manager.get_course_details")
     @patch("backend.database.db_manager.get_saved_video")
@@ -369,13 +470,114 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertEqual(data["questions"][0]["lecture_id"], "ml_1")
 
         # 2. Test course quiz database persistence
-        from backend.database import RelationalDBManager
         db = RelationalDBManager(postgres_url="")
         db.save_course_quiz("Machine Learning", data, lecture_count=2)
         saved = db.get_saved_course_quiz("Machine Learning")
         self.assertIsNotNone(saved)
         self.assertEqual(saved["course_slug"], "machine-learning")
         self.assertTrue(saved.get("persisted"))
+
+    def test_quiz_attempt_db_persistence(self):
+        """Test pure database persistence for student quiz attempts."""
+        db = RelationalDBManager(postgres_url="")
+
+        # 1. Save lecture attempt
+        saved = db.save_quiz_attempt(
+            quiz_type="lecture",
+            target_id="vid_99",
+            user_email="student@univ.edu",
+            answers={"1": 2, "2": 0},
+            score=1,
+            completed=False
+        )
+        self.assertTrue(saved)
+
+        # 2. Retrieve attempt
+        attempt = db.get_quiz_attempt("lecture", "vid_99", "student@univ.edu")
+        self.assertIsNotNone(attempt)
+        self.assertEqual(attempt["answers"], {"1": 2, "2": 0})
+        self.assertEqual(attempt["score"], 1)
+        self.assertFalse(attempt["is_completed"])
+
+        # 3. Update attempt to completed
+        db.save_quiz_attempt(
+            quiz_type="lecture",
+            target_id="vid_99",
+            user_email="student@univ.edu",
+            answers={"1": 2, "2": 0, "3": 1},
+            score=2,
+            completed=True
+        )
+        updated = db.get_quiz_attempt("lecture", "vid_99", "student@univ.edu")
+        self.assertEqual(updated["score"], 2)
+        self.assertTrue(updated["is_completed"])
+
+        # 4. Delete attempt
+        deleted = db.delete_quiz_attempt("lecture", "vid_99", "student@univ.edu")
+        self.assertTrue(deleted)
+        self.assertIsNone(db.get_quiz_attempt("lecture", "vid_99", "student@univ.edu"))
+
+    @patch("backend.database.RelationalDBManager._get_connection")
+    def test_quiz_attempt_postgres_query(self, mock_conn_func):
+        """Verify Postgres SQL executes UPSERT for quiz attempts."""
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn_func.return_value = mock_conn
+
+        db = RelationalDBManager(postgres_url="postgresql://user:pass@localhost:5432/testdb")
+
+        res = db.save_quiz_attempt(
+            quiz_type="course",
+            target_id="applied-math",
+            user_email="user@test.com",
+            answers={"1": 0},
+            score=1,
+            completed=True
+        )
+        self.assertTrue(res)
+        self.assertTrue(mock_cursor.execute.called)
+        executed_sql = mock_cursor.execute.call_args[0][0]
+        self.assertIn("INSERT INTO lecturescribe_quiz_attempts", executed_sql)
+        self.assertIn("ON CONFLICT (quiz_type, target_id, user_email)", executed_sql)
+
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("backend.database.db_manager.get_saved_quiz")
+    def test_quiz_answers_api_endpoints(self, mock_get_quiz, mock_get_video):
+        mock_get_video.return_value = {"title": "Calculus", "cues": []}
+        mock_get_quiz.return_value = {
+            "video_id": "calc_1",
+            "lecture_title": "Calculus",
+            "questions": [{"id": 1, "question": "Q?", "options": ["A", "B", "C", "D"], "correct_index": 0}]
+        }
+
+        # 1. Save answers via POST
+        res_post = self.client.post("/api/lecture/calc_1/quiz/answers", json={
+            "user_email": "tester@test.com",
+            "answers": {"1": 0},
+            "score": 1,
+            "completed": True
+        })
+        self.assertEqual(res_post.status_code, 200)
+        self.assertTrue(res_post.json()["success"])
+
+        # 2. Retrieve quiz with email query param - should hydrate user answers from DB
+        res_get = self.client.get("/api/lecture/calc_1/quiz?email=tester@test.com")
+        self.assertEqual(res_get.status_code, 200)
+        data = res_get.json()
+        self.assertEqual(data["user_answers"], {"1": 0})
+        self.assertEqual(data["user_score"], 1)
+        self.assertTrue(data["is_completed"])
+
+        # 3. Delete answers via DELETE
+        res_del = self.client.delete("/api/lecture/calc_1/quiz/answers?email=tester@test.com")
+        self.assertEqual(res_del.status_code, 200)
+        self.assertTrue(res_del.json()["success"])
+
+        # 4. Verify cleared
+        res_get2 = self.client.get("/api/lecture/calc_1/quiz?email=tester@test.com")
+        self.assertNotIn("user_answers", res_get2.json())
 
 
 if __name__ == "__main__":

@@ -283,12 +283,20 @@ class QuizGenerateRequest(BaseModel):
     num_questions: Optional[int] = None
 
 
+class QuizAnswersRequest(BaseModel):
+    user_email: Optional[str] = None
+    answers: Dict[str, int] = {}
+    score: Optional[int] = 0
+    completed: Optional[bool] = False
+
+
 @app.get("/api/lecture/{video_id}/quiz")
 @app.post("/api/lecture/{video_id}/quiz")
 def get_or_generate_lecture_quiz(
     video_id: str,
     regenerate: bool = Query(False, description="Force regenerate without using cache"),
     num_questions: Optional[int] = Query(None, description="Number of quiz questions to generate (3-15)"),
+    email: Optional[str] = Query(None, description="Signed-in user email"),
     body: Optional[QuizGenerateRequest] = None
 ):
     """Retrieve or generate interactive practice quiz with LaTeX math formulas."""
@@ -301,6 +309,14 @@ def get_or_generate_lecture_quiz(
         cached_quiz = redis_cache.get_quiz(clean_vid)
         if cached_quiz:
             print(f"⚡ [Redis Hit] Returning cached quiz for video '{clean_vid}'.")
+            if email:
+                attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
+                if attempt:
+                    cached_quiz = dict(cached_quiz)
+                    cached_quiz["user_answers"] = attempt.get("answers", {})
+                    cached_quiz["user_score"] = attempt.get("score", 0)
+                    cached_quiz["user_completed"] = attempt.get("completed", False)
+                    cached_quiz["is_completed"] = attempt.get("completed", False)
             return cached_quiz
 
     # 2. Check Relational Database Persistence
@@ -310,6 +326,14 @@ def get_or_generate_lecture_quiz(
             print(f"💾 [PostgreSQL Hit] Returning persisted quiz for video '{clean_vid}'.")
             if redis_cache:
                 redis_cache.set_quiz(clean_vid, db_quiz, ttl_seconds=86400)
+            if email:
+                attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
+                if attempt:
+                    db_quiz = dict(db_quiz)
+                    db_quiz["user_answers"] = attempt.get("answers", {})
+                    db_quiz["user_score"] = attempt.get("score", 0)
+                    db_quiz["user_completed"] = attempt.get("completed", False)
+                    db_quiz["is_completed"] = attempt.get("completed", False)
             return db_quiz
 
     # 3. Retrieve Saved Video & Cues from DB
@@ -328,13 +352,19 @@ def get_or_generate_lecture_quiz(
     else:
         target_count = determine_lecture_quiz_count(cues, saved.get("duration"))
 
-    # 4. Generate with LLM / fallback
-    quiz_data = pinecone_rag_engine.generate_lecture_quiz(
-        video_id=clean_vid,
-        lecture_title=title,
-        cues=cues,
-        num_questions=target_count
-    )
+    # 4. Generate with LLM (No Fallbacks)
+    try:
+        quiz_data = pinecone_rag_engine.generate_lecture_quiz(
+            video_id=clean_vid,
+            lecture_title=title,
+            cues=cues,
+            num_questions=target_count
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to generate quiz via AI model: {str(e)}"
+        )
 
     # 5. Persist to Relational Database
     db_manager.save_quiz(clean_vid, quiz_data)
@@ -343,7 +373,33 @@ def get_or_generate_lecture_quiz(
     if redis_cache:
         redis_cache.set_quiz(clean_vid, quiz_data, ttl_seconds=86400)
 
+    if email:
+        attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
+        if attempt:
+            quiz_data = dict(quiz_data)
+            quiz_data["user_answers"] = attempt.get("answers", {})
+            quiz_data["user_score"] = attempt.get("score", 0)
+            quiz_data["user_completed"] = attempt.get("completed", False)
+            quiz_data["is_completed"] = attempt.get("completed", False)
+
     return quiz_data
+
+
+@app.post("/api/lecture/{video_id}/quiz/answers")
+def save_lecture_quiz_answers(video_id: str, req: QuizAnswersRequest):
+    """Persist user quiz response state directly into the relational database."""
+    clean_vid = str(video_id or "").strip()
+    email = req.user_email or "anonymous"
+    db_manager.save_quiz_attempt("lecture", clean_vid, email, req.answers, req.score or 0, req.completed or False)
+    return {"status": "success", "success": True}
+
+
+@app.delete("/api/lecture/{video_id}/quiz/answers")
+def reset_lecture_quiz_answers(video_id: str, email: Optional[str] = Query(None)):
+    """Reset user quiz response state in the relational database."""
+    clean_vid = str(video_id or "").strip()
+    db_manager.delete_quiz_attempt("lecture", clean_vid, email or "anonymous")
+    return {"status": "success", "success": True}
 
 
 @app.get("/api/transcript")
@@ -1094,6 +1150,14 @@ def get_or_generate_course_quiz(
         cached_quiz = redis_cache.get_course_quiz(course_slug)
         if cached_quiz:
             print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
+            if email:
+                attempt = db_manager.get_quiz_attempt("course", course_slug, email)
+                if attempt:
+                    cached_quiz = dict(cached_quiz)
+                    cached_quiz["user_answers"] = attempt.get("answers", {})
+                    cached_quiz["user_score"] = attempt.get("score", 0)
+                    cached_quiz["user_completed"] = attempt.get("completed", False)
+                    cached_quiz["is_completed"] = attempt.get("completed", False)
             return cached_quiz
 
     # 2. Check Database Persistence
@@ -1103,6 +1167,14 @@ def get_or_generate_course_quiz(
             print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
             if redis_cache:
                 redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)
+            if email:
+                attempt = db_manager.get_quiz_attempt("course", course_slug, email)
+                if attempt:
+                    db_quiz = dict(db_quiz)
+                    db_quiz["user_answers"] = attempt.get("answers", {})
+                    db_quiz["user_score"] = attempt.get("score", 0)
+                    db_quiz["user_completed"] = attempt.get("completed", False)
+                    db_quiz["is_completed"] = attempt.get("completed", False)
             return db_quiz
 
     # 3. Retrieve Course & Lecture list from DB
@@ -1139,12 +1211,18 @@ def get_or_generate_course_quiz(
             detail=f"No lectures in course '{canonical_title}' have transcripts available to generate a quiz."
         )
 
-    # 5. Generate Course Quiz
-    quiz_data = pinecone_rag_engine.generate_course_quiz(
-        course_name=canonical_title,
-        lectures_data=valid_lectures,
-        num_questions=req_count
-    )
+    # 5. Generate Course Quiz (No Fallbacks)
+    try:
+        quiz_data = pinecone_rag_engine.generate_course_quiz(
+            course_name=canonical_title,
+            lectures_data=valid_lectures,
+            num_questions=req_count
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to generate course quiz via AI model: {str(e)}"
+        )
 
     # 6. Persist to Relational Database
     db_manager.save_course_quiz(canonical_title, quiz_data, lecture_count=len(valid_lectures))
@@ -1153,7 +1231,35 @@ def get_or_generate_course_quiz(
     if redis_cache:
         redis_cache.set_course_quiz(course_slug, quiz_data, ttl_seconds=86400)
 
+    if email:
+        attempt = db_manager.get_quiz_attempt("course", course_slug, email)
+        if attempt:
+            quiz_data = dict(quiz_data)
+            quiz_data["user_answers"] = attempt.get("answers", {})
+            quiz_data["user_score"] = attempt.get("score", 0)
+            quiz_data["user_completed"] = attempt.get("completed", False)
+            quiz_data["is_completed"] = attempt.get("completed", False)
+
     return quiz_data
+
+
+@app.post("/api/course/{course_name}/quiz/answers")
+def save_course_quiz_answers(course_name: str, req: QuizAnswersRequest):
+    """Persist user course quiz responses directly into PostgreSQL."""
+    clean_course = str(course_name).strip()
+    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+    email = req.user_email or "anonymous"
+    db_manager.save_quiz_attempt("course", course_slug, email, req.answers, req.score or 0, req.completed or False)
+    return {"status": "success", "success": True}
+
+
+@app.delete("/api/course/{course_name}/quiz/answers")
+def reset_course_quiz_answers(course_name: str, email: Optional[str] = Query(None)):
+    """Reset user course quiz response state in PostgreSQL."""
+    clean_course = str(course_name).strip()
+    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+    db_manager.delete_quiz_attempt("course", course_slug, email or "anonymous")
+    return {"status": "success", "success": True}
 
 
 @app.post("/api/user/library/record")

@@ -11,6 +11,7 @@ import os
 import re
 import json
 import datetime
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from collections import OrderedDict
@@ -72,6 +73,7 @@ class RelationalDBManager:
         self._resources_memory_cache: List[Dict[str, Any]] = []
         self._quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._course_quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._quiz_attempts_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -255,6 +257,20 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_slug ON lecturescribe_course_quizzes(course_slug);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_quiz_attempts (
+                            id SERIAL PRIMARY KEY,
+                            quiz_type VARCHAR(32) NOT NULL,
+                            target_id VARCHAR(255) NOT NULL,
+                            user_email VARCHAR(255) NOT NULL DEFAULT 'anonymous',
+                            answers JSONB NOT NULL DEFAULT '{}'::jsonb,
+                            score INT DEFAULT 0,
+                            completed BOOLEAN DEFAULT FALSE,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_quiz_attempt UNIQUE (quiz_type, target_id, user_email)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_quiz_attempt ON lecturescribe_quiz_attempts(quiz_type, target_id, user_email);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -513,6 +529,138 @@ class RelationalDBManager:
             if conn:
                 conn.close()
         return None
+
+    def save_quiz_attempt(
+        self,
+        quiz_type: str,
+        target_id: str,
+        user_email: str,
+        answers: Dict[str, int],
+        score: int = 0,
+        completed: bool = False
+    ) -> bool:
+        """Persist user quiz responses and score into PostgreSQL and Memory Cache."""
+        q_type = str(quiz_type or "course").strip().lower()
+        t_id = str(target_id or "").strip().lower()
+        email = str(user_email or "anonymous").strip().lower()
+        key = f"{q_type}:{t_id}:{email}"
+
+        attempt_data = {
+            "quiz_type": q_type,
+            "target_id": t_id,
+            "user_email": email,
+            "answers": answers or {},
+            "score": int(score or 0),
+            "completed": bool(completed),
+            "is_completed": bool(completed),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+        self._quiz_attempts_memory_cache[key] = attempt_data
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    answers_json = json.dumps(answers or {})
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_quiz_attempts (quiz_type, target_id, user_email, answers, score, completed, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (quiz_type, target_id, user_email)
+                        DO UPDATE SET
+                            answers = EXCLUDED.answers,
+                            score = EXCLUDED.score,
+                            completed = EXCLUDED.completed,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (q_type, t_id, email, answers_json, score, completed))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_quiz_attempt error for '{key}': {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_quiz_attempt(self, quiz_type: str, target_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+        """Retrieve persisted user quiz attempt from Memory cache or PostgreSQL."""
+        q_type = str(quiz_type or "course").strip().lower()
+        t_id = str(target_id or "").strip().lower()
+        email = str(user_email or "anonymous").strip().lower()
+        key = f"{q_type}:{t_id}:{email}"
+
+        if key in self._quiz_attempts_memory_cache:
+            return self._quiz_attempts_memory_cache[key]
+
+        if not self.postgres_url:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT answers, score, completed, updated_at
+                        FROM lecturescribe_quiz_attempts
+                        WHERE quiz_type = %s AND target_id = %s AND user_email = %s
+                        LIMIT 1;
+                    """, (q_type, t_id, email))
+                    row = cursor.fetchone()
+                    if row:
+                        raw_answers = row.get("answers")
+                        answers_dict = raw_answers if isinstance(raw_answers, dict) else json.loads(raw_answers or "{}")
+                        data = {
+                            "quiz_type": q_type,
+                            "target_id": t_id,
+                            "user_email": email,
+                            "answers": answers_dict,
+                            "score": row.get("score", 0),
+                            "completed": row.get("completed", False),
+                            "is_completed": row.get("completed", False),
+                            "updated_at": str(row.get("updated_at") or "")
+                        }
+                        self._quiz_attempts_memory_cache[key] = data
+                        return data
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_quiz_attempt error for '{key}': {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+        return None
+
+    def delete_quiz_attempt(self, quiz_type: str, target_id: str, user_email: str) -> bool:
+        """Reset user quiz attempt in PostgreSQL and Memory cache."""
+        q_type = str(quiz_type or "course").strip().lower()
+        t_id = str(target_id or "").strip().lower()
+        email = str(user_email or "anonymous").strip().lower()
+        key = f"{q_type}:{t_id}:{email}"
+        self._quiz_attempts_memory_cache.pop(key, None)
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        DELETE FROM lecturescribe_quiz_attempts
+                        WHERE quiz_type = %s AND target_id = %s AND user_email = %s;
+                    """, (q_type, t_id, email))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] delete_quiz_attempt error for '{key}': {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
 
     def get_saved_video(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Fetch video transcript from In-Memory Cache or PostgreSQL.

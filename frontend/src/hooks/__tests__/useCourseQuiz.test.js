@@ -5,7 +5,6 @@ import useCourseQuiz from '../useCourseQuiz';
 describe('useCourseQuiz hook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.clear();
   });
 
   it('initializes with default empty state', () => {
@@ -18,42 +17,45 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.isCompleted).toBe(false);
   });
 
-  it('loads cached quiz and answers from localStorage immediately', () => {
-    const mockQuiz = {
+  it('hydrates persisted quiz and user answers from API response', async () => {
+    const mockQuizWithAttempts = {
       course_name: 'Applied Mathematics',
       course_slug: 'applied-mathematics',
-      questions: [{ id: 1, question: 'Q1', options: ['A', 'B', 'C', 'D'], correct_index: 0 }]
+      lecture_count: 1,
+      questions: [
+        {
+          id: 1,
+          question: 'What is a vector space?',
+          options: ['A set closed under addition and scaling', 'A number', 'A single point', 'None'],
+          correct_index: 0,
+          lecture_id: 'vid1',
+          lecture_title: 'Session 1',
+          timestamp: '00:00'
+        }
+      ],
+      user_answers: { 1: 0 },
+      user_score: 1,
+      is_completed: true
     };
-    localStorage.setItem('ls_course_quiz_applied-mathematics', JSON.stringify(mockQuiz));
-    localStorage.setItem('ls_course_quiz_answers_applied-mathematics', JSON.stringify({ 1: 0 }));
 
-    const { result } = renderHook(() => useCourseQuiz('applied-mathematics'));
-    expect(result.current.quizData).toEqual(mockQuiz);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockQuizWithAttempts
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Applied Mathematics', 'student@example.com'));
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false);
+    });
+
+    expect(result.current.quizData).toEqual(mockQuizWithAttempts);
     expect(result.current.selectedAnswers).toEqual({ 1: 0 });
+    expect(result.current.score).toBe(1);
     expect(result.current.isCompleted).toBe(true);
   });
 
-  it('does not wipe quiz state when course title is resolved from URL slug', async () => {
-    const mockQuiz = {
-      course_name: 'Applied Mathematics for Data Science',
-      course_slug: 'applied-mathematics-for-data-science',
-      questions: [{ id: 1, question: 'Q1', options: ['A', 'B', 'C', 'D'], correct_index: 0 }]
-    };
-    localStorage.setItem('ls_course_quiz_applied-mathematics-for-data-science', JSON.stringify(mockQuiz));
-
-    // Initially rendered with slug
-    const { result, rerender } = renderHook(
-      ({ courseName }) => useCourseQuiz(courseName),
-      { initialProps: { courseName: 'applied-mathematics-for-data-science' } }
-    );
-    expect(result.current.quizData).toEqual(mockQuiz);
-
-    // Later rerendered with full human-readable title
-    rerender({ courseName: 'Applied Mathematics for Data Science' });
-    expect(result.current.quizData).toEqual(mockQuiz);
-  });
-
-  it('fetchOrGenerateQuiz fetches course quiz from API and updates state', async () => {
+  it('syncs answers and score to backend database API on selectAnswer and deletes on resetQuiz', async () => {
     const mockQuiz = {
       course_name: 'Applied Mathematics',
       course_slug: 'applied-mathematics',
@@ -94,29 +96,58 @@ describe('useCourseQuiz hook', () => {
     });
 
     expect(result.current.quizData).toEqual(mockQuiz);
-    expect(result.current.quizLoading).toBe(false);
-    expect(result.current.quizError).toBeNull();
+
+    // Answer Q1 correctly
+    act(() => {
+      result.current.selectAnswer(1, 0);
+    });
+
+    expect(result.current.selectedAnswers).toEqual({ 1: 0 });
+    expect(result.current.score).toBe(1);
+    expect(result.current.isCompleted).toBe(false);
+
+    // Verify DB sync call was made for Q1
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/course/Applied%20Mathematics/quiz?email=student%40example.com'),
+      expect.stringContaining('/api/course/Applied%20Mathematics/quiz/answers'),
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ regenerate: false })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_email: 'student@example.com',
+          answers: { 1: 0 },
+          score: 1,
+          completed: false
+        })
       })
     );
 
-    // Test answer selection and lecture breakdown
+    // Answer Q2 incorrectly
     act(() => {
-      result.current.selectAnswer(1, 0); // Correct
-      result.current.selectAnswer(2, 1); // Incorrect
+      result.current.selectAnswer(2, 1);
     });
 
+    expect(result.current.selectedAnswers).toEqual({ 1: 0, 2: 1 });
     expect(result.current.score).toBe(1);
     expect(result.current.isCompleted).toBe(true);
     expect(result.current.lectureBreakdown['Session 1: Vectors'].correct).toBe(1);
     expect(result.current.lectureBreakdown['Session 2: Matrices'].correct).toBe(0);
 
-    // Verify localStorage was updated with answers
-    expect(localStorage.getItem('ls_course_quiz_answers_applied-mathematics')).toBe(JSON.stringify({ 1: 0, 2: 1 }));
+    // Reset quiz
+    await act(async () => {
+      await result.current.resetQuiz();
+    });
+
+    expect(result.current.selectedAnswers).toEqual({});
+    expect(result.current.score).toBe(0);
+    expect(result.current.isCompleted).toBe(false);
+
+    // Verify DB delete call was made
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/course/Applied%20Mathematics/quiz/answers?email=student%40example.com'),
+      expect.objectContaining({
+        method: 'DELETE'
+      })
+    );
   });
 
   it('handles API error gracefully in fetchOrGenerateQuiz', async () => {

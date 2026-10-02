@@ -1186,19 +1186,6 @@ class Llama3PineconeRAGStore:
 
         raise RuntimeError("All LLM providers failed to generate summary.")
 
-    FALLBACK_ACADEMIC_DISTRACTORS = [
-        "The property only holds when the operator is strictly positive definite and self-adjoint.",
-        "A counterexample shows the sequence diverges in general Banach spaces without uniform convexity.",
-        "The formulation requires all singular values to be non-zero for well-posed inversion.",
-        "The gradient dynamics exhibit sublinear convergence rate $\\mathcal{O}(1/k)$ for non-strongly convex objectives.",
-        "The basis vectors must form an orthonormal set with respect to the standard $L^2$ inner product.",
-        "The dual formulation achieves strong duality only when Slater's constraint qualification is met.",
-        "The empirical risk converges to the expected risk with rate $\\mathcal{O}(1/\\sqrt{n})$ under i.i.d. sampling.",
-        "The orthogonal projection matrix satisfies $P^2 = P$ and $P = P^T$ in Euclidean space.",
-        "All eigenvalues must satisfy $|\\lambda_i| < 1$ for asymptotic spectral stability.",
-        "The transformation preserves the trace and determinant under arbitrary similarity transforms."
-    ]
-
     @staticmethod
     def _is_conversational_filler(text: str) -> bool:
         """Detect greeting, roll-call, or conversational filler cues."""
@@ -1417,44 +1404,9 @@ class Llama3PineconeRAGStore:
                 except Exception as e:
                     print(f"⚠️ [Gemini Quiz Warning] {e}")
 
-        # 3. Fallback Academic Synthesizer (offline, test, or API rate limit fallback)
-        fallback_questions = []
-        num_sub = len(substantive_cues)
-        for i in range(target_count):
-            cue_idx = min(num_sub - 1, int(((i + 0.5) / max(1, target_count)) * num_sub))
-            cue = substantive_cues[cue_idx] if substantive_cues else {"time": "05:00", "text": title}
-            ts = cue.get("time", "05:00")
-            snippet = cue.get("text", "").strip() or f"Foundational principle in {title}"
-
-            dist_indices = [(i * 3 + d) % len(self.FALLBACK_ACADEMIC_DISTRACTORS) for d in range(3)]
-            distractors = [self.FALLBACK_ACADEMIC_DISTRACTORS[d_idx] for d_idx in dist_indices]
-
-            clean_snippet = snippet
-            if len(clean_snippet) > 120:
-                clean_snippet = clean_snippet[:117] + "..."
-
-            c_idx = i % 4
-            options = list(distractors)
-            options.insert(c_idx, clean_snippet)
-
-            fallback_questions.append({
-                "id": i + 1,
-                "question": f"At [{ts}], which key concept or statement is emphasized regarding {title}?",
-                "options": options,
-                "correct_index": c_idx,
-                "explanation": f"At [{ts}], the professor explains: \"{snippet}\".",
-                "timestamp": ts,
-                "difficulty": "medium"
-            })
-
-        return {
-            "video_id": clean_vid,
-            "lecture_title": title,
-            "questions": fallback_questions,
-            "total_questions": len(fallback_questions),
-            "model": "Deterministic Transcript Synthesizer",
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        }
+        raise RuntimeError(
+            f"Unable to generate quiz for lecture '{title}'. All configured AI models failed or returned invalid responses."
+        )
 
     def generate_course_quiz(
         self,
@@ -1684,54 +1636,9 @@ class Llama3PineconeRAGStore:
                 except Exception as e:
                     print(f"⚠️ [Gemini Course Quiz Warning] {e}")
 
-        # 3. Fallback Academic Synthesizer
-        fallback_questions = []
-        for i in range(target_count):
-            lect = valid_lectures[i % len(valid_lectures)]
-            raw_cues = lect.get("cues", [])
-            substantive_cues = self._filter_substantive_cues(raw_cues)
-            num_sub = len(substantive_cues)
-
-            lect_turn = i // len(valid_lectures)
-            lect_total_turns = max(1, target_count // len(valid_lectures))
-            fraction = (lect_turn + 0.5) / (lect_total_turns + 0.5)
-            cue_idx = min(num_sub - 1, int(fraction * num_sub))
-            cue = substantive_cues[cue_idx] if substantive_cues else {"time": "05:00", "text": lect["title"]}
-            ts = cue.get("time", "05:00")
-            snippet = cue.get("text", "").strip() or f"Foundational principle in {lect['title']}"
-
-            dist_indices = [(i * 3 + d) % len(self.FALLBACK_ACADEMIC_DISTRACTORS) for d in range(3)]
-            distractors = [self.FALLBACK_ACADEMIC_DISTRACTORS[d_idx] for d_idx in dist_indices]
-
-            clean_snippet = snippet
-            if len(clean_snippet) > 120:
-                clean_snippet = clean_snippet[:117] + "..."
-
-            c_idx = i % 4
-            options = list(distractors)
-            options.insert(c_idx, clean_snippet)
-
-            fallback_questions.append({
-                "id": i + 1,
-                "question": f"In '{lect['title']}' around [{ts}], which key concept or principle is analyzed regarding {clean_course}?",
-                "options": options,
-                "correct_index": c_idx,
-                "explanation": f"In lecture '{lect['title']}' around [{ts}], the professor explains: \"{snippet}\".",
-                "lecture_id": lect["video_id"],
-                "lecture_title": lect["title"],
-                "timestamp": ts,
-                "difficulty": "medium"
-            })
-
-        return {
-            "course_name": clean_course,
-            "course_slug": course_slug,
-            "lecture_count": num_lectures,
-            "questions": fallback_questions,
-            "total_questions": len(fallback_questions),
-            "model": "Deterministic Multi-Lecture Synthesizer",
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        }
+        raise RuntimeError(
+            f"Unable to generate course quiz for '{clean_course}'. All configured AI models failed or returned invalid responses."
+        )
 
     @staticmethod
     def check_llm_connectivity() -> Dict[str, Any]:

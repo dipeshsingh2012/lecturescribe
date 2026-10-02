@@ -112,6 +112,14 @@ def format_whatsapp_message(
 
 class TwilioWhatsAppService:
     def __init__(self):
+        self._refresh_env()
+
+    def _refresh_env(self):
+        """Dynamically reload .env to pick up any newly saved credentials."""
+        if _env_path.exists():
+            load_dotenv(dotenv_path=_env_path, override=True)
+        else:
+            load_dotenv(override=True)
         self.account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
         self.auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
         self.from_number = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886").strip()
@@ -119,6 +127,7 @@ class TwilioWhatsAppService:
 
     def is_configured(self) -> bool:
         """Check if Twilio credentials and recipient number are properly set."""
+        self._refresh_env()
         return bool(self.account_sid and self.auth_token and self.to_number)
 
     def send_whatsapp_message(
@@ -130,13 +139,15 @@ class TwilioWhatsAppService:
         Deliver message via Twilio Programmable Messaging API.
         Falls back gracefully to simulation mode if credentials are not configured.
         """
+        self._refresh_env()
         target_to = (recipient or self.to_number).strip()
         if target_to and not target_to.startswith("whatsapp:"):
             # Ensure whatsapp: prefix
             target_to = f"whatsapp:{target_to}"
 
-        # 1. Simulation / Dry Run if credentials missing
-        if not self.account_sid or not self.auth_token or not target_to:
+        # 1. Simulation / Dry Run if credentials missing or placeholder
+        is_placeholder = any(p in self.auth_token.lower() for p in ["[authtoken]", "your_auth_token_here", "placeholder"])
+        if not self.account_sid or not self.auth_token or is_placeholder or not target_to:
             print("\n================ [TWILIO WHATSAPP SIMULATION] ================")
             print(f"Recipient : {target_to or 'NOT CONFIGURED (set TWILIO_WHATSAPP_TO)'}")
             print(f"From      : {self.from_number}")

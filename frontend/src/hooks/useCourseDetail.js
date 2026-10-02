@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
 import { normalizeCourseSlug, getCourseNameFromPath } from '../utils/routing';
 
@@ -29,6 +29,8 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     }
   });
   const [directCourseData, setDirectCourseData] = useState(null);
+  const inFlightRef = useRef('');
+  const lastFetchedRef = useRef('');
 
   // Direct course fetching when navigated to /course/:courseName directly
   useEffect(() => {
@@ -61,28 +63,36 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
       return;
     }
 
-    let isCancelled = false;
+    const queryTarget = slug || selectedCourse;
+    if (inFlightRef.current === queryTarget || lastFetchedRef.current === queryTarget) {
+      return;
+    }
+
+    inFlightRef.current = queryTarget;
+    setCourseLoading(true);
+
     const fetchDirectCourse = async () => {
-      setCourseLoading(true);
       try {
         const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-        const queryTarget = slug || selectedCourse;
         const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(queryTarget)}${emailParam}`);
-        if (res.ok && !isCancelled) {
+        if (res.ok) {
           const data = await res.json();
-          if (data.course) {
+          if (data && data.course) {
+            lastFetchedRef.current = queryTarget;
             setDirectCourseData(data.course);
           }
         }
       } catch (e) {
         console.warn("Direct course lookup error:", e);
       } finally {
-        if (!isCancelled) setCourseLoading(false);
+        if (inFlightRef.current === queryTarget) {
+          inFlightRef.current = '';
+          setCourseLoading(false);
+        }
       }
     };
     fetchDirectCourse();
-    return () => { isCancelled = true; };
-  }, [selectedCourse, effectiveCourses, userEmail]);
+  }, [selectedCourse, effectiveCourses, userEmail, directCourseData]);
 
   const activeCourseData = useMemo(() => {
     if (!selectedCourse) return null;

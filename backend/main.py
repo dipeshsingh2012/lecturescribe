@@ -214,11 +214,16 @@ def get_transcript(
         if saved:
             print(f"[DB Cache Hit] Video '{video_id}' found in database. Skipping transcript and summary re-generation.")
             saved["cached"] = True
-            effective_course = (course_name or saved.get("course_name") or "General Lectures").strip()
+            raw_course = course_name if isinstance(course_name, str) else None
+            effective_course = ((raw_course and raw_course.strip()) or saved.get("course_name") or "General Lectures").strip()
             saved["course_name"] = effective_course
             # Ingest into Algolia & Pinecone (safe/idempotent, skips if already active)
             algolia_service.ingest_cues(video_id, saved["title"], saved["cues"])
             pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved["cues"])
+            drive_url = db_manager.get_drive_folder_url(video_id, email)
+            if drive_url:
+                saved["drive_folder_url"] = drive_url
+                saved["driveFolderUrl"] = drive_url
             if email and email.strip():
                 db_manager.record_user_lecture(
                     user_email=email,
@@ -226,7 +231,8 @@ def get_transcript(
                     title=saved["title"],
                     duration=saved.get("duration", "Unknown"),
                     source_url=saved.get("sourceUrl", f"https://vimeo.com/{video_id}"),
-                    course_name=effective_course
+                    course_name=effective_course,
+                    drive_folder_url=drive_url
                 )
             return saved
 
@@ -261,7 +267,8 @@ def get_transcript(
         summary_sections = generate_summary_sections(cues, title)
         source_url = f"https://vimeo.com/{video_id}"
         caption_label = track.get("label", "English")
-        derived_course = (course_name or extract_course_name(title)).strip()
+        raw_course = course_name if isinstance(course_name, str) else None
+        derived_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
 
         # 3. Save to Relational DB (PostgreSQL)
         db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
@@ -283,6 +290,7 @@ def get_transcript(
                 course_name=derived_course
             )
 
+        drive_url = db_manager.get_drive_folder_url(video_id, email)
         return {
             "videoId": video_id,
             "title": title,
@@ -293,6 +301,8 @@ def get_transcript(
             "summarySections": summary_sections,
             "course_name": derived_course,
             "pineconeIndexedChunks": pinecone_chunks,
+            "drive_folder_url": drive_url,
+            "driveFolderUrl": drive_url,
             "cached": False
         }
 
@@ -1124,6 +1134,7 @@ class CloudUploadRequest(BaseModel):
     parent_folder_id: Optional[str] = None
     access_token: Optional[str] = None
     user_email: Optional[str] = None
+    job_id: Optional[str] = None
 
 
 @app.get("/api/video/download-options")
@@ -1220,7 +1231,7 @@ def upload_lecture_bundle_to_gdrive(
                 s_lines.append("")
             summary_md = "\n".join(s_lines)
 
-    job_id = google_drive_service.create_job(video_id, title)
+    job_id = google_drive_service.create_job(video_id, title, job_id=req.job_id)
 
     background_tasks.add_task(
         google_drive_service.execute_bundle_upload,

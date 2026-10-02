@@ -78,6 +78,7 @@ describe('useCourseDetail hook functionality', () => {
     });
 
     await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
       expect(result.current.activeCourseData?.course_name).toBe('New External Course');
     });
   });

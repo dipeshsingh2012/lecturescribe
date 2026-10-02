@@ -65,5 +65,45 @@ describe('LecturePlayer', () => {
     expect(screen.queryByText(/Cached \(0ms Re-generation\)/i)).toBeNull();
     expect(screen.queryByText(/Database Cache/i)).toBeNull();
     expect(screen.queryByText(/Instant Search/i)).toBeNull();
+    expect(screen.queryByText(/Saved in Drive/i)).toBeNull();
+  });
+
+  it('renders "Saved in Drive" badge linking to Google Drive when drive_folder_url is present', () => {
+    const activeData = {
+      videoId: '556677',
+      title: 'Deep Learning Foundations',
+      course_name: 'CS229',
+      duration: '45:00',
+      total_cues: 120,
+      drive_folder_url: 'https://drive.google.com/drive/folders/folder-xyz'
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={{ course_name: 'CS229' }}
+        selectedCourse="CS229"
+        setSelectedCourse={vi.fn()}
+        userLibrary={[]}
+        effectiveCourses={[]}
+        setActiveData={vi.fn()}
+        navigateTo={vi.fn()}
+        iframeRef={{ current: null }}
+        copied={false}
+        handleCopyTranscript={vi.fn()}
+        googleUser={{ email: 'student@example.com' }}
+        openUploadModal={vi.fn()}
+        lectureResources={[]}
+        lectureResourcesLoading={false}
+        handleDeleteResource={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const driveBadge = screen.getByRole('link', { name: /Saved in Google Drive/i });
+    expect(driveBadge).toBeInTheDocument();
+    expect(driveBadge).toHaveAttribute('href', 'https://drive.google.com/drive/folders/folder-xyz');
+    expect(driveBadge).toHaveAttribute('target', '_blank');
+    expect(screen.getByText('Saved in Drive')).toBeInTheDocument();
   });
 });

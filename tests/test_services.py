@@ -19,6 +19,21 @@ class TestServices(unittest.TestCase):
         self.assertTrue(len(job_id) > 0)
         job = google_drive_service.get_job(job_id)
         self.assertIsNotNone(job)
+
+    def test_gdrive_job_resume(self):
+        job_id = google_drive_service.create_job("test_video_2", "Test Resume Lecture")
+        job = google_drive_service.get_job(job_id)
+        job["status"] = "FAILED"
+        job["error"] = "Network timeout"
+        job["files"] = [{"name": "summary.md", "id": "f123"}]
+
+        resumed_id = google_drive_service.create_job("test_video_2", "Test Resume Lecture", job_id=job_id)
+        self.assertEqual(resumed_id, job_id)
+        resumed_job = google_drive_service.get_job(job_id)
+        self.assertEqual(resumed_job["status"], "PROCESSING")
+        self.assertIsNone(resumed_job["error"])
+        self.assertEqual(len(resumed_job["files"]), 1)
+
     def test_user_library_record_payload(self):
         from backend.main import UserLibraryRecordRequest
         payload = {

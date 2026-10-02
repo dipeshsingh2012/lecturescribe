@@ -76,4 +76,42 @@ describe('CourseLectures', () => {
     fireEvent.click(deleteBtn);
     expect(handleDeleteFromLibrary).toHaveBeenCalledWith('998877');
   });
+
+  it('renders Google Drive badges (header icon, chip, and action button) when drive_folder_url is present', () => {
+    const lectures = [
+      {
+        video_id: '998877',
+        video_url: 'https://vimeo.com/998877',
+        video_title: 'Classical Mechanics Lecture 1',
+        drive_folder_url: 'https://drive.google.com/drive/folders/test-folder-123',
+        total_duration_seconds: 3600,
+        cue_count: 50
+      }
+    ];
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={lectures}
+        handleTranscribe={vi.fn()}
+        handleDeleteFromLibrary={vi.fn()}
+        handleClearCourse={vi.fn()}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    const chip = screen.getByRole('link', { name: /^In Google Drive$/i });
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveAttribute('href', 'https://drive.google.com/drive/folders/test-folder-123');
+    expect(chip).toHaveAttribute('target', '_blank');
+
+    const actionDriveBtn = screen.getByRole('link', { name: /^Open in Google Drive$/i });
+    expect(actionDriveBtn).toBeInTheDocument();
+    expect(actionDriveBtn).toHaveAttribute('href', 'https://drive.google.com/drive/folders/test-folder-123');
+
+    const headerDriveBadge = screen.getByRole('link', { name: /^Saved in Google Drive$/i });
+    expect(headerDriveBadge).toBeInTheDocument();
+    expect(headerDriveBadge).toHaveAttribute('href', 'https://drive.google.com/drive/folders/test-folder-123');
+  });
 });

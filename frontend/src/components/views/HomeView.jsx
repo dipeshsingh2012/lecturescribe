@@ -51,6 +51,7 @@ export default function HomeView({
   setCourseViewTab,
   courseResources,
   openUploadModal,
+  openPreviewModal,
   handleSelectCourse,
   courseResourcesLoading,
   handleDeleteResource,
@@ -284,6 +285,7 @@ export default function HomeView({
           selectedCourse={selectedCourse}
           activeCourseData={activeCourseData}
           openUploadModal={openUploadModal}
+          openPreviewModal={openPreviewModal}
           handleDeleteResource={handleDeleteResource}
           currentTheme={currentTheme}
         />

@@ -637,6 +637,40 @@ class RelationalDBManager:
         finally:
             conn.close()
 
+    def get_drive_folder_url(self, video_id: str, user_email: Optional[str] = None) -> Optional[str]:
+        """Fetch saved Google Drive folder URL for a given video_id."""
+        if not video_id:
+            return None
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if user_email and user_email.strip():
+                        cursor.execute("""
+                            SELECT drive_folder_url FROM lecturescribe_user_library 
+                            WHERE video_id = %s AND user_email = %s AND drive_folder_url IS NOT NULL AND drive_folder_url != ''
+                            ORDER BY id DESC LIMIT 1;
+                        """, (str(video_id), user_email.strip().lower()))
+                        row = cursor.fetchone()
+                        if row and row.get("drive_folder_url"):
+                            return row["drive_folder_url"]
+
+                    cursor.execute("""
+                        SELECT drive_folder_url FROM lecturescribe_user_library 
+                        WHERE video_id = %s AND drive_folder_url IS NOT NULL AND drive_folder_url != ''
+                        ORDER BY id DESC LIMIT 1;
+                    """, (str(video_id),))
+                    row = cursor.fetchone()
+                    if row and row.get("drive_folder_url"):
+                        return row["drive_folder_url"]
+        except Exception as e:
+            print(f"[DB Error fetching drive_folder_url]: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return None
+
     def auto_map_videos_to_user(self, user_email: str):
         """Maps all unassigned or existing database videos to the currently logged in user."""
         if not user_email:

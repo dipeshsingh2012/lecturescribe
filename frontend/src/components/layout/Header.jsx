@@ -16,7 +16,8 @@ import {
   Bot,
   Cloud,
   Folder,
-  LogOut
+  LogOut,
+  Check
 } from 'lucide-react';
 import { ProtonThemeSelector } from '@dipesh.singh/proton';
 import { LMS_THEMES } from '../../store/themeStore';
@@ -111,29 +112,69 @@ export default function Header({
               </button>
             </Box>
 
-            <Tooltip title="Save to Google Drive" arrow>
-              <button
-                onClick={() => openDownloadModal()}
-                aria-label="Save to Google Drive"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: 'rgba(255, 255, 255, 0.16)',
-                  color: '#ffffff',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  padding: '6px 10px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  height: '34px'
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.26)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.16)'; }}
-              >
-                <GoogleDriveIcon size={18} />
-              </button>
-            </Tooltip>
+            {(() => {
+              const driveFolderUrl = (
+                activeData?.drive_folder_url ||
+                activeData?.driveFolderUrl ||
+                userLibrary?.find(l => String(l.video_id) === String(activeData?.videoId))?.drive_folder_url ||
+                userLibrary?.find(l => String(l.video_id) === String(activeData?.videoId))?.driveFolderUrl
+              );
+
+              return (
+                <Tooltip
+                  title={driveFolderUrl ? "Saved in Google Drive — Click to view folder or upload details" : "Save to Google Drive"}
+                  arrow
+                >
+                  <button
+                    onClick={() => openDownloadModal()}
+                    aria-label={driveFolderUrl ? "Saved in Google Drive" : "Save to Google Drive"}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      position: 'relative',
+                      background: driveFolderUrl ? 'rgba(16, 185, 129, 0.22)' : 'rgba(255, 255, 255, 0.16)',
+                      color: '#ffffff',
+                      border: driveFolderUrl ? '1px solid rgba(16, 185, 129, 0.6)' : '1px solid rgba(255, 255, 255, 0.3)',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      height: '34px'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = driveFolderUrl ? 'rgba(16, 185, 129, 0.32)' : 'rgba(255, 255, 255, 0.26)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = driveFolderUrl ? 'rgba(16, 185, 129, 0.22)' : 'rgba(255, 255, 255, 0.16)';
+                    }}
+                  >
+                    <GoogleDriveIcon size={18} />
+                    {driveFolderUrl && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          bottom: '-2px',
+                          right: '-2px',
+                          background: '#10b981',
+                          borderRadius: '50%',
+                          width: '12px',
+                          height: '12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          boxShadow: '0 0 4px rgba(0,0,0,0.5)',
+                          border: '1.5px solid #000'
+                        }}
+                        title="Saved in Drive"
+                      >
+                        <Check size={8} color="#ffffff" strokeWidth={3.5} />
+                      </span>
+                    )}
+                  </button>
+                </Tooltip>
+              );
+            })()}
           </>
         )}
 

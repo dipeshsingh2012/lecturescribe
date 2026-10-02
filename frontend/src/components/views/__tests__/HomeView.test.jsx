@@ -32,6 +32,7 @@ describe('HomeView', () => {
     setCourseViewTab: vi.fn(),
     courseResources: [],
     openUploadModal: vi.fn(),
+    openPreviewModal: vi.fn(),
     handleSelectCourse: vi.fn(),
     courseResourcesLoading: false,
     handleDeleteResource: vi.fn(),
@@ -64,5 +65,34 @@ describe('HomeView', () => {
     const backBtn = screen.getAllByRole('button', { name: /All Courses/i })[0];
     fireEvent.click(backBtn);
     expect(handleClearCourse).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes openPreviewModal to CourseMaterials and triggers it when clicking View', () => {
+    const openPreviewModal = vi.fn();
+    const testResource = {
+      id: 'res-course-1',
+      title: 'Course Syllabus',
+      filename: 'syllabus.pdf',
+      file_type: 'pdf',
+      file_size_bytes: 1024,
+      download_url: 'https://example.com/syllabus.pdf',
+      created_at: '2026-09-01T00:00:00Z',
+      user_email: 'prof@example.com'
+    };
+
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        courseViewTab="resources"
+        courseResources={[testResource]}
+        openPreviewModal={openPreviewModal}
+      />
+    );
+
+    expect(screen.getByText('Course Syllabus')).toBeInTheDocument();
+    const viewButton = screen.getByRole('button', { name: /View/i });
+    fireEvent.click(viewButton);
+    expect(openPreviewModal).toHaveBeenCalledWith(testResource);
   });
 });

@@ -72,11 +72,18 @@ class GoogleDriveService:
             "message": "Sign in with Google to export to your personal Google Drive."
         }
 
-    def create_job(self, video_id: str, title: str) -> str:
-        """Initializes an asynchronous upload job and returns its tracking job_id."""
-        job_id = uuid.uuid4().hex[:12]
-        self._jobs[job_id] = {
-            "job_id": job_id,
+    def create_job(self, video_id: str, title: str, job_id: Optional[str] = None) -> str:
+        """Initializes or resumes an asynchronous upload job and returns its tracking job_id."""
+        if job_id and job_id in self._jobs:
+            existing = self._jobs[job_id]
+            existing["status"] = "PROCESSING"
+            existing["error"] = None
+            existing["current_step"] = "Resuming Google Drive upload..."
+            return job_id
+
+        new_job_id = uuid.uuid4().hex[:12]
+        self._jobs[new_job_id] = {
+            "job_id": new_job_id,
             "video_id": video_id,
             "title": title,
             "status": "PROCESSING",
@@ -90,7 +97,7 @@ class GoogleDriveService:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
         }
-        return job_id
+        return new_job_id
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves current progress and details for a given job."""
@@ -153,6 +160,11 @@ class GoogleDriveService:
         if init_resp.status_code == 401:
             raise RuntimeError(
                 "Google Drive access token expired (HTTP 401). Please sign in with Google again to refresh your session."
+            )
+        if init_resp.status_code == 403:
+            raise RuntimeError(
+                "Google Drive upload permission denied (HTTP 403): Your account has not granted Google Drive permissions. "
+                "Please click 'Authorize Google Drive' in the export modal and make sure the Google Drive permission box is checked."
             )
         if init_resp.status_code not in (200, 201):
             raise RuntimeError(
@@ -348,48 +360,69 @@ class GoogleDriveService:
             return
 
         try:
-            # STEP 1: Download lecture video (.mp4) FIRST so drive session is fresh
-            job["progress"] = 5
-            job["current_step"] = f"Downloading lecture video ({title})..."
+            uploaded_files = list(job.get("files") or [])
+            uploaded_names = {f.get("name") for f in uploaded_files if f.get("name")}
+            video_already_uploaded = any(f.get("is_video") for f in uploaded_files)
+
+            # STEP 1: Download lecture video (.mp4) FIRST so drive session is fresh (skip if video already uploaded)
             video_file = None
-            try:
-                video_file = self._download_lecture_video(
-                    video_id=video_id,
-                    title=title,
-                    streams_info=streams_info,
-                    job=job
-                )
-            except Exception as ve:
-                print(f"[Google Drive Export] Video download error: {ve}")
-                job["video_warning"] = f"Video capture failed ({ve})"
+            if not video_already_uploaded:
+                job["progress"] = max(job.get("progress", 0), 5)
+                job["current_step"] = f"Downloading lecture video ({title})..."
+                try:
+                    video_file = self._download_lecture_video(
+                        video_id=video_id,
+                        title=title,
+                        streams_info=streams_info,
+                        job=job
+                    )
+                except Exception as ve:
+                    print(f"[Google Drive Export] Video download error: {ve}")
+                    job["video_warning"] = f"Video capture failed ({ve})"
+            else:
+                job["progress"] = max(job.get("progress", 0), 85)
+                job["current_step"] = "Video already saved in Google Drive. Resuming remaining lecture bundle..."
 
-            # STEP 2: Connect to Google Drive API & Create Dedicated Folder
-            job["progress"] = 45
-            job["current_step"] = "Connecting to Google Drive API..."
-
+            # STEP 2: Connect to Google Drive API & Get or Create Dedicated Folder
             service = self._get_drive_client(access_token=access_token)
 
-            folder_name = f"LectureScribe - {title} ({video_id})"
-            folder_metadata: Dict[str, Any] = {
-                "name": folder_name,
-                "mimeType": "application/vnd.google-apps.folder"
-            }
-            if parent_folder_id:
-                folder_metadata["parents"] = [parent_folder_id]
+            folder_id = job.get("folder_id")
+            folder_url = job.get("folder_url")
 
-            job["progress"] = 50
-            job["current_step"] = f"Creating dedicated folder '{folder_name}'..."
+            if not folder_id:
+                job["progress"] = max(job.get("progress", 0), 45)
+                job["current_step"] = "Connecting to Google Drive API..."
 
-            folder = service.files().create(
-                body=folder_metadata,
-                fields="id, webViewLink"
-            ).execute()
+                folder_name = f"LectureScribe - {title} ({video_id})"
+                folder_metadata: Dict[str, Any] = {
+                    "name": folder_name,
+                    "mimeType": "application/vnd.google-apps.folder"
+                }
+                if parent_folder_id:
+                    folder_metadata["parents"] = [parent_folder_id]
 
-            folder_id = folder.get("id")
-            folder_url = folder.get("webViewLink") or f"https://drive.google.com/drive/folders/{folder_id}"
+                job["progress"] = max(job.get("progress", 0), 50)
+                job["current_step"] = f"Creating dedicated folder '{folder_name}'..."
 
-            job["folder_id"] = folder_id
-            job["folder_url"] = folder_url
+                try:
+                    folder = service.files().create(
+                        body=folder_metadata,
+                        fields="id, webViewLink"
+                    ).execute()
+                except Exception as fe:
+                    err_str = str(fe)
+                    if "insufficient" in err_str.lower() or "403" in err_str:
+                        raise RuntimeError(
+                            "Google Drive upload permission denied: Your Google sign-in does not have permission to create files in Google Drive. "
+                            "Please click 'Authorize Google Drive' in the export modal, check the Google Drive permission box, and try again."
+                        )
+                    raise
+
+                folder_id = folder.get("id")
+                folder_url = folder.get("webViewLink") or f"https://drive.google.com/drive/folders/{folder_id}"
+
+                job["folder_id"] = folder_id
+                job["folder_url"] = folder_url
 
             if user_email and user_email.strip():
                 try:
@@ -403,10 +436,8 @@ class GoogleDriveService:
                 except Exception as de:
                     print(f"[User Library Sync Notice]: {de}")
 
-            uploaded_files = []
-
-            # STEP 3: Upload the Video File (.mp4) into the Folder
-            if video_file and video_file.exists():
+            # STEP 3: Upload the Video File (.mp4) into the Folder if not already uploaded
+            if not video_already_uploaded and video_file and video_file.exists():
                 v_size_mb = round(video_file.stat().st_size / (1024 * 1024), 1)
                 job["current_step"] = f"Uploading '{video_file.name}' ({v_size_mb} MB) to Google Drive..."
                 job["progress"] = 55
@@ -421,28 +452,30 @@ class GoogleDriveService:
                         start_pct=55,
                         end_pct=85,
                     )
-                    uploaded_files.append({
+                    v_item = {
                         "id": v_resp.get("id"),
                         "name": v_resp.get("name"),
                         "url": v_resp.get("webViewLink") or f"https://drive.google.com/file/d/{v_resp.get('id')}/view",
                         "size": v_resp.get("size") or str(video_file.stat().st_size),
                         "is_video": True,
-                    })
+                    }
+                    uploaded_files.append(v_item)
+                    uploaded_names.add(v_item["name"])
+                    job["files"] = list(uploaded_files)
                     print(f"[Google Drive Export] Video '{video_file.name}' ({v_size_mb} MB) successfully uploaded.")
-                except Exception as vue:
-                    print(f"[Google Drive Export Warning] Video upload error: {vue}")
-                    job["video_warning"] = str(vue)
-                finally:
                     try:
                         video_file.unlink()
                     except Exception:
                         pass
-            else:
-                if not job.get("video_warning"):
-                    job["video_warning"] = "Video stream could not be captured. Uploading documents and download guide."
+                except Exception as vue:
+                    print(f"[Google Drive Export Warning] Video upload error: {vue}")
+                    job["video_warning"] = str(vue)
+                    raise
+            elif not video_already_uploaded and not job.get("video_warning"):
+                job["video_warning"] = "Video stream could not be captured. Uploading documents and download guide."
 
             # STEP 4: Format & Upload the 5 Documentation & Subtitle Bundle Assets
-            job["progress"] = 85
+            job["progress"] = max(job.get("progress", 0), 85)
             job["current_step"] = "Uploading documentation, transcripts, and subtitles..."
 
             files_to_upload: List[Dict[str, Any]] = []
@@ -525,6 +558,10 @@ class GoogleDriveService:
 
             total_doc_files = len(files_to_upload)
             for idx, item in enumerate(files_to_upload):
+                if item["name"] in uploaded_names:
+                    print(f"[Google Drive Export] Skipping already-uploaded file: {item['name']}")
+                    continue
+
                 job["progress"] = 85 + int((idx / total_doc_files) * 12)
                 job["current_step"] = f"Uploading '{item['name']}' ({idx + 1}/{total_doc_files})..."
 
@@ -537,18 +574,30 @@ class GoogleDriveService:
                     mimetype=item["mimeType"],
                     resumable=False
                 )
-                uploaded = service.files().create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields="id, name, webViewLink, size"
-                ).execute()
+                try:
+                    uploaded = service.files().create(
+                        body=file_metadata,
+                        media_body=media,
+                        fields="id, name, webViewLink, size"
+                    ).execute()
+                except Exception as fe:
+                    err_str = str(fe)
+                    if "insufficient" in err_str.lower() or "403" in err_str:
+                        raise RuntimeError(
+                            "Google Drive upload permission denied: Your Google sign-in does not have permission to create files in Google Drive. "
+                            "Please click 'Authorize Google Drive' in the export modal, check the Google Drive permission box, and try again."
+                        )
+                    raise
 
-                uploaded_files.append({
+                new_file = {
                     "id": uploaded.get("id"),
                     "name": uploaded.get("name"),
                     "url": uploaded.get("webViewLink"),
                     "is_video": False,
-                })
+                }
+                uploaded_files.append(new_file)
+                uploaded_names.add(new_file["name"])
+                job["files"] = list(uploaded_files)
 
             job["files"] = uploaded_files
             job["progress"] = 100

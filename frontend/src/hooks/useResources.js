@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
 
 export function useResources(activeVideoId, selectedCourse, googleUser) {
@@ -74,10 +74,16 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     }
   };
 
+  const lastCourseSlugRef = useRef('');
+
   useEffect(() => {
     if (selectedCourse) {
+      const slug = selectedCourse.trim().toLowerCase();
+      if (lastCourseSlugRef.current === slug) return;
+      lastCourseSlugRef.current = slug;
       fetchCourseResources(selectedCourse);
     } else {
+      lastCourseSlugRef.current = '';
       setCourseResources([]);
     }
   }, [selectedCourse]);

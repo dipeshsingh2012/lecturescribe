@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
 import { normalizeCourseSlug } from '../utils/routing';
 
@@ -7,9 +7,16 @@ export function useUserLibrary(userEmail) {
   const [userCourses, setUserCourses] = useState([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [librarySearch, setLibrarySearch] = useState('');
+  const inFlightFetchRef = useRef(false);
+  const lastFetchedEmailRef = useRef(null);
 
   const fetchUserLibrary = async (email = userEmail) => {
     if (!email) return;
+    if (inFlightFetchRef.current && lastFetchedEmailRef.current === email) {
+      return;
+    }
+    inFlightFetchRef.current = true;
+    lastFetchedEmailRef.current = email;
     setLibraryLoading(true);
     try {
       const [libRes, coursesRes] = await Promise.all([
@@ -27,6 +34,7 @@ export function useUserLibrary(userEmail) {
     } catch (err) {
       console.warn("Failed to fetch user library/courses:", err);
     } finally {
+      inFlightFetchRef.current = false;
       setLibraryLoading(false);
     }
   };

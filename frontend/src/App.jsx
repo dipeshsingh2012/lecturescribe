@@ -65,7 +65,12 @@ export default function App() {
 
   // 1. Core State & Domain Hooks
   const [activeLectureRef, setActiveLectureRef] = useState(null);
-  const auth = useGoogleAuth(activeLectureRef, (email) => library.fetchUserLibrary(email));
+  const auth = useGoogleAuth(activeLectureRef, (email, job) => {
+    library.fetchUserLibrary(email);
+    if (job?.folder_url) {
+      lecture.setActiveData((prev) => (prev ? { ...prev, drive_folder_url: job.folder_url } : prev));
+    }
+  });
   const library = useUserLibrary(auth.googleUser?.email);
   const course = useCourseDetail(library.effectiveCourses, auth.googleUser?.email, library.librarySearch, null);
   const { selectedCourse, setSelectedCourse, setDirectCourseData } = course;
@@ -209,6 +214,7 @@ export default function App() {
             setCourseViewTab={resources.setCourseViewTab}
             courseResources={resources.courseResources}
             openUploadModal={resources.openUploadModal}
+            openPreviewModal={resources.openPreviewModal}
             handleSelectCourse={handleSelectCourse}
             courseResourcesLoading={resources.courseResourcesLoading}
             handleDeleteResource={resources.handleDeleteResource}
@@ -272,6 +278,8 @@ export default function App() {
           open={auth.isDownloadModalOpen}
           onClose={auth.closeDownloadModal}
           activeData={activeData}
+          userLibrary={library.userLibrary}
+          effectiveCourses={library.effectiveCourses}
           {...auth}
         />
 

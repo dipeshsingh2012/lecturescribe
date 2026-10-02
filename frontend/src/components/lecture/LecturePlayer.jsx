@@ -6,9 +6,11 @@ import {
 } from '@mui/material';
 import {
   Folder,
-  ChevronRight
+  ChevronRight,
+  ExternalLink
 } from 'lucide-react';
 import { normalizeCourseSlug } from '../../utils/routing';
+import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
 
 export default function LecturePlayer({
@@ -32,6 +34,17 @@ export default function LecturePlayer({
   currentTheme
 }) {
   if (!activeData) return null;
+
+  const driveFolderUrl = (
+    activeData.drive_folder_url ||
+    activeData.driveFolderUrl ||
+    userLibrary?.find(l => String(l.video_id) === String(activeData.videoId))?.drive_folder_url ||
+    userLibrary?.find(l => String(l.video_id) === String(activeData.videoId))?.driveFolderUrl ||
+    effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id) === String(activeData.videoId))?.drive_folder_url ||
+    effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id) === String(activeData.videoId))?.driveFolderUrl ||
+    activeCourseData?.lectures?.find(l => String(l.video_id) === String(activeData.videoId))?.drive_folder_url ||
+    activeCourseData?.lectures?.find(l => String(l.video_id) === String(activeData.videoId))?.driveFolderUrl
+  );
 
   return (
     <div style={{
@@ -161,8 +174,38 @@ export default function LecturePlayer({
         ></iframe>
       </div>
 
-      <div>
-        <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3, margin: 0 }}>{activeData.title}</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+        <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3, margin: 0, flex: '1 1 240px' }}>
+          {activeData.title}
+        </h1>
+        {driveFolderUrl && (
+          <a
+            href={driveFolderUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Saved in Google Drive"
+            title="Open lecture bundle in Google Drive"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '4px 12px',
+              borderRadius: '16px',
+              background: 'var(--highlight-bg)',
+              border: '1px solid var(--badge-border)',
+              color: 'var(--theme-primary)',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              textDecoration: 'none',
+              flexShrink: 0,
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <GoogleDriveIcon size={15} />
+            <span>Saved in Drive</span>
+            <ExternalLink size={12} style={{ opacity: 0.8 }} />
+          </a>
+        )}
       </div>
 
       {/* Lecture Resources Shelf */}

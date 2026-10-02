@@ -42,7 +42,7 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
   const pollIntervalRef = useRef(null);
 
-  const handleGoogleSignIn = async (autoStartUpload = false) => {
+  const handleGoogleSignIn = async (autoStartUpload = false, forceConsent = false) => {
     let currentStatus = gdriveStatus;
     if (!currentStatus?.client_id) {
       try {
@@ -77,6 +77,7 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
       const tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: activeClientId,
         scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email',
+        hint: googleUser?.email || undefined,
         callback: async (tokenResponse) => {
           if (tokenResponse.error) {
             console.error("Google Sign-in error:", tokenResponse);
@@ -85,6 +86,20 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
           }
           if (tokenResponse.access_token) {
             const token = tokenResponse.access_token;
+            const grantedScope = tokenResponse.scope || '';
+            const hasDriveScope = (
+              grantedScope.includes('drive.file') ||
+              grantedScope.includes('drive') ||
+              (window.google?.accounts?.oauth2?.hasGrantedAnyScope &&
+               window.google.accounts.oauth2.hasGrantedAnyScope(tokenResponse, 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'))
+            );
+
+            // If user signed in while export modal was open, ensure Drive scope was granted
+            if (isDownloadModalOpen && !hasDriveScope) {
+              setGdriveError("Google Drive permission was not granted. Please click 'Authorize Google Drive' again and check the Google Drive permission box in the popup.");
+              return;
+            }
+
             setGdriveAccessToken(token);
             const expiresIn = tokenResponse.expires_in ? Number(tokenResponse.expires_in) : 3599;
             const expiresAt = Date.now() + (expiresIn * 1000);
@@ -118,7 +133,7 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
           }
         },
       });
-      tokenClient.requestAccessToken();
+      tokenClient.requestAccessToken(isDownloadModalOpen || forceConsent ? { prompt: 'consent' } : {});
     } catch (err) {
       console.error("Google OAuth Exception:", err);
       setGdriveError(`Failed to initialize Google Sign-in: ${err.message}`);
@@ -144,7 +159,20 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
     if (!activeData) return;
     setGdriveUploading(true);
     setGdriveError(null);
-    setGdriveJob(null);
+
+    const isResuming = Boolean(gdriveJobId && gdriveJob?.status === 'FAILED');
+    const existingJobId = isResuming ? gdriveJobId : null;
+
+    if (isResuming && gdriveJob) {
+      setGdriveJob(prev => ({
+        ...prev,
+        status: 'PROCESSING',
+        current_step: 'Resuming Google Drive upload...',
+        error: null
+      }));
+    } else {
+      setGdriveJob(null);
+    }
 
     let summaryMd = `# Executive Summary: ${activeData.title}\n\n`;
     (activeData.summarySections || []).forEach(sec => {
@@ -164,7 +192,8 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
           title: activeData.title,
           summary_content: summaryMd,
           access_token: (activeToken || '').trim() || null,
-          user_email: googleUser?.email || null
+          user_email: googleUser?.email || null,
+          job_id: existingJobId
         })
       });
 
@@ -176,7 +205,9 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
       const jobData = await res.json();
       const jobId = jobData.job_id;
       setGdriveJobId(jobId);
-      setGdriveJob({ status: 'PROCESSING', progress: 5, current_step: 'Downloading video stream...' });
+      if (!isResuming) {
+        setGdriveJob({ status: 'PROCESSING', progress: 5, current_step: 'Downloading video stream...' });
+      }
 
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
@@ -192,7 +223,7 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
               pollIntervalRef.current = null;
               setGdriveUploading(false);
               if (currentJob.status === 'COMPLETED' && googleUser?.email && typeof onUploadSuccess === 'function') {
-                onUploadSuccess(googleUser.email);
+                onUploadSuccess(googleUser.email, currentJob);
               }
               if (currentJob.status === 'FAILED') {
                 setGdriveError(currentJob.error || currentJob.current_step || "Upload failed");

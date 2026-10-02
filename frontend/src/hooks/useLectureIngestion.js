@@ -95,7 +95,8 @@ export function useLectureIngestion({
           navigateTo(`/course/${normalizeCourseSlug(finalCourse)}/lecture/${vidId}`, true);
         }
       }
-      setActiveData({ ...cached, cached: true });
+      const existingDriveUrl = cached.drive_folder_url || cached.driveFolderUrl || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(vidId))?.drive_folder_url || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(vidId))?.driveFolderUrl;
+      setActiveData({ ...cached, drive_folder_url: existingDriveUrl, driveFolderUrl: existingDriveUrl, cached: true });
       setUrlInput('');
       if (typeof initChatMessages === 'function') {
         initChatMessages(cached.title, vidId);
@@ -142,7 +143,9 @@ export function useLectureIngestion({
             navigateTo(`/course/${normalizeCourseSlug(finalCourse)}/lecture/${data.videoId}`, true);
           }
         }
-        setActiveData(data);
+        const existingDriveUrl = data.drive_folder_url || data.driveFolderUrl || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(data.videoId))?.drive_folder_url || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(data.videoId))?.driveFolderUrl;
+        const enrichedData = { ...data, drive_folder_url: existingDriveUrl || data.drive_folder_url, driveFolderUrl: existingDriveUrl || data.driveFolderUrl };
+        setActiveData(enrichedData);
         setUrlInput('');
         if (typeof initChatMessages === 'function') {
           initChatMessages(data.title, data.videoId);

@@ -5,6 +5,7 @@ import useCourseQuiz from '../useCourseQuiz';
 describe('useCourseQuiz hook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   it('initializes with default empty state', () => {
@@ -15,6 +16,41 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.selectedAnswers).toEqual({});
     expect(result.current.score).toBe(0);
     expect(result.current.isCompleted).toBe(false);
+  });
+
+  it('loads cached quiz and answers from localStorage immediately', () => {
+    const mockQuiz = {
+      course_name: 'Applied Mathematics',
+      course_slug: 'applied-mathematics',
+      questions: [{ id: 1, question: 'Q1', options: ['A', 'B', 'C', 'D'], correct_index: 0 }]
+    };
+    localStorage.setItem('ls_course_quiz_applied-mathematics', JSON.stringify(mockQuiz));
+    localStorage.setItem('ls_course_quiz_answers_applied-mathematics', JSON.stringify({ 1: 0 }));
+
+    const { result } = renderHook(() => useCourseQuiz('applied-mathematics'));
+    expect(result.current.quizData).toEqual(mockQuiz);
+    expect(result.current.selectedAnswers).toEqual({ 1: 0 });
+    expect(result.current.isCompleted).toBe(true);
+  });
+
+  it('does not wipe quiz state when course title is resolved from URL slug', async () => {
+    const mockQuiz = {
+      course_name: 'Applied Mathematics for Data Science',
+      course_slug: 'applied-mathematics-for-data-science',
+      questions: [{ id: 1, question: 'Q1', options: ['A', 'B', 'C', 'D'], correct_index: 0 }]
+    };
+    localStorage.setItem('ls_course_quiz_applied-mathematics-for-data-science', JSON.stringify(mockQuiz));
+
+    // Initially rendered with slug
+    const { result, rerender } = renderHook(
+      ({ courseName }) => useCourseQuiz(courseName),
+      { initialProps: { courseName: 'applied-mathematics-for-data-science' } }
+    );
+    expect(result.current.quizData).toEqual(mockQuiz);
+
+    // Later rerendered with full human-readable title
+    rerender({ courseName: 'Applied Mathematics for Data Science' });
+    expect(result.current.quizData).toEqual(mockQuiz);
   });
 
   it('fetchOrGenerateQuiz fetches course quiz from API and updates state', async () => {
@@ -61,7 +97,7 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.quizLoading).toBe(false);
     expect(result.current.quizError).toBeNull();
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/course/Applied%20Mathematics/quiz?email=student%40example.com',
+      expect.stringContaining('/api/course/Applied%20Mathematics/quiz?email=student%40example.com'),
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ regenerate: false })
@@ -78,6 +114,9 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.isCompleted).toBe(true);
     expect(result.current.lectureBreakdown['Session 1: Vectors'].correct).toBe(1);
     expect(result.current.lectureBreakdown['Session 2: Matrices'].correct).toBe(0);
+
+    // Verify localStorage was updated with answers
+    expect(localStorage.getItem('ls_course_quiz_answers_applied-mathematics')).toBe(JSON.stringify({ 1: 0, 2: 1 }));
   });
 
   it('handles API error gracefully in fetchOrGenerateQuiz', async () => {

@@ -620,6 +620,18 @@ class Llama3PineconeRAGStore:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
+                "model_name": "llama-3.3-70b-versatile",
+                "display": "Groq Llama 3.3 70B Versatile"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "llama-3.1-8b-instant",
+                "display": "Groq Llama 3.1 8B Instant"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
                 "model_name": "openai/gpt-oss-120b",
                 "display": "Groq GPT-OSS 120B"
             })
@@ -630,6 +642,18 @@ class Llama3PineconeRAGStore:
                 "display": "Groq GPT-OSS 20B"
             })
         if gemini_key:
+            candidates.append({
+                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "auth_header": f"Bearer {gemini_key}",
+                "model_name": "gemini-2.0-flash",
+                "display": "Gemini 2.0 Flash (OpenAI API)"
+            })
+            candidates.append({
+                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "auth_header": f"Bearer {gemini_key}",
+                "model_name": "gemini-1.5-flash",
+                "display": "Gemini 1.5 Flash (OpenAI API)"
+            })
             candidates.append({
                 "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "auth_header": f"Bearer {gemini_key}",
@@ -1162,6 +1186,52 @@ class Llama3PineconeRAGStore:
 
         raise RuntimeError("All LLM providers failed to generate summary.")
 
+    FALLBACK_ACADEMIC_DISTRACTORS = [
+        "The property only holds when the operator is strictly positive definite and self-adjoint.",
+        "A counterexample shows the sequence diverges in general Banach spaces without uniform convexity.",
+        "The formulation requires all singular values to be non-zero for well-posed inversion.",
+        "The gradient dynamics exhibit sublinear convergence rate $\\mathcal{O}(1/k)$ for non-strongly convex objectives.",
+        "The basis vectors must form an orthonormal set with respect to the standard $L^2$ inner product.",
+        "The dual formulation achieves strong duality only when Slater's constraint qualification is met.",
+        "The empirical risk converges to the expected risk with rate $\\mathcal{O}(1/\\sqrt{n})$ under i.i.d. sampling.",
+        "The orthogonal projection matrix satisfies $P^2 = P$ and $P = P^T$ in Euclidean space.",
+        "All eigenvalues must satisfy $|\\lambda_i| < 1$ for asymptotic spectral stability.",
+        "The transformation preserves the trace and determinant under arbitrary similarity transforms."
+    ]
+
+    @staticmethod
+    def _is_conversational_filler(text: str) -> bool:
+        """Detect greeting, roll-call, or conversational filler cues."""
+        if not text:
+            return True
+        t = text.strip()
+        if len(t) < 15:
+            return True
+        filler_pattern = re.compile(
+            r'^(namaste|good morning|good afternoon|good evening|hello|hi|welcome|'
+            r'can you hear me|am i audible|are you there|are people there|is my screen|'
+            r'audio check|mic check|attendance|roll call|yes sir|no sir|okay sir|thank you|'
+            r'bye bye|goodbye|see you|let us start|let me share|give me a second|give me a minute)',
+            re.IGNORECASE
+        )
+        if filler_pattern.search(t):
+            if len(t) < 60:
+                return True
+        return False
+
+    @classmethod
+    def _filter_substantive_cues(cls, cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter out introductory chit-chat, greetings, and short non-academic cues."""
+        substantive = []
+        for c in (cues or []):
+            txt = str(c.get("text") or "").strip()
+            if not cls._is_conversational_filler(txt):
+                substantive.append(c)
+        if len(substantive) >= 2:
+            return substantive
+        non_empty = [c for c in (cues or []) if str(c.get("text") or "").strip()]
+        return non_empty if non_empty else cues
+
     def generate_lecture_quiz(
         self,
         video_id: str,
@@ -1182,13 +1252,13 @@ class Llama3PineconeRAGStore:
         if not valid_cues:
             valid_cues = [{"time": "00:00", "text": f"Lecture overview and introduction for {title}."}]
 
-        # Sample cues evenly to cover entire timeline
-        total_valid = len(valid_cues)
-        if total_valid > 150:
-            step = max(1, total_valid // 100)
-            sampled_cues = valid_cues[::step]
+        substantive_cues = self._filter_substantive_cues(valid_cues)
+        total_sub = len(substantive_cues)
+        if total_sub > 150:
+            step = max(1, total_sub // 100)
+            sampled_cues = substantive_cues[::step]
         else:
-            sampled_cues = valid_cues
+            sampled_cues = substantive_cues
 
         transcript_lines = [f"[{c.get('time', '00:00')}] {c.get('text', '').strip()}" for c in sampled_cues]
         transcript_sample = "\n".join(transcript_lines)[:32000]
@@ -1288,7 +1358,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -1323,7 +1393,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -1347,23 +1417,31 @@ class Llama3PineconeRAGStore:
                 except Exception as e:
                     print(f"⚠️ [Gemini Quiz Warning] {e}")
 
-        # 3. Fallback Synthesizer (offline, test, or API rate limit fallback)
+        # 3. Fallback Academic Synthesizer (offline, test, or API rate limit fallback)
         fallback_questions = []
-        chunk_step = max(1, len(valid_cues) // target_count)
-        for i in range(min(target_count, len(valid_cues))):
-            cue = valid_cues[min(i * chunk_step, len(valid_cues) - 1)]
-            ts = cue.get("time", "00:00")
-            snippet = cue.get("text", "").strip() or f"Introduction to {title}"
+        num_sub = len(substantive_cues)
+        for i in range(target_count):
+            cue_idx = min(num_sub - 1, int(((i + 0.5) / max(1, target_count)) * num_sub))
+            cue = substantive_cues[cue_idx] if substantive_cues else {"time": "05:00", "text": title}
+            ts = cue.get("time", "05:00")
+            snippet = cue.get("text", "").strip() or f"Foundational principle in {title}"
+
+            dist_indices = [(i * 3 + d) % len(self.FALLBACK_ACADEMIC_DISTRACTORS) for d in range(3)]
+            distractors = [self.FALLBACK_ACADEMIC_DISTRACTORS[d_idx] for d_idx in dist_indices]
+
+            clean_snippet = snippet
+            if len(clean_snippet) > 120:
+                clean_snippet = clean_snippet[:117] + "..."
+
+            c_idx = i % 4
+            options = list(distractors)
+            options.insert(c_idx, clean_snippet)
+
             fallback_questions.append({
                 "id": i + 1,
-                "question": f"At [{ts}], which concept or statement is emphasized regarding {title}?",
-                "options": [
-                    f"{snippet[:80]}...",
-                    "A counterexample showing the condition fails in general spaces.",
-                    "An introductory greeting with no mathematical bearing.",
-                    "A proof relying on an unverified physical assumption."
-                ],
-                "correct_index": 0,
+                "question": f"At [{ts}], which key concept or statement is emphasized regarding {title}?",
+                "options": options,
+                "correct_index": c_idx,
                 "explanation": f"At [{ts}], the professor explains: \"{snippet}\".",
                 "timestamp": ts,
                 "difficulty": "medium"
@@ -1422,12 +1500,13 @@ class Llama3PineconeRAGStore:
             # Dynamically scale: 1 lecture -> 6, 2 -> 8, 3 -> 10, 4 -> 12, etc., up to 20 max
             target_count = max(5, min(20, max(6, num_lectures * 3)))
 
-        # Build chronological multi-lecture transcript sample
+        # Build chronological multi-lecture transcript sample using substantive cues
         lecture_summaries = []
         for l_idx, lect in enumerate(valid_lectures):
-            cues = lect["cues"]
-            step = max(1, len(cues) // 25)
-            sampled = cues[::step][:25]
+            raw_cues = lect["cues"]
+            substantive_cues = self._filter_substantive_cues(raw_cues)
+            step = max(1, len(substantive_cues) // 25)
+            sampled = substantive_cues[::step][:25]
             cue_lines = [f"  [{c.get('time', '00:00')}] {c.get('text', '').strip()}" for c in sampled]
             lecture_summaries.append(
                 f"=== LECTURE {l_idx + 1}: {lect['title']} (Video ID: {lect['video_id']}) ===\n" + "\n".join(cue_lines)
@@ -1544,7 +1623,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -1580,7 +1659,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -1605,28 +1684,39 @@ class Llama3PineconeRAGStore:
                 except Exception as e:
                     print(f"⚠️ [Gemini Course Quiz Warning] {e}")
 
-        # 3. Fallback Round-Robin Synthesizer
+        # 3. Fallback Academic Synthesizer
         fallback_questions = []
         for i in range(target_count):
             lect = valid_lectures[i % len(valid_lectures)]
-            cues = lect.get("cues", [])
-            cue_step = max(1, len(cues) // max(1, (target_count // len(valid_lectures)) + 1))
-            cue_idx = min(len(cues) - 1, (i // len(valid_lectures)) * cue_step)
-            cue = cues[cue_idx] if cues else {"time": "00:00", "text": lect["title"]}
-            ts = cue.get("time", "00:00")
-            snippet = cue.get("text", "").strip() or f"Foundational theorem in {lect['title']}"
+            raw_cues = lect.get("cues", [])
+            substantive_cues = self._filter_substantive_cues(raw_cues)
+            num_sub = len(substantive_cues)
+
+            lect_turn = i // len(valid_lectures)
+            lect_total_turns = max(1, target_count // len(valid_lectures))
+            fraction = (lect_turn + 0.5) / (lect_total_turns + 0.5)
+            cue_idx = min(num_sub - 1, int(fraction * num_sub))
+            cue = substantive_cues[cue_idx] if substantive_cues else {"time": "05:00", "text": lect["title"]}
+            ts = cue.get("time", "05:00")
+            snippet = cue.get("text", "").strip() or f"Foundational principle in {lect['title']}"
+
+            dist_indices = [(i * 3 + d) % len(self.FALLBACK_ACADEMIC_DISTRACTORS) for d in range(3)]
+            distractors = [self.FALLBACK_ACADEMIC_DISTRACTORS[d_idx] for d_idx in dist_indices]
+
+            clean_snippet = snippet
+            if len(clean_snippet) > 120:
+                clean_snippet = clean_snippet[:117] + "..."
+
+            c_idx = i % 4
+            options = list(distractors)
+            options.insert(c_idx, clean_snippet)
 
             fallback_questions.append({
                 "id": i + 1,
-                "question": f"In '{lect['title']}' at [{ts}], which concept or statement is emphasized regarding {clean_course}?",
-                "options": [
-                    f"{snippet[:80]}...",
-                    "A counterexample showing the condition fails in general vector spaces.",
-                    "An introductory greeting with no mathematical bearing.",
-                    "A proof relying on an unverified physical assumption."
-                ],
-                "correct_index": 0,
-                "explanation": f"In lecture '{lect['title']}' at [{ts}], the professor explains: \"{snippet}\".",
+                "question": f"In '{lect['title']}' around [{ts}], which key concept or principle is analyzed regarding {clean_course}?",
+                "options": options,
+                "correct_index": c_idx,
+                "explanation": f"In lecture '{lect['title']}' around [{ts}], the professor explains: \"{snippet}\".",
                 "lecture_id": lect["video_id"],
                 "lecture_title": lect["title"],
                 "timestamp": ts,

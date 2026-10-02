@@ -40,6 +40,32 @@ class TestLectureQuiz(unittest.TestCase):
             self.assertIn("explanation", q)
             self.assertIn("timestamp", q)
 
+    def test_quiz_filters_greetings_and_filler(self):
+        """Verify that greetings, roll-calls, and pleasantries are excluded from questions."""
+        cues = [
+            {"time": "00:00", "text": "Namaste,"},
+            {"time": "01:30", "text": "Namaste to all of you. Are people there?"},
+            {"time": "02:08", "text": "Good morning, Girish."},
+            {"time": "05:15", "text": "The spectral theorem asserts that every symmetric matrix is orthogonally diagonalizable."},
+            {"time": "14:40", "text": "Singular value decomposition factors any real matrix into orthogonal and diagonal components."},
+            {"time": "25:00", "text": "Gram-Schmidt orthogonalization produces an orthonormal basis spanning the same subspace."}
+        ]
+
+        with patch("requests.post", side_effect=Exception("Network offline")):
+            quiz = pinecone_rag_engine.generate_lecture_quiz(
+                video_id="math_test",
+                lecture_title="Advanced Linear Algebra",
+                cues=cues,
+                num_questions=3
+            )
+
+        for q in quiz["questions"]:
+            full_content = q["question"] + " " + " ".join(q["options"]) + " " + q["explanation"]
+            self.assertNotIn("Namaste", full_content)
+            self.assertNotIn("Girish", full_content)
+            self.assertNotIn("Are people there", full_content)
+            self.assertNotIn("introductory greeting with no mathematical bearing", full_content.lower())
+
     @patch("backend.database.db_manager.get_saved_video")
     def test_quiz_endpoint_404_when_missing(self, mock_get_saved):
         mock_get_saved.return_value = None

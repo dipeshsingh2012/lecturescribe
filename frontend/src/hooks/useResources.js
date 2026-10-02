@@ -6,7 +6,56 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const [lectureResourcesLoading, setLectureResourcesLoading] = useState(false);
   const [courseResources, setCourseResources] = useState([]);
   const [courseResourcesLoading, setCourseResourcesLoading] = useState(false);
-  const [courseViewTab, setCourseViewTab] = useState('lectures'); // 'lectures' | 'resources'
+
+  const getInitialCourseTab = () => {
+    if (typeof window !== 'undefined') {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const tab = params.get('tab');
+        if (tab === 'quiz' || tab === 'resources' || tab === 'lectures') {
+          return tab;
+        }
+      } catch {}
+    }
+    return 'lectures';
+  };
+
+  const [courseViewTab, setCourseViewTabState] = useState(getInitialCourseTab);
+
+  const setCourseViewTab = (tab) => {
+    setCourseViewTabState(tab);
+    if (typeof window !== 'undefined') {
+      try {
+        const url = new URL(window.location.href);
+        if (tab && tab !== 'lectures') {
+          url.searchParams.set('tab', tab);
+        } else {
+          url.searchParams.delete('tab');
+        }
+        window.history.replaceState({}, '', url.pathname + (url.search || ''));
+      } catch (e) {
+        console.warn("Course tab URL update warning:", e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const tab = params.get('tab');
+        if (tab === 'quiz' || tab === 'resources' || tab === 'lectures') {
+          setCourseViewTabState(tab);
+        } else {
+          setCourseViewTabState('lectures');
+        }
+      } catch {}
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadTarget, setUploadTarget] = useState({ courseName: 'General Lectures', videoId: null });
   const [uploadMode, setUploadMode] = useState('file'); // 'file' | 'link'

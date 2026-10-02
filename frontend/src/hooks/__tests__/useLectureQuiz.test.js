@@ -5,6 +5,7 @@ import useLectureQuiz from '../useLectureQuiz';
 describe('useLectureQuiz hook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   it('initializes with default empty state', () => {
@@ -47,10 +48,13 @@ describe('useLectureQuiz hook', () => {
     expect(result.current.quizData).toEqual(mockQuiz);
     expect(result.current.quizLoading).toBe(false);
     expect(result.current.quizError).toBeNull();
-    expect(global.fetch).toHaveBeenCalledWith('/api/lecture/vid123/quiz', expect.objectContaining({
-      method: 'POST',
-      body: JSON.stringify({ regenerate: false })
-    }));
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/vid123/quiz'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ regenerate: false })
+      })
+    );
   });
 
   it('handles API error gracefully in fetchOrGenerateQuiz', async () => {

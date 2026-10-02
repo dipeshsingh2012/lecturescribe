@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Box,
   Button,
@@ -65,6 +65,13 @@ export default function HomeView({
     activeCourseData?.course_name || selectedCourse,
     googleUser?.email
   );
+
+  // Automatically fetch course quiz if user is on the Course Quiz tab and no quiz is loaded yet
+  useEffect(() => {
+    if (courseViewTab === 'quiz' && selectedCourse && !courseQuiz.quizData && !courseQuiz.quizLoading) {
+      courseQuiz.fetchOrGenerateQuiz(false);
+    }
+  }, [courseViewTab, selectedCourse, courseQuiz.quizData, courseQuiz.quizLoading, courseQuiz.fetchOrGenerateQuiz]);
 
   return (
     <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>

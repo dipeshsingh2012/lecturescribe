@@ -42,7 +42,6 @@ def get_moodle_feed_url() -> str:
     auth_token = os.getenv("MOODLE_AUTH_TOKEN", "").strip()
 
     if not auth_token:
-        # Default placeholder if user hasn't configured MOODLE_AUTH_TOKEN yet
         auth_token = "demo_token"
 
     return f"https://learning.iiitdwd.ac.in/calendar/export_execute.php?userid={user_id}&authtoken={auth_token}&preset_what=all&preset_time=custom"
@@ -182,6 +181,7 @@ class MoodleCalendarService:
         try:
             resp = requests.get(feed_url, timeout=15)
             if resp.status_code == 200 and resp.text:
+                print(f"📡 [Moodle iCal]: Successfully fetched calendar feed ({len(resp.text)} chars).")
                 return resp.text
             print(f"⚠️ [Moodle iCal Warning]: HTTP {resp.status_code} fetching calendar feed.")
             return ""
@@ -292,7 +292,7 @@ class MoodleCalendarService:
 
         Returns: (matched_events, slot_label, tomorrow_preview_events)
         """
-        events = self.get_events(refresh=False)
+        events = self.get_events(refresh=True)
         curr = (now or datetime.datetime.now(IST)).astimezone(IST)
         today = curr.date()
         tomorrow = today + datetime.timedelta(days=1)

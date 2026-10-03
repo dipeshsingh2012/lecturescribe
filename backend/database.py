@@ -275,6 +275,10 @@ class RelationalDBManager:
                     conn.commit()
             self._schema_initialized = True
             print("[PostgreSQL] Connection verified and schema initialized successfully.")
+            try:
+                self.backfill_missing_course_names()
+            except Exception as b_err:
+                print(f"[PostgreSQL Notice] Initial backfill deferred ({b_err}).")
         finally:
             conn.close()
 
@@ -963,6 +967,10 @@ class RelationalDBManager:
                             last_viewed_at = NOW();
                     """, (clean_email, video_id, title, duration, source_url, drive_folder_url, derived_course))
                     conn.commit()
+            try:
+                self.auto_map_videos_to_user(clean_email)
+            except Exception as map_err:
+                print(f"[PostgreSQL Notice] Auto-map during write skipped ({map_err}).")
             return True
         finally:
             conn.close()
@@ -1078,8 +1086,6 @@ class RelationalDBManager:
             return []
 
         clean_email = user_email.strip().lower()
-        self.auto_map_videos_to_user(clean_email)
-        self.backfill_missing_course_names()
 
         conn = self._get_connection()
         try:
@@ -1196,7 +1202,6 @@ class RelationalDBManager:
 
         conn = None
         try:
-            self.backfill_missing_course_names()
             conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
@@ -1300,8 +1305,6 @@ class RelationalDBManager:
             return []
 
         clean_email = user_email.strip().lower()
-        self.auto_map_videos_to_user(clean_email)
-        self.backfill_missing_course_names()
 
         conn = self._get_connection()
         try:

@@ -441,6 +441,8 @@ def get_transcript(
                     course_name=effective_course,
                     drive_folder_url=drive_url
                 )
+                if redis_cache:
+                    redis_cache.invalidate_user(email.strip())
             return saved
 
         # 2. Extract fresh video config from Vimeo
@@ -496,6 +498,8 @@ def get_transcript(
                 source_url=source_url,
                 course_name=derived_course
             )
+            if redis_cache:
+                redis_cache.invalidate_user(email.strip())
 
         drive_url = db_manager.get_drive_folder_url(video_id, email)
         return {
@@ -1096,9 +1100,18 @@ class UserLibraryRecordRequest(BaseModel):
 @app.get("/api/user/library")
 def get_user_library(email: str = Query(..., description="User Google email")):
     """Fetch user's saved LMS library of lectures."""
-    if not email or not email.strip():
+    clean_email = (email or "").strip().lower()
+    if not clean_email:
         raise HTTPException(status_code=400, detail="User email is required.")
-    lectures = db_manager.get_user_library(email.strip())
+
+    if redis_cache:
+        cached = redis_cache.get_user_library(clean_email)
+        if cached is not None:
+            return {"status": "success", "lectures": cached, "library": cached, "count": len(cached), "cached": True}
+
+    lectures = db_manager.get_user_library(clean_email)
+    if redis_cache:
+        redis_cache.set_user_library(clean_email, lectures, ttl_seconds=300)
     return {"status": "success", "lectures": lectures, "library": lectures, "count": len(lectures)}
 
 
@@ -1111,7 +1124,15 @@ def get_user_courses(
     target_email = (email or user_email or "").strip().lower()
     if not target_email:
         raise HTTPException(status_code=400, detail="email query parameter is required.")
+
+    if redis_cache:
+        cached = redis_cache.get_user_courses(target_email)
+        if cached is not None:
+            return {"status": "success", "email": target_email, "count": len(cached), "courses": cached, "cached": True}
+
     courses = db_manager.get_user_courses(target_email)
+    if redis_cache:
+        redis_cache.set_user_courses(target_email, courses, ttl_seconds=300)
     return {"status": "success", "email": target_email, "count": len(courses), "courses": courses}
 
 
@@ -1285,15 +1306,20 @@ def record_user_lecture(req: UserLibraryRecordRequest):
         drive_folder_url=req.drive_folder_url,
         course_name=req.course_name
     )
+    if success and redis_cache:
+        redis_cache.invalidate_user(target_email)
     return {"status": "success" if success else "failed"}
 
 
 @app.delete("/api/user/library/{video_id}")
 def delete_user_lecture(video_id: str, email: str = Query(..., description="User Google email")):
     """Remove a lecture from the user's LMS library."""
-    if not email.strip() or not video_id.strip():
+    clean_email = email.strip()
+    if not clean_email or not video_id.strip():
         raise HTTPException(status_code=400, detail="email and video_id are required.")
-    success = db_manager.remove_user_lecture(email, video_id)
+    success = db_manager.remove_user_lecture(clean_email, video_id)
+    if success and redis_cache:
+        redis_cache.invalidate_user(clean_email)
     return {"status": "success" if success else "failed"}
 
 

@@ -1,5 +1,6 @@
 import unittest
 import time
+import json
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
@@ -106,6 +107,34 @@ class TestRedisCache(unittest.TestCase):
         self.assertTrue(hit_res.get("cached"))
         self.assertEqual(hit_res.get("cache_tier"), "REDIS")
         self.assertEqual(hit_res.get("answer"), "UNet is a convolutional network...")
+
+    def test_user_courses_and_library_cache(self):
+        """Test user courses & library cache get, set, and user invalidation."""
+        mock_redis = MagicMock()
+        service = RedisCacheService(redis_url="redis://localhost:6379")
+        service.client = mock_redis
+        service.enabled = True
+
+        courses_data = [{"course_name": "CS 101", "lecture_count": 2}]
+        library_data = [{"video_id": "v1", "title": "Intro"}]
+
+        # Test set
+        service.set_user_courses("test@domain.com", courses_data, ttl_seconds=300)
+        mock_redis.setex.assert_called_with("ls:user_courses:test@domain.com", 300, json.dumps(courses_data))
+
+        service.set_user_library("test@domain.com", library_data, ttl_seconds=300)
+        mock_redis.setex.assert_called_with("ls:user_library:test@domain.com", 300, json.dumps(library_data))
+
+        # Test get hit
+        mock_redis.get.return_value = json.dumps(courses_data)
+        courses = service.get_user_courses("test@domain.com")
+        self.assertEqual(courses, courses_data)
+
+        # Test user invalidation
+        mock_redis.delete.return_value = 2
+        deleted = service.invalidate_user("test@domain.com")
+        self.assertEqual(deleted, 2)
+        mock_redis.delete.assert_called_with("ls:user_courses:test@domain.com", "ls:user_library:test@domain.com")
 
 
 if __name__ == "__main__":

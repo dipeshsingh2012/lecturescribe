@@ -313,8 +313,80 @@ class RedisCacheService:
             return False
 
     # ---------------------------------------------------------
+    # User Courses & Library Cache Operations
+    # ---------------------------------------------------------
+
+    def get_user_courses(self, user_email: str) -> Optional[List[Dict[str, Any]]]:
+        """Retrieve cached courses list for a user."""
+        if not self.client or not self.enabled or not user_email:
+            return None
+        clean_email = user_email.strip().lower()
+        key = f"ls:user_courses:{clean_email}"
+        try:
+            raw = self.client.get(key)
+            if raw:
+                return json.loads(raw)
+        except Exception as e:
+            print(f"[Redis Cache Warning] User courses cache read error: {e}")
+        return None
+
+    def set_user_courses(self, user_email: str, courses_data: List[Dict[str, Any]], ttl_seconds: int = 300) -> bool:
+        """Cache courses list for a user (default TTL: 5 minutes / 300s)."""
+        if not self.client or not self.enabled or not user_email:
+            return False
+        clean_email = user_email.strip().lower()
+        key = f"ls:user_courses:{clean_email}"
+        try:
+            self.client.setex(key, ttl_seconds, json.dumps(courses_data))
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] User courses cache write error: {e}")
+            return False
+
+    def get_user_library(self, user_email: str) -> Optional[List[Dict[str, Any]]]:
+        """Retrieve cached library list for a user."""
+        if not self.client or not self.enabled or not user_email:
+            return None
+        clean_email = user_email.strip().lower()
+        key = f"ls:user_library:{clean_email}"
+        try:
+            raw = self.client.get(key)
+            if raw:
+                return json.loads(raw)
+        except Exception as e:
+            print(f"[Redis Cache Warning] User library cache read error: {e}")
+        return None
+
+    def set_user_library(self, user_email: str, library_data: List[Dict[str, Any]], ttl_seconds: int = 300) -> bool:
+        """Cache library list for a user (default TTL: 5 minutes / 300s)."""
+        if not self.client or not self.enabled or not user_email:
+            return False
+        clean_email = user_email.strip().lower()
+        key = f"ls:user_library:{clean_email}"
+        try:
+            self.client.setex(key, ttl_seconds, json.dumps(library_data))
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] User library cache write error: {e}")
+            return False
+
+    # ---------------------------------------------------------
     # Invalidation & Administration
     # ---------------------------------------------------------
+
+    def invalidate_user(self, user_email: str) -> int:
+        """Purge cached courses and library for a user upon updates/additions."""
+        if not self.client or not self.enabled or not user_email:
+            return 0
+        clean_email = user_email.strip().lower()
+        try:
+            keys = [f"ls:user_courses:{clean_email}", f"ls:user_library:{clean_email}"]
+            deleted = self.client.delete(*keys)
+            print(f"🗑️ [Redis Cache] Invalidated user cache for '{clean_email}' ({deleted} keys removed).")
+            return deleted
+        except Exception as e:
+            print(f"[Redis Cache Warning] Invalidation error for user '{clean_email}': {e}")
+            return 0
 
     def invalidate_video(self, video_id: str) -> int:
         """Purge all cached queries, quizzes, and tool results for a specific lecture."""

@@ -67,16 +67,12 @@ class TestChatAutopopulate(unittest.TestCase):
         mock_get_history,
         mock_get_video
     ):
-        """Verify parallel execution of all 4 standard prompts and sequential DB persistence."""
+        """Verify parallel execution of the 2 standard summary prompts and sequential DB persistence."""
         generated_messages = [
             {"id": "msg_user_1", "sender": "user", "text": AUTOPOPULATE_PROMPTS[0]},
             {"id": "msg_bot_1", "sender": "bot", "text": "15m summary", "submission_text": "sub 15"},
             {"id": "msg_user_2", "sender": "user", "text": AUTOPOPULATE_PROMPTS[1]},
-            {"id": "msg_bot_2", "sender": "bot", "text": "30m summary", "submission_text": "sub 30"},
-            {"id": "msg_user_3", "sender": "user", "text": AUTOPOPULATE_PROMPTS[2]},
-            {"id": "msg_bot_3", "sender": "bot", "text": "full summary", "submission_text": "sub full"},
-            {"id": "msg_user_4", "sender": "user", "text": AUTOPOPULATE_PROMPTS[3]},
-            {"id": "msg_bot_4", "sender": "bot", "text": "concepts", "submission_text": "sub concepts"}
+            {"id": "msg_bot_2", "sender": "bot", "text": "full summary", "submission_text": "sub full"}
         ]
         mock_get_history.side_effect = [[], generated_messages]
         mock_get_video.return_value = {
@@ -99,11 +95,11 @@ class TestChatAutopopulate(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["status"], "success")
-        self.assertEqual(data["count"], 8)
-        self.assertEqual(mock_process.call_count, 4)
-        self.assertEqual(mock_save_log.call_count, 4)
+        self.assertEqual(data["count"], 4)
+        self.assertEqual(mock_process.call_count, 2)
+        self.assertEqual(mock_save_log.call_count, 2)
 
-        # Verify all 4 standard prompt texts were passed
+        # Verify all standard prompt texts were passed
         executed_prompts = [call.kwargs.get("user_prompt") for call in mock_process.call_args_list]
         for expected_p in AUTOPOPULATE_PROMPTS:
             self.assertIn(expected_p, executed_prompts)
@@ -154,8 +150,8 @@ class TestChatAutopopulate(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["status"], "success")
-        # 3 successful saves instead of 4
-        self.assertEqual(mock_save_log.call_count, 3)
+        # 1 successful save instead of 2 (since 1 failed)
+        self.assertEqual(mock_save_log.call_count, 1)
 
     def test_process_chat_message_empty_prompt_raises(self):
         """process_chat_message should raise HTTPException 400 for empty queries."""
@@ -277,8 +273,8 @@ class TestChatAutopopulate(unittest.TestCase):
 
         self.assertEqual(r1.status_code, 200)
         self.assertEqual(r2.status_code, 200)
-        # process_chat_message should only be called 4 times (for the first request), NOT 8 times
-        self.assertEqual(mock_process.call_count, 4)
+        # process_chat_message should only be called 2 times (for the first request), NOT 4 times
+        self.assertEqual(mock_process.call_count, 2)
 
     @patch("backend.main.db_manager.delete_chat_message")
     @patch("backend.main.redis_cache")

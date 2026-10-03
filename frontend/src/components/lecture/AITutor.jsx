@@ -240,7 +240,7 @@ export default function AITutor({
                   Preparing Your AI Lecture Guide...
                 </h4>
                 <p style={{ margin: '0', fontSize: '0.82rem', lineHeight: '1.5' }}>
-                  Auto-populating 15-min & 30-min summaries, full comprehensive summary, and core concepts.
+                  Auto-populating 15-min and full comprehensive summaries.
                 </p>
               </div>
             ) : (
@@ -266,9 +266,7 @@ export default function AITutor({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {[
                     "Create a summary for a 15 min read",
-                    "Generate Summary for 30 mins read",
-                    "Generate Full Comprehensive Summary",
-                    "Explain key concepts and definitions"
+                    "Generate Full Comprehensive Summary"
                   ].map((promptText) => (
                     <button
                       key={promptText}
@@ -989,9 +987,7 @@ export default function AITutor({
         }}>
           {[
             "Create a summary for a 15 min read",
-            "Generate Summary for 30 mins read",
-            "Generate Full Comprehensive Summary",
-            "Explain key concepts and definitions"
+            "Generate Full Comprehensive Summary"
           ].map((pText) => (
             <button
               key={pText}

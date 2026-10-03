@@ -853,12 +853,10 @@ def chat_with_transcript(req: ChatRequest):
 
 AUTOPOPULATE_PROMPTS = [
     "Create a summary for a 15 min read",
-    "Generate Summary for 30 mins read",
-    "Generate Full Comprehensive Summary",
-    "Explain key concepts and definitions"
+    "Generate Full Comprehensive Summary"
 ]
 
-# Per-video locks: prevent concurrent autopopulate runs from duplicating all 4 prompts
+# Per-video locks: prevent concurrent autopopulate runs from duplicating prompts
 _autopopulate_locks: dict = {}
 _locks_mutex = threading.Lock()
 
@@ -866,9 +864,9 @@ _locks_mutex = threading.Lock()
 @app.post("/api/chat/autopopulate")
 def autopopulate_chat(req: AutoPopulateRequest):
     """
-    Auto-populates the chat box with resultant responses of all 4 standard quick prompts.
+    Auto-populates the chat box with resultant responses of the 2 standard summary prompts (15-min and full summary).
     If chat history already exists for this video in PostgreSQL, returns it immediately (<50ms).
-    Otherwise, executes the 4 prompts concurrently and persists them sequentially in PostgreSQL.
+    Otherwise, executes the prompts concurrently and persists them sequentially in PostgreSQL.
     """
     vid = str(req.video_id or "").strip()
     if not vid or vid == "active":
@@ -926,7 +924,7 @@ def autopopulate_chat(req: AutoPopulateRequest):
                 return None
 
         results = [None] * len(AUTOPOPULATE_PROMPTS)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             future_to_idx = {
                 executor.submit(_execute_prompt, prompt): idx 
                 for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS)

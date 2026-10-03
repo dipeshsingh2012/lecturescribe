@@ -168,16 +168,14 @@ describe('AITutor', () => {
 
     expect(screen.getByTestId('chat-autopopulating-state')).toBeInTheDocument();
     expect(screen.getByText(/Preparing Your AI Lecture Guide.../i)).toBeInTheDocument();
-    expect(screen.getByText(/Auto-populating 15-min & 30-min summaries/i)).toBeInTheDocument();
+    expect(screen.getByText(/Auto-populating 15-min and full comprehensive summaries/i)).toBeInTheDocument();
   });
 
-  it('renders all 4 quick prompts in welcome screen and clicking each triggers handleSendMessage', () => {
+  it('renders quick prompts in welcome screen and clicking each triggers handleSendMessage', () => {
     const handleSendMessage = vi.fn();
     const prompts = [
       "Create a summary for a 15 min read",
-      "Generate Summary for 30 mins read",
-      "Generate Full Comprehensive Summary",
-      "Explain key concepts and definitions"
+      "Generate Full Comprehensive Summary"
     ];
 
     render(
@@ -213,7 +211,7 @@ describe('AITutor', () => {
       fireEvent.click(welcomeBtn);
       expect(handleSendMessage).toHaveBeenCalledWith(pText);
     });
-    expect(handleSendMessage).toHaveBeenCalledTimes(4);
+    expect(handleSendMessage).toHaveBeenCalledTimes(2);
   });
 
   it('renders 4 quick pills above input and disables clicks while chatLoading is true', () => {

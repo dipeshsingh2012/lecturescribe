@@ -50,7 +50,7 @@ from backend.vimeo_client import (
 )
 from backend.rag_engine import pinecone_rag_engine
 from backend.algolia_service import algolia_service
-from backend.database import db_manager, extract_course_name
+from backend.database import db_manager, extract_course_name, to_course_slug
 from backend.google_drive_service import google_drive_service
 from backend.summary_generator import generate_summary_sections
 from backend.redis_service import redis_cache
@@ -169,6 +169,11 @@ class AlgoliaSearchRequest(BaseModel):
 
 class RegenerateSummaryRequest(BaseModel):
     video_id: str
+
+class CourseTutorChatRequest(BaseModel):
+    message: str
+    user_email: Optional[str] = None
+    chat_history: Optional[List[Dict[str, Any]]] = None
 
 
 @app.get("/health")
@@ -1292,6 +1297,89 @@ def reset_course_quiz_answers(course_name: str, email: Optional[str] = Query(Non
     course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
     db_manager.delete_quiz_attempt("course", course_slug, email or "anonymous")
     return {"status": "success", "success": True}
+
+
+# ==============================================================================
+# Course-Level AI Tutor Endpoints (Exam Preparation & Course Knowledge)
+# ==============================================================================
+
+@app.post("/api/course/{course_name}/tutor/chat")
+def course_tutor_chat(course_name: str, req: CourseTutorChatRequest):
+    """
+    Process an open-ended course query through Course-Level RAG.
+    Grounded in transcripts and outlines across all course lectures and materials.
+    Saves to course chat history in PostgreSQL.
+    """
+    cname = course_name.strip()
+    if not cname:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+
+    prompt = req.message.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    try:
+        res = pinecone_rag_engine.query_course_rag(
+            query=prompt,
+            course_name=cname,
+            user_email=req.user_email,
+            chat_history=req.chat_history
+        )
+    except Exception as e:
+        print(f"❌ [Course Tutor Error]: {e}")
+        raise HTTPException(status_code=500, detail=f"Course Tutor query failed: {str(e)}")
+
+    # Save interaction to DB
+    try:
+        db_manager.save_course_chat_log(
+            course_name=cname,
+            user_prompt=prompt,
+            ai_reply=res.get("reply", ""),
+            citations=res.get("citations", []),
+            user_email=req.user_email,
+            model=res.get("model", "")
+        )
+    except Exception as e:
+        print(f"⚠️ [Course Chat Save Notice]: {e}")
+
+    return res
+
+
+@app.get("/api/course/{course_name}/tutor/history")
+def get_course_tutor_history(course_name: str, user_email: Optional[str] = Query(None)):
+    """Retrieve full chronological conversation history for a course AI Tutor."""
+    cname = course_name.strip()
+    if not cname:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+
+    messages = db_manager.get_course_chat_history(cname, user_email=user_email)
+    slug = to_course_slug(cname)
+    return {
+        "status": "success",
+        "course_slug": slug,
+        "course_name": cname,
+        "count": len(messages),
+        "messages": messages
+    }
+
+
+@app.delete("/api/course/{course_name}/tutor/history")
+def clear_course_tutor_history(course_name: str, user_email: Optional[str] = Query(None)):
+    """Clear course tutor conversation history for this course and user."""
+    cname = course_name.strip()
+    if not cname:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+
+    cleared = db_manager.clear_course_chat_history(cname, user_email=user_email)
+    return {"status": "success" if cleared else "failed", "cleared": cleared}
+
+
+@app.delete("/api/course/{course_name}/tutor/message/{message_id}")
+def delete_course_tutor_message(course_name: str, message_id: str, user_email: Optional[str] = Query(None)):
+    """Delete a single course tutor interaction."""
+    cname = course_name.strip()
+    deleted = db_manager.delete_course_chat_message(message_id, course_name=cname, user_email=user_email)
+    return {"status": "success" if deleted else "failed", "deleted": deleted}
 
 
 @app.post("/api/user/library/record")

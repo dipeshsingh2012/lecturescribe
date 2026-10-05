@@ -59,14 +59,14 @@ describe('CourseLibrary Component', () => {
     render(
       <CourseLibrary
         courseResources={mockSlides}
-        courseReadings={mockBooks}
+        courseReadings={[]}
         triggerExtractReadings={triggerExtractReadings}
         selectedCourse="Machine Learning"
         currentTheme={mockTheme}
       />
     );
 
-    const extractBtn = screen.getAllByRole('button', { name: /Scan & Extract Books/i })[0];
+    const extractBtn = screen.getByRole('button', { name: /Scan & Extract Books/i });
     fireEvent.click(extractBtn);
 
     expect(triggerExtractReadings).toHaveBeenCalled();

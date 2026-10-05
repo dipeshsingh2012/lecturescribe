@@ -335,6 +335,46 @@ class Llama3PineconeRAGStore:
         }
     ]
 
+    COURSE_AGENT_TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_course_transcripts",
+                "description": "Search across all lectures in this course for relevant dialogue, concepts, derivations, and formulas.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Academic search query or topic name"},
+                        "top_k": {"type": "integer", "description": "Number of lecture segments to retrieve (default 8)"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_course_outline_and_lectures",
+                "description": "Get the complete list of lectures in this course, their sequence, titles, and IDs.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_course_reading_materials",
+                "description": "Fetch course library items: professor slides, textbooks, and recommended reading materials.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        }
+    ]
+
     def execute_tool(
         self,
         tool_name: str,
@@ -571,6 +611,142 @@ class Llama3PineconeRAGStore:
             return json.dumps(hits), citations, web_sources
         else:
             raise ValueError(f"Unknown tool '{tool_name}' requested.")
+
+    def execute_course_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        course_name: str,
+        user_email: Optional[str] = None
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """Execute tool calls scoped strictly to course knowledge (lectures, transcripts, outlines, readings)."""
+        citations = []
+        cname = (course_name or "").strip()
+
+        if tool_name == "search_course_transcripts":
+            query = str(arguments.get("query", "")).strip()
+            top_k = int(arguments.get("top_k", 8))
+
+            from backend.database import db_manager, extract_course_name
+            course_details = db_manager.get_course_details(cname, user_email=user_email)
+            lectures = course_details.get("lectures", []) if course_details else []
+            video_ids = [str(l["video_id"]).strip() for l in lectures if l.get("video_id")]
+            title_map = {str(l["video_id"]).strip(): l.get("title", "Lecture") for l in lectures if l.get("video_id")}
+
+            course_matches = []
+            seen_chunks = set()
+
+            # 1. Algolia search across all lectures
+            try:
+                from backend.algolia_service import algolia_service
+                hits = algolia_service.search(query, video_id=None, limit=top_k * 4)
+                for h in hits:
+                    hit_vid = str(h.get("video_id", "")).strip()
+                    hit_title = h.get("video_title") or title_map.get(hit_vid) or "Lecture"
+                    hit_course = extract_course_name(hit_title)
+                    is_in_course = (hit_vid in video_ids) or (cname.lower() in hit_course.lower()) or (hit_course.lower() in cname.lower())
+                    if is_in_course:
+                        chunk_key = (hit_vid, h.get("timestamp", "00:00"))
+                        if chunk_key not in seen_chunks:
+                            seen_chunks.add(chunk_key)
+                            course_matches.append({
+                                "video_id": hit_vid,
+                                "video_title": hit_title,
+                                "timestamp": h.get("timestamp", "00:00"),
+                                "text": h.get("text", "")
+                            })
+            except Exception as e:
+                print(f"⚠️ [Course Tutor Algolia Search Notice]: {e}")
+
+            # 2. PostgreSQL search across course cues if Algolia returns few
+            if len(course_matches) < top_k:
+                try:
+                    conn = db_manager._get_connection()
+                    with conn:
+                        with conn.cursor() as cursor:
+                            if video_ids:
+                                cursor.execute("""
+                                    SELECT c.video_id, v.title as video_title, c.timestamp, c.text
+                                    FROM lecturescribe_transcript_cues c
+                                    JOIN lecturescribe_videos v ON c.video_id = v.video_id
+                                    WHERE c.video_id = ANY(%s)
+                                      AND c.text ILIKE %s
+                                    LIMIT %s;
+                                """, (video_ids, f"%{query}%", top_k * 2))
+                            else:
+                                cursor.execute("""
+                                    SELECT c.video_id, v.title as video_title, c.timestamp, c.text
+                                    FROM lecturescribe_transcript_cues c
+                                    JOIN lecturescribe_videos v ON c.video_id = v.video_id
+                                    WHERE (LOWER(v.course_name) ILIKE %s OR v.title ILIKE %s)
+                                      AND c.text ILIKE %s
+                                    LIMIT %s;
+                                """, (f"%{cname.lower()}%", f"%{cname}%", f"%{query}%", top_k * 2))
+                            rows = cursor.fetchall() or []
+                            for r in rows:
+                                vid = str(r["video_id"]).strip()
+                                ts = r.get("timestamp") or "00:00"
+                                chunk_key = (vid, ts)
+                                if chunk_key not in seen_chunks:
+                                    seen_chunks.add(chunk_key)
+                                    course_matches.append({
+                                        "video_id": vid,
+                                        "video_title": r.get("video_title") or title_map.get(vid) or "Lecture",
+                                        "timestamp": ts,
+                                        "text": r.get("text", "")
+                                    })
+                except Exception as pg_err:
+                    print(f"⚠️ [Course Tutor PostgreSQL Cues Search Notice]: {pg_err}")
+
+            # Format results and generate citations
+            out = []
+            for item in course_matches[:top_k]:
+                vid_item = item["video_id"]
+                title_item = item["video_title"]
+                st = item["timestamp"]
+                txt = item["text"]
+                citations.append({
+                    "video_id": vid_item,
+                    "video_title": title_item,
+                    "timestamp": st,
+                    "end_time": st,
+                    "text": f"[{title_item}] {txt[:120]}...",
+                    "cross_lecture": True
+                })
+                out.append({
+                    "video_id": vid_item,
+                    "lecture_title": title_item,
+                    "timestamp": f"[{st}]",
+                    "text": txt
+                })
+            return json.dumps(out), citations
+
+        elif tool_name == "get_course_outline_and_lectures":
+            from backend.database import db_manager
+            course_details = db_manager.get_course_details(cname, user_email=user_email)
+            lectures = course_details.get("lectures", []) if course_details else []
+            out_lectures = [
+                {
+                    "lecture_index": i + 1,
+                    "video_id": l.get("video_id"),
+                    "title": l.get("title", "Lecture")
+                }
+                for i, l in enumerate(lectures)
+            ]
+            return json.dumps({"course_name": cname, "total_lectures": len(out_lectures), "lectures": out_lectures}), citations
+
+        elif tool_name == "get_course_reading_materials":
+            from backend.database import db_manager
+            resources = db_manager.get_course_resources(cname) or []
+            readings = db_manager.get_course_readings(cname) or []
+            return json.dumps({
+                "course_name": cname,
+                "slides_and_materials": [{"title": r.get("title"), "category": r.get("category")} for r in resources],
+                "recommended_books_and_readings": [{"title": b.get("title"), "author": b.get("author"), "category": b.get("category")} for b in readings]
+            }), citations
+
+        else:
+            raise ValueError(f"Unknown course tool '{tool_name}' requested.")
 
     def query_rag(
         self,
@@ -892,6 +1068,196 @@ class Llama3PineconeRAGStore:
                 continue
 
         raise RuntimeError(f"All unified LLM providers failed. Last error: {last_error}")
+
+    def query_course_rag(
+        self,
+        query: str,
+        course_name: str,
+        user_email: Optional[str] = None,
+        chat_history: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Course-Level RAG backed strictly by course knowledge.
+        Coordinates multi-lecture transcript retrieval, course outline, materials, and citations.
+        """
+        import requests
+        cname = (course_name or "").strip()
+        if not cname:
+            raise ValueError("course_name cannot be empty.")
+
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
+
+        candidates = []
+        if groq_key:
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "llama-3.3-70b-versatile",
+                "display": "Groq Llama 3.3 70B Versatile"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "llama-3.1-8b-instant",
+                "display": "Groq Llama 3.1 8B Instant"
+            })
+        if gemini_key:
+            candidates.append({
+                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "auth_header": f"Bearer {gemini_key}",
+                "model_name": "gemini-2.0-flash",
+                "display": "Gemini 2.0 Flash (OpenAI API)"
+            })
+            candidates.append({
+                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "auth_header": f"Bearer {gemini_key}",
+                "model_name": "gemini-1.5-flash",
+                "display": "Gemini 1.5 Flash (OpenAI API)"
+            })
+
+        if not candidates:
+            raise RuntimeError("No active LLM keys (GROQ_API_KEY or GEMINI_API_KEY) found.")
+
+        # Pre-fetch course transcript cues for query to prime model context
+        pre_res, pre_cit = self.execute_course_tool(
+            "search_course_transcripts",
+            {"query": query, "top_k": 8},
+            cname,
+            user_email=user_email
+        )
+
+        system_prompt = (
+            f"You are the Academic AI Tutor for the course: '{cname}'.\n"
+            "Your mission is to help students synthesize knowledge across all lectures in the course, "
+            "master core concepts, compare topics across lectures, and prepare thoroughly for academic exams.\n\n"
+            "Strict Instructions:\n"
+            "1. Ground your answers strictly and directly in the course lecture transcripts and materials. "
+            "When referencing or explaining a concept from a lecture, cite the lecture title and timestamp: "
+            "e.g. `[Lecture Title · MM:SS]` or in **[Lecture Title]** at `[MM:SS]`.\n"
+            "2. Always format mathematical formulas and equations using standard LaTeX notation: "
+            "single dollar signs for inline math ($...$) and double dollar signs ($$...$$) for standalone block equations.\n"
+            "3. If a student asks to compare topics, synthesize the similarities and differences across the lectures.\n"
+            "4. If a concept was NOT covered in any lecture or material in this course, explicitly state that it was not covered in the course syllabus or lecture recordings. Do not generate or substitute external unverified information.\n"
+            "5. Maintain an encouraging, academically rigorous, clear, and structured tone (use markdown sections and bullet points).\n"
+            "6. NEVER output raw bracketed function tokens like '【search_course_transcripts】' or JSON objects."
+        )
+
+        active_tools = self.COURSE_AGENT_TOOLS
+
+        last_error = None
+        for prov in candidates:
+            endpoint = prov["endpoint"]
+            auth_header = prov["auth_header"]
+            model_name = prov["model_name"]
+            display_model = prov["display"]
+
+            messages = [{"role": "system", "content": system_prompt}]
+
+            # Inject pre-fetched course context
+            if pre_res and pre_res != "[]":
+                messages.append({
+                    "role": "system",
+                    "content": f"Relevant course lecture excerpts retrieved for this query:\n{pre_res}"
+                })
+
+            # Append recent chat history if available
+            if chat_history:
+                for h in chat_history[-6:]:
+                    r = "assistant" if h.get("sender") == "bot" else "user"
+                    txt = h.get("text", "")
+                    if txt:
+                        messages.append({"role": r, "content": txt})
+
+            messages.append({"role": "user", "content": query})
+
+            all_citations = list(pre_cit)
+            max_steps = 3
+            current_step = 0
+            final_answer = ""
+            headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+
+            try:
+                while current_step < max_steps:
+                    current_step += 1
+                    payload = {
+                        "model": model_name,
+                        "messages": messages,
+                        "tools": active_tools,
+                        "tool_choice": "auto",
+                        "max_tokens": 1500,
+                        "temperature": 0.3
+                    }
+
+                    resp = None
+                    for attempt in range(3):
+                        resp = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+                        if resp.status_code in (429, 503):
+                            time.sleep((attempt + 1) * 2.0)
+                            continue
+                        break
+
+                    if resp is None or resp.status_code != 200:
+                        status_val = resp.status_code if resp is not None else "N/A"
+                        body_val = resp.text[:300] if resp is not None else "No response"
+                        raise RuntimeError(f"Course Agent API failed ({status_val}): {body_val}")
+
+                    data = resp.json()
+                    msg = data.get("choices", [{}])[0].get("message", {})
+                    tool_calls = msg.get("tool_calls", []) or []
+                    content_str = msg.get("content", "") or ""
+
+                    if not tool_calls:
+                        final_answer = content_str.strip()
+                        break
+
+                    messages.append({"role": "assistant", "content": content_str, "tool_calls": tool_calls})
+                    for tc in tool_calls:
+                        func_name = tc["function"]["name"]
+                        raw_args = tc["function"]["arguments"]
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        tool_res, tool_cit = self.execute_course_tool(func_name, args, cname, user_email=user_email)
+                        all_citations.extend(tool_cit)
+                        messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
+
+                if not final_answer:
+                    messages.append({
+                        "role": "user",
+                        "content": "Please synthesize a final, clear academic answer grounded in the course material."
+                    })
+                    payload = {
+                        "model": model_name,
+                        "messages": messages,
+                        "max_tokens": 1500,
+                        "temperature": 0.3
+                    }
+                    resp = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        final_answer = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+                # Deduplicate citations
+                seen_cites = set()
+                deduped_citations = []
+                for c in all_citations:
+                    k = (c.get("video_id"), c.get("timestamp"))
+                    if k not in seen_cites:
+                        seen_cites.add(k)
+                        deduped_citations.append(c)
+
+                return {
+                    "reply": final_answer,
+                    "citations": deduped_citations[:10],
+                    "model": display_model,
+                    "course_name": cname
+                }
+
+            except Exception as pe:
+                print(f"⚠️ [Course Tutor Agent Notice] {display_model} failed ({pe}). Cascading...")
+                last_error = pe
+                continue
+
+        raise RuntimeError(f"All LLM providers failed for Course Tutor. Last error: {last_error}")
 
     def _clean_for_submission(
         self,

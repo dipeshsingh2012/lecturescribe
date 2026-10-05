@@ -15,7 +15,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       try {
         const params = new URLSearchParams(window.location.search);
         const tab = params.get('tab');
-        if (tab === 'quiz' || tab === 'resources' || tab === 'library' || tab === 'lectures') {
+        if (tab === 'quiz' || tab === 'tutor' || tab === 'resources' || tab === 'library' || tab === 'lectures') {
           return tab;
         }
       } catch {}

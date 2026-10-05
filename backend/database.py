@@ -35,6 +35,11 @@ def extract_course_name(title: str) -> str:
         return course_part
     return title.strip()
 
+def to_course_slug(course_name: str) -> str:
+    """Normalize a course name into a URL-safe, lowercase hyphenated slug."""
+    clean = (course_name or "").strip()
+    return re.sub(r'[^a-z0-9]+', '-', clean.lower()).strip('-') or "general"
+
 # Load environment variables
 try:
     from dotenv import load_dotenv
@@ -291,6 +296,21 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_readings_course ON lecturescribe_course_readings(course_name);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_chat_logs (
+                            id SERIAL PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            user_prompt TEXT NOT NULL,
+                            ai_reply TEXT NOT NULL,
+                            citations_json JSONB,
+                            user_email VARCHAR(255),
+                            model VARCHAR(128),
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_chat_slug ON lecturescribe_course_chat_logs(course_slug);
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_chat_user ON lecturescribe_course_chat_logs(user_email);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -939,6 +959,194 @@ class RelationalDBManager:
                     return deleted_count > 0
         except Exception as e:
             print(f"[PostgreSQL Notice] delete_chat_message fallback ({e}).")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def save_course_chat_log(
+        self,
+        course_name: str,
+        user_prompt: str,
+        ai_reply: str,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        user_email: Optional[str] = None,
+        model: Optional[str] = None
+    ):
+        """Save course-level chat interaction directly to PostgreSQL."""
+        if not course_name or not user_prompt:
+            return
+
+        clean_name = course_name.strip()
+        course_slug = to_course_slug(clean_name)
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_chat_logs (
+                            course_slug, course_name, user_prompt, ai_reply,
+                            citations_json, user_email, model
+                        )
+                        VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s);
+                    """, (
+                        course_slug,
+                        clean_name,
+                        user_prompt,
+                        ai_reply,
+                        json.dumps(citations or []),
+                        clean_email,
+                        model or ""
+                    ))
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] save_course_chat_log error ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+    def get_course_chat_history(
+        self,
+        course_name: str,
+        user_email: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Fetch chronological course-level chat history directly from PostgreSQL."""
+        if not course_name:
+            return []
+
+        course_slug = to_course_slug(course_name)
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = """
+                        SELECT id, course_slug, course_name, user_prompt, ai_reply,
+                               citations_json, user_email, model, created_at
+                        FROM lecturescribe_course_chat_logs
+                        WHERE course_slug = %s
+                    """
+                    params = [course_slug]
+                    if clean_email:
+                        query += " AND (user_email = %s OR user_email IS NULL)"
+                        params.append(clean_email)
+                    query += " ORDER BY created_at ASC LIMIT %s;"
+                    params.append(limit)
+
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall()
+                    history = []
+                    for r in rows:
+                        c_id = str(r["id"])
+                        ts_str = r["created_at"].isoformat() if r.get("created_at") else ""
+                        citations = r["citations_json"] if isinstance(r.get("citations_json"), list) else []
+                        history.append({
+                            "id": f"msg_user_{c_id}",
+                            "sender": "user",
+                            "text": r["user_prompt"],
+                            "created_at": ts_str
+                        })
+                        history.append({
+                            "id": f"msg_bot_{c_id}",
+                            "sender": "bot",
+                            "text": r["ai_reply"],
+                            "citations": citations,
+                            "model": r.get("model") or "",
+                            "created_at": ts_str
+                        })
+                    return history
+        except Exception as e:
+            print(f"[PostgreSQL Notice] get_course_chat_history error ({e}).")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    def clear_course_chat_history(
+        self,
+        course_name: str,
+        user_email: Optional[str] = None
+    ) -> bool:
+        """Clear course-level chat history for a course and user session directly in PostgreSQL."""
+        if not course_name:
+            return False
+
+        course_slug = to_course_slug(course_name)
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_course_chat_logs
+                            WHERE course_slug = %s AND (user_email = %s OR user_email IS NULL);
+                        """, (course_slug, clean_email))
+                    else:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_course_chat_logs
+                            WHERE course_slug = %s;
+                        """, (course_slug,))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Notice] clear_course_chat_history error ({e}).")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_course_chat_message(
+        self,
+        message_id: str,
+        course_name: Optional[str] = None,
+        user_email: Optional[str] = None
+    ) -> bool:
+        """Delete an interaction from course chat logs directly in PostgreSQL."""
+        if not message_id:
+            return False
+
+        clean_id_str = str(message_id).strip()
+        course_slug = to_course_slug(course_name) if course_name else None
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+
+        if clean_id_str.startswith("msg_user_"):
+            clean_id_str = clean_id_str.replace("msg_user_", "")
+        elif clean_id_str.startswith("msg_bot_"):
+            clean_id_str = clean_id_str.replace("msg_bot_", "")
+
+        try:
+            int_id = int(clean_id_str)
+        except ValueError:
+            return False
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = "DELETE FROM lecturescribe_course_chat_logs WHERE id = %s"
+                    params = [int_id]
+                    if course_slug:
+                        query += " AND course_slug = %s"
+                        params.append(course_slug)
+                    if clean_email:
+                        query += " AND (user_email = %s OR user_email IS NULL)"
+                        params.append(clean_email)
+                    query += ";"
+                    cursor.execute(query, tuple(params))
+                    deleted = cursor.rowcount > 0
+                    conn.commit()
+                    return deleted
+        except Exception as e:
+            print(f"[PostgreSQL Notice] delete_course_chat_message error ({e}).")
             return False
         finally:
             if conn:

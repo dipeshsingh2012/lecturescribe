@@ -18,7 +18,8 @@ import {
   Paperclip,
   BookOpen,
   Upload,
-  Award
+  Award,
+  Sparkles
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -27,8 +28,10 @@ import CourseGrid from '../course/CourseGrid';
 import CourseLibrary from '../course/CourseLibrary';
 import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
+import CourseTutor from '../course/CourseTutor';
 import CalendarAlertCard from '../calendar/CalendarAlertCard';
 import useCourseQuiz from '../../hooks/useCourseQuiz';
+import { useCourseTutor } from '../../hooks/useCourseTutor';
 
 export default function HomeView({
   selectedCourse,
@@ -70,6 +73,11 @@ export default function HomeView({
   currentTheme
 }) {
   const courseQuiz = useCourseQuiz(
+    activeCourseData?.course_name || selectedCourse,
+    googleUser?.email
+  );
+
+  const courseTutor = useCourseTutor(
     activeCourseData?.course_name || selectedCourse,
     googleUser?.email
   );
@@ -261,6 +269,24 @@ export default function HomeView({
               Course Quiz
             </Button>
             <Button
+              variant={courseViewTab === 'tutor' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<Sparkles size={15} />}
+              onClick={() => setCourseViewTab('tutor')}
+              aria-label="Course AI Tutor"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'tutor'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Course Tutor
+            </Button>
+            <Button
               variant={courseViewTab === 'resources' || courseViewTab === 'library' ? 'contained' : 'outlined'}
               size="small"
               startIcon={<BookOpen size={15} />}
@@ -338,6 +364,27 @@ export default function HomeView({
           selectAnswer={courseQuiz.selectAnswer}
           resetQuiz={courseQuiz.resetQuiz}
           handleSelectLecture={(vid, cName) => handleTranscribe(`https://vimeo.com/${vid}`, false, cName)}
+          currentTheme={currentTheme}
+        />
+      ) : courseViewTab === 'tutor' ? (
+        /* LEVEL 2D: COURSE-LEVEL AI TUTOR & EXAM PREPARATION */
+        <CourseTutor
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          lectureCount={filteredCourseLectures.length || activeCourseData?.lecture_count || 0}
+          messages={courseTutor.messages}
+          input={courseTutor.input}
+          setInput={courseTutor.setInput}
+          loading={courseTutor.loading}
+          error={courseTutor.error}
+          sendMessage={courseTutor.sendMessage}
+          clearHistory={courseTutor.clearHistory}
+          deleteMessage={courseTutor.deleteMessage}
+          copyText={courseTutor.copyText}
+          copiedPromptId={courseTutor.copiedPromptId}
+          copiedResponseId={courseTutor.copiedResponseId}
+          chatEndRef={courseTutor.chatEndRef}
+          chatInputRef={courseTutor.chatInputRef}
+          handleSelectLecture={(vid, cName, ts) => handleTranscribe(`https://vimeo.com/${vid}`, false, cName)}
           currentTheme={currentTheme}
         />
       ) : (courseViewTab === 'resources' || courseViewTab === 'library') ? (

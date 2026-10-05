@@ -437,6 +437,15 @@ def get_transcript(
             raw_course = course_name if isinstance(course_name, str) else None
             effective_course = ((raw_course and raw_course.strip()) or saved.get("course_name") or "General Lectures").strip()
             saved["course_name"] = effective_course
+            if raw_course and raw_course.strip():
+                try:
+                    conn = db_manager._get_connection()
+                    with conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("UPDATE lecturescribe_videos SET course_name = %s WHERE video_id = %s;", (effective_course, video_id))
+                            conn.commit()
+                except Exception as ce:
+                    print(f"⚠️ [Course Update Notice]: {ce}")
             # Ingest into Algolia & Pinecone (safe/idempotent, skips if already active)
             algolia_service.ingest_cues(video_id, saved["title"], saved["cues"])
             pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved["cues"])

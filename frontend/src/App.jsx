@@ -84,7 +84,11 @@ export default function App() {
     effectiveCourses: library.effectiveCourses,
     fetchUserLibrary: library.fetchUserLibrary,
     navigateTo,
-    initChatMessages: (t, v) => tutor.initChatMessages(t, v)
+    initChatMessages: (t, v) => tutor.initChatMessages(t, v),
+    onLectureIngested: (courseName) => {
+      if (course.refetchCourse) course.refetchCourse(courseName);
+      if (library.fetchUserLibrary) library.fetchUserLibrary(auth.googleUser?.email);
+    }
   });
   const { activeData, setActiveData, loading, error, cacheNotice, setCacheNotice, urlInput, setUrlInput, handleTranscribe, handlePasteUrl } = lecture;
 

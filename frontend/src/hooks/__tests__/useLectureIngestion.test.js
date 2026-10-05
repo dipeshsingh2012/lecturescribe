@@ -268,4 +268,92 @@ describe('useLectureIngestion hook functionality', () => {
     expect(result.current.error).toContain('Video not found or private');
     expect(result.current.activeData).toBeNull();
   });
+
+  it('adds lecture to course without navigating or opening workspace when stayOnCoursePage is true (API ingestion)', async () => {
+    const lecturePayload = {
+      videoId: '11223344',
+      title: 'Course Lecture 1',
+      cues: [{ time: '00:00', text: 'Hello class' }],
+      course_name: 'Media Studies'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => lecturePayload
+    });
+
+    const navigateTo = vi.fn();
+    const onLectureIngested = vi.fn();
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: 'student@example.com',
+        selectedCourse: 'Media Studies',
+        setSelectedCourse: vi.fn(),
+        activeCourseData: { course_name: 'Media Studies' },
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo,
+        initChatMessages: vi.fn(),
+        onLectureIngested
+      })
+    );
+
+    act(() => {
+      result.current.setUrlInput('https://vimeo.com/11223344');
+    });
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/11223344', false, 'Media Studies', true);
+    });
+
+    // Should NOT navigate away or activate workspace
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(result.current.activeData).toBeNull();
+    expect(result.current.urlInput).toBe('');
+    expect(onLectureIngested).toHaveBeenCalledWith('Media Studies', '11223344');
+    expect(result.current.cacheNotice).toContain('Course Lecture 1');
+    expect(result.current.cacheNotice).toContain('Media Studies');
+  });
+
+  it('adds cached lecture to course without navigating when stayOnCoursePage is true (client cache hit)', async () => {
+    const cachedItem = {
+      videoId: '998877',
+      title: 'Cached Intro to AI',
+      cues: [],
+      course_name: 'Old Course'
+    };
+    localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '998877': cachedItem }));
+
+    const navigateTo = vi.fn();
+    const onLectureIngested = vi.fn();
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: 'Data Science',
+        setSelectedCourse: vi.fn(),
+        activeCourseData: { course_name: 'Data Science' },
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo,
+        initChatMessages: vi.fn(),
+        onLectureIngested
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('998877', false, 'Data Science', true);
+    });
+
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(result.current.activeData).toBeNull();
+    expect(onLectureIngested).toHaveBeenCalledWith('Data Science', '998877');
+    expect(result.current.cacheNotice).toContain('Cached Intro to AI');
+    expect(result.current.cacheNotice).toContain('Data Science');
+
+    // Stored course_name should now be updated to Data Science
+    const stored = JSON.parse(localStorage.getItem('lecturescribe_cached_videos') || '{}');
+    expect(stored['998877'].course_name).toBe('Data Science');
+  });
 });

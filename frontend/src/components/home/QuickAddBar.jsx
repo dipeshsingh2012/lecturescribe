@@ -17,8 +17,13 @@ export default function QuickAddBar({
   handlePasteUrl,
   handleTranscribe,
   loading,
-  currentTheme
+  currentTheme,
+  placeholder,
+  buttonLabel
 }) {
+  const defaultPlaceholder = "Paste any lecture video URL or ID to study & save...";
+  const displayButtonText = loading ? (buttonLabel ? 'Adding...' : 'Ingesting...') : (buttonLabel || 'Transcribe & Study');
+
   return (
     <Paper
       elevation={0}
@@ -39,7 +44,7 @@ export default function QuickAddBar({
         style={{ marginLeft: 8, marginRight: 12, flexShrink: 0 }}
       />
       <InputBase
-        placeholder="Paste any lecture video URL or ID to study & save..."
+        placeholder={placeholder || defaultPlaceholder}
         value={urlInput}
         onChange={(e) => {
           setUrlInput(e.target.value);
@@ -48,6 +53,7 @@ export default function QuickAddBar({
         onPaste={handlePasteUrl}
         onKeyDown={(e) => e.key === 'Enter' && handleTranscribe(urlInput, true)}
         sx={{ flex: 1, color: currentTheme.palette.textPrimary, fontSize: '0.95rem' }}
+        inputProps={{ 'aria-label': placeholder || defaultPlaceholder }}
       />
       <Button
         variant="contained"
@@ -65,7 +71,7 @@ export default function QuickAddBar({
           '&:hover': { bgcolor: currentTheme.palette.primaryHover }
         }}
       >
-        {loading ? 'Ingesting...' : 'Transcribe & Study'}
+        {displayButtonText}
       </Button>
     </Paper>
   );

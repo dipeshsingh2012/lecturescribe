@@ -82,4 +82,45 @@ describe('QuickAddBar', () => {
     );
     expect(screen.getByRole('button', { name: /Ingesting.../i })).toBeDisabled();
   });
+
+  it('renders custom placeholder and custom buttonLabel when provided', () => {
+    const handleTranscribe = vi.fn();
+    const { rerender } = render(
+      <QuickAddBar
+        urlInput="https://vimeo.com/76979871"
+        setUrlInput={vi.fn()}
+        setCacheNotice={vi.fn()}
+        handlePasteUrl={vi.fn()}
+        handleTranscribe={handleTranscribe}
+        loading={false}
+        currentTheme={mockTheme}
+        placeholder="Add video URL or ID to this course (Biology)..."
+        buttonLabel="Add to Course"
+      />
+    );
+
+    expect(screen.getByPlaceholderText('Add video URL or ID to this course (Biology)...')).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: /Add to Course/i });
+    expect(button).toBeInTheDocument();
+    expect(button).not.toBeDisabled();
+
+    fireEvent.click(button);
+    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/76979871', true);
+
+    // When loading is true with custom buttonLabel, it shows 'Adding...'
+    rerender(
+      <QuickAddBar
+        urlInput="https://vimeo.com/76979871"
+        setUrlInput={vi.fn()}
+        setCacheNotice={vi.fn()}
+        handlePasteUrl={vi.fn()}
+        handleTranscribe={handleTranscribe}
+        loading={true}
+        currentTheme={mockTheme}
+        placeholder="Add video URL or ID to this course (Biology)..."
+        buttonLabel="Add to Course"
+      />
+    );
+    expect(screen.getByRole('button', { name: /Adding.../i })).toBeDisabled();
+  });
 });

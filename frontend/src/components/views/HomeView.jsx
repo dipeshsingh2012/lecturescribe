@@ -228,6 +228,21 @@ export default function HomeView({
         />
       </Box>
 
+      {/* Course-level Quick Add Bar */}
+      {selectedCourse && (
+        <QuickAddBar
+          urlInput={urlInput}
+          setUrlInput={setUrlInput}
+          setCacheNotice={setCacheNotice}
+          handlePasteUrl={handlePasteUrl}
+          handleTranscribe={(url) => handleTranscribe(url, false, activeCourseData?.course_name || selectedCourse, true)}
+          loading={loading}
+          currentTheme={currentTheme}
+          placeholder={`Add video URL or ID to this course (${activeCourseData?.course_name || selectedCourse})...`}
+          buttonLabel="Add to Course"
+        />
+      )}
+
       {/* Course View Tabs (Lectures vs Course Quiz vs Course Materials) */}
       {selectedCourse && (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3, flexWrap: 'wrap', gap: 1.5 }}>

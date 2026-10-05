@@ -112,4 +112,31 @@ describe('HomeView', () => {
     fireEvent.click(quizTabBtn);
     expect(setCourseViewTab).toHaveBeenCalledWith('quiz');
   });
+
+  it('renders course-specific QuickAddBar when selectedCourse is active and calls handleTranscribe with stayOnCoursePage=true', () => {
+    const handleTranscribe = vi.fn();
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        urlInput="https://vimeo.com/123456"
+        handleTranscribe={handleTranscribe}
+      />
+    );
+
+    const input = screen.getByPlaceholderText(/Add video URL or ID to this course \(Biostatistics\)...*/i);
+    expect(input).toBeInTheDocument();
+
+    const addBtn = screen.getByRole('button', { name: /Add to Course/i });
+    expect(addBtn).toBeInTheDocument();
+
+    fireEvent.click(addBtn);
+    expect(handleTranscribe).toHaveBeenCalledWith(
+      'https://vimeo.com/123456',
+      false,
+      'Biostatistics',
+      true
+    );
+  });
 });

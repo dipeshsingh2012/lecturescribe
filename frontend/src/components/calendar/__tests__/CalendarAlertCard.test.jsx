@@ -26,7 +26,10 @@ const mockAgendaData = {
         end_time_formatted: '01:00 PM',
         is_all_day: false,
         day_slot: 'morning',
-        location: 'LH-1'
+        location: 'LH-1',
+        description: 'Join Zoom Meeting: https://zoom.us/j/123456789?pwd=test\nMeeting ID: 123 456 789\nPasscode: 998877\nPlease be on time.',
+        meeting_url: 'https://zoom.us/j/123456789?pwd=test',
+        meeting_platform: 'zoom'
       },
       {
         id: 'evt_2',
@@ -35,7 +38,10 @@ const mockAgendaData = {
         start_time_formatted: '06:00 PM',
         end_time_formatted: '11:59 PM',
         is_all_day: false,
-        day_slot: 'evening'
+        day_slot: 'evening',
+        location: 'Online at https://meet.google.com/abc-defg-hij',
+        meeting_url: 'https://meet.google.com/abc-defg-hij',
+        meeting_platform: 'meet'
       }
     ],
     morning: [
@@ -47,7 +53,10 @@ const mockAgendaData = {
         end_time_formatted: '01:00 PM',
         is_all_day: false,
         day_slot: 'morning',
-        location: 'LH-1'
+        location: 'LH-1',
+        description: 'Join Zoom Meeting: https://zoom.us/j/123456789?pwd=test\nMeeting ID: 123 456 789\nPasscode: 998877\nPlease be on time.',
+        meeting_url: 'https://zoom.us/j/123456789?pwd=test',
+        meeting_platform: 'zoom'
       }
     ],
     afternoon: [],
@@ -59,7 +68,10 @@ const mockAgendaData = {
         start_time_formatted: '06:00 PM',
         end_time_formatted: '11:59 PM',
         is_all_day: false,
-        day_slot: 'evening'
+        day_slot: 'evening',
+        location: 'Online at https://meet.google.com/abc-defg-hij',
+        meeting_url: 'https://meet.google.com/abc-defg-hij',
+        meeting_platform: 'meet'
       }
     ]
   },
@@ -153,5 +165,66 @@ describe('CalendarAlertCard Component', () => {
       expect(global.fetch).toHaveBeenCalledWith('/api/calendar/test-alert', { method: 'POST' });
       expect(screen.getByText(/Twilio credentials not configured yet/i)).toBeInTheDocument();
     });
+  });
+
+  it('renders clickable meeting link buttons with correct URLs and target attributes', async () => {
+    render(<CalendarAlertCard currentTheme={mockTheme} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Machine Learning Quiz 2/i)).toBeInTheDocument();
+    });
+
+    // Zoom link button
+    const zoomLinks = screen.getAllByRole('link', { name: /Join Zoom/i });
+    expect(zoomLinks.length).toBeGreaterThan(0);
+    expect(zoomLinks[0]).toHaveAttribute('href', 'https://zoom.us/j/123456789?pwd=test');
+    expect(zoomLinks[0]).toHaveAttribute('target', '_blank');
+    expect(zoomLinks[0]).toHaveAttribute('rel', 'noopener noreferrer');
+
+    // Google Meet link button
+    const meetLinks = screen.getAllByRole('link', { name: /Join Google Meet/i });
+    expect(meetLinks.length).toBeGreaterThan(0);
+    expect(meetLinks[0]).toHaveAttribute('href', 'https://meet.google.com/abc-defg-hij');
+    expect(meetLinks[0]).toHaveAttribute('target', '_blank');
+    expect(meetLinks[0]).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('allows copying meeting link to clipboard', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: writeTextMock
+      }
+    });
+
+    render(<CalendarAlertCard currentTheme={mockTheme} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /Copy meeting link/i }).length).toBeGreaterThan(0);
+    });
+
+    const copyButtons = screen.getAllByRole('button', { name: /Copy meeting link/i });
+    fireEvent.click(copyButtons[0]);
+
+    expect(writeTextMock).toHaveBeenCalledWith('https://zoom.us/j/123456789?pwd=test');
+  });
+
+  it('toggles expansion of long meeting details and passcodes', async () => {
+    render(<CalendarAlertCard currentTheme={mockTheme} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /Show details \/ credentials/i }).length).toBeGreaterThan(0);
+    });
+
+    const expandBtn = screen.getAllByRole('button', { name: /Show details \/ credentials/i })[0];
+    fireEvent.click(expandBtn);
+
+    expect(screen.getAllByRole('button', { name: /Show less/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Passcode: 998877/i).length).toBeGreaterThan(0);
+
+    const collapseBtn = screen.getAllByRole('button', { name: /Show less/i })[0];
+    fireEvent.click(collapseBtn);
+
+    expect(screen.getAllByRole('button', { name: /Show details \/ credentials/i }).length).toBeGreaterThan(0);
   });
 });

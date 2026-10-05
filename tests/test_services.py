@@ -280,6 +280,63 @@ class TestServices(unittest.TestCase):
             self.assertEqual(data["courses"][0]["course_name"], "Introduction to Financial Analytics")
             self.assertEqual(data["courses"][0]["lecture_count"], 2)
 
+    def test_get_course_details_aggregates_all_lectures(self):
+        from unittest.mock import MagicMock, patch
+        from backend.database import db_manager
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+        # First query: lecturescribe_videos -> 3 existing lectures
+        # Second query: lecturescribe_user_library -> 1 newly added lecture + 1 existing with drive_folder_url
+        general_videos = [
+            {"video_id": "101", "title": "Calculus 1", "duration": "45m", "source_url": "https://vimeo.com/101", "course_name": "Applied Mathematics", "created_at": None},
+            {"video_id": "102", "title": "Linear Algebra", "duration": "50m", "source_url": "https://vimeo.com/102", "course_name": "Applied Mathematics", "created_at": None},
+            {"video_id": "103", "title": "Probability", "duration": "60m", "source_url": "https://vimeo.com/103", "course_name": "Applied Mathematics", "created_at": None}
+        ]
+        user_lib_videos = [
+            {"video_id": "103", "title": "Probability", "duration": "60m", "source_url": "https://vimeo.com/103", "drive_folder_url": "https://drive.google.com/103", "last_viewed_at": None, "course_name": "Applied Mathematics"},
+            {"video_id": "104", "title": "Optimization (Newly Added)", "duration": "55m", "source_url": "https://vimeo.com/104", "drive_folder_url": None, "last_viewed_at": None, "course_name": "Applied Mathematics"}
+        ]
+
+        mock_cursor.fetchall.side_effect = [general_videos, user_lib_videos]
+
+        with patch.object(db_manager, "_get_connection", return_value=mock_conn):
+            course = db_manager.get_course_details("Applied Mathematics", user_email="student@example.com")
+
+        self.assertIsNotNone(course)
+        self.assertEqual(course["lecture_count"], 4)
+        lecture_ids = [l["video_id"] for l in course["lectures"]]
+        self.assertIn("101", lecture_ids)
+        self.assertIn("102", lecture_ids)
+        self.assertIn("103", lecture_ids)
+        self.assertIn("104", lecture_ids)
+
+        lec_103 = next(l for l in course["lectures"] if l["video_id"] == "103")
+        self.assertEqual(lec_103["drive_folder_url"], "https://drive.google.com/103")
+
+    def test_get_course_details_memory_fallback(self):
+        from unittest.mock import patch
+        from backend.database import db_manager
+
+        with patch.object(db_manager, "_get_connection", side_effect=Exception("DB down")):
+            db_manager._memory_cache["201"] = {
+                "title": "Discrete Math Lecture",
+                "duration": "40m",
+                "course_name": "Discrete Math",
+                "sourceUrl": "https://vimeo.com/201"
+            }
+            try:
+                course = db_manager.get_course_details("Discrete Math")
+                self.assertIsNotNone(course)
+                self.assertEqual(course["course_name"], "Discrete Math")
+                self.assertEqual(len(course["lectures"]), 1)
+                self.assertEqual(course["lectures"][0]["video_id"], "201")
+            finally:
+                db_manager._memory_cache.pop("201", None)
+
 if __name__ == "__main__":
     unittest.main()
 

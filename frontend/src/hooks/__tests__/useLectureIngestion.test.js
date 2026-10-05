@@ -311,7 +311,7 @@ describe('useLectureIngestion hook functionality', () => {
     expect(navigateTo).not.toHaveBeenCalled();
     expect(result.current.activeData).toBeNull();
     expect(result.current.urlInput).toBe('');
-    expect(onLectureIngested).toHaveBeenCalledWith('Media Studies', '11223344');
+    expect(onLectureIngested).toHaveBeenCalledWith('Media Studies', '11223344', expect.objectContaining({ course_name: 'Media Studies' }));
     expect(result.current.cacheNotice).toContain('Course Lecture 1');
     expect(result.current.cacheNotice).toContain('Media Studies');
   });
@@ -348,7 +348,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     expect(navigateTo).not.toHaveBeenCalled();
     expect(result.current.activeData).toBeNull();
-    expect(onLectureIngested).toHaveBeenCalledWith('Data Science', '998877');
+    expect(onLectureIngested).toHaveBeenCalledWith('Data Science', '998877', expect.objectContaining({ course_name: 'Data Science' }));
     expect(result.current.cacheNotice).toContain('Cached Intro to AI');
     expect(result.current.cacheNotice).toContain('Data Science');
 

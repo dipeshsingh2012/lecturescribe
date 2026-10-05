@@ -85,7 +85,10 @@ export default function App() {
     fetchUserLibrary: library.fetchUserLibrary,
     navigateTo,
     initChatMessages: (t, v) => tutor.initChatMessages(t, v),
-    onLectureIngested: (courseName) => {
+    onLectureIngested: (courseName, vidId, newLecture) => {
+      if (course.addLectureToCourse && newLecture) {
+        course.addLectureToCourse(newLecture, courseName);
+      }
       if (course.refetchCourse) course.refetchCourse(courseName);
       if (library.fetchUserLibrary) library.fetchUserLibrary(auth.googleUser?.email);
     }

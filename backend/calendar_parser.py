@@ -97,6 +97,68 @@ def _normalize_dt(dt_val: Any) -> Tuple[datetime.datetime, bool]:
     return datetime.datetime.now(IST), False
 
 
+MEETING_URL_REGEX = re.compile(r'https?://[^\s<>"\'\)\]\}]+')
+
+
+def detect_meeting_platform(url: str) -> str:
+    """Classify video meeting or LMS platform from URL."""
+    url_lower = url.lower()
+    if "zoom.us" in url_lower:
+        return "zoom"
+    if "meet.google.com" in url_lower:
+        return "meet"
+    if "teams.microsoft.com" in url_lower or "teams.live.com" in url_lower:
+        return "teams"
+    if "webex.com" in url_lower:
+        return "webex"
+    if "bigbluebutton" in url_lower or "/bbb" in url_lower:
+        return "bbb"
+    if "moodle" in url_lower or "learning.iiitdwd.ac.in" in url_lower:
+        return "moodle"
+    return "link"
+
+
+def extract_meeting_info(
+    url_prop: str = "",
+    location: str = "",
+    description: str = ""
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract meeting URL and identify platform (zoom, meet, teams, webex, bbb, moodle, link).
+    Picks video conference links with higher priority if multiple links are found.
+    Returns (meeting_url, meeting_platform).
+    """
+    candidates: List[str] = []
+
+    def _clean_and_add(raw_str: str):
+        if not raw_str:
+            return
+        matches = MEETING_URL_REGEX.findall(raw_str)
+        for m in matches:
+            cleaned = m.rstrip(".,;:!?)]}")
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
+
+    # 1. Collect candidate URLs from url property, location, and description
+    _clean_and_add(url_prop)
+    _clean_and_add(location)
+    _clean_and_add(description)
+
+    if not candidates:
+        return None, None
+
+    # 2. Prioritize video conferencing platforms over generic URLs
+    priority_platforms = {"zoom", "meet", "teams", "webex", "bbb"}
+    for cand in candidates:
+        platform = detect_meeting_platform(cand)
+        if platform in priority_platforms:
+            return cand, platform
+
+    # 3. Otherwise return the first valid URL
+    first_url = candidates[0]
+    return first_url, detect_meeting_platform(first_url)
+
+
 def parse_ical_content(ics_text: str | bytes) -> List[Dict[str, Any]]:
     """Parse raw iCalendar content into standardized, categorized event dictionaries."""
     if isinstance(ics_text, str):
@@ -120,6 +182,7 @@ def parse_ical_content(ics_text: str | bytes) -> List[Dict[str, Any]]:
         summary = str(component.get("summary") or "Untitled Event").strip()
         description = str(component.get("description") or "").strip()
         location = str(component.get("location") or "").strip()
+        url_prop = str(component.get("url") or "").strip()
 
         dtstart_prop = component.get("dtstart")
         dtend_prop = component.get("dtend")
@@ -153,11 +216,20 @@ def parse_ical_content(ics_text: str | bytes) -> List[Dict[str, Any]]:
         else:
             day_slot = "evening"
 
+        meeting_url, meeting_platform = extract_meeting_info(
+            url_prop=url_prop,
+            location=location,
+            description=description
+        )
+
         events.append({
             "id": uid,
             "title": summary,
             "description": description,
             "location": location,
+            "url": url_prop or meeting_url,
+            "meeting_url": meeting_url,
+            "meeting_platform": meeting_platform,
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "start_time_formatted": start_dt.strftime("%I:%M %p"),

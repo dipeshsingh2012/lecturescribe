@@ -106,7 +106,33 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
         const data = await res.json();
         if (data && data.course) {
           lastFetchedRef.current = queryTarget;
-          setDirectCourseData(data.course);
+          setDirectCourseData(prev => {
+            const fetched = data.course;
+            if (!prev || !prev.lectures || prev.lectures.length === 0) {
+              return fetched;
+            }
+            const seen = new Set();
+            const merged = [];
+            for (const lec of (fetched.lectures || [])) {
+              const id = String(lec.video_id || lec.videoId);
+              if (!seen.has(id)) {
+                seen.add(id);
+                merged.push(lec);
+              }
+            }
+            for (const lec of prev.lectures) {
+              const id = String(lec.video_id || lec.videoId);
+              if (!seen.has(id)) {
+                seen.add(id);
+                merged.push(lec);
+              }
+            }
+            return {
+              ...fetched,
+              lecture_count: merged.length,
+              lectures: merged
+            };
+          });
           return data.course;
         }
       }
@@ -116,27 +142,82 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     return null;
   };
 
+  const addLectureToCourse = (lecture, courseTarget = null) => {
+    if (!lecture) return;
+    const vidId = String(lecture.video_id || lecture.videoId);
+    const resolvedName = (courseTarget || selectedCourse || lecture.course_name || 'General Lectures').trim();
+    setDirectCourseData(prev => {
+      if (!prev) {
+        return {
+          course_name: resolvedName,
+          course_slug: normalizeCourseSlug(resolvedName),
+          lecture_count: 1,
+          thumbnail_video_id: vidId,
+          lectures: [lecture]
+        };
+      }
+      const existing = prev.lectures || [];
+      if (existing.some(l => String(l.video_id || l.videoId) === vidId)) {
+        return prev;
+      }
+      const updated = [lecture, ...existing];
+      return {
+        ...prev,
+        course_name: prev.course_name || resolvedName,
+        course_slug: prev.course_slug || normalizeCourseSlug(resolvedName),
+        lecture_count: updated.length,
+        lectures: updated
+      };
+    });
+  };
+
   const activeCourseData = useMemo(() => {
     if (!selectedCourse) return null;
     const clean = selectedCourse.trim().toLowerCase();
     const slug = normalizeCourseSlug(selectedCourse);
 
-    if (directCourseData && (
-      directCourseData.course_name === selectedCourse ||
-      directCourseData.course_name.toLowerCase() === clean ||
-      normalizeCourseSlug(directCourseData.course_name) === slug ||
-      directCourseData.course_slug === slug
-    )) {
-      return directCourseData;
-    }
+    const fromDirect = (
+      directCourseData && (
+        directCourseData.course_name === selectedCourse ||
+        (directCourseData.course_name && directCourseData.course_name.toLowerCase() === clean) ||
+        (directCourseData.course_name && normalizeCourseSlug(directCourseData.course_name) === slug) ||
+        directCourseData.course_slug === slug
+      )
+    ) ? directCourseData : null;
 
-    const found = (
+    const fromEffective = (
       (effectiveCourses || []).find(c => c.course_name === selectedCourse) ||
-      (effectiveCourses || []).find(c => c.course_name.toLowerCase() === clean) ||
-      (effectiveCourses || []).find(c => normalizeCourseSlug(c.course_name) === slug) ||
+      (effectiveCourses || []).find(c => c.course_name && c.course_name.toLowerCase() === clean) ||
+      (effectiveCourses || []).find(c => c.course_name && normalizeCourseSlug(c.course_name) === slug) ||
       (effectiveCourses || []).find(c => c.course_slug === slug)
     );
-    if (found) return found;
+
+    if (fromDirect && fromEffective) {
+      const seen = new Set();
+      const merged = [];
+      for (const lec of (fromDirect.lectures || [])) {
+        const id = String(lec.video_id || lec.videoId);
+        if (!seen.has(id)) {
+          seen.add(id);
+          merged.push(lec);
+        }
+      }
+      for (const lec of (fromEffective.lectures || [])) {
+        const id = String(lec.video_id || lec.videoId);
+        if (!seen.has(id)) {
+          seen.add(id);
+          merged.push(lec);
+        }
+      }
+      return {
+        ...fromDirect,
+        lecture_count: merged.length,
+        lectures: merged
+      };
+    }
+
+    if (fromDirect) return fromDirect;
+    if (fromEffective) return fromEffective;
 
     return null;
   }, [effectiveCourses, selectedCourse, directCourseData]);
@@ -181,6 +262,7 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     setDirectCourseData,
     activeCourseData,
     filteredCourseLectures,
-    refetchCourse
+    refetchCourse,
+    addLectureToCourse
   };
 }

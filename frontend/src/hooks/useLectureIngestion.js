@@ -147,7 +147,7 @@ export function useLectureIngestion({
       if (stayOnCoursePage) {
         setCacheNotice(`⚡ Lecture "${cached.title || vidId}" added to ${finalCourse || 'course'} successfully!`);
         if (typeof onLectureIngested === 'function') {
-          onLectureIngested(finalCourse, vidId);
+          onLectureIngested(finalCourse, vidId, payload);
         }
       } else {
         setCacheNotice("⚡ Pasted video is already cached! Transcripts and summary will load instantly.");
@@ -202,7 +202,7 @@ export function useLectureIngestion({
         if (stayOnCoursePage) {
           setCacheNotice(`⚡ Lecture "${data.title || data.videoId}" added to ${finalCourse || 'course'} successfully!`);
           if (typeof onLectureIngested === 'function') {
-            onLectureIngested(finalCourse, data.videoId);
+            onLectureIngested(finalCourse, data.videoId, enrichedData);
           }
         } else if (data.cached) {
           setCacheNotice("⚡ Retrieved from Database Cache! Transcripts and summary were not regenerated.");

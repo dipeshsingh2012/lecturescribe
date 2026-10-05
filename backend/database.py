@@ -1384,7 +1384,8 @@ class RelationalDBManager:
     def get_course_details(self, course_name: str, user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Fetch aggregated course info and its lecture list.
-        Searches user library (if email provided) or general videos by course_name.
+        Queries all course lectures from PostgreSQL (merging general videos and user library),
+        falling back to in-memory cache if the database is unavailable.
         """
         if not course_name or not course_name.strip():
             return None
@@ -1394,7 +1395,109 @@ class RelationalDBManager:
         slug_as_space = clean_name.replace("-", " ")
         slug_as_wildcard = clean_name.replace("-", "%")
 
-        # Check in-memory cache first if available
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    # 1. Fetch all general lectures for this course from lecturescribe_videos
+                    cursor.execute("""
+                        SELECT video_id, title, duration, source_url, course_name, created_at
+                        FROM lecturescribe_videos
+                        WHERE course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR title ILIKE %s OR title ILIKE %s
+                        ORDER BY created_at DESC;
+                    """, (clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%"))
+                    vid_rows = cursor.fetchall() or []
+
+                    # 2. Fetch user library lectures if email provided (to enrich with drive_folder_url, last_viewed_at)
+                    user_lib_rows = []
+                    if user_email and user_email.strip():
+                        cursor.execute("""
+                            SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at, course_name
+                            FROM lecturescribe_user_library
+                            WHERE user_email = %s AND (
+                                course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s
+                                OR title ILIKE %s OR title ILIKE %s
+                            )
+                            ORDER BY last_viewed_at DESC;
+                        """, (user_email.strip().lower(), clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%"))
+                        user_lib_rows = cursor.fetchall() or []
+
+                    if not vid_rows and not user_lib_rows:
+                        raise ValueError("No course lectures found in database")
+
+                    canonical_name = (
+                        (vid_rows and vid_rows[0].get("course_name")) or
+                        (user_lib_rows and user_lib_rows[0].get("course_name")) or
+                        clean_name
+                    )
+
+                    user_map = {r["video_id"]: r for r in user_lib_rows}
+                    seen_vids = set()
+                    lectures = []
+
+                    # General lectures first, enriched by user library if present
+                    for r in vid_rows:
+                        vid = r["video_id"]
+                        if vid in seen_vids:
+                            continue
+                        seen_vids.add(vid)
+                        u_data = user_map.get(vid)
+                        lectures.append({
+                            "videoId": vid,
+                            "video_id": vid,
+                            "title": r["title"],
+                            "video_title": r["title"],
+                            "duration": r.get("duration") or "Unknown",
+                            "sourceUrl": r.get("source_url") or f"https://vimeo.com/{vid}",
+                            "video_url": r.get("source_url") or f"https://vimeo.com/{vid}",
+                            "driveFolderUrl": u_data.get("drive_folder_url") if u_data else None,
+                            "drive_folder_url": u_data.get("drive_folder_url") if u_data else None,
+                            "lastViewedAt": str(u_data["last_viewed_at"]) if u_data and u_data.get("last_viewed_at") else str(r["created_at"]) if r.get("created_at") else None,
+                            "last_viewed_at": str(u_data["last_viewed_at"]) if u_data and u_data.get("last_viewed_at") else str(r["created_at"]) if r.get("created_at") else None,
+                            "created_at": str(r["created_at"]) if r.get("created_at") else None,
+                            "course_name": r.get("course_name") or canonical_name
+                        })
+
+                    # Any user library lectures not in lecturescribe_videos
+                    for u in user_lib_rows:
+                        vid = u["video_id"]
+                        if vid in seen_vids:
+                            continue
+                        seen_vids.add(vid)
+                        lectures.append({
+                            "videoId": vid,
+                            "video_id": vid,
+                            "title": u["title"],
+                            "video_title": u["title"],
+                            "duration": u.get("duration") or "Unknown",
+                            "sourceUrl": u.get("source_url") or f"https://vimeo.com/{vid}",
+                            "video_url": u.get("source_url") or f"https://vimeo.com/{vid}",
+                            "driveFolderUrl": u.get("drive_folder_url"),
+                            "drive_folder_url": u.get("drive_folder_url"),
+                            "lastViewedAt": str(u["last_viewed_at"]) if u.get("last_viewed_at") else None,
+                            "last_viewed_at": str(u["last_viewed_at"]) if u.get("last_viewed_at") else None,
+                            "created_at": str(u["last_viewed_at"]) if u.get("last_viewed_at") else None,
+                            "course_name": u.get("course_name") or canonical_name
+                        })
+
+                    return {
+                        "course_name": canonical_name,
+                        "lecture_count": len(lectures),
+                        "latest_viewed_at": lectures[0]["last_viewed_at"] if lectures else None,
+                        "thumbnail_video_id": lectures[0]["video_id"] if lectures else None,
+                        "lectures": lectures
+                    }
+        except Exception:
+            pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        # In-memory cache fallback (used when DB is down or in mock test mode)
         mem_lectures = []
         for vid_id, v in self._memory_cache.items():
             c_name = v.get("course_name") or extract_course_name(v.get("title", ""))
@@ -1427,105 +1530,7 @@ class RelationalDBManager:
                 "thumbnail_video_id": mem_lectures[0]["video_id"],
                 "lectures": mem_lectures
             }
-
-        conn = None
-        try:
-            conn = self._get_connection()
-            with conn:
-                with conn.cursor() as cursor:
-                    # 1. If user_email is provided, search user library first
-                    if user_email and user_email.strip():
-                        cursor.execute("""
-                            SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at, course_name
-                            FROM lecturescribe_user_library
-                            WHERE user_email = %s AND (
-                                course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s
-                                OR title ILIKE %s OR title ILIKE %s
-                            )
-                            ORDER BY last_viewed_at DESC;
-                        """, (user_email.strip().lower(), clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%"))
-                        rows = cursor.fetchall() or []
-                        if rows:
-                            canonical_name = rows[0].get("course_name") or clean_name
-                            seen_vids = set()
-                            lectures = []
-                            for r in rows:
-                                vid = r["video_id"]
-                                if vid in seen_vids:
-                                    continue
-                                seen_vids.add(vid)
-                                lectures.append({
-                                    "videoId": vid,
-                                    "video_id": vid,
-                                    "title": r["title"],
-                                    "video_title": r["title"],
-                                    "duration": r.get("duration") or "Unknown",
-                                    "sourceUrl": r.get("source_url") or f"https://vimeo.com/{vid}",
-                                    "video_url": r.get("source_url") or f"https://vimeo.com/{vid}",
-                                    "driveFolderUrl": r.get("drive_folder_url"),
-                                    "drive_folder_url": r.get("drive_folder_url"),
-                                    "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                    "last_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                    "created_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                    "course_name": canonical_name
-                                })
-                            return {
-                                "course_name": canonical_name,
-                                "lecture_count": len(lectures),
-                                "latest_viewed_at": lectures[0]["last_viewed_at"] if lectures else None,
-                                "thumbnail_video_id": lectures[0]["video_id"] if lectures else None,
-                                "lectures": lectures
-                            }
-
-                    # 2. General videos lookup
-                    cursor.execute("""
-                        SELECT video_id, title, duration, source_url, course_name, created_at
-                        FROM lecturescribe_videos
-                        WHERE course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR course_name ILIKE %s OR title ILIKE %s OR title ILIKE %s
-                        ORDER BY created_at DESC;
-                    """, (clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%"))
-                    vid_rows = cursor.fetchall() or []
-                    if not vid_rows:
-                        return None
-
-                    canonical_name = vid_rows[0].get("course_name") or clean_name
-                    seen_vids = set()
-                    lectures = []
-                    for r in vid_rows:
-                        vid = r["video_id"]
-                        if vid in seen_vids:
-                            continue
-                        seen_vids.add(vid)
-                        lectures.append({
-                            "videoId": vid,
-                            "video_id": vid,
-                            "title": r["title"],
-                            "video_title": r["title"],
-                            "duration": r.get("duration") or "Unknown",
-                            "sourceUrl": r.get("source_url") or f"https://vimeo.com/{vid}",
-                            "video_url": r.get("source_url") or f"https://vimeo.com/{vid}",
-                            "driveFolderUrl": None,
-                            "drive_folder_url": None,
-                            "lastViewedAt": str(r["created_at"]) if r.get("created_at") else None,
-                            "last_viewed_at": str(r["created_at"]) if r.get("created_at") else None,
-                            "created_at": str(r["created_at"]) if r.get("created_at") else None,
-                            "course_name": canonical_name
-                        })
-                    return {
-                        "course_name": canonical_name,
-                        "lecture_count": len(lectures),
-                        "latest_viewed_at": lectures[0]["last_viewed_at"] if lectures else None,
-                        "thumbnail_video_id": lectures[0]["video_id"] if lectures else None,
-                        "lectures": lectures
-                    }
-        except Exception:
-            return None
-        finally:
-            if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+        return None
 
     def get_user_library(self, user_email: str) -> List[Dict[str, Any]]:
         """Retrieve all lectures saved in the user's LMS library from PostgreSQL."""

@@ -9,6 +9,8 @@ from backend.main import app
 from backend.calendar_parser import (
     parse_ical_content,
     categorize_event,
+    extract_meeting_info,
+    detect_meeting_platform,
     calendar_service,
     IST
 )
@@ -228,6 +230,69 @@ class TestCalendarAlerts(unittest.TestCase):
                 data_4pm = res_4pm.json()
                 self.assertEqual(data_4pm["status"], "success")
                 self.assertEqual(data_4pm["slot"], "4pm")
+
+    def test_extract_meeting_info(self):
+        # 1. Zoom link in description with passcodes and credentials
+        desc = "Join Zoom Meeting\nhttps://us02web.zoom.us/j/884920192?pwd=abcd\nMeeting ID: 884 920 192\nPasscode: 12345"
+        url, platform = extract_meeting_info(description=desc)
+        self.assertEqual(url, "https://us02web.zoom.us/j/884920192?pwd=abcd")
+        self.assertEqual(platform, "zoom")
+
+        # 2. Google Meet link in location
+        loc = "https://meet.google.com/xyz-uvw-rst"
+        url, platform = extract_meeting_info(location=loc)
+        self.assertEqual(url, "https://meet.google.com/xyz-uvw-rst")
+        self.assertEqual(platform, "meet")
+
+        # 3. Microsoft Teams link in url_prop
+        url_prop = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_xyz"
+        url, platform = extract_meeting_info(url_prop=url_prop)
+        self.assertEqual(url, url_prop)
+        self.assertEqual(platform, "teams")
+
+        # 4. Prioritizes video conference URL over moodle link when both exist
+        url, platform = extract_meeting_info(
+            url_prop="https://learning.iiitdwd.ac.in/mod/url/view.php?id=100",
+            description="Live class at https://zoom.us/j/12345678"
+        )
+        self.assertEqual(url, "https://zoom.us/j/12345678")
+        self.assertEqual(platform, "zoom")
+
+        # 5. No URLs
+        url, platform = extract_meeting_info(location="LH-201", description="In-person classroom session")
+        self.assertIsNone(url)
+        self.assertIsNone(platform)
+
+    def test_parse_ical_with_meeting_links(self):
+        sample_ics = b"""BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:meet_zoom_1
+SUMMARY:Computer Networks Lecture
+DESCRIPTION:Join Zoom Meeting: https://zoom.us/j/9988776655?pwd=pass\nMeeting ID: 9988776655
+LOCATION:Online Zoom
+DTSTART:20261005T040000Z
+DTEND:20261005T050000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:meet_gmeet_2
+SUMMARY:Cloud Computing Viva
+LOCATION:https://meet.google.com/abc-defg-hij
+DTSTART:20261005T060000Z
+DTEND:20261005T070000Z
+END:VEVENT
+END:VCALENDAR
+"""
+        events = parse_ical_content(sample_ics)
+        self.assertEqual(len(events), 2)
+
+        zoom_evt = next(e for e in events if e["id"] == "meet_zoom_1")
+        self.assertEqual(zoom_evt["meeting_url"], "https://zoom.us/j/9988776655?pwd=pass")
+        self.assertEqual(zoom_evt["meeting_platform"], "zoom")
+
+        meet_evt = next(e for e in events if e["id"] == "meet_gmeet_2")
+        self.assertEqual(meet_evt["meeting_url"], "https://meet.google.com/abc-defg-hij")
+        self.assertEqual(meet_evt["meeting_platform"], "meet")
 
 
 if __name__ == "__main__":

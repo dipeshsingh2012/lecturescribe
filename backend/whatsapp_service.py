@@ -109,7 +109,11 @@ def format_whatsapp_message(
             location = (evt.get("location") or "").strip()
             raw_desc = (evt.get("description") or "").strip()
 
-            url, clean_desc = _extract_url_and_clean_desc(raw_desc)
+            url = evt.get("meeting_url") or evt.get("url")
+            if not url:
+                url, clean_desc = _extract_url_and_clean_desc(raw_desc)
+            else:
+                _, clean_desc = _extract_url_and_clean_desc(raw_desc)
 
             # Smart timing display (avoid 11:55 PM - 11:55 PM)
             if is_all_day:
@@ -124,10 +128,22 @@ def format_whatsapp_message(
             lines.append(f"{icon} *{idx}. {title}*")
             lines.append(f"   🏷️ _{cat_label}_  •  ⏰ `{timing}`")
 
-            if location:
+            if location and not (location.startswith("http://") or location.startswith("https://")):
                 lines.append(f"   📍 _{location}_")
             if url:
-                link_label = "Join Class" if ("zoom" in url.lower() or category in ("lecture", "lab")) else "View / Submit"
+                platform = evt.get("meeting_platform")
+                if platform == "zoom" or "zoom" in url.lower():
+                    link_label = "Join Zoom"
+                elif platform == "meet" or "meet.google.com" in url.lower():
+                    link_label = "Join Meet"
+                elif platform == "teams" or "teams.microsoft" in url.lower():
+                    link_label = "Join Teams"
+                elif platform == "webex":
+                    link_label = "Join Webex"
+                elif category in ("lecture", "lab"):
+                    link_label = "Join Class"
+                else:
+                    link_label = "View / Submit"
                 lines.append(f"   🔗 *{link_label}:* {url}")
             elif clean_desc:
                 lines.append(f"   ℹ️ {clean_desc}")

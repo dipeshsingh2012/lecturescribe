@@ -23,9 +23,145 @@ import {
   Sun,
   Coffee,
   Moon,
-  Info
+  Info,
+  Video,
+  ExternalLink,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+
+const PLATFORM_CONFIG = {
+  zoom: {
+    label: 'Join Zoom',
+    bg: '#0b5cff',
+    color: '#ffffff',
+    hoverBg: '#094ecc',
+    border: '#0b5cff'
+  },
+  meet: {
+    label: 'Join Google Meet',
+    bg: '#00796b',
+    color: '#ffffff',
+    hoverBg: '#00695c',
+    border: '#00796b'
+  },
+  teams: {
+    label: 'Join MS Teams',
+    bg: '#4f46e5',
+    color: '#ffffff',
+    hoverBg: '#4338ca',
+    border: '#4f46e5'
+  },
+  webex: {
+    label: 'Join Webex',
+    bg: '#00838f',
+    color: '#ffffff',
+    hoverBg: '#006064',
+    border: '#00838f'
+  },
+  bbb: {
+    label: 'Join Class (BBB)',
+    bg: '#1d4ed8',
+    color: '#ffffff',
+    hoverBg: '#1e40af',
+    border: '#1d4ed8'
+  },
+  moodle: {
+    label: 'Open in Moodle',
+    bg: '#ea580c',
+    color: '#ffffff',
+    hoverBg: '#c2410c',
+    border: '#ea580c'
+  },
+  link: {
+    label: 'Join Meeting',
+    bg: '#2563eb',
+    color: '#ffffff',
+    hoverBg: '#1d4ed8',
+    border: '#2563eb'
+  }
+};
+
+const getMeetingInfo = (evt) => {
+  let url = evt.meeting_url || evt.url;
+  let platform = evt.meeting_platform;
+
+  if (!url) {
+    const combined = `${evt.location || ''} ${evt.description || ''}`;
+    const match = combined.match(/https?:\/\/[^\s<>"')]+[^\s<>"'().,:;?!]/i);
+    if (match) {
+      url = match[0];
+    }
+  }
+
+  if (url && (!platform || platform === 'link' || platform === 'generic')) {
+    const lower = url.toLowerCase();
+    if (lower.includes('zoom.us')) platform = 'zoom';
+    else if (lower.includes('meet.google.com')) platform = 'meet';
+    else if (lower.includes('teams.microsoft.com') || lower.includes('teams.live.com')) platform = 'teams';
+    else if (lower.includes('webex.com')) platform = 'webex';
+    else if (lower.includes('bigbluebutton') || lower.includes('/bbb')) platform = 'bbb';
+    else if (lower.includes('moodle') || lower.includes('learning.iiitdwd.ac.in')) platform = 'moodle';
+    else platform = 'link';
+  }
+
+  return {
+    url,
+    platform: platform || 'link',
+    config: PLATFORM_CONFIG[platform] || PLATFORM_CONFIG.link
+  };
+};
+
+const renderWithLinks = (text, primaryColor = '#2563eb') => {
+  if (!text) return null;
+  const urlRegex = /(https?:\/\/[^\s<>"')]+[^\s<>"'().,:;?!])/g;
+  const parts = [];
+  let lastIdx = 0;
+  let match;
+
+  while ((match = urlRegex.exec(text)) !== null) {
+    const start = match.index;
+    const end = urlRegex.lastIndex;
+    if (start > lastIdx) {
+      parts.push(text.slice(lastIdx, start));
+    }
+    const url = match[0];
+    parts.push(
+      <Box
+        component="a"
+        key={`${start}-${url}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        sx={{
+          color: primaryColor,
+          fontWeight: 600,
+          textDecoration: 'underline',
+          wordBreak: 'break-all',
+          display: 'inline',
+          cursor: 'pointer',
+          '&:hover': {
+            opacity: 0.8,
+            textDecoration: 'none'
+          }
+        }}
+      >
+        {url}
+      </Box>
+    );
+    lastIdx = end;
+  }
+
+  if (lastIdx < text.length) {
+    parts.push(text.slice(lastIdx));
+  }
+
+  return parts.length > 0 ? parts : text;
+};
 
 const CATEGORY_STYLES = {
   exam: {
@@ -79,6 +215,31 @@ export default function CalendarAlertCard({ currentTheme }) {
   const [activeTab, setActiveTab] = useState('today'); // 'today' | 'upcoming'
   const [testAlertLoading, setTestAlertLoading] = useState(false);
   const [testAlertMessage, setTestAlertMessage] = useState(null);
+  const [copiedId, setCopiedId] = useState(null);
+  const [expandedIds, setExpandedIds] = useState(new Set());
+
+  const handleCopyLink = (id, linkText) => {
+    if (!linkText) return;
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(linkText);
+    }
+    setCopiedId(id);
+    setTimeout(() => {
+      setCopiedId((prev) => (prev === id ? null : prev));
+    }, 2000);
+  };
+
+  const toggleExpand = (id) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const fetchAgenda = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -141,6 +302,10 @@ export default function CalendarAlertCard({ currentTheme }) {
 
   const renderEventItem = (evt) => {
     const style = CATEGORY_STYLES[evt.category] || CATEGORY_STYLES.general;
+    const meetingInfo = getMeetingInfo(evt);
+    const isExpanded = expandedIds.has(evt.id);
+    const isLongDesc = evt.description && (evt.description.length > 110 || evt.description.includes('\n'));
+
     return (
       <Box
         key={evt.id}
@@ -203,30 +368,115 @@ export default function CalendarAlertCard({ currentTheme }) {
         </Typography>
 
         {evt.location && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.8, color: currentTheme.palette.textSecondary }}>
-            <MapPin size={13} />
-            <Typography variant="caption" sx={{ fontWeight: 500 }}>
-              {evt.location}
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.8, mt: 0.8, color: currentTheme.palette.textSecondary }}>
+            <MapPin size={13} style={{ flexShrink: 0, marginTop: 3 }} />
+            <Typography variant="caption" sx={{ fontWeight: 500, wordBreak: 'break-word' }}>
+              {renderWithLinks(evt.location, currentTheme.palette.primary)}
             </Typography>
           </Box>
         )}
 
+        {meetingInfo.url && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.2, flexWrap: 'wrap' }}>
+            <Button
+              component="a"
+              href={meetingInfo.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              variant="contained"
+              size="small"
+              startIcon={<Video size={13} />}
+              endIcon={<ExternalLink size={12} />}
+              sx={{
+                bgcolor: meetingInfo.config.bg,
+                color: meetingInfo.config.color,
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                textTransform: 'none',
+                borderRadius: 2,
+                px: 1.4,
+                py: 0.4,
+                boxShadow: 'none',
+                '&:hover': {
+                  bgcolor: meetingInfo.config.hoverBg,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                }
+              }}
+            >
+              {meetingInfo.config.label}
+            </Button>
+            <Tooltip title={copiedId === evt.id ? 'Copied link!' : 'Copy meeting link'}>
+              <IconButton
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopyLink(evt.id, meetingInfo.url);
+                }}
+                sx={{
+                  border: `1px solid ${currentTheme.palette.cardBorder}`,
+                  bgcolor: currentTheme.palette.surface || 'transparent',
+                  color: copiedId === evt.id ? '#16a34a' : currentTheme.palette.textSecondary,
+                  p: 0.5,
+                  borderRadius: 1.5,
+                  '&:hover': {
+                    bgcolor: currentTheme.palette.cardBorder
+                  }
+                }}
+                aria-label="Copy meeting link"
+              >
+                {copiedId === evt.id ? <Check size={13} /> : <Copy size={13} />}
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
+
         {evt.description && evt.description.length > 0 && (
-          <Typography
-            variant="body2"
-            sx={{
-              mt: 0.8,
-              fontSize: '0.8rem',
-              color: currentTheme.palette.textSecondary,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical'
-            }}
-          >
-            {evt.description}
-          </Typography>
+          <Box sx={{ mt: 0.8 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                fontSize: '0.8rem',
+                color: currentTheme.palette.textSecondary,
+                whiteSpace: isExpanded ? 'pre-wrap' : 'normal',
+                wordBreak: 'break-word',
+                ...(!isExpanded && isLongDesc
+                  ? {
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical'
+                    }
+                  : {})
+              }}
+            >
+              {renderWithLinks(evt.description, currentTheme.palette.primary)}
+            </Typography>
+
+            {isLongDesc && (
+              <Button
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleExpand(evt.id);
+                }}
+                endIcon={isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                sx={{
+                  mt: 0.4,
+                  p: 0,
+                  minWidth: 'auto',
+                  textTransform: 'none',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  color: currentTheme.palette.primary,
+                  '&:hover': { bgcolor: 'transparent', textDecoration: 'underline' }
+                }}
+              >
+                {isExpanded ? 'Show less' : 'Show details / credentials'}
+              </Button>
+            )}
+          </Box>
         )}
       </Box>
     );

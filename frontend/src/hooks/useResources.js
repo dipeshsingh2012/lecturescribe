@@ -6,13 +6,16 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const [lectureResourcesLoading, setLectureResourcesLoading] = useState(false);
   const [courseResources, setCourseResources] = useState([]);
   const [courseResourcesLoading, setCourseResourcesLoading] = useState(false);
+  const [courseReadings, setCourseReadings] = useState([]);
+  const [courseReadingsLoading, setCourseReadingsLoading] = useState(false);
+  const [isExtractingReadings, setIsExtractingReadings] = useState(false);
 
   const getInitialCourseTab = () => {
     if (typeof window !== 'undefined') {
       try {
         const params = new URLSearchParams(window.location.search);
         const tab = params.get('tab');
-        if (tab === 'quiz' || tab === 'resources' || tab === 'lectures') {
+        if (tab === 'quiz' || tab === 'resources' || tab === 'library' || tab === 'lectures') {
           return tab;
         }
       } catch {}
@@ -141,6 +144,84 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     }
   };
 
+  const fetchCourseReadings = async (courseName) => {
+    if (!courseName) {
+      setCourseReadings([]);
+      return;
+    }
+    setCourseReadingsLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    try {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/readings`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        setCourseReadings(data.readings || []);
+      }
+    } catch (err) {
+      console.warn("Failed to load course readings:", err);
+    } finally {
+      clearTimeout(timeoutId);
+      setCourseReadingsLoading(false);
+    }
+  };
+
+  const triggerExtractReadings = async (courseName) => {
+    const cname = courseName || selectedCourse;
+    if (!cname) return { status: "error", error: "Course name required" };
+    setIsExtractingReadings(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(cname)}/extract-readings`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.readings) {
+          setCourseReadings(data.readings);
+        }
+        return data;
+      }
+    } catch (err) {
+      console.error("Failed to extract course readings:", err);
+    } finally {
+      setIsExtractingReadings(false);
+    }
+    return { status: "error" };
+  };
+
+  const handleDeleteCourseReading = async (readingId) => {
+    if (!readingId) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/course/reading/${readingId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setCourseReadings(prev => prev.filter(r => r.id !== readingId));
+      }
+    } catch (err) {
+      console.error("Failed to delete reading:", err);
+    }
+  };
+
+  const searchReadingWeb = async (title, author = '', courseName = '') => {
+    if (!title) return [];
+    try {
+      const cname = courseName || selectedCourse || '';
+      const params = new URLSearchParams({ title, author, course_name: cname });
+      const res = await fetch(`${API_BASE}/api/course/reading/search-web?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.results || [];
+      }
+    } catch (err) {
+      console.error("Failed to search reading web:", err);
+    }
+    return [];
+  };
+
   const lastCourseSlugRef = useRef('');
 
   useEffect(() => {
@@ -149,9 +230,11 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       if (lastCourseSlugRef.current === slug) return;
       lastCourseSlugRef.current = slug;
       fetchCourseResources(selectedCourse);
+      fetchCourseReadings(selectedCourse);
     } else {
       lastCourseSlugRef.current = '';
       setCourseResources([]);
+      setCourseReadings([]);
     }
   }, [selectedCourse]);
 
@@ -323,6 +406,14 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     courseResources,
     setCourseResources,
     courseResourcesLoading,
+    courseReadings,
+    setCourseReadings,
+    courseReadingsLoading,
+    isExtractingReadings,
+    fetchCourseReadings,
+    triggerExtractReadings,
+    handleDeleteCourseReading,
+    searchReadingWeb,
     courseViewTab,
     setCourseViewTab,
     uploadModalOpen,

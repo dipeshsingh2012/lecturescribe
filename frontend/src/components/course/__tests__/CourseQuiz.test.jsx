@@ -104,7 +104,7 @@ describe('CourseQuiz Component', () => {
     );
 
     expect(screen.getAllByText(/Supervised Learning Foundations/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/12:30/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/12:30/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Correct!/i)).toBeInTheDocument();
 
     const openLectureBtn = screen.getByRole('button', { name: /Open Supervised Learning Foundations/i });

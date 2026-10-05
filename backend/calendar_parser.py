@@ -31,6 +31,12 @@ IST = ZoneInfo("Asia/Kolkata")
 CACHE_KEY = "moodle_ical_events_cache"
 DEFAULT_CACHE_TTL = 1800  # 30 minutes
 
+# The only two Cloud Scheduler cron slots (IST). Both deliver the same full-day agenda.
+SLOT_LABELS: Dict[str, str] = {
+    "8am": "8:00 AM Daily Reminder",
+    "4pm": "4:00 PM Daily Reminder",
+}
+
 
 def get_moodle_feed_url() -> str:
     """Build or retrieve the authenticated Moodle export URL."""
@@ -284,104 +290,46 @@ class MoodleCalendarService:
         now: Optional[datetime.datetime] = None
     ) -> Tuple[List[Dict[str, Any]], str, Optional[List[Dict[str, Any]]]]:
         """
-        Filter events matching the specific Cloud Scheduler cron dispatch slot.
-        Slots:
-        - '11am': Today 11:00 AM – 3:30 PM IST
-        - '3pm':  Today 3:00 PM – 7:00 PM IST
-        - '6pm':  Today 6:00 PM – 11:59 PM IST + Tomorrow Morning (8:00 AM – 11:00 AM IST) preview
+        Build the daily reminder payload for a Cloud Scheduler cron dispatch slot.
+
+        Only two slots exist: '8am' and '4pm' IST. Both are reminders for the
+        entire day, so they return IDENTICAL data:
+        - matched: every event happening today (00:00 – 23:59:59 IST), including
+          events already past, events spanning into today, and all-day events.
+        - tomorrow_preview: every event starting tomorrow (00:00 – 23:59:59 IST).
+
+        Only the slot_label differs between the two slots.
 
         Returns: (matched_events, slot_label, tomorrow_preview_events)
+        Raises: ValueError for any slot other than '8am' / '4pm'.
         """
+        slot_norm = str(slot or "").strip().lower()
+        if slot_norm not in SLOT_LABELS:
+            raise ValueError(f"Invalid slot '{slot}'. Expected one of: {', '.join(SLOT_LABELS)}.")
+        slot_label = SLOT_LABELS[slot_norm]
+
         events = self.get_events(refresh=True)
         curr = (now or datetime.datetime.now(IST)).astimezone(IST)
         today = curr.date()
         tomorrow = today + datetime.timedelta(days=1)
 
-        slot_norm = str(slot or "").strip().lower()
+        today_start = datetime.datetime.combine(today, datetime.time.min, tzinfo=IST)
+        tomorrow_start = datetime.datetime.combine(tomorrow, datetime.time.min, tzinfo=IST)
+        day_after_start = tomorrow_start + datetime.timedelta(days=1)
 
         matched: List[Dict[str, Any]] = []
-        tomorrow_preview: Optional[List[Dict[str, Any]]] = None
+        tomorrow_preview: List[Dict[str, Any]] = []
 
-        if slot_norm in ("8am", "08:00", "8:00", "morning"):
-            slot_label = "8:00 AM Morning Briefing & Day Schedule"
-            window_start = datetime.datetime.combine(today, datetime.time(8, 0), tzinfo=IST)
-            window_end = datetime.datetime.combine(today, datetime.time(16, 30), tzinfo=IST)
+        for e in events:
+            e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
+            e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
 
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
-                # Matches if start falls in window OR ongoing during window OR all-day event today
-                if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start) or (e.get("is_all_day") and e_start.date() == today):
-                    matched.append(e)
-
-        elif slot_norm in ("4pm", "16:00", "4:00", "afternoon", "evening"):
-            slot_label = "4:00 PM Evening Deadlines & Tomorrow Preview"
-            window_start = datetime.datetime.combine(today, datetime.time(16, 0), tzinfo=IST)
-            window_end = datetime.datetime.combine(today, datetime.time(23, 59, 59), tzinfo=IST)
-
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
-                if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start):
-                    matched.append(e)
-
-            # Tomorrow Morning Preview: 8:00 AM - 12:00 PM IST
-            t_start = datetime.datetime.combine(tomorrow, datetime.time(8, 0), tzinfo=IST)
-            t_end = datetime.datetime.combine(tomorrow, datetime.time(12, 0), tzinfo=IST)
-            tomorrow_preview = []
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                if t_start <= e_start <= t_end:
-                    tomorrow_preview.append(e)
-
-        elif slot_norm in ("11am", "11:00"):
-            slot_label = "11:00 AM Morning & Midday Alert"
-            window_start = datetime.datetime.combine(today, datetime.time(11, 0), tzinfo=IST)
-            window_end = datetime.datetime.combine(today, datetime.time(15, 30), tzinfo=IST)
-
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
-                if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start):
-                    matched.append(e)
-
-        elif slot_norm in ("3pm", "15:00"):
-            slot_label = "3:00 PM Afternoon Sessions & Upcoming Deadlines"
-            window_start = datetime.datetime.combine(today, datetime.time(15, 0), tzinfo=IST)
-            window_end = datetime.datetime.combine(today, datetime.time(19, 0), tzinfo=IST)
-
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
-                if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start):
-                    matched.append(e)
-
-        elif slot_norm in ("6pm", "18:00"):
-            slot_label = "6:00 PM Evening Deadlines & Tomorrow Preview"
-            window_start = datetime.datetime.combine(today, datetime.time(18, 0), tzinfo=IST)
-            window_end = datetime.datetime.combine(today, datetime.time(23, 59, 59), tzinfo=IST)
-
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                e_end = datetime.datetime.fromisoformat(e["end"]).astimezone(IST)
-                if (window_start <= e_start <= window_end) or (e_start < window_start and e_end > window_start):
-                    matched.append(e)
-
-            # Tomorrow Morning Preview: 8:00 AM - 11:00 AM
-            t_start = datetime.datetime.combine(tomorrow, datetime.time(8, 0), tzinfo=IST)
-            t_end = datetime.datetime.combine(tomorrow, datetime.time(11, 0), tzinfo=IST)
-            tomorrow_preview = []
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                if t_start <= e_start <= t_end:
-                    tomorrow_preview.append(e)
-        else:
-            slot_label = f"Schedule Alert ({slot})"
-            # Fallback: all remaining events today
-            for e in events:
-                e_start = datetime.datetime.fromisoformat(e["start"]).astimezone(IST)
-                if e_start.date() == today and e_start >= curr:
-                    matched.append(e)
+            starts_today = today_start <= e_start < tomorrow_start
+            spans_into_today = e_start < today_start < e_end
+            if starts_today or spans_into_today:
+                matched.append(e)
+            elif tomorrow_start <= e_start < day_after_start:
+                tomorrow_preview.append(e)
 
         return matched, slot_label, tomorrow_preview
 

@@ -82,16 +82,10 @@ def format_whatsapp_message(
     time_str = now.strftime("%I:%M %p")
 
     slot_lower = slot_label.lower()
-    if "8" in slot_lower or "morning" in slot_lower:
+    if slot_lower.startswith("8:00 am"):
         header_icon = "🌅"
-    elif "4" in slot_lower or "afternoon" in slot_lower:
+    elif slot_lower.startswith("4:00 pm"):
         header_icon = "🌆"
-    elif "11" in slot_lower:
-        header_icon = "☀️"
-    elif "3" in slot_lower:
-        header_icon = "☕"
-    elif "6" in slot_lower or "evening" in slot_lower:
-        header_icon = "🌙"
     else:
         header_icon = "📅"
 

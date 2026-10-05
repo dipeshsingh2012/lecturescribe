@@ -193,6 +193,21 @@ class GCSStorageService:
 
         return f"https://storage.googleapis.com/{self.bucket_name}/{blob_name}"
 
+    def get_blob_bytes(self, blob_name: str) -> Optional[bytes]:
+        """Download and return raw bytes for a blob from GCS."""
+        if not blob_name:
+            return None
+        bucket = self._get_bucket()
+        if not bucket:
+            return None
+        try:
+            blob = bucket.blob(blob_name)
+            if blob.exists():
+                return blob.download_as_bytes()
+        except Exception as e:
+            print(f"[GCS Read Warning] Could not read blob '{blob_name}': {e}")
+        return None
+
     def delete_blob(self, blob_name: str) -> bool:
         """Delete an object from GCS."""
         if not blob_name:

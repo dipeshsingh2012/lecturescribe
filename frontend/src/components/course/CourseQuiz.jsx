@@ -59,7 +59,7 @@ export default function CourseQuiz({
   const questions = quizData?.questions || [];
 
   // 1. Initial State: No quiz generated yet
-  if (!quizData && !quizLoading) {
+  if ((!quizData || questions.length === 0) && !quizLoading) {
     return (
       <Box
         sx={{
@@ -585,7 +585,7 @@ export default function CourseQuiz({
             mb: 3
           }}
         >
-          <MarkdownWithTimestamps text={currentQ.question} />
+          <MarkdownWithTimestamps content={currentQ.question} text={currentQ.question} />
         </Typography>
 
         {/* Options Grid */}
@@ -669,7 +669,7 @@ export default function CourseQuiz({
                       fontWeight: isThisChosen || (isAnswered && isThisCorrect) ? 600 : 400
                     }}
                   >
-                    <MarkdownWithTimestamps text={optText} />
+                    <MarkdownWithTimestamps content={optText} text={optText} />
                   </Typography>
                 </Box>
 
@@ -707,7 +707,7 @@ export default function CourseQuiz({
             </Box>
 
             <Typography component="div" sx={{ color: textPrimary, fontSize: '0.88rem', lineHeight: 1.6 }}>
-              <MarkdownWithTimestamps text={currentQ.explanation} />
+              <MarkdownWithTimestamps content={currentQ.explanation} text={currentQ.explanation} />
             </Typography>
 
             {currentQ.lecture_id && handleSelectLecture && (

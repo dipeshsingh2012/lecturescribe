@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse
 
 from contextlib import asynccontextmanager
 
-from backend.calendar_parser import calendar_service
+from backend.calendar_parser import calendar_service, SLOT_LABELS
 from backend.whatsapp_service import whatsapp_service
 
 # Import extraction and service modules
@@ -58,6 +58,14 @@ from backend.gcs_storage import gcs_storage_service
 
 # LLM Intent Router Integration
 from backend.slm_router import slm_classify_intent, INTENT_SUMMARY, INTENT_CHAT
+
+# Slide & Reading Recommendation Services
+from backend.slide_parser import parse_slide_document, format_slides_for_llm
+from backend.reading_extractor import (
+    fetch_google_books_metadata,
+    search_web_reading_links,
+    extract_readings_with_llm,
+)
 
 
 @asynccontextmanager
@@ -1489,6 +1497,143 @@ def delete_resource(resource_id: int, user_email: str = Query(..., description="
 
 
 # ==============================================================================
+# Course Library & Reading Recommendations Endpoints
+# ==============================================================================
+
+@app.get("/api/course/{course_name}/readings")
+def get_course_readings(course_name: str):
+    """Retrieve all extracted textbooks, ebooks, and journals for a course."""
+    cname = course_name.strip()
+    if not cname:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    items = db_manager.get_course_readings(cname)
+    return {"status": "success", "course_name": cname, "readings": items, "count": len(items)}
+
+
+@app.post("/api/course/{course_name}/extract-readings")
+def extract_course_readings(course_name: str):
+    """
+    Manual on-demand extraction of recommended books and journals
+    from lecture transcripts and uploaded slide decks (.pptx / .pdf).
+    Enriches with Google Books metadata and persists to PostgreSQL.
+    """
+    cname = course_name.strip()
+    if not cname:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+
+    # 1. Gather all transcripts across lectures in this course
+    transcripts_summary_parts: List[str] = []
+    try:
+        if db_manager.postgres_url and db_manager._schema_initialized:
+            conn = db_manager._get_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT v.video_id, v.title
+                    FROM lecturescribe_videos v
+                    WHERE LOWER(v.course_name) = LOWER(%s)
+                    ORDER BY v.created_at ASC LIMIT 15;
+                """, (cname,))
+                course_vids = cursor.fetchall()
+            conn.close()
+        else:
+            course_vids = []
+    except Exception:
+        course_vids = []
+
+    for cv in course_vids:
+        vid = cv["video_id"]
+        title = cv["title"]
+        cues = db_manager.get_transcript_cues(vid)
+        if cues:
+            head_cues = cues[:40]
+            tail_cues = cues[40:][-20:] if len(cues) > 40 else []
+            combined_cues = head_cues + tail_cues
+            cue_text = " ".join([f"[{c.get('start_time', '')}] {c.get('text', '')}" for c in combined_cues])
+            transcripts_summary_parts.append(f"Lecture '{title}':\n{cue_text}")
+
+    # 2. Gather uploaded slide documents for this course
+    resources = db_manager.get_course_resources(cname)
+    slides_text_parts: List[str] = []
+    for r in resources:
+        ftype = (r.get("file_type") or "").lower()
+        fname = (r.get("filename") or "").lower()
+        blob_name = r.get("blob_name")
+        if ftype in ("ppt", "pptx", "pdf") or fname.endswith((".pptx", ".ppt", ".pdf")):
+            slide_bytes = None
+            if blob_name:
+                slide_bytes = gcs_storage_service.get_blob_bytes(blob_name)
+            if slide_bytes:
+                parsed_slides = parse_slide_document(slide_bytes, filename=fname)
+                if parsed_slides:
+                    formatted_slides = format_slides_for_llm(parsed_slides, max_chars=12000)
+                    slides_text_parts.append(f"Deck '{r.get('title', fname)}':\n{formatted_slides}")
+
+    transcripts_summary = "\n\n".join(transcripts_summary_parts)
+    slides_text = "\n\n".join(slides_text_parts)
+
+    # 3. Call LLM extractor
+    extracted_items = extract_readings_with_llm(cname, transcripts_summary, slides_text)
+
+    saved_items: List[Dict[str, Any]] = []
+    existing = db_manager.get_course_readings(cname)
+    existing_titles = {re.sub(r'[^a-zA-Z0-9]', '', e.get("title", "").lower()) for e in existing}
+
+    for item in extracted_items:
+        norm_t = re.sub(r'[^a-zA-Z0-9]', '', (item.get("title") or "").lower())
+        if not norm_t or norm_t in existing_titles:
+            continue
+        # 4. Enrich via Google Books API
+        gb_meta = fetch_google_books_metadata(item.get("title", ""), item.get("author", ""))
+        if gb_meta:
+            if gb_meta.get("cover_url"):
+                item["cover_url"] = gb_meta["cover_url"]
+            if gb_meta.get("preview_url"):
+                item["preview_url"] = gb_meta["preview_url"]
+            if gb_meta.get("isbn"):
+                item["isbn"] = gb_meta["isbn"]
+
+        saved = db_manager.save_course_reading(cname, item)
+        saved_items.append(saved)
+        existing_titles.add(norm_t)
+
+    all_readings = db_manager.get_course_readings(cname)
+    return {
+        "status": "success",
+        "course_name": cname,
+        "newly_extracted_count": len(saved_items),
+        "readings": all_readings,
+        "count": len(all_readings)
+    }
+
+
+@app.get("/api/course/reading/search-web")
+def search_reading_web(
+    title: str = Query(..., description="Book or paper title"),
+    author: Optional[str] = Query("", description="Author name"),
+    course_name: Optional[str] = Query("", description="Course name")
+):
+    """
+    Search DuckDuckGo & academic sources for free PDFs, syllabus links, or library records.
+    Provides web scrape results when book is not found in catalog or student wants web links.
+    """
+    results = search_web_reading_links(title, author or "", course_name or "")
+    return {
+        "status": "success",
+        "title": title,
+        "author": author,
+        "results": results,
+        "count": len(results)
+    }
+
+
+@app.delete("/api/course/reading/{reading_id}")
+def delete_course_reading(reading_id: int):
+    """Delete a recommended reading item by ID."""
+    success = db_manager.delete_course_reading(reading_id)
+    return {"status": "success", "reading_id": reading_id, "deleted": success}
+
+
+# ==============================================================================
 # Video Download & Cloud Export Endpoints
 # ==============================================================================
 
@@ -1673,11 +1818,12 @@ def send_test_calendar_alert():
 
 @app.post("/api/cron/trigger-alert")
 def trigger_cron_alert(
-    slot: str = Query(..., description="Target alert slot: '8am', '4pm', '11am', '3pm', or '6pm'"),
+    slot: str = Query(..., description="Target alert slot: '8am' or '4pm' (IST)"),
     authorization: Optional[str] = Header(None, description="Bearer token matching CRON_SECRET")
 ):
     """
-    Automated Cloud Scheduler endpoint triggered at scheduled times (e.g. 8:00 AM and 4:00 PM IST).
+    Automated Cloud Scheduler endpoint triggered at 8:00 AM and 4:00 PM IST.
+    Both slots send the same full-day reminder (today's events + tomorrow preview).
     Secured with Bearer token authentication matching CRON_SECRET.
     """
     cron_secret = os.getenv("CRON_SECRET", "").strip()
@@ -1687,8 +1833,7 @@ def trigger_cron_alert(
             raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing Bearer token for cron trigger.")
 
     clean_slot = slot.strip().lower()
-    valid_slots = ("8am", "4pm", "11am", "3pm", "6pm", "08:00", "8:00", "16:00", "4:00", "11:00", "15:00", "18:00", "morning", "afternoon", "evening")
-    if clean_slot not in valid_slots:
+    if clean_slot not in SLOT_LABELS:
         raise HTTPException(status_code=400, detail=f"Invalid slot '{slot}'. Expected '8am' or '4pm'.")
 
     try:

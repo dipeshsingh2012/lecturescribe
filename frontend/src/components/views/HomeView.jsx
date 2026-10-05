@@ -16,6 +16,7 @@ import {
   AlertCircle,
   Video,
   Paperclip,
+  BookOpen,
   Upload,
   Award
 } from 'lucide-react';
@@ -23,7 +24,7 @@ import {
 import HeroBanner from '../home/HeroBanner';
 import QuickAddBar from '../home/QuickAddBar';
 import CourseGrid from '../course/CourseGrid';
-import CourseMaterials from '../course/CourseMaterials';
+import CourseLibrary from '../course/CourseLibrary';
 import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
 import CalendarAlertCard from '../calendar/CalendarAlertCard';
@@ -52,7 +53,13 @@ export default function HomeView({
   setLibrarySearch,
   courseViewTab,
   setCourseViewTab,
-  courseResources,
+  courseResources = [],
+  courseReadings = [],
+  courseReadingsLoading = false,
+  isExtractingReadings = false,
+  triggerExtractReadings,
+  handleDeleteCourseReading,
+  searchReadingWeb,
   openUploadModal,
   openPreviewModal,
   handleSelectCourse,
@@ -254,26 +261,26 @@ export default function HomeView({
               Course Quiz
             </Button>
             <Button
-              variant={courseViewTab === 'resources' ? 'contained' : 'outlined'}
+              variant={courseViewTab === 'resources' || courseViewTab === 'library' ? 'contained' : 'outlined'}
               size="small"
-              startIcon={<Paperclip size={15} />}
-              onClick={() => setCourseViewTab('resources')}
-              aria-label="Course Materials"
+              startIcon={<BookOpen size={15} />}
+              onClick={() => setCourseViewTab('library')}
+              aria-label="Course Library"
               sx={{
                 textTransform: 'none',
                 fontWeight: 700,
                 fontSize: '0.82rem',
                 borderRadius: 2,
-                ...(courseViewTab === 'resources'
+                ...(courseViewTab === 'resources' || courseViewTab === 'library'
                   ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
                   : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
               }}
             >
-              Course Materials ({courseResources.length})
+              Library ({courseResources.length + (courseReadings?.length || 0)})
             </Button>
           </Box>
 
-          <Tooltip title={!googleUser ? "Sign in with Google to upload course resources" : "Upload course-wide slides, syllabus, or notes"}>
+          <Tooltip title={!googleUser ? "Sign in with Google to upload course slides" : "Upload course-wide presentation slides, syllabus, or notes"}>
             <span>
               <Button
                 variant="outlined"
@@ -295,7 +302,7 @@ export default function HomeView({
                   '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary }
                 }}
               >
-                Add Course Material
+                Upload Slides / Materials
               </Button>
             </span>
           </Tooltip>
@@ -333,11 +340,17 @@ export default function HomeView({
           handleSelectLecture={(vid, cName) => handleTranscribe(`https://vimeo.com/${vid}`, false, cName)}
           currentTheme={currentTheme}
         />
-      ) : courseViewTab === 'resources' ? (
-        /* LEVEL 2B: COURSE MATERIALS & RESOURCES VIEW */
-        <CourseMaterials
+      ) : (courseViewTab === 'resources' || courseViewTab === 'library') ? (
+        /* LEVEL 2B: COURSE LIBRARY & SUPPORTING BOOKS VIEW */
+        <CourseLibrary
           courseResourcesLoading={courseResourcesLoading}
           courseResources={courseResources}
+          courseReadings={courseReadings}
+          courseReadingsLoading={courseReadingsLoading}
+          isExtractingReadings={isExtractingReadings}
+          triggerExtractReadings={triggerExtractReadings}
+          handleDeleteCourseReading={handleDeleteCourseReading}
+          searchReadingWeb={searchReadingWeb}
           googleUser={googleUser}
           userLibrary={userLibrary}
           selectedCourse={selectedCourse}

@@ -14,10 +14,13 @@ function remarkGfmTable() {
 
 export default function MarkdownWithTimestamps({
   content,
+  text,
   onCueClick,
   citations = [],
   onCrossLectureClick
 }) {
+  const effectiveText = content ?? text ?? '';
+
   // Parse inline timestamps and tool citations in bot messages and make them clickable
   const renderMessageWithTimestamps = (text) => {
     if (!text) return null;
@@ -225,8 +228,8 @@ export default function MarkdownWithTimestamps({
   };
 
   const sanitizedContent = React.useMemo(() => {
-    if (!content) return '';
-    return content
+    if (!effectiveText) return '';
+    return effectiveText
       // Normalize LaTeX display math \[ ... \] to $$ ... $$
       .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
       // Normalize LaTeX inline math \( ... \) to $ ... $
@@ -237,7 +240,7 @@ export default function MarkdownWithTimestamps({
       .replace(/^(#{1,6})[\u00a0\u2000-\u200b\u202f]+/gm, '$1 ')
       // Ensure blank line before headers if preceded immediately by text
       .replace(/([^\n])\n(#{1,6}\s+)/g, '$1\n\n$2');
-  }, [content]);
+  }, [effectiveText]);
 
   return (
     <ReactMarkdown

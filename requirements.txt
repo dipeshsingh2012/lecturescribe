@@ -31,3 +31,6 @@ static-ffmpeg>=2.5
 icalendar>=5.0.0
 python-dateutil>=2.8.2
 
+# Document & Slide Parsing
+python-pptx>=1.0.0
+pypdf>=5.0.0

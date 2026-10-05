@@ -228,6 +228,12 @@ export default function App() {
             handleSelectCourse={handleSelectCourse}
             courseResourcesLoading={resources.courseResourcesLoading}
             handleDeleteResource={resources.handleDeleteResource}
+            courseReadings={resources.courseReadings}
+            courseReadingsLoading={resources.courseReadingsLoading}
+            isExtractingReadings={resources.isExtractingReadings}
+            triggerExtractReadings={resources.triggerExtractReadings}
+            handleDeleteCourseReading={resources.handleDeleteCourseReading}
+            searchReadingWeb={resources.searchReadingWeb}
             courseLoading={course.courseLoading}
             handleDeleteFromLibrary={library.handleDeleteFromLibrary}
             currentTheme={currentTheme}

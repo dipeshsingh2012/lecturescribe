@@ -74,6 +74,7 @@ class RelationalDBManager:
         self._quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._course_quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_attempts_memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._readings_memory_cache: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -271,6 +272,25 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_quiz_attempt ON lecturescribe_quiz_attempts(quiz_type, target_id, user_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_readings (
+                            id SERIAL PRIMARY KEY,
+                            course_name VARCHAR(255) NOT NULL,
+                            title VARCHAR(255) NOT NULL,
+                            author VARCHAR(255),
+                            edition VARCHAR(100),
+                            reading_type VARCHAR(32) DEFAULT 'book',
+                            category VARCHAR(64) DEFAULT 'recommended',
+                            cover_url TEXT,
+                            preview_url TEXT,
+                            isbn VARCHAR(32),
+                            source_type VARCHAR(32),
+                            source_context TEXT,
+                            web_links JSONB DEFAULT '[]'::jsonb,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_readings_course ON lecturescribe_course_readings(course_name);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -1646,6 +1666,159 @@ class RelationalDBManager:
         if target:
             self._resources_memory_cache = [r for r in self._resources_memory_cache if r.get("id") != resource_id]
         return target
+
+    def get_course_readings(self, course_name: str) -> List[Dict[str, Any]]:
+        """Retrieve all extracted and curated readings for a course."""
+        clean_course = (course_name or "General Lectures").strip()
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, course_name, title, author, edition, reading_type,
+                               category, cover_url, preview_url, isbn, source_type,
+                               source_context, web_links, created_at
+                        FROM lecturescribe_course_readings
+                        WHERE LOWER(course_name) = LOWER(%s)
+                        ORDER BY id ASC;
+                    """, (clean_course,))
+                    rows = cursor.fetchall()
+                    results = []
+                    for r in rows:
+                        item = dict(r)
+                        if isinstance(item.get("created_at"), (datetime.date, datetime.datetime)):
+                            item["created_at"] = item["created_at"].isoformat()
+                        results.append(item)
+                    return results
+            except Exception as e:
+                print(f"[PostgreSQL Notice] get_course_readings fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # Memory fallback
+        return [
+            r for r in self._readings_memory_cache
+            if r.get("course_name", "").lower() == clean_course.lower()
+        ]
+
+    def save_course_reading(self, course_name: str, reading: Dict[str, Any]) -> Dict[str, Any]:
+        """Insert a course reading item."""
+        clean_course = (course_name or "General Lectures").strip()
+        title = (reading.get("title") or "").strip()
+        author = (reading.get("author") or "").strip()
+        edition = (reading.get("edition") or "").strip()
+        reading_type = (reading.get("reading_type") or "book").strip()
+        category = (reading.get("category") or "recommended").strip()
+        cover_url = (reading.get("cover_url") or "").strip()
+        preview_url = (reading.get("preview_url") or "").strip()
+        isbn = (reading.get("isbn") or "").strip()
+        source_type = (reading.get("source_type") or "manual").strip()
+        source_context = (reading.get("source_context") or "").strip()
+        web_links = reading.get("web_links") or []
+
+        item = {
+            "course_name": clean_course,
+            "title": title,
+            "author": author,
+            "edition": edition,
+            "reading_type": reading_type,
+            "category": category,
+            "cover_url": cover_url,
+            "preview_url": preview_url,
+            "isbn": isbn,
+            "source_type": source_type,
+            "source_context": source_context,
+            "web_links": web_links,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_course_readings (
+                                course_name, title, author, edition, reading_type,
+                                category, cover_url, preview_url, isbn, source_type,
+                                source_context, web_links
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            RETURNING id, created_at;
+                        """, (
+                            clean_course, title, author, edition, reading_type,
+                            category, cover_url, preview_url, isbn, source_type,
+                            source_context, json.dumps(web_links)
+                        ))
+                        row = cursor.fetchone()
+                        if row:
+                            item["id"] = row["id"]
+                            if isinstance(row["created_at"], (datetime.date, datetime.datetime)):
+                                item["created_at"] = row["created_at"].isoformat()
+                        conn.commit()
+                        return item
+            except Exception as e:
+                print(f"[PostgreSQL Notice] save_course_reading fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # Memory fallback
+        item["id"] = int(time.time() * 1000) % 10000000
+        self._readings_memory_cache.append(item)
+        return item
+
+    def delete_course_reading(self, reading_id: int) -> bool:
+        """Delete a reading item by ID."""
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_course_readings
+                            WHERE id = %s;
+                        """, (reading_id,))
+                        conn.commit()
+                return True
+            except Exception as e:
+                print(f"[PostgreSQL Notice] delete_course_reading fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        self._readings_memory_cache = [r for r in self._readings_memory_cache if r.get("id") != reading_id]
+        return True
+
+    def clear_course_readings(self, course_name: str) -> bool:
+        """Clear all readings for a course."""
+        clean_course = (course_name or "General Lectures").strip()
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_course_readings
+                            WHERE LOWER(course_name) = LOWER(%s);
+                        """, (clean_course,))
+                        conn.commit()
+                return True
+            except Exception as e:
+                print(f"[PostgreSQL Notice] clear_course_readings fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        self._readings_memory_cache = [
+            r for r in self._readings_memory_cache
+            if r.get("course_name", "").lower() != clean_course.lower()
+        ]
+        return True
 
     def _ts_to_secs(self, ts: str) -> int:
         """Convert MM:SS or HH:MM:SS to total seconds."""

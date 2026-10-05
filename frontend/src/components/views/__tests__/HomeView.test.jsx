@@ -139,4 +139,16 @@ describe('HomeView', () => {
       true
     );
   });
+
+  it('renders cacheNotice banner with Check icon without throwing error', () => {
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        cacheNotice="⚡ Lecture successfully added to course!"
+      />
+    );
+
+    expect(screen.getByText(/Lecture successfully added to course!/i)).toBeInTheDocument();
+  });
 });

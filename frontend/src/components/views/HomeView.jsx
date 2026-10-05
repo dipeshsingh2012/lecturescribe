@@ -19,7 +19,8 @@ import {
   BookOpen,
   Upload,
   Award,
-  Sparkles
+  Sparkles,
+  Check
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';

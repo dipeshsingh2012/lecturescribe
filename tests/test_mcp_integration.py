@@ -34,6 +34,7 @@ class TestMCPIntegration(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
             "LECTURESCRIBE_MCP_TOKEN": "test-mcp-token",
             "LECTURESCRIBE_GITHUB_DISPATCH_TOKEN": "test-github-token",
         },
@@ -94,6 +95,7 @@ class TestMCPIntegration(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
             "LECTURESCRIBE_MCP_TOKEN": "test-mcp-token",
             "LECTURESCRIBE_GITHUB_DISPATCH_TOKEN": "test-github-token",
         },

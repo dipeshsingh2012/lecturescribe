@@ -13,7 +13,7 @@ import json
 import datetime
 import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Mapping
 from collections import OrderedDict
 
 def extract_course_name(title: str) -> str:
@@ -311,6 +311,25 @@ class RelationalDBManager:
 
                         CREATE INDEX IF NOT EXISTS idx_pg_course_chat_slug ON lecturescribe_course_chat_logs(course_slug);
                         CREATE INDEX IF NOT EXISTS idx_pg_course_chat_user ON lecturescribe_course_chat_logs(user_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_fleet_runs (
+                            request_id VARCHAR(128) PRIMARY KEY,
+                            tenant_id VARCHAR(128) NOT NULL,
+                            initiative_id VARCHAR(128) NOT NULL,
+                            event_type VARCHAR(64) NOT NULL,
+                            title VARCHAR(500) NOT NULL,
+                            client_payload JSONB NOT NULL,
+                            status VARCHAR(32) NOT NULL,
+                            github_run_id VARCHAR(32),
+                            github_run_attempt VARCHAR(16),
+                            run_url TEXT,
+                            conclusion VARCHAR(100),
+                            error_summary TEXT,
+                            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_lecturescribe_fleet_runs_initiative
+                            ON lecturescribe_fleet_runs (tenant_id, initiative_id, created_at DESC);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -319,6 +338,139 @@ class RelationalDBManager:
                 self.backfill_missing_course_names()
             except Exception as b_err:
                 print(f"[PostgreSQL Notice] Initial backfill deferred ({b_err}).")
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _serialize_fleet_run(row: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(row, Mapping):
+            return None
+        result = dict(row)
+        for key in ("created_at", "updated_at"):
+            value = result.get(key)
+            if value is not None and hasattr(value, "isoformat"):
+                result[key] = value.isoformat()
+        result.pop("client_payload", None)
+        return result
+
+    def create_fleet_run(
+        self,
+        request_id: str,
+        tenant_id: str,
+        initiative_id: str,
+        event_type: str,
+        title: str,
+        client_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Create a durable dispatch record, returning an existing idempotent request if present."""
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_fleet_runs
+                            (request_id, tenant_id, initiative_id, event_type, title, client_payload, status)
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, 'dispatching')
+                        ON CONFLICT (request_id) DO NOTHING
+                        RETURNING request_id;
+                        """,
+                        (request_id, tenant_id, initiative_id, event_type, title, json.dumps(client_payload)),
+                    )
+                    created = cursor.fetchone() is not None
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_fleet_runs WHERE request_id = %s;",
+                        (request_id,),
+                    )
+                    row = self._serialize_fleet_run(cursor.fetchone())
+            return {"created": created, "run": row}
+        finally:
+            conn.close()
+
+    def get_fleet_run(self, request_id: str) -> Optional[Dict[str, Any]]:
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_fleet_runs WHERE request_id = %s;",
+                        (request_id,),
+                    )
+                    return self._serialize_fleet_run(cursor.fetchone())
+        finally:
+            conn.close()
+
+    def update_fleet_run(
+        self,
+        request_id: str,
+        status: str,
+        github_run_id: Optional[str] = None,
+        github_run_attempt: Optional[str] = None,
+        run_url: Optional[str] = None,
+        conclusion: Optional[str] = None,
+        error_summary: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Apply an idempotent status update while preventing backward/invalid transitions."""
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        ranks = {
+            "dispatching": 0,
+            "dispatch_unknown": 1,
+            "queued": 1,
+            "running": 2,
+            "succeeded": 3,
+            "failed": 3,
+            "cancelled": 3,
+        }
+        if status not in ranks:
+            raise ValueError("Unsupported fleet run status.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_fleet_runs WHERE request_id = %s FOR UPDATE;",
+                        (request_id,),
+                    )
+                    current_row = cursor.fetchone()
+                    if not isinstance(current_row, Mapping):
+                        return None
+                    current = current_row["status"]
+                    terminal = {"succeeded", "failed", "cancelled"}
+                    if current in terminal and status != current and ranks[status] < ranks[current]:
+                        return self._serialize_fleet_run(current_row)
+                    if current in terminal and status != current:
+                        raise ValueError(f"Cannot change terminal fleet status '{current}' to '{status}'.")
+                    if current not in terminal and ranks[status] < ranks[current]:
+                        return self._serialize_fleet_run(current_row)
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_fleet_runs
+                        SET status = %s,
+                            github_run_id = COALESCE(%s, github_run_id),
+                            github_run_attempt = COALESCE(%s, github_run_attempt),
+                            run_url = COALESCE(%s, run_url),
+                            conclusion = COALESCE(%s, conclusion),
+                            error_summary = COALESCE(%s, error_summary),
+                            updated_at = NOW()
+                        WHERE request_id = %s
+                        RETURNING *;
+                        """,
+                        (
+                            status,
+                            github_run_id,
+                            github_run_attempt,
+                            run_url,
+                            conclusion,
+                            error_summary,
+                            request_id,
+                        ),
+                    )
+                    return self._serialize_fleet_run(cursor.fetchone())
         finally:
             conn.close()
 

@@ -1,10 +1,12 @@
 # Agentic Fleet Integration Template for lecturescribe
 
-This document captures the exact integration pattern used for target repositories that are meant to run the autonomous SDLC workflow from `dipeshsingh2012/agentic-fleet`.
+This document captures the GitHub Actions runner setup for `dipeshsingh2012/agentic-fleet`. For the MCP-triggered, bidirectional aroadmap integration, implementation details and manual configuration are in [docs/agentic-fleet-mcp-integration.md](docs/agentic-fleet-mcp-integration.md).
 
 ## Objective
 
 Enable GitHub Actions in this repository so the central agentic-fleet orchestration engine can monitor and act on issues, PRs, and review events in `lecturescribe`.
+
+The primary intended cross-project entry point is now aroadmap calling LectureScribe's authenticated MCP endpoint. The workflow's `repository_dispatch` trigger executes the fleet; workflow callbacks synchronize execution status. `workflow_dispatch` is only a workflow diagnostic, not the end-to-end MCP test.
 
 ## Source of truth for the pattern
 
@@ -116,8 +118,6 @@ jobs:
         with:
           gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          skip-mcp-initiative: ${{ github.event_name == 'issues' }}
-          trigger-source: ${{ github.event_name }}
 ```
 
 ## Why this is the correct pattern
@@ -162,4 +162,4 @@ The addition of `agentic-sdlc.yml` is meant to augment the repo with the autonom
 
 ## Continuation reminder
 
-If work is interrupted, the next AI agent can continue by re-creating the exact workflow above and then validating it in GitHub Actions.
+If work is interrupted, continue from [docs/agentic-fleet-mcp-integration.md](docs/agentic-fleet-mcp-integration.md). The code implementation is present; configure the required GitHub/Cloud Run/aroadmap secrets and validate using an approved aroadmap initiative.

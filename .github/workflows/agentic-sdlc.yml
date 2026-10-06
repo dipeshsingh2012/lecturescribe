@@ -34,20 +34,6 @@ jobs:
   agentic-orchestrator:
     name: "Autonomous SDLC Fleet"
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: lecturescribe
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     permissions:
       contents: write
       pull-requests: write
@@ -64,10 +50,69 @@ jobs:
           repository: dipeshsingh2012/agentic-fleet
           path: .agentic-fleet
 
+      - name: Report Fleet Run Started
+        if: github.event_name == 'repository_dispatch' && github.event.client_payload.request_id != ''
+        continue-on-error: true
+        env:
+          CALLBACK_URL: ${{ vars.LECTURESCRIBE_CALLBACK_URL }}
+          CALLBACK_TOKEN: ${{ secrets.LECTURESCRIBE_CALLBACK_TOKEN }}
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ -z "$CALLBACK_URL" ] || [ -z "$CALLBACK_TOKEN" ]; then
+            echo "::warning::Fleet callback URL/token is not configured."
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-connrefused --retry-delay 2 \
+            -X POST "$CALLBACK_URL" \
+            -H "Authorization: Bearer $CALLBACK_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n \
+              --arg request_id "$REQUEST_ID" \
+              --arg status "running" \
+              --arg github_run_id "$RUN_ID" \
+              --arg github_run_attempt "$RUN_ATTEMPT" \
+              --arg run_url "$RUN_URL" \
+              '{request_id:$request_id,status:$status,github_run_id:$github_run_id,github_run_attempt:$github_run_attempt,run_url:$run_url}')"
+
       - name: Run Agentic Fleet Action
+        id: fleet
         uses: ./.agentic-fleet
         with:
           gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          skip-mcp-initiative: ${{ github.event_name == 'issues' }}
-          trigger-source: ${{ github.event_name }}
+
+      - name: Report Fleet Run Result
+        if: always() && github.event_name == 'repository_dispatch' && github.event.client_payload.request_id != ''
+        env:
+          CALLBACK_URL: ${{ vars.LECTURESCRIBE_CALLBACK_URL }}
+          CALLBACK_TOKEN: ${{ secrets.LECTURESCRIBE_CALLBACK_TOKEN }}
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          FLEET_OUTCOME: ${{ steps.fleet.outcome }}
+        run: |
+          if [ -z "$CALLBACK_URL" ] || [ -z "$CALLBACK_TOKEN" ]; then
+            echo "::error::Fleet callback URL/token is not configured."
+            exit 1
+          fi
+          STATUS="failed"
+          if [ "$FLEET_OUTCOME" = "success" ]; then STATUS="succeeded"; fi
+          if [ "$FLEET_OUTCOME" = "cancelled" ]; then STATUS="cancelled"; fi
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-connrefused --retry-delay 2 \
+            -X POST "$CALLBACK_URL" \
+            -H "Authorization: Bearer $CALLBACK_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n \
+              --arg request_id "$REQUEST_ID" \
+              --arg status "$STATUS" \
+              --arg github_run_id "$RUN_ID" \
+              --arg github_run_attempt "$RUN_ATTEMPT" \
+              --arg run_url "$RUN_URL" \
+              --arg conclusion "$FLEET_OUTCOME" \
+              '{request_id:$request_id,status:$status,github_run_id:$github_run_id,github_run_attempt:$github_run_attempt,run_url:$run_url,conclusion:$conclusion}')"

@@ -51,6 +51,7 @@ from backend.vimeo_client import (
 from backend.rag_engine import pinecone_rag_engine
 from backend.algolia_service import algolia_service
 from backend.database import db_manager, extract_course_name, to_course_slug
+from backend.mcp_integration import router as mcp_router
 from backend.google_drive_service import google_drive_service
 from backend.summary_generator import generate_summary_sections
 from backend.redis_service import redis_cache
@@ -119,6 +120,7 @@ app = FastAPI(
     title="LectureScribe Triad API (Postgres + Algolia + Pinecone)",
     lifespan=lifespan
 )
+app.include_router(mcp_router)
 
 app.add_middleware(
     CORSMiddleware,

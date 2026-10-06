@@ -1,0 +1,73 @@
+name: Autonomous Agentic SDLC
+
+run-name: >-
+  ${{
+    github.event_name == 'issue_comment' && format('💬 {0} on #{1} by @{2}', github.event.comment.body, github.event.issue.number, github.actor) ||
+    github.event_name == 'pull_request_review_comment' && format('💬 PR Diff Comment: "{0}" by @{1}', github.event.comment.body, github.actor) ||
+    github.event_name == 'pull_request_review' && format('💬 PR Review: "{0}" by @{1}', github.event.review.body, github.actor) ||
+    github.event_name == 'issues' && format('🎯 Issue #{0}: {1}', github.event.issue.number, github.event.issue.title) ||
+    github.event_name == 'pull_request' && format('🛡️ PR #{0} ({1}): {2}', github.event.pull_request.number, github.event.action, github.event.pull_request.title) ||
+    format('🛸 Fleet Workflow: {0}', github.event_name)
+  }}
+
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created, edited]
+  pull_request:
+    types: [opened, synchronize, labeled]
+  pull_request_review:
+    types: [submitted, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  repository_dispatch:
+    types: [mcp_initiative, mcp_start_dev, fleet_trigger]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  agentic-orchestrator:
+    name: "Autonomous SDLC Fleet"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lecturescribe
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout Central Agent Fleet
+        uses: actions/checkout@v4
+        with:
+          repository: dipeshsingh2012/agentic-fleet
+          path: .agentic-fleet
+
+      - name: Run Agentic Fleet Action
+        uses: ./.agentic-fleet
+        with:
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          skip-mcp-initiative: ${{ github.event_name == 'issues' }}
+          trigger-source: ${{ github.event_name }}

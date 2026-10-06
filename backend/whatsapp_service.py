@@ -8,6 +8,7 @@ Includes simulation / dry-run mode when credentials are not yet set.
 from __future__ import annotations
 
 import os
+import time
 import datetime
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Optional
@@ -190,6 +191,34 @@ class TwilioWhatsAppService:
         self._refresh_env()
         return bool(self.account_sid and self.auth_token and self.to_number)
 
+    def _check_delivery_status(self, sid: str, attempts: int = 4, delay: float = 1.5) -> Dict[str, Any]:
+        """
+        Poll Twilio for the message's real status. A 201 from the send API only means
+        'queued'; sandbox errors (e.g. 63015) surface shortly after as failed/undelivered.
+        Never raises; returns {} keys with None values if status cannot be determined.
+        """
+        result: Dict[str, Any] = {"delivery_status": None, "error_code": None, "error_message": None}
+        if not sid or sid == "unknown_sid":
+            return result
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{self.account_sid}/Messages/{sid}.json"
+        for i in range(attempts):
+            try:
+                r = requests.get(url, auth=HTTPBasicAuth(self.account_sid, self.auth_token), timeout=10)
+                data = r.json()
+                if r.status_code != 200:
+                    return result
+                result["delivery_status"] = data.get("status")
+                result["error_code"] = data.get("error_code")
+                result["error_message"] = data.get("error_message")
+                if result["delivery_status"] in ("failed", "undelivered", "delivered", "read"):
+                    return result
+            except Exception as e:
+                print(f"⚠️ [Twilio Status Check Warning]: {e}")
+                return result
+            if i < attempts - 1:
+                time.sleep(delay)
+        return result
+
     def send_whatsapp_message(
         self,
         message_body: str,
@@ -240,9 +269,21 @@ class TwilioWhatsAppService:
 
             if resp.status_code in (200, 201):
                 sid = resp_data.get("sid", "unknown_sid")
-                print(f"✅ [Twilio WhatsApp Success]: Delivered message SID: {sid} to {target_to}")
+                delivery = self._check_delivery_status(sid)
+                final = delivery.get("delivery_status")
+                if final in ("failed", "undelivered"):
+                    print(
+                        f"❌ [Twilio WhatsApp {final.title()}]: SID {sid} to {target_to} - "
+                        f"error {delivery.get('error_code')}: {delivery.get('error_message')}"
+                    )
+                else:
+                    print(
+                        f"✅ [Twilio WhatsApp Accepted]: SID {sid} to {target_to} "
+                        f"(delivery status: {final or 'unknown'})"
+                    )
                 return {
                     "status": "sent",
+                    **delivery,
                     "sid": sid,
                     "recipient": target_to,
                     "body": message_body,

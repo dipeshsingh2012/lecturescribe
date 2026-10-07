@@ -199,6 +199,7 @@ def test_vimeo_url_resolves_and_downloads_media(monkeypatch, tmp_path):
     assert observed["url"] == "https://vimeo.com/123456789?share=copy"
     assert observed["download"] is True
     assert observed["options"]["noplaylist"] is True
+    assert observed["options"]["extractor_args"] == {"vimeo": {"client": ["android"]}}
 
 
 def test_vimeo_url_rejects_non_video_paths(tmp_path):

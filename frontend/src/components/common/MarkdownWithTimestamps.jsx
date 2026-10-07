@@ -231,7 +231,7 @@ export default function MarkdownWithTimestamps({
     if (!effectiveText) return '';
     return effectiveText
       // Repair common bare, bracketed equations emitted without Markdown math delimiters.
-      .replace(/\[\s*([\s\S]*?\\(?:hat|bar|vec|tilde|mathcal|mathbb|frac|sum|prod|sigma|beta|alpha|left|right)[\s\S]*?)\s*\]/g, (match, equation) => {
+      .replace(/(?<!\\)\[\s*([\s\S]*?\\(?:hat|bar|vec|tilde|mathcal|mathbb|frac|sum|prod|sigma|beta|alpha|left|right)[\s\S]*?)\s*(?<!\\)\]/g, (match, equation) => {
         if (equation.includes('\n') || /\\(?:hat|mathcal|frac|sum|left|right)/.test(equation)) {
           return `$$${equation.trim()}$$`;
         }
@@ -241,9 +241,9 @@ export default function MarkdownWithTimestamps({
       .replace(/(\\(?:hat|bar|vec|tilde)\{[^{}\n]+\}|\\(?:beta|alpha|sigma|theta|mu|tau))\*\{([^{}\n]+)\}/g, '$1_{$2}')
       .replace(/\\mathcal\{N\}!\s*\\left/g, '\\mathcal{N}\\left')
       // Normalize LaTeX display math \[ ... \] to $$ ... $$
-      .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
+      .replace(/\\\[([\s\S]*?)\\\]/g, (_match, equation) => `$$${equation}$$`)
       // Normalize LaTeX inline math \( ... \) to $ ... $
-      .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')
+      .replace(/\\\(([\s\S]*?)\\\)/g, (_match, equation) => `$${equation}$`)
       // Unescape escaped hashes
       .replace(/\\(#+)/g, '$1')
       // Normalize unicode spaces after hashes

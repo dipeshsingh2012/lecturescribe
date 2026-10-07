@@ -109,4 +109,35 @@ describe('MarkdownWithTimestamps', () => {
     expect(container.querySelector('.katex-mathml')).toHaveTextContent(/beta/);
     expect(container.textContent).not.toContain('*{1}');
   });
+
+  it('renders standard inline and display LaTeX delimiters without damaging markdown', () => {
+    const { container } = render(
+      <MarkdownWithTimestamps
+        content={String.raw`A **probability density function** \(f_X(x)\) is non-negative.
+
+### Probability Density Function (PDF)
+
+1. **Non-negativity**
+   \[
+   f_X(x) \ge 0 \quad \text{for all } x \in \mathbb{R}.
+   \]
+
+| Property | Description |
+|----------|-------------|
+| **Normalised** | \(\int_{-\infty}^{\infty} f_X(x)\,dx = 1\). |
+
+### References
+
+- [Probability density function](https://en.wikipedia.org/wiki/Probability_density_function)`}
+      />
+    );
+
+    expect(container.querySelectorAll('.katex').length).toBeGreaterThanOrEqual(3);
+    expect(container.querySelector('h3')).toHaveTextContent('Probability Density Function (PDF)');
+    expect(container.querySelector('table')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Probability density function' }))
+      .toHaveAttribute('href', 'https://en.wikipedia.org/wiki/Probability_density_function');
+    expect(container.textContent).not.toContain('\\[');
+    expect(container.textContent).not.toContain('\\]');
+  });
 });

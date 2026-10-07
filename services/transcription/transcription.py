@@ -103,6 +103,7 @@ def download_media_url(url: str, destination: Path) -> Path:
         "max_filesize": MAX_SOURCE_BYTES,
         "socket_timeout": 30,
         "retries": 3,
+        "extractor_args": {"vimeo": {"client": ["android"]}},
     }
     try:
         with yt_dlp.YoutubeDL(options) as downloader:

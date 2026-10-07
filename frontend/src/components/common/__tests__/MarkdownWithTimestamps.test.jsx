@@ -95,5 +95,18 @@ describe('MarkdownWithTimestamps', () => {
     expect(katexSpans.length).toBeGreaterThan(0);
     expect(container.querySelector('.katex-mathml')).toBeInTheDocument();
   });
-});
 
+  it('repairs a bracketed bare equation with malformed subscript markers', () => {
+    const { container } = render(
+      <MarkdownWithTimestamps
+        content={String.raw`[
+\hat{\beta}*{1} \sim \mathcal{N}!\left(\beta*{1},; \frac{\sigma^{2}}{\sum (x_i-\bar{x})^{2}}\right)
+]`}
+      />
+    );
+
+    expect(container.querySelector('.katex')).toBeInTheDocument();
+    expect(container.querySelector('.katex-mathml')).toHaveTextContent(/beta/);
+    expect(container.textContent).not.toContain('*{1}');
+  });
+});

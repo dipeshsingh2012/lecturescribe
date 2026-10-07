@@ -863,7 +863,8 @@ class Llama3PineconeRAGStore:
             f"You are an Academic AI Tutor for lecture: '{lecture_title}'.\n"
             "You are helpful, precise, non-hallucinatory, and academically rigorous.\n"
             "Always format mathematical and scientific formulas using standard LaTeX notation: "
-            "use single dollar signs for inline formulas like $E=mc^2$ or $\\sigma(z)$, and double dollar signs for standalone block equations like $$\\text{MSE} = \\frac{1}{n} \\sum_{i=1}^{n} (y_i - \\hat{y}_i)^2$$.\n"
+            "use single dollar signs for inline formulas like $E=mc^2$ or $\\sigma(z)$, and double dollar signs for standalone block equations like $$\\text{MSE} = \\frac{1}{n} \\sum_{i=1}^{n} (y_i - \\hat{y}_i)^2$$. "
+            "Always use `_` for subscripts (for example, $\\hat{\\beta}_{1}$), never `*`; wrap every equation in the appropriate dollar-sign delimiters and do not put display equations inside square brackets.\n"
             f"{web_instruction}"
         )
 
@@ -1136,7 +1137,8 @@ class Llama3PineconeRAGStore:
             "When referencing or explaining a concept from a lecture, cite the lecture title and timestamp: "
             "e.g. `[Lecture Title · MM:SS]` or in **[Lecture Title]** at `[MM:SS]`.\n"
             "2. Always format mathematical formulas and equations using standard LaTeX notation: "
-            "single dollar signs for inline math ($...$) and double dollar signs ($$...$$) for standalone block equations.\n"
+            "single dollar signs for inline math ($...$) and double dollar signs ($$...$$) for standalone block equations. "
+            "Always use `_` for subscripts (for example, $\\hat{\\beta}_{1}$), never `*`; wrap every equation in the appropriate dollar-sign delimiters and do not put display equations inside square brackets.\n"
             "3. If a student asks to compare topics, synthesize the similarities and differences across the lectures.\n"
             "4. If a concept was NOT covered in any lecture or material in this course, explicitly state that it was not covered in the course syllabus or lecture recordings. Do not generate or substitute external unverified information.\n"
             "5. Maintain an encouraging, academically rigorous, clear, and structured tone (use markdown sections and bullet points).\n"

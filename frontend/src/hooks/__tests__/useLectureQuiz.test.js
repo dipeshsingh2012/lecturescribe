@@ -94,6 +94,24 @@ describe('useLectureQuiz hook', () => {
     );
   });
 
+  it('does not request quiz generation when transcript is unavailable', async () => {
+    global.fetch = vi.fn();
+    const { result } = renderHook(() => useLectureQuiz({
+      videoId: 'vid-no-captions',
+      cues: [],
+      transcript_available: false
+    }));
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false);
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result.current.quizData).toBeNull();
+    expect(result.current.quizError).toBeNull();
+    expect(result.current.quizLoading).toBe(false);
+  });
+
   it('handles API error gracefully in fetchOrGenerateQuiz', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,

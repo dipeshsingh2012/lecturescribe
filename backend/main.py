@@ -367,10 +367,15 @@ def get_or_generate_lecture_quiz(
     title = saved.get("title", f"Lecture {clean_vid}")
     cues = saved.get("cues", [])
     if not cues:
-        raise HTTPException(
-            status_code=409,
-            detail="This video is imported, but no transcript or captions are available. Quiz generation requires transcript text."
-        )
+        return {
+            "video_id": clean_vid,
+            "lecture_title": title,
+            "questions": [],
+            "total_questions": 0,
+            "transcript_available": False,
+            "quiz_available": False,
+            "message": "This video is imported, but no transcript or captions are available. Quiz generation requires transcript text."
+        }
 
     if req_count is not None and req_count > 0:
         target_count = max(3, min(15, int(req_count)))

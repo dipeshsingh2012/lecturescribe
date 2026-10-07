@@ -116,7 +116,7 @@ class TestLectureQuiz(unittest.TestCase):
     @patch("backend.database.db_manager.get_saved_video")
     @patch("backend.database.db_manager.get_saved_quiz", return_value=None)
     @patch("backend.redis_service.redis_cache.get_quiz", return_value=None)
-    def test_quiz_endpoint_explains_when_transcript_is_unavailable(
+    def test_quiz_endpoint_returns_unavailable_state_when_transcript_is_missing(
         self,
         mock_get_cached_quiz,
         mock_get_saved_quiz,
@@ -129,8 +129,11 @@ class TestLectureQuiz(unittest.TestCase):
 
         response = self.client.post("/api/lecture/no-captions/quiz", json={})
 
-        self.assertEqual(response.status_code, 409)
-        self.assertIn("no transcript or captions", response.json()["detail"].lower())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["quiz_available"])
+        self.assertFalse(response.json()["transcript_available"])
+        self.assertEqual(response.json()["questions"], [])
+        self.assertIn("no transcript or captions", response.json()["message"].lower())
 
     @patch("backend.database.db_manager.get_saved_video")
     @patch("backend.rag_engine.pinecone_rag_engine.generate_lecture_quiz")

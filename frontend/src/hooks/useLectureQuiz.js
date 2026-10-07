@@ -16,6 +16,15 @@ export default function useLectureQuiz(activeData, userEmail = null) {
 
   const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
     if (!videoId) return;
+    const hasTranscript = Array.isArray(activeData?.cues) &&
+      activeData.cues.some((cue) => String(cue?.text || '').trim().length > 0);
+    if (activeData?.transcript_available === false || (Array.isArray(activeData?.cues) && !hasTranscript)) {
+      setQuizData(null);
+      setQuizError(null);
+      setQuizLoading(false);
+      return;
+    }
+
     setQuizLoading(true);
     setQuizError(null);
     try {
@@ -54,7 +63,7 @@ export default function useLectureQuiz(activeData, userEmail = null) {
     } finally {
       setQuizLoading(false);
     }
-  }, [videoId, email]);
+  }, [activeData, videoId, email]);
 
   // Reset/switch quiz state when switching to a different lecture
   useEffect(() => {

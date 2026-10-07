@@ -80,17 +80,18 @@ LectureScribe is the trusted dispatch gateway for its own repository. aroadmap i
 
 ### 4.1 Request from aroadmap
 
-1. A user or authorized aroadmap process selects an approved initiative and requests development or another supported fleet operation.
-2. aroadmap calls LectureScribe's MCP endpoint over HTTPS using a registered credential. The tool request includes the initiative ID and task specification, not GitHub secrets.
-3. LectureScribe authenticates the caller, validates the request, applies an allowlist for supported fleet event types, and verifies that the destination is fixed to `dipeshsingh2012/lecturescribe`.
-4. LectureScribe creates a unique `request_id`, records the request as `accepted` (idempotently), and calls GitHub's repository dispatch API:
+1. An operator approves the initiative by moving it to the `approved` stage. This does not dispatch the fleet.
+2. When the operator moves the approved LectureScribe initiative to `development`, the board requires LectureScribe operator sign-in; aroadmap's server validates the operator session and calls LectureScribe's MCP endpoint over HTTPS using its registered service credential. The same stage-change request returns the fleet status and `request_id`; the caller does not need a second trigger call. Other tenants' stage transitions do not dispatch to LectureScribe.
+3. An authorized aroadmap MCP client can cause the same transition by calling `transition_initiative_stage` with `tenant_id: "lecturescribe"` and `stage: "development"`; the request must include the `AROADMAP_FLEET_TRIGGER_TOKEN` bearer credential.
+4. LectureScribe authenticates the caller, validates the request, applies an allowlist for supported fleet event types, and verifies that the destination is fixed to `dipeshsingh2012/lecturescribe`.
+5. LectureScribe creates a unique `request_id`, records the request as `accepted` (idempotently), and calls GitHub's repository dispatch API:
 
    `POST https://api.github.com/repos/dipeshsingh2012/lecturescribe/dispatches`
 
    with `event_type` set to one of the workflow's supported event types and `client_payload` containing only validated, non-secret task metadata.
-5. GitHub returns HTTP `204` when the dispatch is accepted. LectureScribe returns an MCP tool result containing `request_id`, `accepted`, and the target repository. It must not claim that the workflow has started yet.
+6. GitHub returns HTTP `204` when the dispatch is accepted. LectureScribe returns an MCP tool result containing `request_id`, `accepted`, and the target repository. It must not claim that the workflow has started yet.
 
-Suggested MCP request:
+Suggested aroadmap MCP stage-transition request:
 
 ```json
 {
@@ -98,20 +99,19 @@ Suggested MCP request:
   "id": "rpc-unique-id",
   "method": "tools/call",
   "params": {
-    "name": "trigger_agentic_fleet",
+    "name": "transition_initiative_stage",
     "arguments": {
-      "initiative_id": "initiative-123",
+      "tenant_id": "lecturescribe",
+      "item_id": "initiative-123",
+      "stage": "development",
       "event_type": "mcp_start_dev",
-      "title": "Add lecture export option",
-      "task": "Implement the approved initiative in LectureScribe.",
-      "acceptance_criteria": [
-        "Given a lecture, when export is requested, then a downloadable bundle is produced."
-      ],
-      "source": "aroadmap"
+      "request_id": "uuid"
     }
   }
 }
 ```
+
+The caller authenticates to aroadmap using `Authorization: Bearer <AROADMAP_FLEET_TRIGGER_TOKEN>`. The aroadmap server builds and sends the downstream LectureScribe `trigger_agentic_fleet` request; the service credential is never exposed to the MCP client.
 
 Suggested GitHub dispatch body:
 
@@ -281,10 +281,12 @@ Configure aroadmap's server-side environment with:
 - `LECTURESCRIBE_MCP_TOKEN`: same value as LectureScribe's `LECTURESCRIBE_MCP_TOKEN`.
 - `AROADMAP_FLEET_TRIGGER_TOKEN`: required bearer token for callers invoking aroadmap's privileged trigger tool.
 - `LECTURESCRIBE_STATUS_SYNC_TOKEN`: shared with LectureScribe's `AROADMAP_MCP_TOKEN` and required to report workflow status.
+- `AROADMAP_LECTURESCRIBE_OPERATOR_PASSWORD`: a unique random value of at least 32 bytes for signing into the LectureScribe roadmap before moving an approved card to development.
+- `AROADMAP_LECTURESCRIBE_SESSION_SECRET`: an independent random value of at least 32 bytes used to sign the eight-hour HttpOnly operator session cookie.
 - Create/configure a `lecturescribe` aroadmap tenant and approved initiative before dispatching. The trigger tool is deliberately limited to this tenant and does not transition the initiative to shipped.
 - Apply the updated aroadmap Drizzle schema using the project's normal database migration procedure (`npm run db:push`) before enabling status reporting. Review the proposed schema changes against the deployed database first; do not run this command against production without the expected approval/change process.
 
-Use the project's hosting secret manager for credentials. The browser must never receive service tokens. The deployed aroadmap endpoint should require authentication for privileged fleet tools, even if other MCP tools remain available under a different policy.
+Use the project's hosting secret manager for credentials. The browser must never receive service tokens. The deployed aroadmap endpoint requires `AROADMAP_FLEET_TRIGGER_TOKEN` as a bearer credential for both the explicit trigger tool and MCP transitions to development for the LectureScribe tenant. The public roadmap board uses a separate operator password and a server-signed, HttpOnly, eight-hour cookie for development-stage moves; never expose the signing secret to browser JavaScript.
 
 ### 8.4 Local development
 
@@ -338,7 +340,7 @@ Use the existing configured PostgreSQL database only after reviewing its schema 
 
 1. Deploy the LectureScribe backend with test/non-production credentials and callback authentication configured.
 2. Confirm `initialize` and `tools/list` through the deployed MCP endpoint.
-3. Use aroadmap's MCP client to call `trigger_agentic_fleet` with a low-risk test initiative and a unique `request_id`.
+3. Approve the low-risk initiative, then sign in to the LectureScribe board and move its card from Approved to In Development. Alternatively, use an authenticated aroadmap MCP client to call `transition_initiative_stage` with `tenant_id: "lecturescribe"`, the initiative ID, and `stage: "development"`. Capture the returned `request_id`.
 4. Confirm the backend records `accepted` and GitHub receives the matching `repository_dispatch` event.
 5. Confirm the correct Agentic Fleet workflow run starts and reads the event payload.
 6. Confirm LectureScribe receives `running` and terminal callbacks, including the run URL.

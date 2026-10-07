@@ -114,6 +114,25 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertIn("not found", response.json()["detail"].lower())
 
     @patch("backend.database.db_manager.get_saved_video")
+    @patch("backend.database.db_manager.get_saved_quiz", return_value=None)
+    @patch("backend.redis_service.redis_cache.get_quiz", return_value=None)
+    def test_quiz_endpoint_explains_when_transcript_is_unavailable(
+        self,
+        mock_get_cached_quiz,
+        mock_get_saved_quiz,
+        mock_get_saved_video
+    ):
+        mock_get_saved_video.return_value = {
+            "title": "Lecture without captions",
+            "cues": []
+        }
+
+        response = self.client.post("/api/lecture/no-captions/quiz", json={})
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("no transcript or captions", response.json()["detail"].lower())
+
+    @patch("backend.database.db_manager.get_saved_video")
     @patch("backend.rag_engine.pinecone_rag_engine.generate_lecture_quiz")
     def test_quiz_endpoint_success_and_caching(self, mock_gen_quiz, mock_get_saved):
         mock_get_saved.return_value = {
@@ -422,6 +441,39 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertEqual(len(quiz["questions"]), 3)
         covered_lectures = {q["lecture_id"] for q in quiz["questions"]}
         self.assertEqual(covered_lectures, {"lec_1", "lec_2", "lec_3"})
+
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("backend.rag_engine.pinecone_rag_engine.generate_detailed_quiz_explanation")
+    @patch("backend.database.db_manager.save_quiz_explanation")
+    def test_detailed_quiz_explanation_endpoint(self, mock_save, mock_gen_expl, mock_get_saved):
+        mock_get_saved.return_value = {
+            "title": "Linear Algebra Session 5",
+            "cues": [{"time": "43:34", "text": "Slope is a geometric interpretation of vector ratios."}]
+        }
+
+        mock_gen_expl.return_value = {
+            "detailed_explanation": "**Question Analysis**\n\nThis question tests vector space concepts...",
+            "model": "Groq llama-3.3-70b-versatile",
+            "generated_at": "2026-10-06T12:00:00Z"
+        }
+
+        req_body = {
+            "question_id": 1,
+            "question": "What is a vector space?",
+            "options": ["A", "B", "C", "D"],
+            "correct_index": 0,
+            "explanation": "Defined at [00:00].",
+            "timestamp": "00:00",
+            "regenerate": False
+        }
+
+        response = self.client.post("/api/lecture/vid123/quiz/explanation", json=req_body)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("detailed_explanation", data)
+        self.assertIn("Question Analysis", data["detailed_explanation"])
+        mock_gen_expl.assert_called_once()
+        mock_save.assert_called_once()
 
     @patch("backend.database.db_manager.get_course_details")
     @patch("backend.database.db_manager.get_saved_video")

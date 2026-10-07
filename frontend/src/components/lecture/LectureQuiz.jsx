@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Typography,
@@ -6,7 +6,11 @@ import {
   CircularProgress,
   Alert,
   Chip,
-  LinearProgress
+  LinearProgress,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Divider
 } from '@mui/material';
 import {
   HelpCircle,
@@ -15,7 +19,9 @@ import {
   RotateCcw,
   Sparkles,
   Clock,
-  Award
+  Award,
+  ChevronDown,
+  BookOpen
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
@@ -32,7 +38,11 @@ export default function LectureQuiz({
   selectAnswer,
   resetQuiz,
   handleCueClick,
-  currentTheme
+  currentTheme,
+  detailedExplanations = {},
+  explanationLoading = {},
+  fetchDetailedExplanation,
+  transcriptAvailable = true
 }) {
   const primaryColor = currentTheme?.palette?.primary || '#6366f1';
   const cardBg = currentTheme?.palette?.cardBg || '#1e293b';
@@ -41,6 +51,7 @@ export default function LectureQuiz({
   const textSecondary = currentTheme?.palette?.textSecondary || '#94a3b8';
 
   const OPTION_LABELS = ['A', 'B', 'C', 'D'];
+  const [expandedExplanation, setExpandedExplanation] = useState({});
 
   // 1. Initial State: No quiz generated yet
   if (!quizData && !quizLoading) {
@@ -93,6 +104,12 @@ export default function LectureQuiz({
             Generate a personalized practice quiz scaled to the length of this lecture, grounded in the professor's explanations, mathematical proofs, and timestamps.
           </Typography>
 
+          {!transcriptAvailable && (
+            <Alert severity="warning" sx={{ mb: 3, textAlign: 'left' }}>
+              This video was imported, but no transcript or captions are available. Quiz generation requires transcript text.
+            </Alert>
+          )}
+
           {quizError && (
             <Alert severity="error" sx={{ mb: 3, textAlign: 'left' }}>
               {quizError}
@@ -103,6 +120,7 @@ export default function LectureQuiz({
             variant="contained"
             size="large"
             onClick={() => fetchOrGenerateQuiz(false)}
+            disabled={!transcriptAvailable}
             startIcon={<Sparkles size={18} />}
             sx={{
               background: `linear-gradient(135deg, ${primaryColor}, #8b5cf6)`,
@@ -224,6 +242,7 @@ export default function LectureQuiz({
             variant="contained"
             size="small"
             onClick={() => fetchOrGenerateQuiz(true)}
+            disabled={!transcriptAvailable}
             startIcon={<Sparkles size={14} />}
             sx={{
               background: primaryColor,
@@ -240,6 +259,12 @@ export default function LectureQuiz({
       </Box>
 
       {/* Completion Scorecard Banner */}
+      {!transcriptAvailable && (
+        <Alert severity="warning">
+          This video has no transcript or captions. Existing quiz questions remain available, but new quizzes require transcript text.
+        </Alert>
+      )}
+
       {isCompleted && (
         <Box
           sx={{
@@ -506,6 +531,90 @@ export default function LectureQuiz({
                     </Button>
                   )}
                 </Box>
+              )}
+
+              {/* Detailed Explanation Accordion */}
+              {isAnswered && (
+                <Accordion
+                  expanded={expandedExplanation[q.id] || false}
+                  onChange={(e, isExpanded) => {
+                    setExpandedExplanation(prev => ({ ...prev, [q.id]: isExpanded }));
+                    if (isExpanded && !detailedExplanations[q.id] && !explanationLoading[q.id]) {
+                      fetchDetailedExplanation(q.id, q);
+                    }
+                  }}
+                  sx={{
+                    mt: 2,
+                    bgcolor: 'rgba(99, 102, 241, 0.05)',
+                    border: `1px solid ${cardBorder}`,
+                    borderRadius: 1.5,
+                    '&:before': { display: 'none' },
+                    boxShadow: 'none'
+                  }}
+                >
+                  <AccordionSummary
+                    expandIcon={<ChevronDown size={18} />}
+                    sx={{
+                      minHeight: 48,
+                      '& .MuiAccordionSummary-content': {
+                        margin: '12px 0',
+                        alignItems: 'center'
+                      }
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1 }}>
+                      <BookOpen size={18} color={primaryColor} />
+                      <Typography
+                        variant="subtitle2"
+                        sx={{
+                          fontWeight: 700,
+                          color: textPrimary,
+                          fontSize: '0.9rem'
+                        }}
+                      >
+                        Detailed Explanation
+                      </Typography>
+                      {explanationLoading[q.id] && (
+                        <CircularProgress size={14} sx={{ color: primaryColor }} />
+                      )}
+                      {detailedExplanations[q.id] && !explanationLoading[q.id] && (
+                        <Chip
+                          label="Ready"
+                          size="small"
+                          sx={{
+                            height: 20,
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            bgcolor: 'rgba(16, 185, 129, 0.15)',
+                            color: '#10b981'
+                          }}
+                        />
+                      )}
+                    </Box>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ pt: 0 }}>
+                    <Divider sx={{ mb: 2, borderColor: cardBorder }} />
+                    {explanationLoading[q.id] ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 2 }}>
+                        <CircularProgress size={20} sx={{ color: primaryColor }} />
+                        <Typography variant="body2" sx={{ color: textSecondary }}>
+                          Generating detailed explanation with lecture context, course materials, and web sources...
+                        </Typography>
+                      </Box>
+                    ) : detailedExplanations[q.id] ? (
+                      <Box sx={{ color: textPrimary, fontSize: '0.9rem', lineHeight: 1.7 }}>
+                        <MarkdownWithTimestamps
+                          content={detailedExplanations[q.id]}
+                          onTimestampClick={handleCueClick}
+                        />
+                      </Box>
+                    ) : (
+                      <Typography variant="body2" sx={{ color: textSecondary, fontStyle: 'italic' }}>
+                        Click to generate a comprehensive explanation using lecture transcript, course-wide context, and academic web sources.
+                      </Typography>
+                    )}
+                  </AccordionDetails>
+                </Accordion>
               )}
             </Box>
           );

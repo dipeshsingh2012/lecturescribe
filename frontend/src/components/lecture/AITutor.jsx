@@ -45,7 +45,8 @@ export default function AITutor({
   setChatInput,
   chatInputRef,
   chatEndRef,
-  handleSendMessage
+  handleSendMessage,
+  transcriptAvailable = true
 }) {
   const [internalCopiedResponseId, setInternalCopiedResponseId] = React.useState(null);
   const [showScrollBottom, setShowScrollBottom] = React.useState(false);
@@ -196,6 +197,23 @@ export default function AITutor({
           </button>
         </div>
       </div>
+
+      {!transcriptAvailable && (
+        <div
+          role="status"
+          style={{
+            padding: '10px 18px',
+            borderBottom: '1px solid rgba(234, 179, 8, 0.35)',
+            background: 'rgba(234, 179, 8, 0.08)',
+            color: 'var(--text-primary)',
+            fontSize: '0.8rem',
+            lineHeight: 1.5,
+            flexShrink: 0
+          }}
+        >
+          This video was imported without a transcript. The tutor can still answer general questions, but lecture-grounded answers and transcript summaries are unavailable.
+        </div>
+      )}
 
       {/* Chat Messages Container */}
       <div

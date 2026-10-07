@@ -8,7 +8,8 @@ export default function TranscriptSearch({
   handleCueClick,
   activeCueIdx,
   copied = false,
-  handleCopyTranscript
+  handleCopyTranscript,
+  transcriptAvailable = true
 }) {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(displayCues.length > 6);
@@ -211,9 +212,10 @@ export default function TranscriptSearch({
               <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
               <input
                 type="text"
-                placeholder="Search transcript by keywords or topics..."
+                placeholder={transcriptAvailable ? 'Search transcript by keywords or topics...' : 'Transcript unavailable'}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                disabled={!transcriptAvailable}
                 style={{
                   width: '100%',
                   background: 'var(--card-bg)',
@@ -229,6 +231,7 @@ export default function TranscriptSearch({
             {handleCopyTranscript && (
               <button
                 onClick={handleCopyTranscript}
+                disabled={!transcriptAvailable}
                 title="Copy entire lecture transcript to clipboard"
                 aria-label="Copy Transcript"
                 style={{
@@ -262,7 +265,24 @@ export default function TranscriptSearch({
           style={{ flex: 1, overflowY: 'auto', padding: '6px 10px' }}
         >
           <div ref={transcriptStartRef} />
-          {displayCues.map((cue, idx) => {
+          {!transcriptAvailable ? (
+            <div
+              role="status"
+              style={{
+                margin: '24px auto',
+                maxWidth: '520px',
+                padding: '14px 16px',
+                border: '1px solid rgba(234, 179, 8, 0.35)',
+                borderRadius: '8px',
+                background: 'rgba(234, 179, 8, 0.08)',
+                color: 'var(--text-primary)',
+                fontSize: '0.84rem',
+                lineHeight: 1.5
+              }}
+            >
+              This video was imported, but no transcript or captions are available. Transcript search requires transcript text.
+            </div>
+          ) : displayCues.map((cue, idx) => {
             const isActive = activeCueIdx === idx;
             return (
               <div

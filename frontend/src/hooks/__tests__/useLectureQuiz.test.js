@@ -15,6 +15,8 @@ describe('useLectureQuiz hook', () => {
     expect(result.current.selectedAnswers).toEqual({});
     expect(result.current.score).toBe(0);
     expect(result.current.isCompleted).toBe(false);
+    expect(result.current.detailedExplanations).toEqual({});
+    expect(result.current.explanationLoading).toEqual({});
   });
 
   it('hydrates persisted quiz and user answers from API response', async () => {
@@ -185,6 +187,54 @@ describe('useLectureQuiz hook', () => {
       expect.stringContaining('/api/lecture/vid123/quiz/answers?email=student%40example.com'),
       expect.objectContaining({
         method: 'DELETE'
+      })
+    );
+  });
+
+  it('fetches detailed explanation for a question', async () => {
+    const mockExplanation = {
+      detailed_explanation: '**Question Analysis**\n\nThis question tests...',
+      model: 'Groq llama-3.3-70b-versatile',
+      generated_at: '2026-10-06T12:00:00Z'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockExplanation
+    });
+
+    const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }, 'student@example.com'));
+
+    const questionData = {
+      id: 1,
+      question: 'What is a basis?',
+      options: ['Option A', 'Option B', 'Option C', 'Option D'],
+      correct_index: 0,
+      explanation: 'Explained at [01:32:00].',
+      timestamp: '01:32:00'
+    };
+
+    await act(async () => {
+      await result.current.fetchDetailedExplanation(1, questionData);
+    });
+
+    expect(result.current.detailedExplanations[1]).toBe(mockExplanation.detailed_explanation);
+    expect(result.current.explanationLoading[1]).toBe(false);
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/vid123/quiz/explanation'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question_id: 1,
+          question: 'What is a basis?',
+          options: ['Option A', 'Option B', 'Option C', 'Option D'],
+          correct_index: 0,
+          explanation: 'Explained at [01:32:00].',
+          timestamp: '01:32:00',
+          regenerate: false
+        })
       })
     );
   });

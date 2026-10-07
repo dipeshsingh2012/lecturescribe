@@ -63,6 +63,22 @@ describe('TranscriptSearch', () => {
     expect(screen.getByText(/0\s*hits/i)).toBeInTheDocument();
   });
 
+  it('explains when transcript search is unavailable', () => {
+    render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+        transcriptAvailable={false}
+      />
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent(/video was imported.*no transcript or captions/i);
+    expect(screen.getByPlaceholderText(/Transcript unavailable/i)).toBeDisabled();
+  });
+
   it('renders Copy Transcript button and triggers handleCopyTranscript on click', () => {
     const handleCopyTranscript = vi.fn();
     const { rerender } = render(

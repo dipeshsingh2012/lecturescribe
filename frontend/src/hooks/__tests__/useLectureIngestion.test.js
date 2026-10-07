@@ -55,6 +55,40 @@ describe('useLectureIngestion hook functionality', () => {
     expect(stored['76979871']).toBeDefined();
   });
 
+  it('activates an imported video and marks its transcript unavailable', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        videoId: '1233458452',
+        title: 'Introduction to Generative AI',
+        cues: [],
+        transcript_available: false,
+        transcript_message: 'This video was imported, but Vimeo has no caption tracks.'
+      })
+    });
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/1233458452');
+    });
+
+    expect(result.current.activeData.videoId).toBe('1233458452');
+    expect(result.current.activeData.transcript_available).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
   it('loads instantly from client cache if already cached', async () => {
     const cachedItem = {
       videoId: '999',

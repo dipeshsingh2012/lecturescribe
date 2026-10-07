@@ -92,6 +92,11 @@ export function useLectureIngestion({
 
     if (cachedVideos[vidId]) {
       const cached = cachedVideos[vidId];
+      const transcriptAvailable = Array.isArray(cached.cues) &&
+        cached.cues.some((cue) => String(cue?.text || '').trim().length > 0);
+      const cachedTranscriptMessage = transcriptAvailable
+        ? null
+        : 'This video was imported, but no transcript or captions are available.';
       let finalCourse = effectiveCourse || cached.course_name;
       if (finalCourse) {
         const match = effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === normalizeCourseSlug(finalCourse));
@@ -106,9 +111,17 @@ export function useLectureIngestion({
       const existingDriveUrl = cached.drive_folder_url || cached.driveFolderUrl || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(vidId))?.drive_folder_url || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(vidId))?.driveFolderUrl;
       
       if (!stayOnCoursePage) {
-        setActiveData({ ...cached, course_name: finalCourse, drive_folder_url: existingDriveUrl, driveFolderUrl: existingDriveUrl, cached: true });
+        setActiveData({
+          ...cached,
+          course_name: finalCourse,
+          drive_folder_url: existingDriveUrl,
+          driveFolderUrl: existingDriveUrl,
+          cached: true,
+          transcript_available: transcriptAvailable,
+          transcript_message: cachedTranscriptMessage
+        });
         if (typeof initChatMessages === 'function') {
-          initChatMessages(cached.title, vidId);
+          initChatMessages(cached.title, vidId, cached.cues);
         }
       }
       setUrlInput('');
@@ -137,7 +150,15 @@ export function useLectureIngestion({
       }
 
       setCachedVideos((prev) => {
-        const updated = { ...prev, [vidId]: { ...cached, course_name: finalCourse } };
+        const updated = {
+          ...prev,
+          [vidId]: {
+            ...cached,
+            course_name: finalCourse,
+            transcript_available: transcriptAvailable,
+            transcript_message: cachedTranscriptMessage
+          }
+        };
         try {
           localStorage.setItem('lecturescribe_cached_videos', JSON.stringify(updated));
         } catch {}
@@ -182,7 +203,7 @@ export function useLectureIngestion({
         if (!stayOnCoursePage) {
           setActiveData(enrichedData);
           if (typeof initChatMessages === 'function') {
-            initChatMessages(data.title, data.videoId);
+            initChatMessages(data.title, data.videoId, data.cues);
           }
         }
         setUrlInput('');

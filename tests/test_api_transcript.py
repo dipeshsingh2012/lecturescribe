@@ -96,6 +96,53 @@ Today we discuss forward kinematics.
         self.assertEqual(data["course_name"], "Artificial Intelligence")
         self.assertEqual(mock_save_transcript.call_args[1].get("course_name"), "Artificial Intelligence")
 
+    @patch("backend.main.db_manager.get_saved_video", return_value=None)
+    @patch("backend.main.fetch_player_config")
+    @patch("backend.main.get_text_tracks", return_value=[])
+    @patch("backend.main.fetch_vtt")
+    @patch("backend.main.generate_summary_sections")
+    @patch("backend.main.db_manager.save_video_transcript")
+    @patch("backend.main.algolia_service.ingest_cues")
+    @patch("backend.main.pinecone_rag_engine.ingest_transcript")
+    @patch("backend.main.db_manager.get_drive_folder_url", return_value=None)
+    def test_video_is_imported_without_caption_tracks(
+        self,
+        mock_get_drive_url,
+        mock_ingest_transcript,
+        mock_ingest_search,
+        mock_save_transcript,
+        mock_generate_summary,
+        mock_fetch_vtt,
+        mock_get_tracks,
+        mock_fetch_config,
+        mock_get_saved_video
+    ):
+        mock_fetch_config.return_value = {
+            "video": {
+                "title": "Introduction to Generative AI",
+                "duration": 4087
+            }
+        }
+
+        response = self.client.get("/api/transcript?url=https://vimeo.com/1233458452")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["videoId"], "1233458452")
+        self.assertEqual(data["title"], "Introduction to Generative AI")
+        self.assertEqual(data["cues"], [])
+        self.assertEqual(data["summarySections"], [])
+        self.assertFalse(data["transcript_available"])
+        self.assertIn("no caption or subtitle tracks", data["transcript_message"])
+        mock_save_transcript.assert_called_once()
+        self.assertEqual(mock_save_transcript.call_args.args[4], "Unavailable")
+        self.assertEqual(mock_save_transcript.call_args.args[5], [])
+        self.assertEqual(mock_save_transcript.call_args.args[6], [])
+        mock_generate_summary.assert_not_called()
+        mock_fetch_vtt.assert_not_called()
+        mock_ingest_search.assert_not_called()
+        mock_ingest_transcript.assert_not_called()
+
     def test_transcript_invalid_url_raises_400(self):
         response = self.client.get("/api/transcript?url=not-a-valid-vimeo-link")
         self.assertEqual(response.status_code, 400)

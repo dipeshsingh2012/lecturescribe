@@ -86,18 +86,8 @@ describe('useAITutor hook functionality', () => {
     expect(hookResult.result.current.copiedResponseId).toBe('msg-bot-1');
   });
 
-  it('autopopulates 4 prompt results when chat history is initially empty', async () => {
-    const mockAutopopulateMessages = [
-      { id: 'msg_user_1', sender: 'user', text: 'Create a summary for a 15 min read' },
-      { id: 'msg_bot_1', sender: 'bot', text: '15 min summary content', submission_text: '15 min submission' },
-      { id: 'msg_user_2', sender: 'user', text: 'Generate Summary for 30 mins read' },
-      { id: 'msg_bot_2', sender: 'bot', text: '30 min summary content', submission_text: '30 min submission' },
-      { id: 'msg_user_3', sender: 'user', text: 'Generate Full Comprehensive Summary' },
-      { id: 'msg_bot_3', sender: 'bot', text: 'Full summary content', submission_text: 'Full submission' },
-      { id: 'msg_user_4', sender: 'user', text: 'Explain key concepts and definitions' },
-      { id: 'msg_bot_4', sender: 'bot', text: 'Key concepts content', submission_text: 'Key concepts submission' }
-    ];
-
+  it('does not autopopulate summaries when transcript cues are unavailable', async () => {
+    const autopopulate = vi.fn();
     global.fetch = vi.fn().mockImplementation((url) => {
       if (url.includes('/api/chat/history')) {
         return Promise.resolve({
@@ -106,9 +96,10 @@ describe('useAITutor hook functionality', () => {
         });
       }
       if (url.includes('/api/chat/autopopulate')) {
+        autopopulate();
         return Promise.resolve({
           ok: true,
-          json: async () => ({ status: 'success', count: 8, messages: mockAutopopulateMessages })
+          json: async () => ({ status: 'success', count: 0, messages: [] })
         });
       }
       return Promise.resolve({ ok: true, json: async () => ({}) });
@@ -119,11 +110,35 @@ describe('useAITutor hook functionality', () => {
       hookResult = renderHook(() => useAITutor({ videoId: 'v10', title: 'ML 101', cues: [] }, { email: 'student@example.com' }));
     });
 
-    expect(hookResult.result.current.chatMessages.length).toBe(8);
-    expect(hookResult.result.current.chatMessages[0].text).toBe('Create a summary for a 15 min read');
-    expect(hookResult.result.current.chatMessages[1].text).toBe('15 min summary content');
-    expect(hookResult.result.current.submissionSummaries['msg_bot_1']).toBe('15 min submission');
-    expect(hookResult.result.current.submissionSummaries['msg_bot_4']).toBe('Key concepts submission');
+    expect(autopopulate).not.toHaveBeenCalled();
+    expect(hookResult.result.current.chatMessages).toEqual([]);
+    expect(hookResult.result.current.chatLoading).toBe(false);
+  });
+
+  it('does not use the previous lecture transcript to autopopulate a transcript-free lecture', async () => {
+    let autopopulateCallCount = 0;
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/chat/autopopulate')) {
+        autopopulateCallCount++;
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+    });
+
+    let hookResult;
+    await act(async () => {
+      hookResult = renderHook(() => useAITutor({
+        videoId: 'previous-lecture',
+        cues: [{ time: '00:00', text: 'Previous lecture transcript.' }]
+      }, null));
+    });
+    expect(autopopulateCallCount).toBe(1);
+
+    await act(async () => {
+      await hookResult.result.current.initChatMessages('No captions', 'no-captions', []);
+    });
+
+    expect(autopopulateCallCount).toBe(1);
   });
 
   it('does not re-autopopulate in same session after clearChatHistory', async () => {
@@ -153,7 +168,10 @@ describe('useAITutor hook functionality', () => {
 
     let hookResult;
     await act(async () => {
-      hookResult = renderHook(() => useAITutor({ videoId: 'v10' }, null));
+      hookResult = renderHook(() => useAITutor({
+        videoId: 'v10',
+        cues: [{ time: '00:00', text: 'Lecture transcript content.' }]
+      }, null));
     });
 
     expect(autopopulateCallCount).toBe(1);
@@ -201,7 +219,12 @@ describe('useAITutor hook functionality', () => {
     let hookData;
     await act(async () => {
       hookData = renderHook(({ data }) => useAITutor(data, null), {
-        initialProps: { data: { videoId: 'v10' } }
+        initialProps: {
+          data: {
+            videoId: 'v10',
+            cues: [{ time: '00:00', text: 'Lecture transcript content.' }]
+          }
+        }
       });
     });
 
@@ -214,7 +237,12 @@ describe('useAITutor hook functionality', () => {
 
     // Switch video to v20 -> clearedInSessionRef should reset
     await act(async () => {
-      hookData.rerender({ data: { videoId: 'v20' } });
+      hookData.rerender({
+        data: {
+          videoId: 'v20',
+          cues: [{ time: '00:00', text: 'Lecture transcript content.' }]
+        }
+      });
     });
 
     expect(autopopulatedVideos).toEqual(['v10', 'v20']);
@@ -226,7 +254,9 @@ describe('useAITutor hook functionality', () => {
 
     // Calling initChatMessages for target video resets cleared guard
     await act(async () => {
-      await hookData.result.current.initChatMessages('New Lecture', 'v30');
+      await hookData.result.current.initChatMessages('New Lecture', 'v30', [
+        { time: '00:00', text: 'Lecture transcript content.' }
+      ]);
     });
 
     expect(autopopulatedVideos).toEqual(['v10', 'v20', 'v30']);
@@ -245,7 +275,10 @@ describe('useAITutor hook functionality', () => {
 
     let hookResult;
     await act(async () => {
-      hookResult = renderHook(() => useAITutor({ videoId: 'v-err' }, null));
+      hookResult = renderHook(() => useAITutor({
+        videoId: 'v-err',
+        cues: [{ time: '00:00', text: 'Lecture transcript content.' }]
+      }, null));
     });
 
     expect(hookResult.result.current.chatLoading).toBe(false);
@@ -269,7 +302,11 @@ describe('useAITutor hook functionality', () => {
       return Promise.resolve({ ok: true, json: async () => ({}) });
     });
 
-    const activeData = { videoId: 'v123', title: 'NLP Session' };
+    const activeData = {
+      videoId: 'v123',
+      title: 'NLP Session',
+      cues: [{ time: '00:00', text: 'Lecture transcript content.' }]
+    };
     const { result } = renderHook(() => useAITutor(activeData, null));
 
     act(() => {
@@ -302,7 +339,10 @@ describe('useAITutor hook functionality', () => {
       return Promise.resolve({ ok: true, json: async () => ({}) });
     });
 
-    const activeData = { videoId: 'v123' };
+    const activeData = {
+      videoId: 'v123',
+      cues: [{ time: '00:00', text: 'Lecture transcript content.' }]
+    };
     const { result } = renderHook(() => useAITutor(activeData, { email: 'student@example.com' }));
 
     act(() => {

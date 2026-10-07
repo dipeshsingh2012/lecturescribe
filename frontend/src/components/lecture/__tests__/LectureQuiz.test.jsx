@@ -47,6 +47,22 @@ describe('LectureQuiz Component', () => {
     expect(screen.getByText(/Synthesizing Lecture Quiz/i)).toBeInTheDocument();
   });
 
+  it('explains quiz generation is unavailable without transcript and disables generation', () => {
+    render(
+      <LectureQuiz
+        quizData={null}
+        quizLoading={false}
+        quizError={null}
+        fetchOrGenerateQuiz={vi.fn()}
+        transcriptAvailable={false}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/quiz generation requires transcript text/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate Quiz/i })).toBeDisabled();
+  });
+
   it('renders questions and allows selecting an answer with instant feedback and timestamp button', () => {
     const selectAnswer = vi.fn();
     const handleCueClick = vi.fn();

@@ -101,7 +101,10 @@ export function useAITutor(activeData, googleUser) {
       }
 
       // If history is empty and not explicitly cleared in this session, auto-populate the 4 standard prompts
-      if (allowAutopopulate && !clearedInSessionRef.current) {
+      const availableCues = activeDataRef.current?.cues || activeData?.cues || [];
+      const hasTranscript = Array.isArray(availableCues) &&
+        availableCues.some((cue) => String(cue?.text || '').trim().length > 0);
+      if (allowAutopopulate && hasTranscript && !clearedInSessionRef.current) {
         await autopopulateChat(videoId, userEmail);
         return;
       }
@@ -190,12 +193,19 @@ export function useAITutor(activeData, googleUser) {
     }
   };
 
-  const initChatMessages = (title, videoId = null) => {
+  const initChatMessages = (title, videoId = null, cues = undefined) => {
     const targetVid = videoId || activeData?.videoId;
     if (targetVid) {
       clearedInSessionRef.current = false;
       currentVideoIdRef.current = targetVid;
-      fetchChatHistory(targetVid, googleUser?.email);
+      const targetCues = cues ?? (
+        targetVid === activeDataRef.current?.videoId
+          ? activeDataRef.current?.cues
+          : undefined
+      );
+      const hasTranscript = Array.isArray(targetCues) &&
+        targetCues.some((cue) => String(cue?.text || '').trim().length > 0);
+      fetchChatHistory(targetVid, googleUser?.email, hasTranscript);
     } else {
       setChatMessages([]);
       setSubmissionSummaries({});

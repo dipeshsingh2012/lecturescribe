@@ -2006,6 +2006,208 @@ class Llama3PineconeRAGStore:
             f"Unable to generate course quiz for '{clean_course}'. All configured AI models failed or returned invalid responses."
         )
 
+    def generate_detailed_quiz_explanation(
+        self,
+        video_id: str,
+        lecture_title: str,
+        question: str,
+        options: List[str],
+        correct_index: int,
+        explanation: str,
+        timestamp: str,
+        cues: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate comprehensive detailed explanation for a quiz question using RAG.
+        Combines lecture transcript context, course-wide search, and web search.
+        """
+        import requests
+
+        clean_vid = str(video_id or "").strip()
+        title = lecture_title or "Active Lecture"
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        # Get lecture cues if not provided
+        if not cues:
+            try:
+                from backend.database import db_manager
+                saved = db_manager.get_saved_video(clean_vid)
+                cues = saved.get("cues", []) if saved else []
+            except Exception:
+                cues = []
+
+        # 1. Extract transcript context around the timestamp
+        transcript_context = ""
+        if cues and timestamp:
+            try:
+                ts_sec = self._parse_timestamp(timestamp)
+                # Get context window: 2 minutes before to 2 minutes after
+                window_start = max(0, ts_sec - 120)
+                window_end = ts_sec + 120
+
+                window_cues = []
+                for c in cues:
+                    cue_time = self._parse_timestamp(c.get("time", "00:00"))
+                    if window_start <= cue_time <= window_end:
+                        window_cues.append(f"[{c.get('time', '00:00')}] {c.get('text', '')}")
+
+                if window_cues:
+                    transcript_context = "\n".join(window_cues)
+            except Exception as e:
+                print(f"⚠️ [Explanation Context Warning] Could not extract transcript context: {e}")
+
+        # 2. Search course lectures for related concepts
+        course_context = ""
+        try:
+            # Extract key terms from the question
+            key_terms = re.findall(r'\b[a-zA-Z]{3,}\b', question)
+            if key_terms:
+                search_query = " ".join(key_terms[:5])
+                course_res, _ = self.execute_tool(
+                    "search_course_lectures",
+                    {"query": search_query, "top_k": 3},
+                    clean_vid,
+                    title
+                )
+                if course_res and course_res != "[]":
+                    course_context = course_res
+        except Exception as e:
+            print(f"⚠️ [Course Context Warning] {e}")
+
+        # 3. Search web for academic context
+        web_context = ""
+        try:
+            search_query = f"{question} {options[correct_index] if correct_index < len(options) else ''}"
+            web_res, _, web_sources = self.execute_tool(
+                "search_web_context",
+                {"search_query": search_query},
+                clean_vid,
+                title
+            )
+            if web_res and web_res != "[]":
+                web_context = web_res
+        except Exception as e:
+            print(f"⚠️ [Web Context Warning] {e}")
+
+        # Build the system prompt
+        system_prompt = (
+            f"You are an expert Academic AI Tutor for the lecture: '{title}'.\n"
+            "Your task is to generate a comprehensive, detailed explanation for a quiz question that a student got wrong.\n\n"
+            "Strict Guidelines:\n"
+            "1. Structure: Organize your explanation into clear sections:\n"
+            "   - **Question Analysis**: Briefly restate what the question is asking\n"
+            "   - **Correct Answer**: Clearly state the correct option and why it's correct\n"
+            "   - **Why Other Options Are Wrong**: Explain why each incorrect option is incorrect\n"
+            "   - **Lecture Context**: Explain how this concept was taught in the lecture with specific references\n"
+            "   - **Key Concepts**: Break down the underlying concepts, formulas, or principles\n"
+            "   - **Related Topics**: Mention related concepts from other lectures if applicable\n"
+            "2. Use the provided transcript context to ground your explanation in what the professor actually said\n"
+            "3. Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display)\n"
+            "4. If web sources are provided, cite them as [Source Name](URL)\n"
+            "5. Be thorough but clear - explain step-by-step so a student can understand\n"
+            "6. Include the exact timestamp from the lecture where this was discussed\n"
+        )
+
+        user_prompt = f"""Generate a detailed explanation for this quiz question:
+
+**Question**: {question}
+
+**Options**:
+"""
+        for i, opt in enumerate(options):
+            marker = "✓ (CORRECT)" if i == correct_index else "✗"
+            user_prompt += f"- {chr(65+i)}. {opt} {marker}\n"
+
+        user_prompt += f"""
+**Brief Explanation**: {explanation}
+
+**Timestamp**: {timestamp}
+
+**Transcript Context Around Timestamp**:
+{transcript_context if transcript_context else "No transcript context available"}
+
+**Related Course Lecture Context**:
+{course_context if course_context else "No additional course context found"}
+
+**Web Academic Sources**:
+{web_context if web_context else "No web sources found"}
+
+Please provide a comprehensive, detailed explanation that helps the student understand this concept deeply."""
+
+        # Try Groq first
+        if groq_key:
+            for model_name in ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]:
+                try:
+                    payload = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "temperature": 0.4,
+                        "max_tokens": 2048
+                    }
+                    r = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json=payload,
+                        timeout=60
+                    )
+                    if r.status_code == 200:
+                        detailed_explanation = r.json()["choices"][0]["message"]["content"].strip()
+                        return {
+                            "detailed_explanation": detailed_explanation,
+                            "model": f"Groq {model_name}",
+                            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        }
+                except Exception as e:
+                    print(f"⚠️ [Groq Explanation Warning] {e}")
+
+        # Try Gemini as fallback
+        if gemini_key:
+            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.8-flash"]:
+                try:
+                    payload = {
+                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                        "systemInstruction": {"parts": [{"text": system_prompt}]},
+                        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048}
+                    }
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                    resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+                    if resp.status_code == 200:
+                        detailed_explanation = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        return {
+                            "detailed_explanation": detailed_explanation,
+                            "model": f"Gemini {model_name}",
+                            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        }
+                except Exception as e:
+                    print(f"⚠️ [Gemini Explanation Warning] {e}")
+
+        # Fallback: enhance the brief explanation
+        enhanced_explanation = f"""**Detailed Explanation**
+
+**Question Analysis**
+{question}
+
+**Correct Answer**
+Option {chr(65 + correct_index)} is correct: {options[correct_index] if correct_index < len(options) else ''}
+
+**Why This Is Correct**
+{explanation}
+
+**Lecture Context**
+This concept was discussed at timestamp {timestamp} in the lecture "{title}".
+
+**Note**: Enhanced explanation generated - full RAG context unavailable due to LLM errors. Please try regenerating later.
+"""
+        return {
+            "detailed_explanation": enhanced_explanation,
+            "model": "Fallback Enhanced",
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+
     @staticmethod
     def check_llm_connectivity() -> Dict[str, Any]:
         """Probes Groq and Gemini connectivity and intent router status."""

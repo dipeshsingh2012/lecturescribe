@@ -79,6 +79,7 @@ class RelationalDBManager:
         self._quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._course_quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_attempts_memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._quiz_explanations_memory_cache: Dict[str, Dict[int, str]] = {}
         self._readings_memory_cache: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
@@ -277,6 +278,18 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_quiz_attempt ON lecturescribe_quiz_attempts(quiz_type, target_id, user_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_quiz_explanations (
+                            id SERIAL PRIMARY KEY,
+                            video_id VARCHAR(128) REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            question_id INTEGER NOT NULL,
+                            detailed_explanation TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_quiz_explanation UNIQUE (video_id, question_id)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_quiz_explanation_vid ON lecturescribe_quiz_explanations(video_id);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_readings (
                             id SERIAL PRIMARY KEY,
@@ -857,6 +870,84 @@ class RelationalDBManager:
         finally:
             if conn:
                 conn.close()
+
+    def save_quiz_explanation(self, video_id: str, question_id: int, detailed_explanation: str) -> bool:
+        """Persist detailed quiz explanation to PostgreSQL and In-Memory cache."""
+        if not video_id or not detailed_explanation:
+            return False
+
+        clean_vid = str(video_id).strip()
+        q_id = int(question_id or 0)
+
+        if clean_vid not in self._quiz_explanations_memory_cache:
+            self._quiz_explanations_memory_cache[clean_vid] = {}
+        self._quiz_explanations_memory_cache[clean_vid][q_id] = detailed_explanation
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_quiz_explanations (video_id, question_id, detailed_explanation, updated_at)
+                        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (video_id, question_id)
+                        DO UPDATE SET
+                            detailed_explanation = EXCLUDED.detailed_explanation,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (clean_vid, q_id, detailed_explanation))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_quiz_explanation error for video '{clean_vid}' question {q_id}: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_quiz_explanation(self, video_id: str, question_id: int) -> Optional[str]:
+        """Retrieve detailed quiz explanation from In-Memory cache or PostgreSQL."""
+        if not video_id:
+            return None
+
+        clean_vid = str(video_id).strip()
+        q_id = int(question_id or 0)
+
+        if clean_vid in self._quiz_explanations_memory_cache:
+            if q_id in self._quiz_explanations_memory_cache[clean_vid]:
+                return self._quiz_explanations_memory_cache[clean_vid][q_id]
+
+        if not self.postgres_url:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT detailed_explanation
+                        FROM lecturescribe_quiz_explanations
+                        WHERE video_id = %s AND question_id = %s
+                        LIMIT 1;
+                    """, (clean_vid, q_id))
+                    row = cursor.fetchone()
+                    if row and row.get("detailed_explanation"):
+                        explanation = row["detailed_explanation"]
+                        if clean_vid not in self._quiz_explanations_memory_cache:
+                            self._quiz_explanations_memory_cache[clean_vid] = {}
+                        self._quiz_explanations_memory_cache[clean_vid][q_id] = explanation
+                        return explanation
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_quiz_explanation error for video '{clean_vid}' question {q_id}: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+        return None
 
     def get_saved_video(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Fetch video transcript from In-Memory Cache or PostgreSQL.

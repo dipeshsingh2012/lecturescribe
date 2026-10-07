@@ -358,7 +358,7 @@ def get_or_generate_lecture_quiz(
 
     # 3. Retrieve Saved Video & Cues from DB
     saved = db_manager.get_saved_video(clean_vid)
-    if not saved or not saved.get("cues"):
+    if not saved:
         raise HTTPException(
             status_code=404,
             detail=f"Lecture '{clean_vid}' transcript not found in database. Ingest lecture first."
@@ -366,6 +366,11 @@ def get_or_generate_lecture_quiz(
 
     title = saved.get("title", f"Lecture {clean_vid}")
     cues = saved.get("cues", [])
+    if not cues:
+        raise HTTPException(
+            status_code=409,
+            detail="This video is imported, but no transcript or captions are available. Quiz generation requires transcript text."
+        )
 
     if req_count is not None and req_count > 0:
         target_count = max(3, min(15, int(req_count)))
@@ -422,6 +427,70 @@ def reset_lecture_quiz_answers(video_id: str, email: Optional[str] = Query(None)
     return {"status": "success", "success": True}
 
 
+class QuizExplanationRequest(BaseModel):
+    question_id: int
+    question: str
+    options: List[str]
+    correct_index: int
+    explanation: str
+    timestamp: str
+    regenerate: bool = False
+
+
+@app.post("/api/lecture/{video_id}/quiz/explanation")
+def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
+    """Generate or retrieve detailed explanation for a quiz question using RAG."""
+    clean_vid = str(video_id or "").strip()
+
+    # 1. Check cache first if not regenerating
+    if not req.regenerate:
+        cached = db_manager.get_quiz_explanation(clean_vid, req.question_id)
+        if cached:
+            return {
+                "detailed_explanation": cached,
+                "cached": True,
+                "model": "Cached"
+            }
+
+    # 2. Get lecture data
+    saved = db_manager.get_saved_video(clean_vid)
+    if not saved:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Lecture '{clean_vid}' not found in database."
+        )
+
+    title = saved.get("title", f"Lecture {clean_vid}")
+    cues = saved.get("cues", [])
+
+    # 3. Generate detailed explanation using RAG
+    try:
+        explanation_data = pinecone_rag_engine.generate_detailed_quiz_explanation(
+            video_id=clean_vid,
+            lecture_title=title,
+            question=req.question,
+            options=req.options,
+            correct_index=req.correct_index,
+            explanation=req.explanation,
+            timestamp=req.timestamp,
+            cues=cues
+        )
+
+        # 4. Save to database
+        db_manager.save_quiz_explanation(
+            clean_vid,
+            req.question_id,
+            explanation_data["detailed_explanation"]
+        )
+
+        return explanation_data
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to generate detailed explanation: {str(e)}"
+        )
+
+
 @app.get("/api/transcript")
 def get_transcript(
     url: str = Query(..., description="Vimeo URL or Video ID"),
@@ -436,6 +505,12 @@ def get_transcript(
         if saved:
             print(f"[DB Cache Hit] Video '{video_id}' found in database. Skipping transcript and summary re-generation.")
             saved["cached"] = True
+            saved_cues = saved.get("cues") or []
+            saved["transcript_available"] = bool(saved_cues)
+            saved["transcript_message"] = (
+                None if saved_cues else
+                "This video was imported, but no transcript or captions are available."
+            )
             raw_course = course_name if isinstance(course_name, str) else None
             effective_course = ((raw_course and raw_course.strip()) or saved.get("course_name") or "General Lectures").strip()
             saved["course_name"] = effective_course
@@ -448,9 +523,10 @@ def get_transcript(
                             conn.commit()
                 except Exception as ce:
                     print(f"⚠️ [Course Update Notice]: {ce}")
-            # Ingest into Algolia & Pinecone (safe/idempotent, skips if already active)
-            algolia_service.ingest_cues(video_id, saved["title"], saved["cues"])
-            pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved["cues"])
+            # Only transcript-backed services can be populated when cues exist.
+            if saved_cues:
+                algolia_service.ingest_cues(video_id, saved["title"], saved_cues)
+                pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved_cues)
             drive_url = db_manager.get_drive_folder_url(video_id, email)
             if drive_url:
                 saved["drive_folder_url"] = drive_url
@@ -481,36 +557,44 @@ def get_transcript(
             duration = str(raw_dur)
 
         tracks = get_text_tracks(config)
-        if not tracks:
-            raise HTTPException(status_code=404, detail="No caption/subtitle tracks found for this video")
+        track = next((t for t in tracks if t.get("default")), tracks[0]) if tracks else None
+        cues = []
+        transcript_message = "This video was imported, but Vimeo has no caption or subtitle tracks available."
+        if track:
+            vtt_url = track.get("url") or track.get("src")
+            if vtt_url:
+                try:
+                    vtt_content = fetch_vtt(vtt_url)
+                    raw_segments = parse_vtt(vtt_content)
+                    cues = [
+                        {"time": format_timestamp(s["start"]), "text": s["text"]}
+                        for s in raw_segments
+                    ]
+                    if not cues:
+                        transcript_message = "This video was imported, but its caption track contains no transcript text."
+                except Exception as exc:
+                    print(f"⚠️ [Vimeo Caption Notice] Could not retrieve captions for video '{video_id}': {exc}")
+                    transcript_message = "This video was imported, but its caption track could not be downloaded."
+            else:
+                transcript_message = "This video was imported, but Vimeo did not provide a downloadable caption track."
 
-        track = next((t for t in tracks if t.get("default")), tracks[0])
-        vtt_url = track.get("url") or track.get("src")
-        if not vtt_url:
-            raise HTTPException(status_code=404, detail="No caption file URL found")
-
-        vtt_content = fetch_vtt(vtt_url)
-        raw_segments = parse_vtt(vtt_content)
-
-        cues = [
-            {"time": format_timestamp(s["start"]), "text": s["text"]}
-            for s in raw_segments
-        ]
-
-        summary_sections = generate_summary_sections(cues, title)
+        transcript_available = bool(cues)
+        if transcript_available:
+            transcript_message = None
+        summary_sections = generate_summary_sections(cues, title) if transcript_available else []
         source_url = f"https://vimeo.com/{video_id}"
-        caption_label = track.get("label", "English")
+        caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
         raw_course = course_name if isinstance(course_name, str) else None
         derived_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
 
         # 3. Save to Relational DB (PostgreSQL)
         db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
 
-        # 4. Ingest into Algolia Search Engine
-        algolia_service.ingest_cues(video_id, title, cues)
-
-        # 5. Ingest into Pinecone Vector Store
-        pinecone_chunks = pinecone_rag_engine.ingest_transcript(video_id, title, cues)
+        # 4-5. Ingest transcript-backed search indexes only when captions exist.
+        pinecone_chunks = []
+        if transcript_available:
+            algolia_service.ingest_cues(video_id, title, cues)
+            pinecone_chunks = pinecone_rag_engine.ingest_transcript(video_id, title, cues)
 
         # 6. Record into user LMS library if authenticated
         if email and email.strip():
@@ -534,6 +618,8 @@ def get_transcript(
             "captionLabel": caption_label,
             "cues": cues,
             "summarySections": summary_sections,
+            "transcript_available": transcript_available,
+            "transcript_message": transcript_message,
             "course_name": derived_course,
             "pineconeIndexedChunks": pinecone_chunks,
             "drive_folder_url": drive_url,

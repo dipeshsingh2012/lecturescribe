@@ -9,6 +9,8 @@ export default function useLectureQuiz(activeData, userEmail = null) {
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizError, setQuizError] = useState(null);
   const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [detailedExplanations, setDetailedExplanations] = useState({});
+  const [explanationLoading, setExplanationLoading] = useState({});
 
   const lastVidRef = useRef(videoId);
 
@@ -97,11 +99,51 @@ export default function useLectureQuiz(activeData, userEmail = null) {
 
   const resetQuiz = useCallback(() => {
     setSelectedAnswers({});
+    setDetailedExplanations({});
     if (videoId) {
       const delEmail = email ? `?email=${encodeURIComponent(email)}` : '';
       fetch(`${API_BASE}/api/lecture/${videoId}/quiz/answers${delEmail}`, {
         method: 'DELETE'
       }).catch(() => {});
+    }
+  }, [videoId, email]);
+
+  const fetchDetailedExplanation = useCallback(async (questionId, questionData) => {
+    if (!videoId || !questionData) return;
+
+    const loadingKey = `${questionId}`;
+    setExplanationLoading(prev => ({ ...prev, [loadingKey]: true }));
+
+    try {
+      const emailParam = email ? `?email=${encodeURIComponent(email)}` : '';
+      const res = await fetch(`${API_BASE}/api/lecture/${videoId}/quiz/explanation${emailParam}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question_id: questionId,
+          question: questionData.question,
+          options: questionData.options,
+          correct_index: questionData.correct_index,
+          explanation: questionData.explanation,
+          timestamp: questionData.timestamp,
+          regenerate: false
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Server returned ${res.status}`);
+      }
+
+      const data = await res.json();
+      setDetailedExplanations(prev => ({
+        ...prev,
+        [questionId]: data.detailed_explanation
+      }));
+    } catch (err) {
+      console.error('Failed to fetch detailed explanation:', err);
+    } finally {
+      setExplanationLoading(prev => ({ ...prev, [loadingKey]: false }));
     }
   }, [videoId, email]);
 
@@ -125,6 +167,9 @@ export default function useLectureQuiz(activeData, userEmail = null) {
     answeredCount,
     fetchOrGenerateQuiz,
     selectAnswer,
-    resetQuiz
+    resetQuiz,
+    detailedExplanations,
+    explanationLoading,
+    fetchDetailedExplanation
   };
 }

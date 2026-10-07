@@ -65,8 +65,16 @@ export default function LectureWorkspace({
   answeredCount = quiz?.answeredCount,
   fetchOrGenerateQuiz = quiz?.fetchOrGenerateQuiz,
   selectAnswer = quiz?.selectAnswer,
-  resetQuiz = quiz?.resetQuiz
+  resetQuiz = quiz?.resetQuiz,
+  detailedExplanations = quiz?.detailedExplanations,
+  explanationLoading = quiz?.explanationLoading,
+  fetchDetailedExplanation = quiz?.fetchDetailedExplanation
 }) {
+  const transcriptAvailable =
+    activeData?.transcript_available !== false &&
+    Array.isArray(activeData?.cues) &&
+    activeData.cues.some((cue) => String(cue?.text || '').trim());
+
   const handleCrossLectureClick = (videoId, timestamp, courseName) => {
     if (!videoId) return;
     if (activeData?.videoId === videoId) {
@@ -126,6 +134,7 @@ export default function LectureWorkspace({
           activeCueIdx={activeCueIdx}
           copied={copied}
           handleCopyTranscript={handleCopyTranscript}
+          transcriptAvailable={transcriptAvailable}
         />
       ) : activeTab === 'quiz' ? (
         <LectureQuiz
@@ -142,6 +151,10 @@ export default function LectureWorkspace({
           resetQuiz={resetQuiz}
           handleCueClick={handleCueClick}
           currentTheme={currentTheme}
+          detailedExplanations={detailedExplanations}
+          explanationLoading={explanationLoading}
+          fetchDetailedExplanation={fetchDetailedExplanation}
+          transcriptAvailable={transcriptAvailable}
         />
       ) : (
         <AITutor
@@ -170,6 +183,7 @@ export default function LectureWorkspace({
           chatInputRef={chatInputRef}
           chatEndRef={chatEndRef}
           handleSendMessage={handleSendMessage}
+          transcriptAvailable={transcriptAvailable}
         />
       )}
     </div>

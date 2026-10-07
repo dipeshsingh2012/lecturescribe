@@ -4,6 +4,32 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import AITutor from '../AITutor';
 
 describe('AITutor', () => {
+  it('warns when tutor responses cannot be grounded in a transcript', () => {
+    render(
+      <AITutor
+        webSearchEnabled={false}
+        setWebSearchEnabled={vi.fn()}
+        clearChatHistory={vi.fn()}
+        chatMessages={[]}
+        setChatMessages={vi.fn()}
+        viewMode="learning"
+        submissionSummaries={{}}
+        cleanSubmissionFallback={vi.fn()}
+        handleCueClick={vi.fn()}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        chatInputRef={{ current: null }}
+        chatEndRef={{ current: null }}
+        handleSendMessage={vi.fn()}
+        transcriptAvailable={false}
+      />
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent(/imported without a transcript/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/lecture-grounded answers/i);
+  });
+
   it('renders chat header, web toggle, and new chat button without model selector', () => {
     const setWebSearchEnabled = vi.fn();
     const clearChatHistory = vi.fn();

@@ -1,4 +1,6 @@
 import unittest
+import os
+from types import SimpleNamespace
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.main import app
@@ -147,6 +149,57 @@ Today we discuss forward kinematics.
         response = self.client.get("/api/transcript?url=not-a-valid-vimeo-link")
         self.assertEqual(response.status_code, 400)
         self.assertIn("detail", response.json())
+
+    @patch("backend.main.redis_cache.invalidate_video")
+    @patch("backend.main.pinecone_rag_engine.ingest_transcript", return_value=[])
+    @patch("backend.main.algolia_service.ingest_cues")
+    @patch("backend.main.db_manager.save_video_transcript")
+    @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.requests.post")
+    def test_transcription_endpoint_saves_and_indexes_generated_cues(
+        self, mock_post, mock_get_video, mock_save, mock_algolia, mock_pinecone, mock_invalidate
+    ):
+        mock_get_video.return_value = {
+            "title": "Introduction to Generative AI",
+            "duration": "45m",
+            "sourceUrl": "https://vimeo.com/1233458452",
+            "course_name": "Artificial Intelligence",
+            "cues": [],
+        }
+        mock_post.return_value = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "text": "Welcome to class.",
+                "segments": [{"start": 65.3, "text": " Welcome to class. "}],
+            },
+        )
+
+        with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):
+            response = self.client.post("/api/lecture/1233458452/transcribe?email=student%40example.com")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["transcript_available"])
+        self.assertEqual(data["captionLabel"], "Groq Whisper")
+        self.assertEqual(data["cues"], [{"time": "01:05", "text": "Welcome to class."}])
+        mock_post.assert_called_once_with(
+            "https://transcription.example/transcribe/url",
+            json={"url": "https://vimeo.com/1233458452"},
+            timeout=(15, 900),
+        )
+        mock_save.assert_called_once()
+        self.assertEqual(mock_save.call_args.args[4], "Groq Whisper")
+        self.assertEqual(mock_save.call_args.args[5], data["cues"])
+        mock_algolia.assert_called_once_with("1233458452", "Introduction to Generative AI", data["cues"])
+        mock_pinecone.assert_called_once_with("1233458452", "Introduction to Generative AI", data["cues"])
+        mock_invalidate.assert_called_once_with("1233458452")
+
+    @patch("backend.main.db_manager.get_saved_video", return_value=None)
+    def test_transcription_endpoint_requires_an_imported_video(self, _mock_get_video):
+        with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):
+            response = self.client.post("/api/lecture/1233458452/transcribe")
+
+        self.assertEqual(response.status_code, 404)
 
 if __name__ == "__main__":
     unittest.main()

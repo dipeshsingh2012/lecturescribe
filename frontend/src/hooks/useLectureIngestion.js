@@ -16,6 +16,8 @@ export function useLectureIngestion({
 }) {
   const [urlInput, setUrlInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [transcriptionLoading, setTranscriptionLoading] = useState(false);
+  const [transcriptionError, setTranscriptionError] = useState(null);
   const [error, setError] = useState(null);
   const [cacheNotice, setCacheNotice] = useState(null);
   const [activeData, setActiveData] = useState(null);
@@ -33,6 +35,11 @@ export function useLectureIngestion({
   useEffect(() => {
     activeDataRef.current = activeData;
   }, [activeData]);
+
+  useEffect(() => {
+    setTranscriptionError(null);
+    setTranscriptionLoading(false);
+  }, [activeData?.videoId]);
 
   useEffect(() => {
     if (error || cacheNotice) {
@@ -53,6 +60,41 @@ export function useLectureIngestion({
       } else if (cachedVideos[vidId]) {
         setCacheNotice("⚡ Pasted video is already cached! Transcripts and summary will load instantly.");
       }
+    }
+  };
+
+  const handleGenerateTranscript = async () => {
+    const videoId = activeData?.videoId;
+    if (!videoId || transcriptionLoading) return;
+
+    setTranscriptionLoading(true);
+    setTranscriptionError(null);
+    try {
+      const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
+      const response = await fetch(
+        `${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/transcribe${emailParam}`,
+        { method: 'POST' }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || `Server returned status ${response.status}`);
+      }
+
+      setActiveData((current) => current?.videoId === videoId ? { ...current, ...data } : current);
+      setCachedVideos((previous) => {
+        const updated = { ...previous, [videoId]: { ...previous[videoId], ...data } };
+        try {
+          localStorage.setItem('lecturescribe_cached_videos', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      if (typeof initChatMessages === 'function') {
+        initChatMessages(data.title || activeData.title, videoId, data.cues);
+      }
+    } catch (err) {
+      setTranscriptionError(err.message || 'Failed to generate a transcript for this video.');
+    } finally {
+      setTranscriptionLoading(false);
     }
   };
 
@@ -245,6 +287,8 @@ export function useLectureIngestion({
     setUrlInput,
     loading,
     setLoading,
+    transcriptionLoading,
+    transcriptionError,
     error,
     setError,
     cacheNotice,
@@ -253,6 +297,7 @@ export function useLectureIngestion({
     setActiveData,
     activeDataRef,
     handleTranscribe,
+    handleGenerateTranscript,
     handlePasteUrl
   };
 }

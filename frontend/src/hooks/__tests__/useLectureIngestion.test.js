@@ -89,6 +89,60 @@ describe('useLectureIngestion hook functionality', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('generates a transcript and updates the active lecture and local cache', async () => {
+    const lecturePayload = {
+      videoId: '1233458452',
+      title: 'Introduction to Generative AI',
+      cues: [{ time: '00:00', text: 'Welcome to class.' }],
+      transcript_available: true
+    };
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ videoId: '1233458452', title: lecturePayload.title, cues: [], transcript_available: false })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => lecturePayload
+      });
+
+    const initChatMessages = vi.fn();
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: 'student@example.com',
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/1233458452');
+    });
+    await act(async () => {
+      await result.current.handleGenerateTranscript();
+    });
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      expect.stringContaining('/api/lecture/1233458452/transcribe?email=student%40example.com'),
+      { method: 'POST' }
+    );
+    expect(result.current.activeData.cues).toEqual(lecturePayload.cues);
+    expect(result.current.activeData.transcript_available).toBe(true);
+    expect(result.current.transcriptionError).toBeNull();
+    expect(initChatMessages).toHaveBeenLastCalledWith(
+      lecturePayload.title,
+      '1233458452',
+      lecturePayload.cues
+    );
+    const cached = JSON.parse(localStorage.getItem('lecturescribe_cached_videos') || '{}');
+    expect(cached['1233458452'].cues).toEqual(lecturePayload.cues);
+  });
+
   it('loads instantly from client cache if already cached', async () => {
     const cachedItem = {
       videoId: '999',

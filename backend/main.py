@@ -13,6 +13,7 @@ import time
 import threading
 import traceback
 import concurrent.futures
+import requests
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
@@ -218,6 +219,96 @@ def get_lecture_by_id(
 ):
     """Dedicated API endpoint for fetching a lecture workspace by Vimeo video ID."""
     return get_transcript(url=video_id, email=email, course_name=course_name)
+
+
+@app.post("/api/lecture/{video_id}/transcribe")
+def transcribe_lecture(
+    video_id: str,
+    email: Optional[str] = Query(None, description="Signed-in user email for LMS library")
+):
+    """Generate and persist a transcript for an imported lecture without captions."""
+    if not re.fullmatch(r"\d+", video_id):
+        raise HTTPException(status_code=400, detail="A valid Vimeo video ID is required.")
+
+    service_url = os.getenv("TRANSCRIPTION_SERVICE_URL", "").strip().rstrip("/")
+    if not service_url:
+        raise HTTPException(status_code=503, detail="Video transcription is not configured.")
+
+    saved = db_manager.get_saved_video(video_id)
+    if not saved:
+        raise HTTPException(status_code=404, detail="Import this lecture before generating its transcript.")
+    existing_cues = saved.get("cues") or []
+    if any(str(cue.get("text") or "").strip() for cue in existing_cues):
+        raise HTTPException(status_code=409, detail="This lecture already has a transcript.")
+
+    source_url = f"https://vimeo.com/{video_id}"
+    try:
+        response = requests.post(
+            f"{service_url}/transcribe/url",
+            json={"url": source_url},
+            timeout=(15, 900),
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Transcription service request failed: {exc}") from exc
+
+    try:
+        transcription = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Transcription service returned invalid JSON.") from exc
+    if not isinstance(transcription, dict):
+        raise HTTPException(status_code=502, detail="Transcription service returned an invalid response.")
+
+    raw_segments = transcription.get("segments")
+    cues = []
+    if isinstance(raw_segments, list):
+        for segment in raw_segments:
+            if not isinstance(segment, dict):
+                continue
+            text = str(segment.get("text") or "").strip()
+            start = segment.get("start")
+            if text and isinstance(start, (int, float)) and start >= 0:
+                cues.append({"time": format_timestamp(str(datetime.timedelta(seconds=int(start)))), "text": text})
+    if not cues:
+        transcript_text = str(transcription.get("text") or "").strip()
+        if transcript_text:
+            cues = [{"time": "00:00", "text": transcript_text}]
+    if not cues:
+        raise HTTPException(status_code=502, detail="Transcription service returned no transcript text.")
+
+    title = saved.get("title") or f"Vimeo Video {video_id}"
+    duration = saved.get("duration") or "Unknown"
+    course_name = saved.get("course_name")
+    db_manager.save_video_transcript(
+        video_id,
+        title,
+        duration,
+        source_url,
+        "Groq Whisper",
+        cues,
+        [],
+        user_email=email,
+        course_name=course_name,
+    )
+    algolia_service.ingest_cues(video_id, title, cues)
+    pinecone_chunks = pinecone_rag_engine.ingest_transcript(video_id, title, cues)
+    if redis_cache:
+        redis_cache.invalidate_video(video_id)
+
+    return {
+        **saved,
+        "videoId": video_id,
+        "title": title,
+        "duration": duration,
+        "sourceUrl": saved.get("sourceUrl") or source_url,
+        "captionLabel": "Groq Whisper",
+        "cues": cues,
+        "summarySections": saved.get("summarySections") or [],
+        "transcript_available": True,
+        "transcript_message": None,
+        "pineconeIndexedChunks": pinecone_chunks,
+        "cached": False,
+    }
 
 
 def determine_lecture_quiz_count(cues: Optional[List[Dict[str, Any]]] = None, duration_str: Optional[str] = None) -> int:

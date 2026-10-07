@@ -15,6 +15,9 @@ export default function LectureWorkspace({
   setActiveData,
   navigateTo,
   handleTranscribe,
+  handleGenerateTranscript,
+  transcriptionLoading,
+  transcriptionError,
   iframeRef,
   copied,
   handleCopyTranscript,
@@ -112,6 +115,9 @@ export default function LectureWorkspace({
         effectiveCourses={effectiveCourses}
         setActiveData={setActiveData}
         navigateTo={navigateTo}
+        handleGenerateTranscript={handleGenerateTranscript}
+        transcriptionLoading={transcriptionLoading}
+        transcriptionError={transcriptionError}
         iframeRef={iframeRef}
         copied={copied}
         handleCopyTranscript={handleCopyTranscript}

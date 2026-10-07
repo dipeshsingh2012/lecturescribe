@@ -107,6 +107,38 @@ describe('LecturePlayer', () => {
     expect(screen.getByText('Saved in Drive')).toBeInTheDocument();
   });
 
+  it('offers transcript generation when the lecture has no transcript', () => {
+    const handleGenerateTranscript = vi.fn();
+    render(
+      <LecturePlayer
+        activeData={{ videoId: '123', title: 'No Captions', cues: [], transcript_available: false }}
+        setSelectedCourse={vi.fn()}
+        setActiveData={vi.fn()}
+        navigateTo={vi.fn()}
+        currentTheme={mockTheme}
+        handleGenerateTranscript={handleGenerateTranscript}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate transcript/i }));
+    expect(handleGenerateTranscript).toHaveBeenCalledOnce();
+  });
+
+  it('hides transcript generation when cues are already available', () => {
+    render(
+      <LecturePlayer
+        activeData={{ videoId: '123', title: 'Has Captions', cues: [{ time: '00:00', text: 'Hello' }] }}
+        setSelectedCourse={vi.fn()}
+        setActiveData={vi.fn()}
+        navigateTo={vi.fn()}
+        currentTheme={mockTheme}
+        handleGenerateTranscript={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Generate transcript/i })).toBeNull();
+  });
+
   it('renders breadcrumb with hovers and truncated styles for long course and lecture names', () => {
     const longData = {
       videoId: '998877',

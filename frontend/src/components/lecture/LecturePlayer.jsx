@@ -3,12 +3,15 @@ import {
   Box,
   Button,
   Typography,
-  Tooltip
+  Tooltip,
+  Alert,
+  CircularProgress
 } from '@mui/material';
 import {
   Folder,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  AudioLines
 } from 'lucide-react';
 import { normalizeCourseSlug } from '../../utils/routing';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
@@ -32,7 +35,10 @@ export default function LecturePlayer({
   lectureResources = [],
   lectureResourcesLoading,
   handleDeleteResource,
-  currentTheme
+  currentTheme,
+  handleGenerateTranscript,
+  transcriptionLoading = false,
+  transcriptionError = null
 }) {
   if (!activeData) return null;
 
@@ -46,6 +52,8 @@ export default function LecturePlayer({
     activeCourseData?.lectures?.find(l => String(l.video_id) === String(activeData.videoId))?.drive_folder_url ||
     activeCourseData?.lectures?.find(l => String(l.video_id) === String(activeData.videoId))?.driveFolderUrl
   );
+  const hasTranscript = Array.isArray(activeData.cues) &&
+    activeData.cues.some((cue) => String(cue?.text || '').trim());
 
   return (
     <div style={{
@@ -228,6 +236,24 @@ export default function LecturePlayer({
           </a>
         )}
       </div>
+
+      {!hasTranscript && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}>
+          <Button
+            variant="contained"
+            onClick={handleGenerateTranscript}
+            disabled={!handleGenerateTranscript || transcriptionLoading}
+            startIcon={transcriptionLoading
+              ? <CircularProgress size={16} color="inherit" />
+              : <AudioLines size={17} />}
+          >
+            {transcriptionLoading ? 'Generating transcript…' : 'Generate transcript'}
+          </Button>
+          {transcriptionError && (
+            <Alert severity="error" role="alert">{transcriptionError}</Alert>
+          )}
+        </Box>
+      )}
 
       {/* Lecture Resources Shelf */}
       <LectureResourcesShelf

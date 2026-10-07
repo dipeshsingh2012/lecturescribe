@@ -93,7 +93,7 @@ export default function App() {
       if (library.fetchUserLibrary) library.fetchUserLibrary(auth.googleUser?.email);
     }
   });
-  const { activeData, setActiveData, loading, error, cacheNotice, setCacheNotice, urlInput, setUrlInput, handleTranscribe, handlePasteUrl } = lecture;
+  const { activeData, setActiveData, loading, error, cacheNotice, setCacheNotice, urlInput, setUrlInput, handleTranscribe, handleGenerateTranscript, transcriptionLoading, transcriptionError, handlePasteUrl } = lecture;
 
   useEffect(() => {
     setActiveLectureRef(activeData);
@@ -256,6 +256,9 @@ export default function App() {
             setActiveData={setActiveData}
             navigateTo={navigateTo}
             handleTranscribe={handleTranscribe}
+            handleGenerateTranscript={handleGenerateTranscript}
+            transcriptionLoading={transcriptionLoading}
+            transcriptionError={transcriptionError}
             iframeRef={player.iframeRef}
             copied={player.copied}
             handleCopyTranscript={player.handleCopyTranscript}

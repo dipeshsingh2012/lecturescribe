@@ -2076,27 +2076,6 @@ def get_calendar_events(
         raise HTTPException(status_code=500, detail=f"Failed to fetch calendar agenda: {str(e)}")
 
 
-@app.post("/api/calendar/test-alert")
-def send_test_calendar_alert():
-    """Trigger an immediate test WhatsApp alert containing today's agenda."""
-    try:
-        events = calendar_service.get_events(refresh=False)
-        today = datetime.datetime.now(ZoneInfo("Asia/Kolkata")).date()
-        today_events = [
-            e for e in events 
-            if datetime.datetime.fromisoformat(e["start"]).astimezone(ZoneInfo("Asia/Kolkata")).date() == today
-        ]
-        result = whatsapp_service.dispatch_test_alert(today_events)
-        return {
-            "status": "success",
-            "events_included": len(today_events),
-            "dispatch_result": result
-        }
-    except Exception as e:
-        print(f"❌ [Test Alert Error]: {e}")
-        raise HTTPException(status_code=500, detail=f"Test alert failed: {str(e)}")
-
-
 @app.post("/api/cron/trigger-alert")
 def trigger_cron_alert(
     slot: str = Query(..., description="Target alert slot: '8am' or '4pm' (IST)"),

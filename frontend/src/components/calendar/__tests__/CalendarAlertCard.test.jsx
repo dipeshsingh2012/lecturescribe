@@ -99,19 +99,6 @@ describe('CalendarAlertCard Component', () => {
           json: async () => mockAgendaData
         });
       }
-      if (url.includes('/api/calendar/test-alert')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            status: 'success',
-            events_included: 2,
-            dispatch_result: {
-              status: 'simulated',
-              recipient: '+919876543210'
-            }
-          })
-        });
-      }
       return Promise.reject(new Error(`Unhandled URL: ${url}`));
     });
   });
@@ -151,20 +138,15 @@ describe('CalendarAlertCard Component', () => {
     });
   });
 
-  it('triggers test alert dispatch on button click', async () => {
+  it('does not expose a manual WhatsApp test alert action', async () => {
     render(<CalendarAlertCard currentTheme={mockTheme} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Test WhatsApp Alert/i })).toBeInTheDocument();
+      expect(screen.getByText(/Academic Schedule & Alerts/i)).toBeInTheDocument();
     });
 
-    const testBtn = screen.getByRole('button', { name: /Test WhatsApp Alert/i });
-    fireEvent.click(testBtn);
-
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/api/calendar/test-alert', { method: 'POST' });
-      expect(screen.getByText(/Twilio credentials not configured yet/i)).toBeInTheDocument();
-    });
+    expect(screen.queryByRole('button', { name: /Test WhatsApp Alert/i })).not.toBeInTheDocument();
+    expect(global.fetch).not.toHaveBeenCalledWith('/api/calendar/test-alert', expect.anything());
   });
 
   it('renders clickable meeting link buttons with correct URLs and target attributes', async () => {

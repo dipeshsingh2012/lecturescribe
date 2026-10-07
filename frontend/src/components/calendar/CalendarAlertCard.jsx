@@ -6,15 +6,13 @@ import {
   Chip,
   IconButton,
   Tooltip,
-  CircularProgress,
-  Collapse
+  CircularProgress
 } from '@mui/material';
 import {
   Calendar as CalendarIcon,
   Clock,
   MapPin,
   RefreshCw,
-  Send,
   AlertTriangle,
   CheckCircle2,
   FileText,
@@ -23,7 +21,6 @@ import {
   Sun,
   Coffee,
   Moon,
-  Info,
   Video,
   ExternalLink,
   Copy,
@@ -213,8 +210,6 @@ export default function CalendarAlertCard({ currentTheme }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('today'); // 'today' | 'upcoming'
-  const [testAlertLoading, setTestAlertLoading] = useState(false);
-  const [testAlertMessage, setTestAlertMessage] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const [expandedIds, setExpandedIds] = useState(new Set());
 
@@ -262,43 +257,6 @@ export default function CalendarAlertCard({ currentTheme }) {
   useEffect(() => {
     fetchAgenda(false);
   }, [fetchAgenda]);
-
-  const handleSendTestAlert = async () => {
-    setTestAlertLoading(true);
-    setTestAlertMessage(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/calendar/test-alert`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || 'Test alert dispatch failed');
-      }
-
-      const dispatchInfo = data.dispatch_result || {};
-      if (dispatchInfo.status === 'sent') {
-        setTestAlertMessage({
-          type: 'success',
-          text: `WhatsApp test alert dispatched to ${dispatchInfo.recipient || 'your phone'} via Twilio!`
-        });
-      } else if (dispatchInfo.status === 'simulated') {
-        setTestAlertMessage({
-          type: 'info',
-          text: 'Twilio credentials not configured yet — alert payload generated and logged in backend console!'
-        });
-      } else {
-        setTestAlertMessage({
-          type: 'warning',
-          text: `Alert status: ${dispatchInfo.status} (${dispatchInfo.error || 'Check server logs'})`
-        });
-      }
-    } catch (err) {
-      setTestAlertMessage({
-        type: 'error',
-        text: err.message || 'Failed to dispatch test alert'
-      });
-    } finally {
-      setTestAlertLoading(false);
-    }
-  };
 
   const renderEventItem = (evt) => {
     const style = CATEGORY_STYLES[evt.category] || CATEGORY_STYLES.general;
@@ -566,72 +524,8 @@ export default function CalendarAlertCard({ currentTheme }) {
             </IconButton>
           </Tooltip>
 
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={testAlertLoading ? <CircularProgress size={14} color="inherit" /> : <Send size={14} />}
-            disabled={testAlertLoading}
-            onClick={handleSendTestAlert}
-            sx={{
-              textTransform: 'none',
-              fontWeight: 700,
-              fontSize: '0.8rem',
-              borderRadius: 2.2,
-              px: 2,
-              py: 0.7,
-              bgcolor: '#25D366', // WhatsApp Brand Green
-              color: '#ffffff',
-              boxShadow: '0 2px 8px rgba(37, 211, 102, 0.25)',
-              '&:hover': { bgcolor: '#1eb855' }
-            }}
-          >
-            {testAlertLoading ? 'Dispatching...' : 'Test WhatsApp Alert'}
-          </Button>
         </Box>
       </Box>
-
-      {/* Test Alert Notification Toast */}
-      <Collapse in={!!testAlertMessage}>
-        {testAlertMessage && (
-          <Box
-            sx={{
-              p: 1.5,
-              mb: 2.5,
-              borderRadius: 2.5,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1.5,
-              fontSize: '0.85rem',
-              fontWeight: 600,
-              ...(testAlertMessage.type === 'success' && {
-                bgcolor: 'rgba(16, 185, 129, 0.1)',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
-                color: '#10b981'
-              }),
-              ...(testAlertMessage.type === 'info' && {
-                bgcolor: 'rgba(59, 130, 246, 0.1)',
-                border: '1px solid rgba(59, 130, 246, 0.3)',
-                color: '#3b82f6'
-              }),
-              ...(testAlertMessage.type === 'error' && {
-                bgcolor: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-                color: '#ef4444'
-              })
-            }}
-          >
-            {testAlertMessage.type === 'success' && <CheckCircle2 size={16} />}
-            {testAlertMessage.type === 'info' && <Info size={16} />}
-            {testAlertMessage.type === 'error' && <AlertTriangle size={16} />}
-            <Typography variant="caption" sx={{ fontWeight: 600, flex: 1 }}>
-              {testAlertMessage.text}
-            </Typography>
-            <IconButton size="small" onClick={() => setTestAlertMessage(null)} sx={{ color: 'inherit', p: 0.5 }}>
-              ×
-            </IconButton>
-          </Box>
-        )}
-      </Collapse>
 
       {/* Counts Summary Bar */}
       {agenda?.counts && (

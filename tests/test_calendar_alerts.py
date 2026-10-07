@@ -183,13 +183,9 @@ class TestCalendarAlerts(unittest.TestCase):
             self.assertIn("counts", data)
             self.assertIn("upcoming", data)
 
-    def test_api_calendar_test_alert_endpoint(self):
-        with patch.object(calendar_service, "fetch_raw_feed", return_value=SAMPLE_ICS_CONTENT.decode("utf-8")):
-            res = self.client.post("/api/calendar/test-alert")
-            self.assertEqual(res.status_code, 200)
-            data = res.json()
-            self.assertEqual(data["status"], "success")
-            self.assertIn("dispatch_result", data)
+    def test_api_calendar_test_alert_endpoint_is_removed(self):
+        res = self.client.post("/api/calendar/test-alert")
+        self.assertEqual(res.status_code, 405)
 
     def test_api_cron_trigger_endpoint_security(self):
         with patch.dict(os.environ, {"CRON_SECRET": "my_super_secret_cron_key"}):

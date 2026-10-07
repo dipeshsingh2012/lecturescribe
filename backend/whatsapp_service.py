@@ -334,15 +334,5 @@ class TwilioWhatsAppService:
 
         return self.send_whatsapp_message(message_text)
 
-    def dispatch_test_alert(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Send immediate alert containing today's schedule."""
-        message_text = format_whatsapp_message(
-            events=events,
-            slot_label="Academic Schedule Preview",
-            tomorrow_preview=None
-        )
-        return self.send_whatsapp_message(message_text)
-
-
 # Global singleton instance
 whatsapp_service = TwilioWhatsAppService()

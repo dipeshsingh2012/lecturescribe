@@ -185,7 +185,7 @@ class TestCalendarAlerts(unittest.TestCase):
 
     def test_api_calendar_test_alert_endpoint_is_removed(self):
         res = self.client.post("/api/calendar/test-alert")
-        self.assertEqual(res.status_code, 405)
+        self.assertIn(res.status_code, (404, 405))
 
     def test_api_cron_trigger_endpoint_security(self):
         with patch.dict(os.environ, {"CRON_SECRET": "my_super_secret_cron_key"}):

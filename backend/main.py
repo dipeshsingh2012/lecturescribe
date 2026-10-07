@@ -248,9 +248,21 @@ def transcribe_lecture(
             json={"url": source_url},
             timeout=(15, 900),
         )
-        response.raise_for_status()
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Transcription service request failed: {exc}") from exc
+
+    if not response.ok:
+        try:
+            error_body = response.json()
+        except ValueError:
+            error_body = {}
+        service_detail = error_body.get("detail") if isinstance(error_body, dict) else None
+        if not isinstance(service_detail, str) or not service_detail.strip():
+            service_detail = f"Transcription service returned HTTP {response.status_code}."
+        raise HTTPException(
+            status_code=502,
+            detail=f"Transcription service failed: {service_detail.strip()[:1000]}",
+        )
 
     try:
         transcription = response.json()

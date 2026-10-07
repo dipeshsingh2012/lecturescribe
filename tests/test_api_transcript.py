@@ -167,7 +167,7 @@ Today we discuss forward kinematics.
             "cues": [],
         }
         mock_post.return_value = SimpleNamespace(
-            raise_for_status=lambda: None,
+            ok=True,
             json=lambda: {
                 "text": "Welcome to class.",
                 "segments": [{"start": 65.3, "text": " Welcome to class. "}],
@@ -193,6 +193,29 @@ Today we discuss forward kinematics.
         mock_algolia.assert_called_once_with("1233458452", "Introduction to Generative AI", data["cues"])
         mock_pinecone.assert_called_once_with("1233458452", "Introduction to Generative AI", data["cues"])
         mock_invalidate.assert_called_once_with("1233458452")
+
+    @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.requests.post")
+    def test_transcription_endpoint_surfaces_transcription_service_error(self, mock_post, mock_get_video):
+        mock_get_video.return_value = {
+            "title": "Introduction to Generative AI",
+            "duration": "45m",
+            "cues": [],
+        }
+        mock_post.return_value = SimpleNamespace(
+            ok=False,
+            status_code=502,
+            json=lambda: {"detail": "GROQ_API_KEY is not configured."},
+        )
+
+        with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):
+            response = self.client.post("/api/lecture/1233458452/transcribe")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.json()["detail"],
+            "Transcription service failed: GROQ_API_KEY is not configured.",
+        )
 
     @patch("backend.main.db_manager.get_saved_video", return_value=None)
     def test_transcription_endpoint_requires_an_imported_video(self, _mock_get_video):

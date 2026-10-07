@@ -30,6 +30,14 @@ export const getLectureIdFromPath = (path = (typeof window !== 'undefined' ? win
   return parsePathRoute(path).videoId;
 };
 
+export const getLectureTabFromPath = (path = (typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/')) => {
+  if (!parsePathRoute(path).videoId) return 'transcript';
+
+  const query = path.includes('?') ? path.slice(path.indexOf('?') + 1).split('#')[0] : '';
+  const tab = new URLSearchParams(query).get('tab');
+  return tab === 'tutor' || tab === 'quiz' ? tab : 'transcript';
+};
+
 export const getCourseNameFromPath = (path = (typeof window !== 'undefined' ? window.location.pathname : '/')) => {
   return parsePathRoute(path).courseName;
 };

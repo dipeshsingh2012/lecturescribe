@@ -4,7 +4,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 
 import { useThemeStore, LMS_THEMES, applyThemeCssVariables, createAppMuiTheme } from './store/themeStore';
 import { cleanSubmissionFallback } from './utils/formatters';
-import { parsePathRoute, normalizeCourseSlug } from './utils/routing';
+import { parsePathRoute, getLectureTabFromPath, normalizeCourseSlug } from './utils/routing';
 
 import { useGoogleAuth } from './hooks/useGoogleAuth';
 import { useUserLibrary } from './hooks/useUserLibrary';
@@ -24,13 +24,7 @@ import UploadResourceModal from './components/modals/UploadResourceModal';
 import ResourcePreviewModal from './components/modals/ResourcePreviewModal';
 
 export default function App() {
-  const [activeTab, setActiveTabState] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const tabParam = new URLSearchParams(window.location.search).get('tab');
-      if (tabParam === 'tutor' || tabParam === 'transcript' || tabParam === 'quiz') return tabParam;
-    }
-    return 'transcript';
-  });
+  const [activeTab, setActiveTabState] = useState(() => getLectureTabFromPath());
 
   const setActiveTab = (tab) => {
     setActiveTabState(tab);
@@ -61,6 +55,7 @@ export default function App() {
     } catch (e) {
       console.warn("Navigation history warning:", e);
     }
+    setActiveTabState(getLectureTabFromPath(path));
     setCurrentPath(path);
   };
 
@@ -139,8 +134,7 @@ export default function App() {
       setSelectedCourse(courseName);
 
       if (typeof window !== 'undefined') {
-        const tabParam = new URLSearchParams(window.location.search).get('tab');
-        setActiveTabState(tabParam === 'tutor' ? 'tutor' : tabParam === 'quiz' ? 'quiz' : 'transcript');
+        setActiveTabState(getLectureTabFromPath(`${current}${window.location.search}`));
       }
 
       if (videoId) {

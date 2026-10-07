@@ -239,7 +239,14 @@ def transcribe_lecture(
         raise HTTPException(status_code=404, detail="Import this lecture before generating its transcript.")
     existing_cues = saved.get("cues") or []
     if any(str(cue.get("text") or "").strip() for cue in existing_cues):
-        raise HTTPException(status_code=409, detail="This lecture already has a transcript.")
+        return {
+            **saved,
+            "videoId": video_id,
+            "cues": existing_cues,
+            "transcript_available": True,
+            "transcript_message": None,
+            "cached": True,
+        }
 
     source_url = f"https://vimeo.com/{video_id}"
     try:

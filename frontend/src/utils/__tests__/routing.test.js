@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   parsePathRoute,
+  getLectureTabFromPath,
   getLectureIdFromPath,
   getCourseNameFromPath,
   normalizeCourseSlug,
@@ -48,6 +49,19 @@ describe('routing utility functions', () => {
     it('extracts lecture ID correctly', () => {
       expect(getLectureIdFromPath('/course/math/lecture/555')).toBe('555');
       expect(getLectureIdFromPath('/course/math')).toBeNull();
+    });
+
+    describe('getLectureTabFromPath', () => {
+      it('reads tab selection only from lecture routes', () => {
+        expect(getLectureTabFromPath('/lecture/123?tab=quiz')).toBe('quiz');
+        expect(getLectureTabFromPath('/course/data-science/lecture/123?tab=tutor')).toBe('tutor');
+      });
+
+      it('defaults to transcript for other pages and lecture routes without a tab', () => {
+        expect(getLectureTabFromPath('/course/data-science?tab=quiz')).toBe('transcript');
+        expect(getLectureTabFromPath('/?tab=quiz')).toBe('transcript');
+        expect(getLectureTabFromPath('/lecture/123')).toBe('transcript');
+      });
     });
 
     it('extracts course name correctly', () => {

@@ -217,6 +217,29 @@ Today we discuss forward kinematics.
             "Transcription service failed: GROQ_API_KEY is not configured.",
         )
 
+    @patch("backend.main.requests.post")
+    @patch("backend.main.db_manager.get_saved_video")
+    def test_transcription_endpoint_returns_existing_cues_instead_of_conflict(
+        self, mock_get_video, mock_post
+    ):
+        saved_cues = [{"time": "00:12", "text": "The probability density function integrates to one."}]
+        mock_get_video.return_value = {
+            "videoId": "1233458452",
+            "title": "Introduction to Generative AI",
+            "duration": "45m",
+            "cues": saved_cues,
+            "summarySections": [],
+        }
+
+        with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):
+            response = self.client.post("/api/lecture/1233458452/transcribe")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["cues"], saved_cues)
+        self.assertTrue(response.json()["transcript_available"])
+        self.assertTrue(response.json()["cached"])
+        mock_post.assert_not_called()
+
     @patch("backend.main.db_manager.get_saved_video", return_value=None)
     def test_transcription_endpoint_requires_an_imported_video(self, _mock_get_video):
         with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import socket
-import sys
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,42 +163,50 @@ def test_vimeo_url_resolves_and_downloads_media(monkeypatch, tmp_path):
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
         ],
     )
-    observed = {}
-
-    class MockYoutubeDL:
-        def __init__(self, options):
-            observed["options"] = options
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            del exc_type, exc_value, traceback
-            return None
-
-        def extract_info(self, url, download):
-            observed["url"] = url
-            observed["download"] = download
-            return {"id": "123456789", "ext": "m4a"}
-
-        def prepare_filename(self, info):
-            del info
-            path = tmp_path / "source.m4a"
-            path.write_bytes(MOCK_AUDIO_FIXTURE)
-            return str(path)
-
-    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=MockYoutubeDL))
-    source = transcription.download_media_url(
-        "https://vimeo.com/123456789?share=copy",
-        tmp_path / "source.media",
+    stream_url = "https://vod-adaptive-ak.vimeocdn.com/signed/playlist.m3u8"
+    config_response = SimpleNamespace(
+        is_redirect=False,
+        raise_for_status=lambda: None,
+        json=lambda: {
+            "video": {"id": 123456789, "privacy": "anybody"},
+            "request": {
+                "files": {
+                    "hls": {
+                        "default_cdn": "ak",
+                        "cdns": {"ak": {"url": stream_url}},
+                    }
+                }
+            },
+        },
     )
 
-    assert source == tmp_path / "source.m4a"
-    assert source.read_bytes() == MOCK_AUDIO_FIXTURE
-    assert observed["url"] == "https://vimeo.com/123456789?share=copy"
-    assert observed["download"] is True
-    assert observed["options"]["noplaylist"] is True
-    assert observed["options"]["extractor_args"] == {"vimeo": {"client": ["android"]}}
+    with patch.object(transcription.requests, "get", return_value=config_response) as get_config:
+        source = transcription.download_media_url(
+            "https://vimeo.com/123456789?share=copy",
+            tmp_path / "source.media",
+        )
+
+    assert source == stream_url
+    get_config.assert_called_once()
+    assert get_config.call_args.args[0] == "https://player.vimeo.com/video/123456789/config"
+    assert get_config.call_args.kwargs["allow_redirects"] is False
+
+
+def test_extract_audio_uses_safe_protocols_for_vimeo_hls(tmp_path):
+    observed_args = []
+
+    def mock_ffmpeg(args):
+        observed_args.append(args)
+        Path(args[-1]).write_bytes(b"mock-audio")
+
+    with patch.object(transcription, "_run_ffmpeg", side_effect=mock_ffmpeg):
+        chunks = transcription.extract_audio(
+            "https://vod-adaptive-ak.vimeocdn.com/signed/playlist.m3u8",
+            tmp_path,
+        )
+
+    assert chunks == [tmp_path / "audio.mp3"]
+    assert observed_args[0][:2] == ["-protocol_whitelist", "https,tls,tcp,crypto"]
 
 
 def test_vimeo_url_rejects_non_video_paths(tmp_path):

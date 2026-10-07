@@ -8,7 +8,7 @@ Standalone FastAPI service intended for Google Cloud Run. It accepts media uploa
 - `POST /transcribe` — `multipart/form-data` with a `file` field containing audio or video.
 - `POST /transcribe/url` — JSON body such as `{"url":"https://example.com/lecture.mp4"}` or `{"url":"https://vimeo.com/123456789"}`.
 
-Successful responses contain `text`, timed `segments` when returned by Whisper, `model`, and `chunks`. Direct media URL inputs must use HTTPS on port 443, resolve only to public IP addresses, and must not redirect. Vimeo video-page URLs are resolved through yt-dlp's unauthenticated Android client and must start from a validated public Vimeo host. Vimeo videos that require account access or are restricted to specific embeds still cannot be downloaded by this service.
+Successful responses contain `text`, timed `segments` when returned by Whisper, `model`, and `chunks`. Direct media URL inputs must use HTTPS on port 443, resolve only to public IP addresses, and must not redirect. Vimeo page URLs are resolved through Vimeo's public player config and HLS CDN URLs. Only videos Vimeo identifies as public are accepted; account-restricted and embed-restricted videos are unsupported.
 
 Audio at or below 25 MB is sent to Groq as one request. Larger extracted MP3 files are split into 30-minute chunks, each checked against Groq's 25 MB request limit. Rate limits and transient upstream failures are retried with bounded exponential backoff.
 

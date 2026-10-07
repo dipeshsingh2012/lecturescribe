@@ -5,7 +5,7 @@ import AITutor from '../AITutor';
 
 describe('AITutor', () => {
   it('warns when tutor responses cannot be grounded in a transcript', () => {
-    render(
+    const { rerender } = render(
       <AITutor
         webSearchEnabled={false}
         setWebSearchEnabled={vi.fn()}
@@ -23,11 +23,38 @@ describe('AITutor', () => {
         chatEndRef={{ current: null }}
         handleSendMessage={vi.fn()}
         transcriptAvailable={false}
+        videoId="lecture-1"
       />
     );
 
     expect(screen.getByRole('status')).toHaveTextContent(/imported without a transcript/i);
     expect(screen.getByRole('status')).toHaveTextContent(/lecture-grounded answers/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss transcript notice/i }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    rerender(
+      <AITutor
+        webSearchEnabled={false}
+        setWebSearchEnabled={vi.fn()}
+        clearChatHistory={vi.fn()}
+        chatMessages={[]}
+        setChatMessages={vi.fn()}
+        viewMode="learning"
+        submissionSummaries={{}}
+        cleanSubmissionFallback={vi.fn()}
+        handleCueClick={vi.fn()}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        chatInputRef={{ current: null }}
+        chatEndRef={{ current: null }}
+        handleSendMessage={vi.fn()}
+        transcriptAvailable={false}
+        videoId="lecture-2"
+      />
+    );
+    expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
   it('renders chat header, web toggle, and new chat button without model selector', () => {

@@ -190,6 +190,7 @@ export default function LectureWorkspace({
           chatEndRef={chatEndRef}
           handleSendMessage={handleSendMessage}
           transcriptAvailable={transcriptAvailable}
+          videoId={activeData?.videoId}
         />
       )}
     </div>

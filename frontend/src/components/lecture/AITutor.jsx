@@ -16,7 +16,8 @@ import {
   Send,
   Check,
   Copy,
-  ChevronDown
+  ChevronDown,
+  X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
@@ -46,12 +47,18 @@ export default function AITutor({
   chatInputRef,
   chatEndRef,
   handleSendMessage,
-  transcriptAvailable = true
+  transcriptAvailable = true,
+  videoId
 }) {
   const [internalCopiedResponseId, setInternalCopiedResponseId] = React.useState(null);
   const [showScrollBottom, setShowScrollBottom] = React.useState(false);
+  const [showTranscriptNotice, setShowTranscriptNotice] = React.useState(true);
   const messagesContainerRef = React.useRef(null);
   const activeCopiedResponseId = copiedResponseId !== undefined && copiedResponseId !== null ? copiedResponseId : internalCopiedResponseId;
+
+  React.useEffect(() => {
+    setShowTranscriptNotice(true);
+  }, [videoId]);
 
   React.useEffect(() => {
     if (chatInputRef?.current) {
@@ -198,7 +205,7 @@ export default function AITutor({
         </div>
       </div>
 
-      {!transcriptAvailable && (
+      {!transcriptAvailable && showTranscriptNotice && (
         <div
           role="status"
           style={{
@@ -208,10 +215,34 @@ export default function AITutor({
             color: 'var(--text-primary)',
             fontSize: '0.8rem',
             lineHeight: 1.5,
-            flexShrink: 0
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: '12px'
           }}
         >
-          This video was imported without a transcript. The tutor can still answer general questions, but lecture-grounded answers and transcript summaries are unavailable.
+          <span>
+            This video was imported without a transcript. The tutor can still answer general questions, but lecture-grounded answers and transcript summaries are unavailable.
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss transcript notice"
+            onClick={() => setShowTranscriptNotice(false)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              padding: 2,
+              border: 0,
+              background: 'transparent',
+              color: 'inherit',
+              cursor: 'pointer'
+            }}
+          >
+            <X size={16} />
+          </button>
         </div>
       )}
 

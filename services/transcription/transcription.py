@@ -75,8 +75,8 @@ def download_remote_media(url: str, destination: Path) -> int:
     return total_bytes
 
 
-def download_media_url(url: str, destination: Path) -> Path:
-    """Download direct media URLs or resolve Vimeo pages with yt-dlp."""
+def download_media_url(url: str, destination: Path) -> Path | str:
+    """Download direct media URLs or resolve public Vimeo pages to an HLS stream."""
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").lower().rstrip(".")
     if hostname not in {"vimeo.com", "www.vimeo.com"}:
@@ -88,37 +88,67 @@ def download_media_url(url: str, destination: Path) -> Path:
         raise ValueError("Only Vimeo video page URLs are supported.")
     validate_public_https_url(url)
 
+    config_url = f"https://player.vimeo.com/video/{parsed.path.strip('/')}/config"
+    validate_public_https_url(config_url)
     try:
-        import yt_dlp
-    except ImportError as exc:
-        raise TranscriptionError("yt-dlp is not installed in the transcription service.") from exc
+        response = requests.get(
+            config_url,
+            headers={
+                "Accept": "application/json",
+                "Referer": "https://vimeo.com/",
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                ),
+            },
+            timeout=(10, 30),
+            allow_redirects=False,
+        )
+        if response.is_redirect:
+            raise ValueError("Vimeo player config redirects are not supported.")
+        response.raise_for_status()
+        config = response.json()
+    except requests.RequestException as exc:
+        raise TranscriptionError(f"Unable to fetch public Vimeo player config: {exc}") from exc
 
-    output_template = str(destination.with_suffix(".%(ext)s"))
-    options: dict[str, Any] = {
-        "format": "bestaudio/best",
-        "outtmpl": output_template,
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "max_filesize": MAX_SOURCE_BYTES,
-        "socket_timeout": 30,
-        "retries": 3,
-        "extractor_args": {"vimeo": {"client": ["android"]}},
-    }
-    try:
-        with yt_dlp.YoutubeDL(options) as downloader:
-            info = downloader.extract_info(url, download=True)
-            downloaded_path = Path(downloader.prepare_filename(info))
-    except Exception as exc:
-        raise TranscriptionError(f"Unable to download Vimeo media: {exc}") from exc
+    if not isinstance(config, dict):
+        raise TranscriptionError("Vimeo returned an invalid player config.")
+    video = config.get("video") or {}
+    if not isinstance(video, dict):
+        raise TranscriptionError("Vimeo returned invalid video metadata.")
+    if str(video.get("id")) != parsed.path.strip("/"):
+        raise TranscriptionError("Vimeo player config did not match the requested video.")
+    if video.get("privacy") != "anybody":
+        raise ValueError("This Vimeo video is not publicly accessible.")
 
-    if not downloaded_path.is_file():
-        raise TranscriptionError("yt-dlp completed without producing a media file.")
-    if downloaded_path.stat().st_size > MAX_SOURCE_BYTES:
-        raise ValueError("Vimeo media exceeds the 2 GiB source limit.")
-    if downloaded_path.stat().st_size == 0:
-        raise ValueError("Vimeo returned an empty media file.")
-    return downloaded_path
+    files = (config.get("request") or {}).get("files") or {}
+    hls = files.get("hls") or {}
+    cdns = hls.get("cdns") or {}
+    default_cdn = hls.get("default_cdn")
+    candidates = [cdns[default_cdn]] if default_cdn in cdns else []
+    candidates.extend(stream for key, stream in cdns.items() if key != default_cdn)
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        stream_url = candidate.get("url")
+        if not isinstance(stream_url, str) or not stream_url:
+            continue
+        parsed_stream = urlparse(stream_url)
+        stream_host = (parsed_stream.hostname or "").lower().rstrip(".")
+        if (
+            parsed_stream.scheme != "https"
+            or parsed_stream.port not in (None, 443)
+            or not (stream_host.endswith(".vimeocdn.com") or stream_host == "vimeocdn.com")
+        ):
+            continue
+        try:
+            validate_public_https_url(stream_url)
+        except ValueError:
+            continue
+        return stream_url
+
+    raise TranscriptionError("Vimeo player config did not contain a public HLS stream.")
 
 
 def _run_ffmpeg(args: list[str]) -> None:
@@ -139,10 +169,16 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise TranscriptionError(f"ffmpeg could not extract audio: {details}")
 
 
-def extract_audio(source: Path, workspace: Path) -> list[Path]:
+def extract_audio(source: Path | str, workspace: Path) -> list[Path]:
     """Convert media to 16 kHz mono MP3, splitting oversized audio into chunks."""
     extracted = workspace / "audio.mp3"
+    source_args = (
+        ["-protocol_whitelist", "https,tls,tcp,crypto"]
+        if isinstance(source, str)
+        else []
+    )
     _run_ffmpeg([
+        *source_args,
         "-i", str(source),
         "-vn",
         "-ac", "1",
@@ -244,7 +280,7 @@ def _transcribe_chunk(path: Path, api_key: str) -> dict[str, Any]:
     raise TranscriptionError(f"Groq transcription failed after retries: {last_error}")
 
 
-def transcribe_media_file(source: Path) -> dict[str, Any]:
+def transcribe_media_file(source: Path | str) -> dict[str, Any]:
     """Extract audio and transcribe each chunk with Groq Whisper."""
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:

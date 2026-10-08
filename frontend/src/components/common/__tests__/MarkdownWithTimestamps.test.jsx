@@ -140,4 +140,49 @@ describe('MarkdownWithTimestamps', () => {
     expect(container.textContent).not.toContain('\\[');
     expect(container.textContent).not.toContain('\\]');
   });
+
+  it('renders lecture summary with mixed math and timestamps without corrupting delimiters', () => {
+    const handleCueClick = vi.fn();
+    const content = `Announcements and Schedule Updates
+## Review of Linearly Independent Sets and Span [08:00] The lecture transitions into revisiting core linear algebra concepts from previous reading assignments, specifically focusing on linear independence and vector spaces [08:34, 13:26]. [13:31] A set of vectors $\{v_1, v_2, \\dots, v_k\}$ in $\\mathbb{R}^n$ is defined as **linearly independent** if the only way to generate the zero vector via a linear combination is by setting all scalars to zero ($c_1v_1 + c_2v_2 + \\dots + c_kv_k = 0 \\implies c_1 = c_2 = \\dots = c_k = 0$) [13:31, 14:52]. [22:23] The **span** of a set of vectors is introduced as the set of all possible linear combinations of those vectors, representing the smallest vector space that contains the given set of vectors [29:00, 30:05]. ## Four Fundamental Subspaces of a Matrix [41:06] The professor reviews the four fundamental subspaces associated with an $m \\times n$ matrix $A$: 1. **Null space of $A$** ($\\text{Nul}(A)$), which is a subset of $\\mathbb{R}^n$ [42:19]. 2. **Column space of $A$** ($\\text{Col}(A)$) or range of $A$, which is a subset of $\\mathbb{R}^m$ [42:33]. 3. **Null space of $A^T$** ($\\text{Nul}(A^T)$), which is a subset of $\\mathbb{R}^m$ [42:49]. 4. **Column space of $A^T$** ($\\text{Col}(A^T)$) or the row space of $A$, which is a subset of $\\mathbb{R}^n$ [43:02, 43:33]. ## Linear Transformations [50:32] A **linear transformation** $T: \\mathbb{R}^n \\to \\mathbb{R}^m$ is a mapping from a vector $x$ in $\\mathbb{R}^n$ to a vector $b$ in $\\mathbb{R}^m$ via matrix multiplication ($Ax = b$) that satisfies three key properties [51:14, 1:01:22]: 1. **Zero mapping:** $T(0) = 0$ (the zero vector in $\\mathbb{R}^n$ maps to the zero vector in $\\mathbb{R}^m$) [1:01:31]. 2. **Superposition (Additivity):** $T(u + v) = T(u) + T(v)$ for all vectors $u, v$ in $\\mathbb{R}^n$ [1:02:39]. 3. **Homogeneity:** $T(cu) = cT(u)$ for any vector $u$ and scalar $c$ [1:03:04, 1:07:44]. Geometric implications of linear transformations include mapping lines or planes passing through the origin in $\\mathbb{R}^n$ to lines or planes passing through the origin in $\\mathbb{R}^m$ [1:15:09, 1:18:26].`;
+
+    const { container } = render(
+      <MarkdownWithTimestamps content={content} onCueClick={handleCueClick} />
+    );
+
+    // Mathematical formulas are preserved and rendered via KaTeX
+    expect(container.querySelectorAll('.katex').length).toBeGreaterThan(0);
+    // Crucially: no stray $$ display math delimiters were injected around timestamps or prose
+    expect(container.textContent).not.toContain('$$');
+    // Headings are intact
+    const headings = Array.from(container.querySelectorAll('h2')).map(h => h.textContent);
+    expect(headings.some(t => t.includes('Review of Linearly Independent Sets'))).toBe(true);
+    expect(headings.some(t => t.includes('Four Fundamental Subspaces'))).toBe(true);
+    expect(headings.some(t => t.includes('Linear Transformations'))).toBe(true);
+    // Timestamps are converted to clickable buttons, including comma-separated lists
+    const btn08 = screen.getByRole('button', { name: /08:00/i });
+    expect(btn08).toBeInTheDocument();
+    fireEvent.click(btn08);
+    expect(handleCueClick).toHaveBeenCalledWith('08:00');
+
+    expect(screen.getByRole('button', { name: /08:34/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /13:26/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /13:31/i }).length).toBe(2);
+    expect(screen.getByRole('button', { name: /14:52/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /42:19/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /42:33/i })).toBeInTheDocument();
+  });
+
+  it('repairs and correctly renders previously corrupted timestamp math delimiters', () => {
+    const handleCueClick = vi.fn();
+    const corruptedContent = `subset of $\\mathbb{R}^n$ [42:19$$. 2. **Column space of $A$** ($\\text{Col}(A)$) or range of $A$, which is a subset of $\\mathbb{R}^m$ $$42:33].`;
+    const { container } = render(
+      <MarkdownWithTimestamps content={corruptedContent} onCueClick={handleCueClick} />
+    );
+
+    expect(container.textContent).not.toContain('42:19$$');
+    expect(container.textContent).not.toContain('$$42:33');
+    expect(screen.getByRole('button', { name: /42:19/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /42:33/i })).toBeInTheDocument();
+  });
 });

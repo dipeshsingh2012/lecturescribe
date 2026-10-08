@@ -21,79 +21,97 @@ export default function MarkdownWithTimestamps({
 }) {
   const effectiveText = content ?? text ?? '';
 
+  const renderTimestampButton = (ts, key) => {
+    const crossCite = (citations || []).find(c => c.cross_lecture && c.timestamp === ts);
+    if (crossCite && typeof onCrossLectureClick === 'function') {
+      return (
+        <button
+          key={key}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onCrossLectureClick(crossCite.video_id, crossCite.timestamp, crossCite.video_title);
+          }}
+          title={`Open ${crossCite.video_title || 'lecture'} at ${ts}`}
+          style={{
+            background: 'rgba(0, 117, 237, 0.12)',
+            color: 'var(--theme-primary)',
+            border: '1px solid var(--theme-primary)',
+            borderRadius: '4px',
+            padding: '1px 6px',
+            margin: '0 2px',
+            fontWeight: 700,
+            fontSize: '0.8rem',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '3px',
+            verticalAlign: 'baseline',
+            transition: 'all 0.15s ease'
+          }}
+        >
+          ⏱️ {ts}
+        </button>
+      );
+    }
+
+    return (
+      <button
+        key={key}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof onCueClick === 'function') {
+            onCueClick(ts);
+          }
+        }}
+        title={`Jump video to ${ts}`}
+        style={{
+          background: 'var(--highlight-bg)',
+          color: 'var(--theme-primary)',
+          border: '1px solid rgba(0, 117, 237, 0.3)',
+          borderRadius: '4px',
+          padding: '1px 6px',
+          margin: '0 2px',
+          fontWeight: 700,
+          fontSize: '0.8rem',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px',
+          verticalAlign: 'baseline',
+          transition: 'all 0.15s ease'
+        }}
+      >
+        ⏱️ {ts}
+      </button>
+    );
+  };
+
   // Parse inline timestamps and tool citations in bot messages and make them clickable
   const renderMessageWithTimestamps = (text) => {
     if (!text) return null;
-    const parts = text.split(/(\[\d{1,2}:\d{2}(?::\d{2})?\]|【[^】]+】)/g);
+    const parts = text.split(/(\[(?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+\]|【[^】]+】)/g);
     if (parts.length === 1) return text;
     return parts.map((part, pIdx) => {
-      const match = part.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]$/);
+      const match = part.match(/^\[((?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+)\]$/);
       if (match) {
-        const ts = match[1];
-        const crossCite = (citations || []).find(c => c.cross_lecture && c.timestamp === ts);
-        if (crossCite && typeof onCrossLectureClick === 'function') {
+        const tsList = match[1].match(/\d{1,2}:\d{2}(?::\d{2})?/g);
+        if (tsList && tsList.length > 0) {
+          if (tsList.length === 1) {
+            return renderTimestampButton(tsList[0], pIdx);
+          }
           return (
-            <button
-              key={pIdx}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onCrossLectureClick(crossCite.video_id, crossCite.timestamp, crossCite.video_title);
-              }}
-              title={`Open ${crossCite.video_title || 'lecture'} at ${ts}`}
-              style={{
-                background: 'rgba(0, 117, 237, 0.12)',
-                color: 'var(--theme-primary)',
-                border: '1px solid var(--theme-primary)',
-                borderRadius: '4px',
-                padding: '1px 6px',
-                margin: '0 2px',
-                fontWeight: 700,
-                fontSize: '0.8rem',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '3px',
-                verticalAlign: 'baseline',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              ⏱️ {ts}
-            </button>
+            <span key={pIdx} style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+              {tsList.map((ts, idx) => (
+                <React.Fragment key={idx}>
+                  {idx > 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>,</span>}
+                  {renderTimestampButton(ts, `${pIdx}-${idx}`)}
+                </React.Fragment>
+              ))}
+            </span>
           );
         }
-
-        return (
-          <button
-            key={pIdx}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (typeof onCueClick === 'function') {
-                onCueClick(ts);
-              }
-            }}
-            title={`Jump video to ${ts}`}
-            style={{
-              background: 'var(--highlight-bg)',
-              color: 'var(--theme-primary)',
-              border: '1px solid rgba(0, 117, 237, 0.3)',
-              borderRadius: '4px',
-              padding: '1px 6px',
-              margin: '0 2px',
-              fontWeight: 700,
-              fontSize: '0.8rem',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '3px',
-              verticalAlign: 'baseline',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            ⏱️ {ts}
-          </button>
-        );
       }
 
       const bracketMatch = part.match(/^【([^】]+)】$/);
@@ -230,8 +248,15 @@ export default function MarkdownWithTimestamps({
   const sanitizedContent = React.useMemo(() => {
     if (!effectiveText) return '';
     return effectiveText
+      // Repair corrupted timestamp delimiters like [14:52$$ or $$22:23]
+      .replace(/\[((?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+)\$\$/g, '[$1]')
+      .replace(/\$\$((?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+)\]/g, '[$1]')
       // Repair common bare, bracketed equations emitted without Markdown math delimiters.
+      // Must NOT match across timestamps [MM:SS], tool citations 【...】, markdown bold/headers, or list markers.
       .replace(/(?<!\\)\[\s*([\s\S]*?\\(?:hat|bar|vec|tilde|mathcal|mathbb|frac|sum|prod|sigma|beta|alpha|left|right)[\s\S]*?)\s*(?<!\\)\]/g, (match, equation) => {
+        if (/\[\d{1,2}:\d{2}|\d{1,2}:\d{2}\]|【|\*\*|##|^\d+\.\s/m.test(match) || /\d{1,2}:\d{2}/.test(equation)) {
+          return match;
+        }
         if (equation.includes('\n') || /\\(?:hat|mathcal|frac|sum|left|right)/.test(equation)) {
           return `$$${equation.trim()}$$`;
         }

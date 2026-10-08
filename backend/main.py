@@ -1576,6 +1576,11 @@ def save_lecture_progress_endpoint(req: SaveLectureProgressRequest):
         active_cue_idx=req.active_cue_idx,
         user_email=req.user_email
     )
+    if redis_cache:
+        target_email = req.user_email.strip().lower() if req.user_email and req.user_email.strip() else "anonymous"
+        redis_cache.invalidate_user(target_email)
+        if target_email != "anonymous":
+            redis_cache.invalidate_user("anonymous")
     return {
         "status": "success",
         "video_id": vid,

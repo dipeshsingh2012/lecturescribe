@@ -108,6 +108,12 @@ export default function App() {
     setActiveData(null);
     lecture.setError(null);
     setCacheNotice(null);
+    if (library.fetchUserLibrary) {
+      library.fetchUserLibrary(auth.googleUser?.email);
+    }
+    if (selectedCourse && course.refetchCourse) {
+      course.refetchCourse(selectedCourse);
+    }
   };
 
   const handleSelectCourse = (name) => {

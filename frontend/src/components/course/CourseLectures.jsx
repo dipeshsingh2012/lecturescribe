@@ -94,6 +94,15 @@ export default function CourseLectures({
     >
       {filteredCourseLectures.map((item) => {
         const driveUrl = item.drive_folder_url || item.driveFolderUrl;
+        const prog = item.progress;
+        const rawPct = prog?.progress_percent;
+        const hasPct = typeof rawPct === 'number' && !isNaN(rawPct) && rawPct > 0;
+        const hasSec = typeof prog?.last_seconds === 'number' && prog.last_seconds > 2;
+        const hasTs = Boolean(prog?.last_timestamp && prog.last_timestamp !== '00:00' && prog.last_timestamp !== '0:00');
+        const hasProgress = Boolean(prog && (hasPct || hasSec || hasTs));
+        const progressPct = hasPct ? Math.min(100, Math.max(0, Math.round(rawPct))) : (hasProgress ? 5 : 0);
+        const isCompleted = hasPct && rawPct >= 90;
+        const resumeTimestamp = prog?.last_timestamp || '00:00';
 
         return (
           <Card
@@ -244,21 +253,23 @@ export default function CourseLectures({
                 />
               </Box>
 
-              {item.progress && item.progress.progress_percent > 0 && (
+              {hasProgress && (
                 <Box sx={{ mt: 1.5, pt: 1, borderTop: '1px dashed var(--border-color)' }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
                     <Typography variant="caption" sx={{ color: 'var(--text-secondary)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 0.5, fontWeight: 600 }}>
-                      ⏱️ {item.progress.progress_percent >= 90 ? 'Completed' : `Resume at ${item.progress.last_timestamp || '00:00'}`}
+                      ⏱️ {isCompleted ? 'Completed' : `Resume at ${resumeTimestamp}`}
                     </Typography>
-                    <Typography variant="caption" sx={{ color: currentTheme.palette.primary, fontWeight: 700, fontSize: '0.72rem' }}>
-                      {Math.round(item.progress.progress_percent)}%
-                    </Typography>
+                    {hasPct && (
+                      <Typography variant="caption" sx={{ color: isCompleted ? '#10b981' : currentTheme.palette.primary, fontWeight: 700, fontSize: '0.72rem' }}>
+                        {progressPct}%
+                      </Typography>
+                    )}
                   </Box>
                   <Box sx={{ width: '100%', height: 4, borderRadius: 2, bgcolor: 'var(--border-color)', overflow: 'hidden' }}>
                     <Box sx={{
-                      width: `${Math.min(100, Math.max(0, item.progress.progress_percent))}%`,
+                      width: `${progressPct}%`,
                       height: '100%',
-                      bgcolor: item.progress.progress_percent >= 90 ? '#10b981' : currentTheme.palette.primary,
+                      bgcolor: isCompleted ? '#10b981' : currentTheme.palette.primary,
                       transition: 'width 0.3s ease'
                     }} />
                   </Box>
@@ -281,8 +292,8 @@ export default function CourseLectures({
                   '&:hover': { bgcolor: currentTheme.palette.primaryHover }
                 }}
               >
-                {item.progress && item.progress.progress_percent > 0 && item.progress.progress_percent < 90
-                  ? `Resume (${item.progress.last_timestamp}) →`
+                {hasProgress && !isCompleted
+                  ? `Resume (${resumeTimestamp}) →`
                   : 'Study Lecture →'}
               </Button>
 

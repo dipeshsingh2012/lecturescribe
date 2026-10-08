@@ -145,21 +145,50 @@ export default function CourseGrid({
             flexDirection: 'column',
             gap: 0.8
           }}>
-            {(course.lectures || []).slice(0, 2).map((l, i) => (
-              <Box key={l.video_id || i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Play size={11} color="var(--theme-primary)" style={{ flexShrink: 0 }} />
-                <Typography variant="caption" sx={{
-                  color: 'var(--text-primary)',
-                  fontWeight: 500,
-                  fontSize: '0.78rem',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}>
-                  {l.title || `Lecture ${l.video_id}`}
-                </Typography>
-              </Box>
-            ))}
+            {(course.lectures || []).slice(0, 2).map((l, i) => {
+              const lProg = l.progress;
+              const lHasProg = Boolean(lProg && (
+                (typeof lProg.progress_percent === 'number' && lProg.progress_percent > 0) ||
+                (typeof lProg.last_seconds === 'number' && lProg.last_seconds > 2) ||
+                (lProg.last_timestamp && lProg.last_timestamp !== '00:00' && lProg.last_timestamp !== '0:00')
+              ));
+              const lCompleted = lProg?.progress_percent >= 90;
+              const lPct = typeof lProg?.progress_percent === 'number' && lProg.progress_percent > 0
+                ? Math.round(lProg.progress_percent)
+                : null;
+
+              return (
+                <Box key={l.video_id || i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Play size={11} color="var(--theme-primary)" style={{ flexShrink: 0 }} />
+                  <Typography variant="caption" sx={{
+                    color: 'var(--text-primary)',
+                    fontWeight: 500,
+                    fontSize: '0.78rem',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flex: 1
+                  }}>
+                    {l.title || `Lecture ${l.video_id}`}
+                  </Typography>
+                  {lHasProg && (
+                    <Typography variant="caption" sx={{
+                      ml: 'auto',
+                      flexShrink: 0,
+                      fontSize: '0.68rem',
+                      color: lCompleted ? '#10b981' : 'var(--theme-primary)',
+                      fontWeight: 700,
+                      bgcolor: lCompleted ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)',
+                      px: 0.8,
+                      py: 0.2,
+                      borderRadius: 1
+                    }}>
+                      {lCompleted ? 'Done' : (lPct ? `${lPct}%` : (lProg.last_timestamp || 'In progress'))}
+                    </Typography>
+                  )}
+                </Box>
+              );
+            })}
             {(course.lecture_count || 0) > 2 && (
               <Typography variant="caption" sx={{ color: 'var(--theme-primary)', fontWeight: 600, fontSize: '0.72rem', mt: 0.2 }}>
                 + {course.lecture_count - 2} more {course.lecture_count - 2 === 1 ? 'lecture' : 'lectures'}

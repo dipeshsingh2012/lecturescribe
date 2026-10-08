@@ -47,6 +47,21 @@ export function useLecturePlayer(activeData, userEmail = null) {
   useEffect(() => {
     if (iframeRef.current && activeData) {
       try {
+        if (!durationRef.current) {
+          if (typeof activeData.duration === 'number' && activeData.duration > 0) {
+            durationRef.current = activeData.duration;
+          } else if (typeof activeData.duration === 'string') {
+            const parsed = parseTimestampToSeconds(activeData.duration);
+            if (parsed > 0) durationRef.current = parsed;
+          } else if (activeData.cues && activeData.cues.length > 0) {
+            const lastCue = activeData.cues[activeData.cues.length - 1];
+            if (lastCue?.time) {
+              const cueSec = parseTimestampToSeconds(lastCue.time);
+              if (cueSec > 0) durationRef.current = cueSec;
+            }
+          }
+        }
+
         const player = new Player(iframeRef.current);
         playerRef.current = player;
 
@@ -167,6 +182,9 @@ export function useLecturePlayer(activeData, userEmail = null) {
                   const resData = await res.json();
                   const prog = resData?.progress;
                   if (prog && typeof prog.last_seconds === 'number' && prog.last_seconds > 2) {
+                    if (prog.duration_seconds && prog.duration_seconds > 0 && !durationRef.current) {
+                      durationRef.current = prog.duration_seconds;
+                    }
                     const dur = prog.duration_seconds || durationRef.current || 0;
                     const isCompleted = dur > 0 && (prog.last_seconds / dur) >= 0.98;
                     if (!isCompleted) {

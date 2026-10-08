@@ -193,22 +193,25 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     );
 
     if (fromDirect && fromEffective) {
-      const seen = new Set();
-      const merged = [];
+      const seen = new Map();
       for (const lec of (fromDirect.lectures || [])) {
         const id = String(lec.video_id || lec.videoId);
-        if (!seen.has(id)) {
-          seen.add(id);
-          merged.push(lec);
-        }
+        seen.set(id, lec);
       }
       for (const lec of (fromEffective.lectures || [])) {
         const id = String(lec.video_id || lec.videoId);
-        if (!seen.has(id)) {
-          seen.add(id);
-          merged.push(lec);
+        if (seen.has(id)) {
+          const existing = seen.get(id);
+          seen.set(id, {
+            ...existing,
+            ...lec,
+            progress: lec.progress || existing.progress
+          });
+        } else {
+          seen.set(id, lec);
         }
       }
+      const merged = Array.from(seen.values());
       return {
         ...fromDirect,
         lecture_count: merged.length,

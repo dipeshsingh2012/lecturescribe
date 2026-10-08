@@ -64,8 +64,27 @@ export function useUserLibrary(userEmail) {
   }, [userEmail]);
 
   const effectiveCourses = useMemo(() => {
+    // Build lookup of lecture progress from userLibrary
+    const libProgressMap = {};
+    (userLibrary || []).forEach(it => {
+      const vid = String(it.video_id || it.videoId || '');
+      if (vid && it.progress) {
+        libProgressMap[vid] = it.progress;
+      }
+    });
+
     if (userCourses && userCourses.length > 0) {
-      return userCourses;
+      return userCourses.map(course => {
+        if (!course.lectures) return course;
+        return {
+          ...course,
+          lectures: course.lectures.map(lec => {
+            const vid = String(lec.video_id || lec.videoId || '');
+            const prog = lec.progress || libProgressMap[vid];
+            return prog ? { ...lec, progress: prog } : lec;
+          })
+        };
+      });
     }
     const map = {};
     (userLibrary || []).forEach(item => {

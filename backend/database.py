@@ -1083,6 +1083,11 @@ class RelationalDBManager:
         safe_dur = max(0.0, float(duration_seconds or 0.0))
         safe_idx = max(0, int(active_cue_idx or 0))
 
+        # Check existing cached item to preserve duration if client passed 0
+        existing_item = self._progress_memory_cache.get((clean_email, video_id))
+        if safe_dur <= 0.0 and existing_item and existing_item.get("duration_seconds", 0) > 0:
+            safe_dur = float(existing_item["duration_seconds"])
+
         if safe_dur > 0:
             progress_pct = min(100.0, max(0.0, round((safe_secs / safe_dur) * 100.0, 1)))
         else:
@@ -1113,7 +1118,11 @@ class RelationalDBManager:
                                 last_timestamp = EXCLUDED.last_timestamp,
                                 last_seconds = EXCLUDED.last_seconds,
                                 duration_seconds = CASE WHEN EXCLUDED.duration_seconds > 0 THEN EXCLUDED.duration_seconds ELSE lecturescribe_lecture_progress.duration_seconds END,
-                                progress_percent = EXCLUDED.progress_percent,
+                                progress_percent = CASE
+                                    WHEN EXCLUDED.duration_seconds > 0 THEN EXCLUDED.progress_percent
+                                    WHEN lecturescribe_lecture_progress.duration_seconds > 0 THEN LEAST(100.0, GREATEST(0.0, ROUND((EXCLUDED.last_seconds / lecturescribe_lecture_progress.duration_seconds) * 100.0, 1)))
+                                    ELSE EXCLUDED.progress_percent
+                                END,
                                 active_cue_idx = EXCLUDED.active_cue_idx,
                                 updated_at = NOW()
                             RETURNING id, video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at;
@@ -2548,6 +2557,12 @@ class RelationalDBManager:
                     """, (clean_email,))
                     rows = cursor.fetchall() or []
 
+                    try:
+                        v_ids = [r["video_id"] for r in rows if r.get("video_id")]
+                        prog_map = self.get_user_progress_map(user_email=clean_email, video_ids=v_ids)
+                    except Exception:
+                        prog_map = {}
+
                     courses_map = OrderedDict()
                     for r in rows:
                         c_name = (r.get("course_name") or extract_course_name(r.get("title", ""))).strip()
@@ -2595,7 +2610,8 @@ class RelationalDBManager:
                             "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
                             "last_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
                             "created_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                            "course_name": canonical_course_title
+                            "course_name": canonical_course_title,
+                            "progress": prog_map.get(r["video_id"])
                         })
 
                     return list(courses_map.values())

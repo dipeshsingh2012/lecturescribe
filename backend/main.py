@@ -75,6 +75,7 @@ from backend.slide_parser import parse_slide_document, format_slides_for_llm
 from backend.reading_extractor import (
     fetch_google_books_metadata,
     search_web_reading_links,
+    resolve_digital_book_reader,
     extract_readings_with_llm,
 )
 
@@ -2271,18 +2272,22 @@ def get_course_readings(course_name: str):
 
 
 @app.post("/api/course/{course_name}/extract-readings")
-def extract_course_readings(course_name: str):
+def extract_course_readings(course_name: str, regenerate: bool = Query(False, description="Wipe existing course readings and re-extract")):
     """
     Manual on-demand extraction of recommended books and journals
     from lecture transcripts and uploaded slide decks (.pptx / .pdf).
     Enriches with Google Books metadata and persists to PostgreSQL.
     Supports course name or URL slug.
+    If regenerate=True, wipes existing readings for the course first.
     """
     raw_name = course_name.strip()
     if not raw_name:
         raise HTTPException(status_code=400, detail="course_name is required.")
     cname = db_manager.resolve_course_canonical_name(raw_name)
     slug_norm = to_course_slug(raw_name)
+
+    if regenerate:
+        db_manager.clear_course_readings(cname)
 
     # 1. Gather all transcripts across lectures in this course
     transcripts_summary_parts: List[str] = []
@@ -2357,22 +2362,26 @@ def extract_course_readings(course_name: str):
     extracted_items = extract_readings_with_llm(cname, transcripts_summary, slides_text)
 
     saved_items: List[Dict[str, Any]] = []
-    existing = db_manager.get_course_readings(cname)
+    existing = [] if regenerate else db_manager.get_course_readings(cname)
     existing_titles = {re.sub(r'[^a-zA-Z0-9]', '', e.get("title", "").lower()) for e in existing}
 
     for item in extracted_items:
         norm_t = re.sub(r'[^a-zA-Z0-9]', '', (item.get("title") or "").lower())
         if not norm_t or norm_t in existing_titles:
             continue
-        # 4. Enrich via Google Books API
-        gb_meta = fetch_google_books_metadata(item.get("title", ""), item.get("author", ""))
-        if gb_meta:
-            if gb_meta.get("cover_url"):
-                item["cover_url"] = gb_meta["cover_url"]
-            if gb_meta.get("preview_url"):
-                item["preview_url"] = gb_meta["preview_url"]
-            if gb_meta.get("isbn"):
-                item["isbn"] = gb_meta["isbn"]
+        # 4. Enrich via multi-source digital book resolver (Archive.org, OpenLibrary, OpenAccess PDF, Google Books)
+        meta = resolve_digital_book_reader(item.get("title", ""), item.get("author", ""))
+        if meta:
+            if meta.get("cover_url"):
+                item["cover_url"] = meta["cover_url"]
+            if meta.get("preview_url"):
+                item["preview_url"] = meta["preview_url"]
+            if meta.get("embed_url"):
+                item["embed_url"] = meta["embed_url"]
+            if meta.get("reader_type"):
+                item["reader_type"] = meta["reader_type"]
+            if meta.get("isbn"):
+                item["isbn"] = meta["isbn"]
 
         saved = db_manager.save_course_reading(cname, item)
         saved_items.append(saved)
@@ -2385,6 +2394,90 @@ def extract_course_readings(course_name: str):
         "newly_extracted_count": len(saved_items),
         "readings": all_readings,
         "count": len(all_readings)
+    }
+
+
+@app.get("/api/course/reading/{reading_id}/reader")
+def get_or_resolve_reading_reader(
+    reading_id: int,
+    refresh: bool = Query(False, description="Force re-resolving reader from external APIs")
+):
+    """
+    Retrieve or dynamically resolve the in-page reader URL for a course reading.
+    Enriches with Archive.org, Google Books, or OpenLibrary if not yet cached or if refresh=True.
+    """
+    reading = None
+    if db_manager.postgres_url and db_manager._schema_initialized:
+        conn = db_manager._get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, course_name, title, author, edition, reading_type,
+                       category, cover_url, preview_url, embed_url, reader_type, isbn
+                FROM lecturescribe_course_readings
+                WHERE id = %s;
+            """, (reading_id,))
+            row = cur.fetchone()
+            if row:
+                reading = dict(row)
+        conn.close()
+
+    if not reading:
+        for r in db_manager._readings_memory_cache:
+            if r.get("id") == reading_id:
+                reading = dict(r)
+                break
+
+    if not reading:
+        raise HTTPException(status_code=404, detail="Reading item not found.")
+
+    embed_url = reading.get("embed_url") or ""
+    reader_type = reading.get("reader_type") or "embed"
+    cover_url = reading.get("cover_url") or ""
+
+    if embed_url and not refresh:
+        return {
+            "status": "success",
+            "reading_id": reading_id,
+            "title": reading.get("title"),
+            "author": reading.get("author"),
+            "embed_url": embed_url,
+            "reader_type": reader_type,
+            "preview_url": reading.get("preview_url") or embed_url,
+            "cover_url": cover_url
+        }
+
+    # Resolve on the fly if embed_url was not previously populated or refresh requested
+    meta = resolve_digital_book_reader(reading.get("title", ""), reading.get("author", ""))
+    if meta and meta.get("embed_url"):
+        embed_url = meta["embed_url"]
+        reader_type = meta.get("reader_type", "embed")
+        cover_url = meta.get("cover_url") or cover_url
+        preview_url = meta.get("preview_url") or reading.get("preview_url") or ""
+        db_manager.update_course_reading_embed(
+            reading_id=reading_id,
+            embed_url=embed_url,
+            reader_type=reader_type,
+            cover_url=cover_url,
+            preview_url=preview_url
+        )
+
+    # Google Books preview fallback if preview_url has ID
+    if not embed_url and reading.get("preview_url") and "books.google.com" in reading["preview_url"]:
+        m = re.search(r'id=([a-zA-Z0-9_\-]+)', reading["preview_url"])
+        if m:
+            embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
+            reader_type = "google_embed"
+            db_manager.update_course_reading_embed(reading_id, embed_url, reader_type)
+
+    return {
+        "status": "success",
+        "reading_id": reading_id,
+        "title": reading.get("title"),
+        "author": reading.get("author"),
+        "embed_url": embed_url,
+        "reader_type": reader_type,
+        "preview_url": reading.get("preview_url") or embed_url,
+        "cover_url": cover_url
     }
 
 

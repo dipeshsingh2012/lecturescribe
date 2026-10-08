@@ -99,4 +99,40 @@ describe('CourseLibrary Component', () => {
       expect(screen.getByText(/Full text available online/i)).toBeInTheDocument();
     });
   });
+
+  it('triggers full regeneration when Regenerate All is clicked', async () => {
+    const triggerExtractReadings = vi.fn().mockResolvedValue({ status: 'success', count: 3 });
+    render(
+      <CourseLibrary
+        courseResources={mockSlides}
+        courseReadings={mockBooks}
+        triggerExtractReadings={triggerExtractReadings}
+        selectedCourse="Machine Learning"
+        currentTheme={mockTheme}
+      />
+    );
+
+    const regenBtn = screen.getByRole('button', { name: /Regenerate All/i });
+    fireEvent.click(regenBtn);
+
+    expect(triggerExtractReadings).toHaveBeenCalledWith(expect.anything(), true);
+  });
+
+  it('triggers handleRefreshReadingReader when book refresh icon is clicked', async () => {
+    const handleRefreshReadingReader = vi.fn().mockResolvedValue({ status: 'success' });
+    render(
+      <CourseLibrary
+        courseResources={mockSlides}
+        courseReadings={mockBooks}
+        handleRefreshReadingReader={handleRefreshReadingReader}
+        selectedCourse="Machine Learning"
+        currentTheme={mockTheme}
+      />
+    );
+
+    const refreshBtn = screen.getByLabelText(/Refresh Reader Link/i);
+    fireEvent.click(refreshBtn);
+
+    expect(handleRefreshReadingReader).toHaveBeenCalledWith(mockBooks[0].id);
+  });
 });

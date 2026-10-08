@@ -249,6 +249,7 @@ export default function App() {
             courseReadingsLoading={resources.courseReadingsLoading}
             isExtractingReadings={resources.isExtractingReadings}
             triggerExtractReadings={resources.triggerExtractReadings}
+            handleRefreshReadingReader={resources.handleRefreshReadingReader}
             handleDeleteCourseReading={resources.handleDeleteCourseReading}
             searchReadingWeb={resources.searchReadingWeb}
             courseLoading={course.courseLoading}

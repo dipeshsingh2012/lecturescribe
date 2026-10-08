@@ -366,6 +366,8 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_readings_course ON lecturescribe_course_readings(course_name);
+                        ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS embed_url TEXT;
+                        ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS reader_type VARCHAR(64) DEFAULT 'embed';
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_chat_logs (
                             id SERIAL PRIMARY KEY,
@@ -3228,7 +3230,7 @@ class RelationalDBManager:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT id, course_name, title, author, edition, reading_type,
-                               category, cover_url, preview_url, isbn, source_type,
+                               category, cover_url, preview_url, embed_url, reader_type, isbn, source_type,
                                source_context, web_links, created_at
                         FROM lecturescribe_course_readings
                         WHERE LOWER(course_name) = LOWER(%s)
@@ -3268,6 +3270,8 @@ class RelationalDBManager:
         category = (reading.get("category") or "recommended").strip()
         cover_url = (reading.get("cover_url") or "").strip()
         preview_url = (reading.get("preview_url") or "").strip()
+        embed_url = (reading.get("embed_url") or "").strip()
+        reader_type = (reading.get("reader_type") or "embed").strip()
         isbn = (reading.get("isbn") or "").strip()
         source_type = (reading.get("source_type") or "manual").strip()
         source_context = (reading.get("source_context") or "").strip()
@@ -3282,6 +3286,8 @@ class RelationalDBManager:
             "category": category,
             "cover_url": cover_url,
             "preview_url": preview_url,
+            "embed_url": embed_url,
+            "reader_type": reader_type,
             "isbn": isbn,
             "source_type": source_type,
             "source_context": source_context,
@@ -3298,13 +3304,13 @@ class RelationalDBManager:
                         cursor.execute("""
                             INSERT INTO lecturescribe_course_readings (
                                 course_name, title, author, edition, reading_type,
-                                category, cover_url, preview_url, isbn, source_type,
+                                category, cover_url, preview_url, embed_url, reader_type, isbn, source_type,
                                 source_context, web_links
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                             RETURNING id, created_at;
                         """, (
                             clean_course, title, author, edition, reading_type,
-                            category, cover_url, preview_url, isbn, source_type,
+                            category, cover_url, preview_url, embed_url, reader_type, isbn, source_type,
                             source_context, json.dumps(web_links)
                         ))
                         row = cursor.fetchone()
@@ -3324,6 +3330,53 @@ class RelationalDBManager:
         item["id"] = int(time.time() * 1000) % 10000000
         self._readings_memory_cache.append(item)
         return item
+
+    def update_course_reading_embed(
+        self,
+        reading_id: int,
+        embed_url: str,
+        reader_type: str = "embed",
+        cover_url: str = "",
+        preview_url: str = ""
+    ) -> bool:
+        """Update reader embed URL and cover for an existing reading item."""
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        updates = ["embed_url = %s", "reader_type = %s"]
+                        params = [embed_url, reader_type]
+                        if cover_url:
+                            updates.append("cover_url = %s")
+                            params.append(cover_url)
+                        if preview_url:
+                            updates.append("preview_url = %s")
+                            params.append(preview_url)
+                        params.append(reading_id)
+                        cursor.execute(f"""
+                            UPDATE lecturescribe_course_readings
+                            SET {', '.join(updates)}
+                            WHERE id = %s;
+                        """, tuple(params))
+                        conn.commit()
+                return True
+            except Exception as e:
+                print(f"[PostgreSQL Notice] update_course_reading_embed error: {e}")
+            finally:
+                if conn:
+                    conn.close()
+        for r in self._readings_memory_cache:
+            if r.get("id") == reading_id:
+                r["embed_url"] = embed_url
+                r["reader_type"] = reader_type
+                if cover_url:
+                    r["cover_url"] = cover_url
+                if preview_url:
+                    r["preview_url"] = preview_url
+                return True
+        return False
 
     def delete_course_reading(self, reading_id: int) -> bool:
         """Delete a reading item by ID."""

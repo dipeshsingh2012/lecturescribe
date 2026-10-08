@@ -29,10 +29,12 @@ import {
   Search,
   BookMarked,
   CheckCircle,
-  FileText
+  FileText,
+  RotateCw
 } from 'lucide-react';
 import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/formatters';
 import { normalizeCourseSlug } from '../../utils/routing';
+import BookReaderModal from '../modals/BookReaderModal';
 
 export default function CourseLibrary({
   courseResourcesLoading = false,
@@ -41,6 +43,7 @@ export default function CourseLibrary({
   courseReadingsLoading = false,
   isExtractingReadings = false,
   triggerExtractReadings,
+  handleRefreshReadingReader,
   handleDeleteCourseReading,
   searchReadingWeb,
   googleUser,
@@ -58,25 +61,40 @@ export default function CourseLibrary({
   const [webSearchResults, setWebSearchResults] = useState([]);
   const [webSearchLoading, setWebSearchLoading] = useState(false);
   const [extractSuccessMsg, setExtractSuccessMsg] = useState('');
+  const [activeReaderBook, setActiveReaderBook] = useState(null);
+  const [refreshingReadingId, setRefreshingReadingId] = useState(null);
 
   const courseDisplayName = activeCourseData?.course_name || selectedCourse || 'Course Library';
   const exactCourseSlug =
     activeCourseData?.course_slug ||
     (activeCourseData?.course_name ? normalizeCourseSlug(activeCourseData.course_name) : normalizeCourseSlug(selectedCourse));
 
-  // Trigger manual book extraction
-  const handleExtractClick = async () => {
+  // Trigger book extraction (incremental or full regeneration)
+  const handleExtractClick = async (regenerate = false) => {
     if (!triggerExtractReadings) return;
     setExtractSuccessMsg('');
-    const res = await triggerExtractReadings(exactCourseSlug || courseDisplayName);
+    const res = await triggerExtractReadings(exactCourseSlug || courseDisplayName, regenerate);
     if (res && res.status === 'success') {
       const added = res.newly_extracted_count || 0;
       setExtractSuccessMsg(
-        added > 0
-          ? `Discovered ${added} new recommended reading${added > 1 ? 's' : ''}!`
-          : `Scan complete! All current readings are up to date (${res.count || 0} books found).`
+        regenerate
+          ? `Regeneration complete! Extracted and verified ${res.count || 0} books afresh.`
+          : added > 0
+            ? `Discovered ${added} new recommended reading${added > 1 ? 's' : ''}!`
+            : `Scan complete! All current readings are up to date (${res.count || 0} books found).`
       );
       setTimeout(() => setExtractSuccessMsg(''), 6000);
+    }
+  };
+
+  // Re-resolve digital reader link dynamically for a single book
+  const handleRefreshSingleReader = async (bookId) => {
+    if (!handleRefreshReadingReader || !bookId) return;
+    setRefreshingReadingId(bookId);
+    try {
+      await handleRefreshReadingReader(bookId);
+    } finally {
+      setRefreshingReadingId(null);
     }
   };
 
@@ -446,7 +464,7 @@ export default function CourseLibrary({
       {/* SECTION 2: RECOMMENDED BOOKS & ACADEMIC READINGS */}
       {/* ========================================================================= */}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <BookMarked size={20} color={currentTheme.palette.primary} />
             <Typography variant="subtitle1" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
@@ -464,9 +482,35 @@ export default function CourseLibrary({
               }}
             />
           </Box>
-          <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
-            Auto-extracted from lecture audio transcripts and professor presentation slides
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: { xs: 'none', md: 'inline' } }}>
+              Auto-extracted from transcripts & slides
+            </Typography>
+            {courseReadings.length > 0 && (
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={isExtractingReadings}
+                onClick={() => handleExtractClick(true)}
+                startIcon={isExtractingReadings ? <CircularProgress size={13} color="inherit" /> : <RotateCw size={13} />}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  borderRadius: 2,
+                  borderColor: currentTheme.palette.cardBorder,
+                  color: currentTheme.palette.textSecondary,
+                  '&:hover': {
+                    borderColor: currentTheme.palette.primary,
+                    color: currentTheme.palette.primary,
+                    bgcolor: 'var(--highlight-bg, rgba(59, 130, 246, 0.08))'
+                  }
+                }}
+              >
+                {isExtractingReadings ? "Regenerating..." : "Regenerate All"}
+              </Button>
+            )}
+          </Box>
         </Box>
 
         {isExtractingReadings ? (
@@ -517,7 +561,7 @@ export default function CourseLibrary({
               variant="contained"
               size="small"
               startIcon={<Sparkles size={14} />}
-              onClick={handleExtractClick}
+              onClick={() => handleExtractClick(false)}
               sx={{
                 bgcolor: currentTheme.palette.primary,
                 color: '#fff',
@@ -678,27 +722,27 @@ export default function CourseLibrary({
                     gap: 1
                   }}>
                     <Box sx={{ display: 'flex', gap: 1 }}>
-                      {book.preview_url ? (
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          component="a"
-                          href={book.preview_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          startIcon={<BookOpen size={13} />}
-                          sx={{
-                            textTransform: 'none',
-                            fontWeight: 700,
-                            fontSize: '0.75rem',
-                            borderRadius: 2,
-                            borderColor: currentTheme.palette.cardBorder,
-                            color: currentTheme.palette.textPrimary
-                          }}
-                        >
-                          Preview
-                        </Button>
-                      ) : null}
+                      <Button
+                        variant="contained"
+                        size="small"
+                        onClick={() => setActiveReaderBook(book)}
+                        startIcon={<BookOpen size={13} />}
+                        sx={{
+                          textTransform: 'none',
+                          fontWeight: 700,
+                          fontSize: '0.75rem',
+                          borderRadius: 2,
+                          backgroundColor: currentTheme.palette.primary,
+                          color: '#ffffff',
+                          boxShadow: 'none',
+                          '&:hover': {
+                            backgroundColor: currentTheme.palette.primaryDark || currentTheme.palette.primary,
+                            boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
+                          }
+                        }}
+                      >
+                        Read Book
+                      </Button>
 
                       <Button
                         variant="outlined"
@@ -711,27 +755,53 @@ export default function CourseLibrary({
                           fontSize: '0.75rem',
                           borderRadius: 2,
                           borderColor: currentTheme.palette.cardBorder,
-                          color: currentTheme.palette.primary
+                          color: currentTheme.palette.textSecondary
                         }}
                       >
                         Search Web
                       </Button>
                     </Box>
 
-                    {handleDeleteCourseReading && (
-                      <Tooltip title="Remove reading">
-                        <IconButton
-                          size="small"
-                          onClick={() => handleDeleteCourseReading(book.id)}
-                          sx={{
-                            color: currentTheme.palette.textSecondary,
-                            '&:hover': { color: '#ef4444' }
-                          }}
-                        >
-                          <Trash2 size={15} />
-                        </IconButton>
-                      </Tooltip>
-                    )}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {handleRefreshReadingReader && (
+                        <Tooltip title="Re-resolve / refresh digital reader link">
+                          <span>
+                            <IconButton
+                              size="small"
+                              aria-label="Refresh Reader Link"
+                              disabled={refreshingReadingId === book.id}
+                              onClick={() => handleRefreshSingleReader(book.id)}
+                              sx={{
+                                color: currentTheme.palette.textSecondary,
+                                '&:hover': { color: currentTheme.palette.primary }
+                              }}
+                            >
+                              {refreshingReadingId === book.id ? (
+                                <CircularProgress size={14} color="inherit" />
+                              ) : (
+                                <RotateCw size={14} />
+                              )}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
+
+                      {handleDeleteCourseReading && (
+                        <Tooltip title="Remove reading">
+                          <IconButton
+                            size="small"
+                            aria-label="Remove Reading"
+                            onClick={() => handleDeleteCourseReading(book.id)}
+                            sx={{
+                              color: currentTheme.palette.textSecondary,
+                              '&:hover': { color: '#ef4444' }
+                            }}
+                          >
+                            <Trash2 size={15} />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </Box>
                   </Box>
                 </Paper>
               );
@@ -739,6 +809,16 @@ export default function CourseLibrary({
           </Box>
         )}
       </Box>
+
+      {/* ========================================================================= */}
+      {/* IN-PAGE DIGITAL BOOK READER MODAL */}
+      {/* ========================================================================= */}
+      <BookReaderModal
+        open={Boolean(activeReaderBook)}
+        onClose={() => setActiveReaderBook(null)}
+        book={activeReaderBook}
+        currentTheme={currentTheme}
+      />
 
       {/* ========================================================================= */}
       {/* WEB SCRAPER / SEARCH MODAL */}

@@ -17,6 +17,133 @@ import requests
 from backend.web_search import search_web_for_context
 
 GOOGLE_BOOKS_API = "https://www.googleapis.com/books/v1/volumes"
+OPEN_LIBRARY_API = "https://openlibrary.org/search.json"
+ARCHIVE_ORG_SEARCH_API = "https://archive.org/advancedsearch.php"
+
+def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") -> Dict[str, Any]:
+    """
+    Multi-source resolver for interactive in-page reading.
+    Searches dynamically:
+      1. Internet Archive (interactive page-flipper book reader)
+      2. OpenLibrary API (IA IDs + high-res book covers)
+      3. Google Books Embedded Viewer API
+    Returns rich metadata including embed_url and reader_type.
+    """
+    if not title or len(title.strip()) < 3:
+        return {}
+
+    clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', title).strip()
+    clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip()
+    lt = title.lower()
+    la = author.lower()
+
+    # 2. Internet Archive Advanced Search (Direct Embed Reader)
+    try:
+        author_word = clean_author.split()[0] if clean_author else ""
+        q_parts = [f'title:({clean_title})', 'mediatype:(texts)']
+        if author_word and len(author_word) >= 3:
+            q_parts.append(f'creator:({author_word})')
+        q = ' AND '.join(q_parts)
+        ia_res = requests.get(
+            ARCHIVE_ORG_SEARCH_API,
+            params={'q': q, 'fl[]': 'identifier,title,creator,year', 'rows': 2, 'output': 'json'},
+            timeout=3.5
+        )
+        if ia_res.status_code == 200:
+            docs = ia_res.json().get('response', {}).get('docs', [])
+            if docs:
+                d = docs[0]
+                ident = d.get('identifier')
+                if ident:
+                    return {
+                        "matched_title": d.get('title') or title,
+                        "matched_authors": d.get('creator') or author,
+                        "cover_url": f"https://archive.org/services/img/{ident}",
+                        "preview_url": f"https://archive.org/details/{ident}",
+                        "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
+                        "reader_type": "archive_org",
+                        "source_provider": "Internet Archive"
+                    }
+    except Exception:
+        pass
+
+    # 3. OpenLibrary API (Covers + IA links)
+    try:
+        q = f"{clean_title} {clean_author}".strip()
+        ol_res = requests.get(
+            OPEN_LIBRARY_API,
+            params={'q': q, 'limit': 2},
+            timeout=3.5
+        )
+        if ol_res.status_code == 200:
+            docs = ol_res.json().get('docs', [])
+            if docs:
+                d = docs[0]
+                ia_list = d.get('ia') or []
+                cover_i = d.get('cover_i')
+                cover_url = f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg" if cover_i else ""
+                matched_t = d.get('title') or title
+                matched_a = ', '.join(d.get('author_name', [])) or author
+                ol_isbn = d.get('isbn', [''])[0] if d.get('isbn') else ''
+                if ia_list:
+                    ident = ia_list[0]
+                    return {
+                        "matched_title": matched_t,
+                        "matched_authors": matched_a,
+                        "cover_url": cover_url or f"https://archive.org/services/img/{ident}",
+                        "preview_url": f"https://archive.org/details/{ident}",
+                        "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
+                        "reader_type": "archive_org",
+                        "isbn": ol_isbn,
+                        "source_provider": "Internet Archive"
+                    }
+                elif cover_url:
+                    # Found book and cover; will try Google Books below for reader embed
+                    gb_res = fetch_google_books_metadata(title, author)
+                    embed_url = ""
+                    reader_type = "web"
+                    if gb_res.get("preview_url") and "books.google.com" in gb_res["preview_url"]:
+                        m = re.search(r'id=([a-zA-Z0-9_\-]+)', gb_res["preview_url"])
+                        if m:
+                            embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
+                            reader_type = "google_embed"
+
+                    return {
+                        "matched_title": matched_t,
+                        "matched_authors": matched_a,
+                        "cover_url": cover_url or gb_res.get("cover_url", ""),
+                        "preview_url": gb_res.get("preview_url") or f"https://openlibrary.org{d.get('key', '')}",
+                        "embed_url": embed_url,
+                        "reader_type": reader_type,
+                        "isbn": ol_isbn or gb_res.get("isbn", ""),
+                        "source_provider": "OpenLibrary / Google Books"
+                    }
+    except Exception:
+        pass
+
+    # 4. Google Books Fallback
+    gb_res = fetch_google_books_metadata(title, author)
+    if gb_res:
+        embed_url = ""
+        reader_type = "web"
+        if gb_res.get("preview_url") and "books.google.com" in gb_res["preview_url"]:
+            m = re.search(r'id=([a-zA-Z0-9_\-]+)', gb_res["preview_url"])
+            if m:
+                embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
+                reader_type = "google_embed"
+
+        return {
+            "matched_title": gb_res.get("matched_title", title),
+            "matched_authors": gb_res.get("matched_authors", author),
+            "cover_url": gb_res.get("cover_url", ""),
+            "preview_url": gb_res.get("preview_url", ""),
+            "embed_url": embed_url,
+            "reader_type": reader_type,
+            "isbn": gb_res.get("isbn", ""),
+            "source_provider": "Google Books"
+        }
+
+    return {}
 
 
 def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:

@@ -172,13 +172,14 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     }
   };
 
-  const triggerExtractReadings = async (courseName) => {
+  const triggerExtractReadings = async (courseName, regenerate = false) => {
     const cname = courseName || selectedCourse;
     if (!cname) return { status: "error", error: "Course name required" };
     const slug = normalizeCourseSlug(cname) || cname;
     setIsExtractingReadings(true);
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/extract-readings`, {
+      const url = `${API_BASE}/api/course/${encodeURIComponent(slug)}/extract-readings${regenerate ? '?regenerate=true' : ''}`;
+      const res = await fetch(url, {
         method: 'POST'
       });
       if (res.ok) {
@@ -194,6 +195,21 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       setIsExtractingReadings(false);
     }
     return { status: "error" };
+  };
+
+  const handleRefreshReadingReader = async (readingId) => {
+    if (!readingId) return null;
+    try {
+      const res = await fetch(`${API_BASE}/api/course/reading/${readingId}/reader?refresh=true`);
+      if (res.ok) {
+        const updated = await res.json();
+        setCourseReadings(prev => prev.map(item => item.id === readingId ? { ...item, ...updated } : item));
+        return updated;
+      }
+    } catch (err) {
+      console.error("Failed to refresh reading reader:", err);
+    }
+    return null;
   };
 
   const handleDeleteCourseReading = async (readingId) => {
@@ -416,6 +432,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     isExtractingReadings,
     fetchCourseReadings,
     triggerExtractReadings,
+    handleRefreshReadingReader,
     handleDeleteCourseReading,
     searchReadingWeb,
     courseViewTab,

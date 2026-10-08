@@ -63,6 +63,7 @@ export default function HomeView({
   courseReadingsLoading = false,
   isExtractingReadings = false,
   triggerExtractReadings,
+  handleRefreshReadingReader,
   handleDeleteCourseReading,
   searchReadingWeb,
   openUploadModal,
@@ -430,6 +431,7 @@ export default function HomeView({
           courseReadingsLoading={courseReadingsLoading}
           isExtractingReadings={isExtractingReadings}
           triggerExtractReadings={triggerExtractReadings}
+          handleRefreshReadingReader={handleRefreshReadingReader}
           handleDeleteCourseReading={handleDeleteCourseReading}
           searchReadingWeb={searchReadingWeb}
           googleUser={googleUser}

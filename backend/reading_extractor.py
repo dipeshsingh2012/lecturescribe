@@ -37,7 +37,42 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
     lt = title.lower()
     la = author.lower()
 
-    # 2. Internet Archive Advanced Search (Direct Embed Reader)
+    # 1. First Priority: Search Internet Archive for UNRESTRICTED full-access items (no sign-in needed)
+    try:
+        author_word = clean_author.split()[0] if clean_author else ""
+        unrestricted_queries = []
+        if author_word and len(author_word) >= 3:
+            unrestricted_queries.append(f'("{clean_title}") AND ({author_word}) AND mediatype:(texts) AND NOT access-restricted-item:true')
+            unrestricted_queries.append(f'title:({clean_title}) AND creator:({author_word}) AND mediatype:(texts) AND NOT access-restricted-item:true')
+        unrestricted_queries.append(f'("{clean_title}") AND mediatype:(texts) AND NOT access-restricted-item:true')
+        unrestricted_queries.append(f'title:({clean_title}) AND mediatype:(texts) AND NOT access-restricted-item:true')
+
+        for q in unrestricted_queries:
+            ia_res = requests.get(
+                ARCHIVE_ORG_SEARCH_API,
+                params={'q': q, 'fl[]': 'identifier,title,creator,year', 'rows': 3, 'output': 'json'},
+                timeout=3.5
+            )
+            if ia_res.status_code == 200:
+                docs = ia_res.json().get('response', {}).get('docs', [])
+                if docs:
+                    d = docs[0]
+                    ident = d.get('identifier')
+                    if ident:
+                        return {
+                            "matched_title": d.get('title') or title,
+                            "matched_authors": d.get('creator') or author,
+                            "cover_url": f"https://archive.org/services/img/{ident}",
+                            "preview_url": f"https://archive.org/details/{ident}",
+                            "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
+                            "reader_type": "archive_org",
+                            "is_lending": False,
+                            "source_provider": "Internet Archive (Full Access)"
+                        }
+    except Exception:
+        pass
+
+    # 2. Second Priority: Standard Internet Archive / OpenLibrary Controlled Digital Lending
     try:
         author_word = clean_author.split()[0] if clean_author else ""
         q_parts = [f'title:({clean_title})', 'mediatype:(texts)']
@@ -62,7 +97,8 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         "preview_url": f"https://archive.org/details/{ident}",
                         "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
                         "reader_type": "archive_org",
-                        "source_provider": "Internet Archive"
+                        "is_lending": True,
+                        "source_provider": "Internet Archive (Lending Library)"
                     }
     except Exception:
         pass
@@ -95,7 +131,8 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
                         "reader_type": "archive_org",
                         "isbn": ol_isbn,
-                        "source_provider": "Internet Archive"
+                        "is_lending": True,
+                        "source_provider": "Internet Archive / OpenLibrary (Lending Library)"
                     }
                 elif cover_url:
                     # Found book and cover; will try Google Books below for reader embed
@@ -116,6 +153,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         "embed_url": embed_url,
                         "reader_type": reader_type,
                         "isbn": ol_isbn or gb_res.get("isbn", ""),
+                        "is_lending": False,
                         "source_provider": "OpenLibrary / Google Books"
                     }
     except Exception:

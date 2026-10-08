@@ -368,6 +368,7 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_pg_readings_course ON lecturescribe_course_readings(course_name);
                         ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS embed_url TEXT;
                         ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS reader_type VARCHAR(64) DEFAULT 'embed';
+                        ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS is_lending BOOLEAN DEFAULT FALSE;
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_chat_logs (
                             id SERIAL PRIMARY KEY,
@@ -3231,7 +3232,7 @@ class RelationalDBManager:
                     cursor.execute("""
                         SELECT id, course_name, title, author, edition, reading_type,
                                category, cover_url, preview_url, embed_url, reader_type, isbn, source_type,
-                               source_context, web_links, created_at
+                               source_context, web_links, is_lending, created_at
                         FROM lecturescribe_course_readings
                         WHERE LOWER(course_name) = LOWER(%s)
                            OR LOWER(course_name) = LOWER(%s)
@@ -3276,6 +3277,7 @@ class RelationalDBManager:
         source_type = (reading.get("source_type") or "manual").strip()
         source_context = (reading.get("source_context") or "").strip()
         web_links = reading.get("web_links") or []
+        is_lending = bool(reading.get("is_lending", False))
 
         item = {
             "course_name": clean_course,
@@ -3292,6 +3294,7 @@ class RelationalDBManager:
             "source_type": source_type,
             "source_context": source_context,
             "web_links": web_links,
+            "is_lending": is_lending,
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
 
@@ -3305,13 +3308,13 @@ class RelationalDBManager:
                             INSERT INTO lecturescribe_course_readings (
                                 course_name, title, author, edition, reading_type,
                                 category, cover_url, preview_url, embed_url, reader_type, isbn, source_type,
-                                source_context, web_links
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                                source_context, web_links, is_lending
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
                             RETURNING id, created_at;
                         """, (
                             clean_course, title, author, edition, reading_type,
                             category, cover_url, preview_url, embed_url, reader_type, isbn, source_type,
-                            source_context, json.dumps(web_links)
+                            source_context, json.dumps(web_links), is_lending
                         ))
                         row = cursor.fetchone()
                         if row:
@@ -3337,9 +3340,10 @@ class RelationalDBManager:
         embed_url: str,
         reader_type: str = "embed",
         cover_url: str = "",
-        preview_url: str = ""
+        preview_url: str = "",
+        is_lending: Optional[bool] = None
     ) -> bool:
-        """Update reader embed URL and cover for an existing reading item."""
+        """Update reader embed URL, cover, and lending status for an existing reading item."""
         conn = None
         if HAS_PSYCOPG2 and self.postgres_url:
             try:
@@ -3354,6 +3358,9 @@ class RelationalDBManager:
                         if preview_url:
                             updates.append("preview_url = %s")
                             params.append(preview_url)
+                        if is_lending is not None:
+                            updates.append("is_lending = %s")
+                            params.append(is_lending)
                         params.append(reading_id)
                         cursor.execute(f"""
                             UPDATE lecturescribe_course_readings
@@ -3375,6 +3382,8 @@ class RelationalDBManager:
                     r["cover_url"] = cover_url
                 if preview_url:
                     r["preview_url"] = preview_url
+                if is_lending is not None:
+                    r["is_lending"] = is_lending
                 return True
         return False
 

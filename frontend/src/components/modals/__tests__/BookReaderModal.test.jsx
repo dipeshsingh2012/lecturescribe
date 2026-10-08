@@ -38,7 +38,7 @@ describe('BookReaderModal', () => {
     );
 
     expect(screen.getByText('Pattern Classification')).toBeInTheDocument();
-    expect(screen.getByText('INTERACTIVE BOOK READER')).toBeInTheDocument();
+    expect(screen.getByText('FULL BOOK (NO LOGIN)')).toBeInTheDocument();
     expect(screen.getByText(/Duda and Hart/i)).toBeInTheDocument();
     expect(screen.getByText('Lecture 1 [04:15]')).toBeInTheDocument();
 
@@ -50,6 +50,28 @@ describe('BookReaderModal', () => {
     const closeBtn = screen.getByTitle('Close reader (Esc)');
     fireEvent.click(closeBtn);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('renders lending copy banner and badge when is_lending is true', () => {
+    const testBook = {
+      id: 5,
+      title: 'Deep Learning',
+      author: 'Goodfellow',
+      embed_url: 'https://archive.org/embed/deeplearning0000good?ui=embed',
+      is_lending: true,
+      reader_type: 'archive_org'
+    };
+
+    render(
+      <BookReaderModal
+        open={true}
+        onClose={vi.fn()}
+        book={testBook}
+      />
+    );
+
+    expect(screen.getByText('LENDING COPY (BORROW FOR 1 HR)')).toBeInTheDocument();
+    expect(screen.getByText(/1-hour lending edition/i)).toBeInTheDocument();
   });
 
   it('toggles fullscreen state on click', () => {

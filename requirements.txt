@@ -18,9 +18,10 @@ sqlalchemy>=2.0.0
 # Distributed Caching (Hosted Redis Cloud / Upstash)
 redis>=5.0.0
 
-# Search & Vector RAG Triad Services
+# Search, Vector RAG & LLM Clients
 algoliasearch>=4.0.0,<5.0.0
 pinecone>=3.0.0
+openai>=1.0.0
 
 # Google Drive Cloud Upload & Google Cloud Storage
 google-api-python-client>=2.100.0

@@ -355,7 +355,7 @@ lecturescribe/
 │   └── REDIS_CACHING_STRATEGY.md # Caching layer design document
 ├── .github/workflows/            # CI + backend deploy YAMLs
 ├── .env.example                  # Environment variables template
-├── requirements.txt              # Python deps (FastAPI, Uvicorn, Pinecone, Algolia, psycopg2, redis, yt-dlp, static-ffmpeg…)
+├── requirements.txt              # Python deps (FastAPI, Uvicorn, OpenAI-compatible LLM clients, Pinecone, Algolia, psycopg2, redis, yt-dlp, static-ffmpeg…)
 ├── pytest.ini                    # pytest discovery config
 ├── Dockerfile                    # Repo-root Dockerfile (backend)
 ├── vercel.json                   # Deployment configs

@@ -133,7 +133,7 @@ export default function CourseLibrary({
   };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
       
       
       {/* ========================================================================= */}
@@ -578,8 +578,13 @@ export default function CourseLibrary({
         ) : (
           <Box sx={{
             display: 'grid',
-            gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' },
-            gap: 2.5
+            gridTemplateColumns: {
+              xs: '1fr',
+              sm: 'repeat(auto-fill, minmax(320px, 1fr))'
+            },
+            gap: 2.5,
+            width: '100%',
+            minWidth: 0
           }}>
             {courseReadings.map((book) => {
               const catBadge = getReadingCategoryBadge(book.category);
@@ -596,6 +601,10 @@ export default function CourseLibrary({
                     flexDirection: 'column',
                     justifyContent: 'space-between',
                     gap: 2,
+                    minWidth: 0,
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
                     transition: 'all 0.2s ease',
                     '&:hover': {
                       borderColor: currentTheme.palette.primary,
@@ -603,7 +612,7 @@ export default function CourseLibrary({
                     }
                   }}
                 >
-                  <Box sx={{ display: 'flex', gap: 2 }}>
+                  <Box sx={{ display: 'flex', gap: 2, minWidth: 0 }}>
                     {/* BOOK COVER OR STYLIZED EMBOSSED SPINE */}
                     {book.cover_url ? (
                       <Box
@@ -657,7 +666,7 @@ export default function CourseLibrary({
 
                     {/* BOOK DETAILS */}
                     <Box sx={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
-                      <Box sx={{ mb: 0.5 }}>
+                      <Box sx={{ mb: 0.5, display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
                         <span
                           style={{
                             fontSize: '0.68rem',
@@ -666,11 +675,50 @@ export default function CourseLibrary({
                             borderRadius: '6px',
                             backgroundColor: catBadge.bg,
                             color: catBadge.color,
-                            border: `1px solid ${catBadge.border}`
+                            border: `1px solid ${catBadge.border}`,
+                            display: 'inline-block',
+                            maxWidth: '100%',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
                           }}
                         >
                           {catBadge.label}
                         </span>
+
+                        {book.is_lending ? (
+                          <span
+                            style={{
+                              fontSize: '0.65rem',
+                              fontWeight: 700,
+                              padding: '2px 6px',
+                              borderRadius: '6px',
+                              backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                              color: '#f59e0b',
+                              border: '1px solid rgba(245, 158, 11, 0.3)',
+                              display: 'inline-block',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            1-Hr Loan
+                          </span>
+                        ) : book.embed_url ? (
+                          <span
+                            style={{
+                              fontSize: '0.65rem',
+                              fontWeight: 700,
+                              padding: '2px 6px',
+                              borderRadius: '6px',
+                              backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                              color: '#10b981',
+                              border: '1px solid rgba(16, 185, 129, 0.3)',
+                              display: 'inline-block',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            Full Book
+                          </span>
+                        ) : null}
                       </Box>
 
                       <Typography
@@ -683,14 +731,27 @@ export default function CourseLibrary({
                           display: '-webkit-box',
                           WebkitLineClamp: 2,
                           WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden'
+                          overflow: 'hidden',
+                          wordBreak: 'break-word'
                         }}
                       >
                         {book.title}
                       </Typography>
 
                       {book.author && (
-                        <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, fontWeight: 600, mb: 0.3 }}>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: currentTheme.palette.textSecondary,
+                            fontWeight: 600,
+                            mb: 0.3,
+                            display: '-webkit-box',
+                            WebkitLineClamp: 1,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                            wordBreak: 'break-word'
+                          }}
+                        >
                           by {book.author}
                         </Typography>
                       )}
@@ -702,9 +763,9 @@ export default function CourseLibrary({
                       )}
 
                       {book.source_context && (
-                        <Box sx={{ mt: 'auto', pt: 1, display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '0.7rem', color: currentTheme.palette.primary }}>
-                          <FileText size={12} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <Box sx={{ mt: 'auto', pt: 1, display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '0.7rem', color: currentTheme.palette.primary, minWidth: 0 }}>
+                          <FileText size={12} style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                             {book.source_context}
                           </span>
                         </Box>
@@ -719,9 +780,11 @@ export default function CourseLibrary({
                     justifyContent: 'space-between',
                     borderTop: `1px solid ${currentTheme.palette.cardBorder}`,
                     pt: 1.5,
-                    gap: 1
+                    gap: 1,
+                    flexWrap: 'wrap',
+                    minWidth: 0
                   }}>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', minWidth: 0 }}>
                       <Button
                         variant="contained"
                         size="small"
@@ -735,6 +798,7 @@ export default function CourseLibrary({
                           backgroundColor: currentTheme.palette.primary,
                           color: '#ffffff',
                           boxShadow: 'none',
+                          whiteSpace: 'nowrap',
                           '&:hover': {
                             backgroundColor: currentTheme.palette.primaryDark || currentTheme.palette.primary,
                             boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
@@ -755,14 +819,15 @@ export default function CourseLibrary({
                           fontSize: '0.75rem',
                           borderRadius: 2,
                           borderColor: currentTheme.palette.cardBorder,
-                          color: currentTheme.palette.textSecondary
+                          color: currentTheme.palette.textSecondary,
+                          whiteSpace: 'nowrap'
                         }}
                       >
                         Search Web
                       </Button>
                     </Box>
 
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
                       {handleRefreshReadingReader && (
                         <Tooltip title="Re-resolve / refresh digital reader link">
                           <span>

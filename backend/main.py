@@ -2382,6 +2382,8 @@ def extract_course_readings(course_name: str, regenerate: bool = Query(False, de
                 item["reader_type"] = meta["reader_type"]
             if meta.get("isbn"):
                 item["isbn"] = meta["isbn"]
+            if "is_lending" in meta:
+                item["is_lending"] = meta["is_lending"]
 
         saved = db_manager.save_course_reading(cname, item)
         saved_items.append(saved)
@@ -2412,7 +2414,7 @@ def get_or_resolve_reading_reader(
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, course_name, title, author, edition, reading_type,
-                       category, cover_url, preview_url, embed_url, reader_type, isbn
+                       category, cover_url, preview_url, embed_url, reader_type, isbn, is_lending
                 FROM lecturescribe_course_readings
                 WHERE id = %s;
             """, (reading_id,))
@@ -2433,6 +2435,7 @@ def get_or_resolve_reading_reader(
     embed_url = reading.get("embed_url") or ""
     reader_type = reading.get("reader_type") or "embed"
     cover_url = reading.get("cover_url") or ""
+    is_lending = reading.get("is_lending", False)
 
     if embed_url and not refresh:
         return {
@@ -2443,7 +2446,8 @@ def get_or_resolve_reading_reader(
             "embed_url": embed_url,
             "reader_type": reader_type,
             "preview_url": reading.get("preview_url") or embed_url,
-            "cover_url": cover_url
+            "cover_url": cover_url,
+            "is_lending": is_lending
         }
 
     # Resolve on the fly if embed_url was not previously populated or refresh requested
@@ -2453,12 +2457,14 @@ def get_or_resolve_reading_reader(
         reader_type = meta.get("reader_type", "embed")
         cover_url = meta.get("cover_url") or cover_url
         preview_url = meta.get("preview_url") or reading.get("preview_url") or ""
+        is_lending = meta.get("is_lending", is_lending)
         db_manager.update_course_reading_embed(
             reading_id=reading_id,
             embed_url=embed_url,
             reader_type=reader_type,
             cover_url=cover_url,
-            preview_url=preview_url
+            preview_url=preview_url,
+            is_lending=is_lending
         )
 
     # Google Books preview fallback if preview_url has ID
@@ -2477,7 +2483,8 @@ def get_or_resolve_reading_reader(
         "embed_url": embed_url,
         "reader_type": reader_type,
         "preview_url": reading.get("preview_url") or embed_url,
-        "cover_url": cover_url
+        "cover_url": cover_url,
+        "is_lending": is_lending
     }
 
 

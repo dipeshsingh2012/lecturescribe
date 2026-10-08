@@ -19,17 +19,20 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
   const [resolvedReaderType, setResolvedReaderType] = useState('embed');
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [isLending, setIsLending] = useState(Boolean(book?.is_lending));
 
   useEffect(() => {
     if (!open || !book) {
       setResolvedEmbedUrl('');
       setIsLoading(true);
       setHasError(false);
+      setIsLending(false);
       return;
     }
 
     setIsLoading(true);
     setHasError(false);
+    setIsLending(Boolean(book.is_lending));
 
     // 1. If book already has an embed_url, use it directly
     if (book.embed_url) {
@@ -61,6 +64,9 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
           if (data && data.embed_url) {
             setResolvedEmbedUrl(data.embed_url);
             setResolvedReaderType(data.reader_type || 'embed');
+            if (data.is_lending !== undefined) {
+              setIsLending(Boolean(data.is_lending));
+            }
           } else if (book.preview_url) {
             setResolvedEmbedUrl(book.preview_url);
             setResolvedReaderType('web');
@@ -103,8 +109,11 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
   if (!open || !book) return null;
 
   const getReaderBadge = () => {
+    if (isLending) {
+      return { label: 'LENDING COPY (BORROW FOR 1 HR)', bg: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' };
+    }
     if (resolvedReaderType === 'archive_org' || resolvedEmbedUrl.includes('archive.org/embed')) {
-      return { label: 'INTERACTIVE BOOK READER', bg: 'rgba(139, 92, 246, 0.15)', color: '#8b5cf6' };
+      return { label: 'FULL BOOK (NO LOGIN)', bg: 'rgba(16, 185, 129, 0.15)', color: '#10b981' };
     }
     if (resolvedReaderType === 'pdf' || resolvedEmbedUrl.endsWith('.pdf')) {
       return { label: 'OPEN-ACCESS PDF', bg: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' };
@@ -117,6 +126,7 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
 
   const badge = getReaderBadge();
   const directOpenUrl = book.preview_url || resolvedEmbedUrl || '';
+  const iaLoginUrl = 'https://archive.org/account/login';
 
   return (
     <div
@@ -222,6 +232,32 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {isLending && (
+              <a
+                href={iaLoginUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Log in to Internet Archive to borrow this library edition for 1 hour"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  background: 'rgba(245, 158, 11, 0.15)',
+                  color: '#f59e0b',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  textDecoration: 'none',
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  transition: 'background 0.15s'
+                }}
+              >
+                <Sparkles size={13} />
+                <span>Borrow Full Copy (1 Hr)</span>
+              </a>
+            )}
+
             {directOpenUrl && (
               <a
                 href={directOpenUrl}
@@ -289,6 +325,44 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
             </button>
           </div>
         </div>
+
+        {/* Lending Advisory Banner */}
+        {isLending && (
+          <div
+            style={{
+              padding: '8px 20px',
+              background: 'rgba(245, 158, 11, 0.08)',
+              borderBottom: '1px solid rgba(245, 158, 11, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+              fontSize: '0.8rem',
+              color: '#fbbf24'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle size={15} style={{ flexShrink: 0 }} />
+              <span>
+                <strong>1-Hour Lending Edition:</strong> To read beyond preview pages, use the <strong>"Borrow"</strong> button inside the reader controls or log in to Internet Archive.
+              </span>
+            </div>
+            <a
+              href={iaLoginUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                color: '#fbbf24',
+                fontWeight: 700,
+                textDecoration: 'underline',
+                whiteSpace: 'nowrap',
+                fontSize: '0.78rem'
+              }}
+            >
+              Sign In to Archive.org &rarr;
+            </a>
+          </div>
+        )}
 
         {/* Reader Viewer Container */}
         <div

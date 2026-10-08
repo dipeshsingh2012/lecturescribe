@@ -2301,12 +2301,13 @@ def extract_course_readings(course_name: str):
     for cv in course_vids:
         vid = cv["video_id"]
         title = cv["title"]
-        cues = db_manager.get_transcript_cues(vid)
+        saved_vid = db_manager.get_saved_video(vid)
+        cues = (saved_vid.get("cues") or []) if saved_vid else []
         if cues:
             head_cues = cues[:40]
             tail_cues = cues[40:][-20:] if len(cues) > 40 else []
             combined_cues = head_cues + tail_cues
-            cue_text = " ".join([f"[{c.get('start_time', '')}] {c.get('text', '')}" for c in combined_cues])
+            cue_text = " ".join([f"[{c.get('start_time') or c.get('time') or ''}] {c.get('text', '')}" for c in combined_cues])
             transcripts_summary_parts.append(f"Lecture '{title}':\n{cue_text}")
 
     # 2. Gather uploaded slide documents for this course

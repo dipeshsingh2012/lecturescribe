@@ -80,6 +80,8 @@ class RelationalDBManager:
         self._course_quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_attempts_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_explanations_memory_cache: Dict[str, Dict[int, str]] = {}
+        self._course_quiz_history_memory: List[Dict[str, Any]] = []
+        self._course_quiz_explanations_memory: Dict[str, Dict[str, str]] = {}
         self._readings_memory_cache: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
@@ -148,6 +150,29 @@ class RelationalDBManager:
                             seconds INT NOT NULL,
                             text TEXT NOT NULL
                         );
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_transcription_jobs (
+                            job_id UUID PRIMARY KEY,
+                            video_id VARCHAR(128) NOT NULL REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            requested_by VARCHAR(255),
+                            status VARCHAR(32) NOT NULL,
+                            stage VARCHAR(32) NOT NULL,
+                            error_message TEXT,
+                            task_name TEXT,
+                            run_execution_name TEXT,
+                            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                            started_at TIMESTAMP WITH TIME ZONE,
+                            completed_at TIMESTAMP WITH TIME ZONE,
+                            CONSTRAINT chk_transcription_job_status
+                                CHECK (status IN ('queued', 'starting', 'processing', 'completed', 'failed'))
+                        );
+
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_transcription_active_job_video
+                            ON lecturescribe_transcription_jobs (video_id)
+                            WHERE status IN ('queued', 'starting', 'processing');
+                        CREATE INDEX IF NOT EXISTS idx_transcription_jobs_video_created
+                            ON lecturescribe_transcription_jobs (video_id, created_at DESC);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_summaries (
                             id SERIAL PRIMARY KEY,
@@ -290,6 +315,37 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_quiz_explanation_vid ON lecturescribe_quiz_explanations(video_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_quiz_history (
+                            id SERIAL PRIMARY KEY,
+                            quiz_id VARCHAR(64) UNIQUE NOT NULL,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            user_email VARCHAR(255) NOT NULL DEFAULT '',
+                            quiz_json JSONB NOT NULL,
+                            answers JSONB NOT NULL DEFAULT '{}'::jsonb,
+                            score INT DEFAULT 0,
+                            total_questions INT DEFAULT 0,
+                            completed BOOLEAN DEFAULT FALSE,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_hist_slug ON lecturescribe_course_quiz_history(course_slug);
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_hist_email ON lecturescribe_course_quiz_history(user_email);
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_hist_quiz_id ON lecturescribe_course_quiz_history(quiz_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_quiz_explanations (
+                            id SERIAL PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            question_id VARCHAR(64) NOT NULL,
+                            detailed_explanation TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_course_quiz_explanation UNIQUE (course_slug, question_id)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_exp ON lecturescribe_course_quiz_explanations(course_slug, question_id);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_readings (
                             id SERIAL PRIMARY KEY,
@@ -484,6 +540,256 @@ class RelationalDBManager:
                         ),
                     )
                     return self._serialize_fleet_run(cursor.fetchone())
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _serialize_transcription_job(row: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(row, Mapping):
+            return None
+        result = dict(row)
+        for key in ("created_at", "updated_at", "started_at", "completed_at"):
+            value = result.get(key)
+            if value is not None and hasattr(value, "isoformat"):
+                result[key] = value.isoformat()
+        return result
+
+    def create_transcription_job(
+        self,
+        job_id: str,
+        video_id: str,
+        requested_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a durable job or return the currently active job for this lecture."""
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        clean_email = requested_by.strip().lower() if requested_by and requested_by.strip() else None
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_transcription_jobs
+                            (job_id, video_id, requested_by, status, stage)
+                        VALUES (%s, %s, %s, 'queued', 'queued')
+                        ON CONFLICT (video_id)
+                            WHERE status IN ('queued', 'starting', 'processing')
+                        DO NOTHING
+                        RETURNING *;
+                        """,
+                        (job_id, video_id, clean_email),
+                    )
+                    row = cursor.fetchone()
+                    created = row is not None
+                    if not created:
+                        cursor.execute(
+                            """
+                            SELECT * FROM lecturescribe_transcription_jobs
+                            WHERE video_id = %s
+                              AND status IN ('queued', 'starting', 'processing')
+                            ORDER BY created_at DESC
+                            LIMIT 1;
+                            """,
+                            (video_id,),
+                        )
+                        row = cursor.fetchone()
+                    serialized = self._serialize_transcription_job(row)
+                    if serialized is None:
+                        raise RuntimeError("Unable to create or retrieve the transcription job.")
+                    serialized["created"] = created
+                    return serialized
+        finally:
+            conn.close()
+
+    def get_transcription_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_transcription_jobs WHERE job_id = %s;",
+                        (job_id,),
+                    )
+                    return self._serialize_transcription_job(cursor.fetchone())
+        finally:
+            conn.close()
+
+    def update_transcription_job(
+        self,
+        job_id: str,
+        status: str,
+        stage: str,
+        error_message: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        if status not in {"queued", "starting", "processing", "completed", "failed"}:
+            raise ValueError("Unsupported transcription job status.")
+        allowed_transitions = {
+            "queued": {"queued", "starting", "failed"},
+            "starting": {"starting", "processing", "failed"},
+            "processing": {"processing", "completed", "failed"},
+            "completed": {"completed"},
+            "failed": {"failed"},
+        }
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT status FROM lecturescribe_transcription_jobs WHERE job_id = %s FOR UPDATE;",
+                        (job_id,),
+                    )
+                    current_row = cursor.fetchone()
+                    if not isinstance(current_row, Mapping):
+                        return None
+                    current_status = current_row["status"]
+                    if status not in allowed_transitions[current_status]:
+                        raise ValueError(
+                            f"Cannot change transcription job status from '{current_status}' to '{status}'."
+                        )
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_transcription_jobs
+                        SET status = %s,
+                            stage = %s,
+                            error_message = %s,
+                            started_at = CASE
+                                WHEN %s = 'processing' THEN COALESCE(started_at, NOW())
+                                ELSE started_at
+                            END,
+                            completed_at = CASE
+                                WHEN %s IN ('completed', 'failed') THEN NOW()
+                                ELSE completed_at
+                            END,
+                            updated_at = NOW()
+                        WHERE job_id = %s
+                        RETURNING *;
+                        """,
+                        (
+                            status,
+                            stage,
+                            error_message,
+                            status,
+                            status,
+                            job_id,
+                        ),
+                    )
+                    return self._serialize_transcription_job(cursor.fetchone())
+        finally:
+            conn.close()
+
+    def record_transcription_task(self, job_id: str, task_name: str) -> None:
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_transcription_jobs
+                        SET task_name = %s, updated_at = NOW()
+                        WHERE job_id = %s;
+                        """,
+                        (task_name, job_id),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("Unable to record the transcription task.")
+        finally:
+            conn.close()
+
+    def record_transcription_execution(self, job_id: str, execution_name: str) -> None:
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_transcription_jobs
+                        SET run_execution_name = %s, updated_at = NOW()
+                        WHERE job_id = %s;
+                        """,
+                        (execution_name, job_id),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("Unable to record the Cloud Run execution.")
+        finally:
+            conn.close()
+
+    def claim_transcription_job(self, job_id: str) -> bool:
+        """Atomically claim a queued/starting job; duplicate worker starts do no work."""
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_transcription_jobs
+                        SET status = 'processing', stage = 'transcribing',
+                            started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+                        WHERE job_id = %s AND status IN ('queued', 'starting')
+                        RETURNING job_id;
+                        """,
+                        (job_id,),
+                    )
+                    return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+    def claim_transcription_dispatch(self, job_id: str) -> bool:
+        """Claim a queued dispatch, allowing recovery of a stale launch attempt."""
+        if not self.postgres_url:
+            raise RuntimeError("DATABASE_URL is not configured.")
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_transcription_jobs
+                        SET status = 'starting', stage = 'starting', updated_at = NOW()
+                        WHERE job_id = %s
+                          AND (
+                            status = 'queued'
+                            OR (
+                                status = 'starting'
+                                AND run_execution_name IS NULL
+                                AND updated_at < NOW() - INTERVAL '2 minutes'
+                            )
+                          )
+                        RETURNING job_id;
+                        """,
+                        (job_id,),
+                    )
+                    return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+    def reset_transcription_dispatch(self, job_id: str) -> bool:
+        """Reset a starting dispatch back to queued if Cloud Run Job launch failed."""
+        if not self.postgres_url:
+            return True
+        conn = self._get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_transcription_jobs
+                        SET status = 'queued', stage = 'queued', updated_at = NOW()
+                        WHERE job_id = %s AND status = 'starting' AND run_execution_name IS NULL;
+                        """,
+                        (job_id,),
+                    )
+                    return cursor.rowcount > 0
         finally:
             conn.close()
 
@@ -737,6 +1043,306 @@ class RelationalDBManager:
         finally:
             if conn:
                 conn.close()
+
+    def save_course_quiz_history(
+        self,
+        course_name: str,
+        quiz_id: str,
+        quiz_data: Dict[str, Any],
+        user_email: str = "",
+        answers: Optional[Dict[str, Any]] = None,
+        score: int = 0,
+        total_questions: int = 0,
+        completed: bool = False
+    ) -> bool:
+        """Persist a course quiz run/attempt into history."""
+        if not course_name or not quiz_id or not quiz_data:
+            return False
+
+        clean_name = str(course_name).strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_name.lower()).strip('-') or "general"
+        clean_email = str(user_email or "").strip().lower()
+        answers_dict = answers or {}
+        tot_q = total_questions or len(quiz_data.get("questions") or [])
+
+        # Update in-memory history cache
+        found_mem = False
+        for item in self._course_quiz_history_memory:
+            if item.get("quiz_id") == quiz_id:
+                item["answers"] = answers_dict
+                item["score"] = score
+                item["total_questions"] = tot_q
+                item["completed"] = completed
+                item["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                found_mem = True
+                break
+        if not found_mem:
+            self._course_quiz_history_memory.append({
+                "quiz_id": quiz_id,
+                "course_slug": course_slug,
+                "course_name": clean_name,
+                "user_email": clean_email,
+                "quiz_json": quiz_data,
+                "answers": answers_dict,
+                "score": score,
+                "total_questions": tot_q,
+                "completed": completed,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            })
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_quiz_history 
+                            (quiz_id, course_slug, course_name, user_email, quiz_json, answers, score, total_questions, completed, updated_at)
+                        VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (quiz_id)
+                        DO UPDATE SET
+                            answers = EXCLUDED.answers,
+                            score = EXCLUDED.score,
+                            total_questions = EXCLUDED.total_questions,
+                            completed = EXCLUDED.completed,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (
+                        quiz_id,
+                        course_slug,
+                        clean_name,
+                        clean_email,
+                        json.dumps(quiz_data),
+                        json.dumps(answers_dict),
+                        score,
+                        tot_q,
+                        completed
+                    ))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_course_quiz_history error for '{quiz_id}': {e}")
+            return True
+        finally:
+            if conn:
+                conn.close()
+
+    def get_course_quiz_history(
+        self,
+        course_name: str,
+        user_email: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve list of historical quiz runs for a course."""
+        if not course_name:
+            return []
+
+        clean_name = str(course_name).strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_name.lower()).strip('-') or "general"
+        clean_email = str(user_email or "").strip().lower()
+
+        if not self.postgres_url:
+            matched = [
+                {
+                    "quiz_id": item["quiz_id"],
+                    "course_name": item["course_name"],
+                    "course_slug": item["course_slug"],
+                    "score": item["score"],
+                    "total_questions": item["total_questions"],
+                    "completed": item["completed"],
+                    "created_at": item["created_at"],
+                    "updated_at": item.get("updated_at", item["created_at"])
+                }
+                for item in reversed(self._course_quiz_history_memory)
+                if item.get("course_slug") == course_slug and (not clean_email or item.get("user_email") == clean_email or not item.get("user_email"))
+            ]
+            return matched
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            SELECT quiz_id, course_slug, course_name, score, total_questions, completed, created_at, updated_at
+                            FROM lecturescribe_course_quiz_history
+                            WHERE course_slug = %s AND (user_email = %s OR user_email = '')
+                            ORDER BY created_at DESC
+                            LIMIT 50;
+                        """, (course_slug, clean_email))
+                    else:
+                        cursor.execute("""
+                            SELECT quiz_id, course_slug, course_name, score, total_questions, completed, created_at, updated_at
+                            FROM lecturescribe_course_quiz_history
+                            WHERE course_slug = %s
+                            ORDER BY created_at DESC
+                            LIMIT 50;
+                        """, (course_slug,))
+                    rows = cursor.fetchall() or []
+                    results = []
+                    for r in rows:
+                        results.append({
+                            "quiz_id": r["quiz_id"],
+                            "course_slug": r["course_slug"],
+                            "course_name": r["course_name"],
+                            "score": r["score"],
+                            "total_questions": r["total_questions"],
+                            "completed": bool(r["completed"]),
+                            "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+                            "updated_at": r["updated_at"].isoformat() if hasattr(r["updated_at"], "isoformat") else str(r["updated_at"])
+                        })
+                    return results
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_course_quiz_history error for '{course_slug}': {e}")
+            return [
+                {
+                    "quiz_id": item["quiz_id"],
+                    "course_name": item["course_name"],
+                    "course_slug": item["course_slug"],
+                    "score": item["score"],
+                    "total_questions": item["total_questions"],
+                    "completed": item["completed"],
+                    "created_at": item["created_at"]
+                }
+                for item in reversed(self._course_quiz_history_memory)
+                if item.get("course_slug") == course_slug
+            ]
+        finally:
+            if conn:
+                conn.close()
+
+    def get_course_quiz_history_by_id(self, quiz_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve full historical quiz details, saved answers, and score by quiz_id."""
+        if not quiz_id:
+            return None
+
+        clean_id = str(quiz_id).strip()
+        for item in self._course_quiz_history_memory:
+            if item.get("quiz_id") == clean_id:
+                return item
+
+        if not self.postgres_url:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT quiz_id, course_slug, course_name, user_email, quiz_json, answers, score, total_questions, completed, created_at, updated_at
+                        FROM lecturescribe_course_quiz_history
+                        WHERE quiz_id = %s
+                        LIMIT 1;
+                    """, (clean_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        quiz_json = row["quiz_json"] if isinstance(row["quiz_json"], dict) else json.loads(row["quiz_json"])
+                        answers = row["answers"] if isinstance(row["answers"], dict) else json.loads(row["answers"])
+                        return {
+                            "quiz_id": row["quiz_id"],
+                            "course_slug": row["course_slug"],
+                            "course_name": row["course_name"],
+                            "user_email": row["user_email"],
+                            "quiz_json": quiz_json,
+                            "answers": answers,
+                            "score": row["score"],
+                            "total_questions": row["total_questions"],
+                            "completed": bool(row["completed"]),
+                            "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+                            "updated_at": row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else str(row["updated_at"])
+                        }
+                    return None
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_course_quiz_history_by_id error for '{clean_id}': {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def save_course_quiz_explanation(self, course_name: str, question_id: Union[int, str], detailed_explanation: str) -> bool:
+        """Persist detailed course quiz explanation to PostgreSQL and In-Memory cache."""
+        if not course_name or not detailed_explanation:
+            return False
+
+        clean_name = str(course_name).strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_name.lower()).strip('-') or "general"
+        q_id = str(question_id or "").strip()
+
+        if course_slug not in self._course_quiz_explanations_memory:
+            self._course_quiz_explanations_memory[course_slug] = {}
+        self._course_quiz_explanations_memory[course_slug][q_id] = detailed_explanation
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_quiz_explanations (course_slug, question_id, detailed_explanation, updated_at)
+                        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (course_slug, question_id)
+                        DO UPDATE SET
+                            detailed_explanation = EXCLUDED.detailed_explanation,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (course_slug, q_id, detailed_explanation))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_course_quiz_explanation error for course '{course_slug}' question {q_id}: {e}")
+            return True
+        finally:
+            if conn:
+                conn.close()
+
+    def get_course_quiz_explanation(self, course_name: str, question_id: Union[int, str]) -> Optional[str]:
+        """Retrieve detailed course quiz explanation from In-Memory cache or PostgreSQL."""
+        if not course_name:
+            return None
+
+        clean_name = str(course_name).strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_name.lower()).strip('-') or "general"
+        q_id = str(question_id or "").strip()
+
+        if course_slug in self._course_quiz_explanations_memory:
+            if q_id in self._course_quiz_explanations_memory[course_slug]:
+                return self._course_quiz_explanations_memory[course_slug][q_id]
+
+        if not self.postgres_url:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT detailed_explanation
+                        FROM lecturescribe_course_quiz_explanations
+                        WHERE course_slug = %s AND question_id = %s
+                        LIMIT 1;
+                    """, (course_slug, q_id))
+                    row = cursor.fetchone()
+                    if row and row.get("detailed_explanation"):
+                        exp = row["detailed_explanation"]
+                        if course_slug not in self._course_quiz_explanations_memory:
+                            self._course_quiz_explanations_memory[course_slug] = {}
+                        self._course_quiz_explanations_memory[course_slug][q_id] = exp
+                        return exp
+            return None
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_course_quiz_explanation error for '{course_slug}' question {q_id}: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
         return None
 
     def save_quiz_attempt(

@@ -18,6 +18,7 @@ export default function LectureWorkspace({
   handleGenerateTranscript,
   transcriptionLoading,
   transcriptionError,
+  transcriptionStage,
   iframeRef,
   copied,
   handleCopyTranscript,
@@ -118,6 +119,7 @@ export default function LectureWorkspace({
         handleGenerateTranscript={handleGenerateTranscript}
         transcriptionLoading={transcriptionLoading}
         transcriptionError={transcriptionError}
+        transcriptionStage={transcriptionStage}
         iframeRef={iframeRef}
         copied={copied}
         handleCopyTranscript={handleCopyTranscript}

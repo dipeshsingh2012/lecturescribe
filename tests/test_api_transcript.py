@@ -247,5 +247,78 @@ Today we discuss forward kinematics.
 
         self.assertEqual(response.status_code, 404)
 
+    def test_async_transcription_endpoint_returns_accepted_job(self):
+        job_id = "128ef3d8-4d98-4e77-87b9-2ec777d028a7"
+        job = {
+            "job_id": job_id,
+            "video_id": "1233458452",
+            "requested_by": "student@example.com",
+            "status": "queued",
+            "stage": "queued",
+            "created": True,
+        }
+        saved_video = {"title": "Lecture", "cues": []}
+        refreshed_job = {**job, "task_name": "task-resource"}
+        with (
+            patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_ENABLED": "true"}),
+            patch("backend.main.db_manager.get_saved_video", return_value=saved_video),
+            patch("backend.main.db_manager.create_transcription_job", return_value=job),
+            patch("backend.main.enqueue_transcription_task", return_value="task-resource") as enqueue,
+            patch("backend.main.db_manager.record_transcription_task") as record_task,
+            patch("backend.main.db_manager.get_transcription_job", return_value=refreshed_job) as get_job,
+        ):
+            response = self.client.post(
+                "/api/lecture/1233458452/transcribe?email=student%40example.com"
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["job_id"], job_id)
+        self.assertEqual(response.json()["status"], "queued")
+        enqueue.assert_called_once_with(job_id)
+        record_task.assert_called_once_with(job_id, "task-resource")
+        get_job.assert_called_once_with(job_id)
+
+    def test_async_transcription_reuses_active_job_without_enqueueing(self):
+        job = {
+            "job_id": "128ef3d8-4d98-4e77-87b9-2ec777d028a7",
+            "video_id": "1233458452",
+            "requested_by": None,
+            "status": "processing",
+            "stage": "transcribing",
+            "created": False,
+        }
+        with (
+            patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_ENABLED": "true"}),
+            patch("backend.main.db_manager.get_saved_video", return_value={"cues": []}),
+            patch("backend.main.db_manager.create_transcription_job", return_value=job),
+            patch("backend.main.enqueue_transcription_task") as enqueue,
+        ):
+            response = self.client.post("/api/lecture/1233458452/transcribe")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "processing")
+        enqueue.assert_not_called()
+
+    def test_transcription_job_status_requires_matching_email_owner(self):
+        job = {
+            "job_id": "128ef3d8-4d98-4e77-87b9-2ec777d028a7",
+            "video_id": "1233458452",
+            "requested_by": "student@example.com",
+            "status": "processing",
+            "stage": "transcribing",
+        }
+        with patch("backend.main.db_manager.get_transcription_job", return_value=job):
+            denied = self.client.get(
+                "/api/lecture/transcription-jobs/128ef3d8-4d98-4e77-87b9-2ec777d028a7"
+            )
+            allowed = self.client.get(
+                "/api/lecture/transcription-jobs/128ef3d8-4d98-4e77-87b9-2ec777d028a7"
+                "?email=student%40example.com"
+            )
+
+        self.assertEqual(denied.status_code, 404)
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json()["stage"], "transcribing")
+
 if __name__ == "__main__":
     unittest.main()

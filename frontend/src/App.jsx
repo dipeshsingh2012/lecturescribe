@@ -79,7 +79,7 @@ export default function App() {
     effectiveCourses: library.effectiveCourses,
     fetchUserLibrary: library.fetchUserLibrary,
     navigateTo,
-    initChatMessages: (t, v) => tutor.initChatMessages(t, v),
+    initChatMessages: (t, v, cues, options) => tutor.initChatMessages(t, v, cues, options),
     onLectureIngested: (courseName, vidId, newLecture) => {
       if (course.addLectureToCourse && newLecture) {
         course.addLectureToCourse(newLecture, courseName);
@@ -88,7 +88,7 @@ export default function App() {
       if (library.fetchUserLibrary) library.fetchUserLibrary(auth.googleUser?.email);
     }
   });
-  const { activeData, setActiveData, loading, error, cacheNotice, setCacheNotice, urlInput, setUrlInput, handleTranscribe, handleGenerateTranscript, transcriptionLoading, transcriptionError, handlePasteUrl } = lecture;
+  const { activeData, setActiveData, loading, error, cacheNotice, setCacheNotice, urlInput, setUrlInput, handleTranscribe, handleGenerateTranscript, transcriptionLoading, transcriptionError, transcriptionStage, handlePasteUrl } = lecture;
 
   useEffect(() => {
     setActiveLectureRef(activeData);
@@ -211,6 +211,7 @@ export default function App() {
             cacheNotice={cacheNotice}
             handlePasteUrl={handlePasteUrl}
             handleTranscribe={handleTranscribe}
+            handleCueClick={player.handleCueClick}
             loading={loading}
             error={error}
             handleClearCourse={handleClearCourse}
@@ -253,6 +254,7 @@ export default function App() {
             handleGenerateTranscript={handleGenerateTranscript}
             transcriptionLoading={transcriptionLoading}
             transcriptionError={transcriptionError}
+            transcriptionStage={transcriptionStage}
             iframeRef={player.iframeRef}
             copied={player.copied}
             handleCopyTranscript={player.handleCopyTranscript}

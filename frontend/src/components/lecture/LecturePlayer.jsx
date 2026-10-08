@@ -38,7 +38,8 @@ export default function LecturePlayer({
   currentTheme,
   handleGenerateTranscript,
   transcriptionLoading = false,
-  transcriptionError = null
+  transcriptionError = null,
+  transcriptionStage = null
 }) {
   if (!activeData) return null;
 
@@ -251,6 +252,15 @@ export default function LecturePlayer({
           </Button>
           {transcriptionError && (
             <Alert severity="error" role="alert">{transcriptionError}</Alert>
+          )}
+          {transcriptionLoading && (
+            <Alert severity="info" role="status">
+              {transcriptionStage === 'queued' || transcriptionStage === 'starting'
+                ? 'Transcript job queued. Waiting for a worker…'
+                : transcriptionStage === 'indexing'
+                  ? 'Transcript saved. Updating lecture search and tutor data…'
+                  : 'Generating transcript…'}
+            </Alert>
           )}
         </Box>
       )}

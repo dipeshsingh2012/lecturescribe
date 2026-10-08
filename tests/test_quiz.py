@@ -1,10 +1,11 @@
 import os
+import time
 import json
 import unittest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
-from backend.main import app, determine_lecture_quiz_count
+from backend.main import app, db_manager, determine_lecture_quiz_count
 from backend.rag_engine import pinecone_rag_engine
 from backend.redis_service import RedisCacheService
 from backend.database import RelationalDBManager
@@ -82,7 +83,8 @@ class TestLectureQuiz(unittest.TestCase):
         q = quiz["questions"][0]
         self.assertEqual(q["question"], "What is a vector space?")
         self.assertEqual(len(q["options"]), 4)
-        self.assertEqual(q["correct_index"], 0)
+        self.assertIn(q["correct_index"], [0, 1, 2, 3])
+        self.assertEqual(q["options"][q["correct_index"]], "A set closed under vector addition and scalar multiplication")
         self.assertEqual(q["timestamp"], "00:00")
         self.assertEqual(q["difficulty"], "easy")
 
@@ -633,6 +635,137 @@ class TestLectureQuiz(unittest.TestCase):
         # 4. Verify cleared
         res_get2 = self.client.get("/api/lecture/calc_1/quiz?email=tester@test.com")
         self.assertNotIn("user_answers", res_get2.json())
+
+
+class TestCourseQuizImprovements(unittest.TestCase):
+    """Test suite for concept-first sanitization, option shuffling, course explainer, and history."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        self.client = TestClient(app)
+
+    def test_sanitize_quiz_question_text_concept_first(self):
+        """Verify episodic preambles and timestamps are stripped while fixing math variable formatting."""
+        # Case 1: "When the lecturer mentions..."
+        raw1 = "When the lecturer mentions PyTorch at 42:52, which of the following is a primary advantage?"
+        clean1 = pinecone_rag_engine._sanitize_quiz_question_text(raw1)
+        self.assertEqual(clean1, "Which of the following is a primary advantage?")
+
+        # Case 2: "In the supervised learning paradigm described at 41:32... input xx and output yy"
+        raw2 = "In the supervised learning paradigm described at 41:32, which of the following best characterizes the relationship between the input xx and the output yy?"
+        clean2 = pinecone_rag_engine._sanitize_quiz_question_text(raw2)
+        self.assertNotIn("41:32", clean2)
+        self.assertNotIn("described at", clean2)
+        self.assertIn("input $x$ and the output $y$", clean2)
+
+        # Case 3: "At 14:20..."
+        raw3 = "At 14:20, what is the definition of gradient descent?"
+        clean3 = pinecone_rag_engine._sanitize_quiz_question_text(raw3)
+        self.assertEqual(clean3, "What is the definition of gradient descent?")
+
+        # Case 4: Concept-first question remains untouched
+        raw4 = "Which mathematical theorem guarantees orthogonal diagonalizability for symmetric matrices?"
+        clean4 = pinecone_rag_engine._sanitize_quiz_question_text(raw4)
+        self.assertEqual(clean4, raw4)
+
+    def test_balance_and_shuffle_options_preserves_correctness(self):
+        """Verify that options are shuffled and correct_index always points to the original correct option."""
+        opts = ["Alpha (Correct)", "Beta (Distractor 1)", "Gamma (Distractor 2)", "Delta (Distractor 3)"]
+        correct_idx = 0
+        seen_indices = set()
+
+        for _ in range(50):
+            shuffled, new_idx = pinecone_rag_engine._balance_and_shuffle_options(opts, correct_idx)
+            self.assertEqual(len(shuffled), 4)
+            self.assertEqual(shuffled[new_idx], "Alpha (Correct)")
+            seen_indices.add(new_idx)
+
+        # Over 50 shuffles, it should have distributed beyond just index 0
+        self.assertGreater(len(seen_indices), 1)
+
+    def test_course_quiz_explanation_endpoint_and_cache(self):
+        """Test detailed AI explanation generation and DB caching for course quiz."""
+        req_body = {
+            "question_id": "q_42",
+            "question": "What is backpropagation?",
+            "options": ["Chain rule of calculus", "Linear regression", "Decision tree", "K-means"],
+            "correct_index": 0,
+            "explanation": "Derived using chain rule.",
+            "timestamp": "12:30",
+            "lecture_id": "ml_101",
+            "course_name": "Machine Learning",
+            "regenerate": False
+        }
+
+        mock_explanation = {
+            "detailed_explanation": "### Deep Dive\nBackpropagation applies the calculus chain rule at [12:30].",
+            "cached": False,
+            "model": "Mock Groq"
+        }
+
+        with patch.object(pinecone_rag_engine, "generate_detailed_quiz_explanation", return_value=mock_explanation):
+            res = self.client.post("/api/course/Machine%20Learning/quiz/explanation", json=req_body)
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertIn("Backpropagation applies", data["detailed_explanation"])
+
+        # Second request should be returned from cache
+        res_cached = self.client.post("/api/course/Machine%20Learning/quiz/explanation", json=req_body)
+        self.assertEqual(res_cached.status_code, 200)
+        cached_data = res_cached.json()
+        self.assertTrue(cached_data.get("cached"))
+        self.assertIn("Backpropagation applies", cached_data["detailed_explanation"])
+
+    def test_course_quiz_history_and_replay_flow(self):
+        """Test saving, listing, retrieving, and replaying course quiz history."""
+        course_name = "Deep Learning Systems"
+        quiz_id = f"test_hist_{int(time.time())}"
+        quiz_data = {
+            "quiz_id": quiz_id,
+            "questions": [
+                {
+                    "id": 1,
+                    "question": "What is automatic differentiation?",
+                    "options": ["A", "B", "C", "D"],
+                    "correct_index": 0,
+                    "explanation": "Explanation 1",
+                    "timestamp": "05:00",
+                    "lecture_id": "dl_1"
+                }
+            ]
+        }
+
+        # 1. Save quiz history
+        saved = db_manager.save_course_quiz_history(
+            course_name=course_name,
+            quiz_id=quiz_id,
+            quiz_data=quiz_data,
+            user_email="student@university.edu",
+            answers={"1": 0},
+            score=1,
+            total_questions=1,
+            completed=True
+        )
+        self.assertTrue(saved)
+
+        # 2. List history
+        res_list = self.client.get(f"/api/course/{course_name}/quiz/history?email=student@university.edu")
+        self.assertEqual(res_list.status_code, 200)
+        history_items = res_list.json().get("history", [])
+        matched = [h for h in history_items if h["quiz_id"] == quiz_id]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["score"], 1)
+        self.assertTrue(matched[0]["completed"])
+
+        # 3. Retrieve specific quiz run by ID (for Review / Replay)
+        res_run = self.client.get(f"/api/course/{course_name}/quiz/history/{quiz_id}")
+        self.assertEqual(res_run.status_code, 200)
+        run_data = res_run.json()
+        self.assertEqual(run_data["quiz_id"], quiz_id)
+        self.assertEqual(run_data["score"], 1)
+        self.assertEqual(run_data["answers"], {"1": 0})
+        self.assertEqual(len(run_data["quiz_json"]["questions"]), 1)
 
 
 if __name__ == "__main__":

@@ -167,4 +167,110 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.quizError).toBe('Course quiz generation failed');
     expect(result.current.quizData).toBeNull();
   });
+
+  it('fetches detailed AI explanation and caches in detailedExplanations', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        detailed_explanation: '### Comprehensive Breakdown\nThe derivative follows from definition.'
+      })
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Calculus 1', 'student@example.com'));
+
+    await act(async () => {
+      await result.current.fetchDetailedExplanation(1, {
+        question: 'What is limit?',
+        options: ['A', 'B', 'C', 'D'],
+        correct_index: 0,
+        explanation: 'Intro',
+        timestamp: '10:00',
+        lecture_id: 'calc_1'
+      });
+    });
+
+    expect(result.current.detailedExplanations[1]).toBe('### Comprehensive Breakdown\nThe derivative follows from definition.');
+    expect(result.current.explanationLoading['1']).toBe(false);
+  });
+
+  it('loads past quiz in review mode and replay mode', async () => {
+    const mockPastRun = {
+      quiz_id: 'cquiz_999',
+      course_name: 'Calculus 1',
+      score: 5,
+      total_questions: 5,
+      answers: { 1: 0, 2: 1 },
+      completed: true,
+      quiz_json: {
+        quiz_id: 'cquiz_999',
+        questions: [{ id: 1, question: 'Q1' }, { id: 2, question: 'Q2' }]
+      }
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockPastRun
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Calculus 1'));
+
+    // Load in review mode
+    await act(async () => {
+      await result.current.loadPastQuiz('cquiz_999', false);
+    });
+
+    expect(result.current.quizData.quiz_id).toBe('cquiz_999');
+    expect(result.current.selectedAnswers).toEqual({ 1: 0, 2: 1 });
+    expect(result.current.reviewMode).toBe(true);
+
+    // Load in replay mode
+    await act(async () => {
+      await result.current.loadPastQuiz('cquiz_999', true);
+    });
+
+    expect(result.current.quizData.quiz_id).toBe('cquiz_999');
+    expect(result.current.selectedAnswers).toEqual({});
+    expect(result.current.reviewMode).toBe(false);
+  });
+
+  it('finishQuiz triggers completion persistence and history refresh', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'success' })
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Calculus 1', 'student@example.com'));
+
+    act(() => {
+      result.current.finishQuiz();
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled(); // No quizData yet
+
+    // With quiz data
+    const mockQuiz = {
+      quiz_id: 'cquiz_100',
+      questions: [{ id: 1, correct_index: 0 }]
+    };
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockQuiz
+    });
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false);
+    });
+
+    await act(async () => {
+      result.current.finishQuiz();
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/course/Calculus%201/quiz/answers'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"completed":true')
+      })
+    );
+  });
 });

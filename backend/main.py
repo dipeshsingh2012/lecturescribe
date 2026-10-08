@@ -14,8 +14,9 @@ import threading
 import traceback
 import concurrent.futures
 import requests
+import uuid
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel
 
 from dotenv import load_dotenv
@@ -32,7 +33,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from contextlib import asynccontextmanager
 
@@ -57,6 +58,14 @@ from backend.google_drive_service import google_drive_service
 from backend.summary_generator import generate_summary_sections
 from backend.redis_service import redis_cache
 from backend.gcs_storage import gcs_storage_service
+from backend.transcription_jobs import (
+    async_transcription_is_enabled,
+    dispatch_transcription_job,
+    enqueue_transcription_task,
+    transcription_job_status,
+    transcription_payload_to_cues,
+    verify_cloud_task_identity,
+)
 
 # LLM Intent Router Integration
 from backend.slm_router import slm_classify_intent, INTENT_SUMMARY, INTENT_CHAT
@@ -67,6 +76,10 @@ from backend.reading_extractor import (
     fetch_google_books_metadata,
     search_web_reading_links,
     extract_readings_with_llm,
+)
+
+_TRANSCRIPTION_JOB_ID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 
 
@@ -173,6 +186,11 @@ class AlgoliaSearchRequest(BaseModel):
 class RegenerateSummaryRequest(BaseModel):
     video_id: str
 
+
+class TranscriptionDispatchRequest(BaseModel):
+    job_id: str
+
+
 class CourseTutorChatRequest(BaseModel):
     message: str
     user_email: Optional[str] = None
@@ -248,6 +266,51 @@ def transcribe_lecture(
             "cached": True,
         }
 
+    if async_transcription_is_enabled():
+        try:
+            job = db_manager.create_transcription_job(
+                job_id=str(uuid.uuid4()),
+                video_id=video_id,
+                requested_by=email,
+            )
+        except Exception as exc:
+            print(f"[Transcription Job Error] Could not create job for video '{video_id}': {exc}")
+            raise HTTPException(status_code=503, detail="Unable to queue transcription right now.") from exc
+
+        if job["created"]:
+            try:
+                task_name = enqueue_transcription_task(str(job["job_id"]))
+            except Exception as exc:
+                db_manager.update_transcription_job(
+                    str(job["job_id"]),
+                    "failed",
+                    "failed",
+                    error_message="Unable to schedule transcription. Please try again.",
+                )
+                print(f"[Transcription Job Error] Enqueue failed for job '{job['job_id']}': {exc}")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Unable to schedule transcription. Please try again.",
+                ) from exc
+            try:
+                db_manager.record_transcription_task(str(job["job_id"]), task_name)
+            except Exception as exc:
+                print(
+                    f"[Transcription Job Warning] Task was enqueued but its name could not be "
+                    f"recorded for job '{job['job_id']}': {exc}"
+                )
+            try:
+                refreshed_job = db_manager.get_transcription_job(str(job["job_id"]))
+                if refreshed_job:
+                    job = refreshed_job
+            except Exception:
+                pass
+
+        return JSONResponse(
+            status_code=202,
+            content=transcription_job_status(job),
+        )
+
     source_url = f"https://vimeo.com/{video_id}"
     try:
         response = requests.post(
@@ -278,20 +341,7 @@ def transcribe_lecture(
     if not isinstance(transcription, dict):
         raise HTTPException(status_code=502, detail="Transcription service returned an invalid response.")
 
-    raw_segments = transcription.get("segments")
-    cues = []
-    if isinstance(raw_segments, list):
-        for segment in raw_segments:
-            if not isinstance(segment, dict):
-                continue
-            text = str(segment.get("text") or "").strip()
-            start = segment.get("start")
-            if text and isinstance(start, (int, float)) and start >= 0:
-                cues.append({"time": format_timestamp(str(datetime.timedelta(seconds=int(start)))), "text": text})
-    if not cues:
-        transcript_text = str(transcription.get("text") or "").strip()
-        if transcript_text:
-            cues = [{"time": "00:00", "text": transcript_text}]
+    cues = transcription_payload_to_cues(transcription)
     if not cues:
         raise HTTPException(status_code=502, detail="Transcription service returned no transcript text.")
 
@@ -328,6 +378,46 @@ def transcribe_lecture(
         "pineconeIndexedChunks": pinecone_chunks,
         "cached": False,
     }
+
+
+@app.get("/api/lecture/transcription-jobs/{job_id}")
+def get_transcription_job(
+    job_id: str,
+    email: Optional[str] = Query(None, description="Signed-in user email for LMS library"),
+):
+    if not _TRANSCRIPTION_JOB_ID_RE.fullmatch(job_id):
+        raise HTTPException(status_code=404, detail="Transcription job not found.")
+    try:
+        job = db_manager.get_transcription_job(job_id)
+    except Exception as exc:
+        print(f"[Transcription Job Error] Could not retrieve job '{job_id}': {exc}")
+        raise HTTPException(status_code=503, detail="Unable to retrieve transcription status.") from exc
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found.")
+    requested_by = job.get("requested_by")
+    if requested_by and (not email or email.strip().lower() != requested_by):
+        raise HTTPException(status_code=404, detail="Transcription job not found.")
+    return transcription_job_status(job)
+
+
+@app.post("/internal/transcription-jobs/dispatch")
+def dispatch_transcription_job_request(
+    payload: TranscriptionDispatchRequest,
+    authorization: Optional[str] = Header(None),
+):
+    if not verify_cloud_task_identity(authorization):
+        raise HTTPException(status_code=401, detail="Invalid task identity.")
+    job_id = payload.job_id
+    if not _TRANSCRIPTION_JOB_ID_RE.fullmatch(job_id):
+        raise HTTPException(status_code=400, detail="A valid transcription job ID is required.")
+    try:
+        dispatch_transcription_job(job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"[Transcription Job Error] Dispatch failed for job '{job_id}': {exc}")
+        raise HTTPException(status_code=503, detail="Unable to start transcription.") from exc
+    return {"accepted": True, "job_id": job_id}
 
 
 def determine_lecture_quiz_count(cues: Optional[List[Dict[str, Any]]] = None, duration_str: Optional[str] = None) -> int:
@@ -418,6 +508,19 @@ class QuizAnswersRequest(BaseModel):
     answers: Dict[str, int] = {}
     score: Optional[int] = 0
     completed: Optional[bool] = False
+    quiz_id: Optional[str] = None
+
+
+class CourseQuizExplanationRequest(BaseModel):
+    question_id: Union[int, str]
+    question: str
+    options: List[str]
+    correct_index: int
+    explanation: Optional[str] = ""
+    timestamp: Optional[str] = "00:00"
+    lecture_id: Optional[str] = None
+    course_name: Optional[str] = None
+    regenerate: Optional[bool] = False
 
 
 @app.get("/api/lecture/{video_id}/quiz")
@@ -1467,6 +1570,8 @@ def get_or_generate_course_quiz(
             lectures_data=valid_lectures,
             num_questions=req_count
         )
+        quiz_id = f"cquiz_{course_slug}_{int(time.time())}"
+        quiz_data["quiz_id"] = quiz_id
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -1475,6 +1580,13 @@ def get_or_generate_course_quiz(
 
     # 6. Persist to Relational Database
     db_manager.save_course_quiz(canonical_title, quiz_data, lecture_count=len(valid_lectures))
+    db_manager.save_course_quiz_history(
+        course_name=canonical_title,
+        quiz_id=quiz_id,
+        quiz_data=quiz_data,
+        user_email=email or "",
+        total_questions=len(quiz_data.get("questions") or [])
+    )
 
     # 7. Cache in Redis (24 hours)
     if redis_cache:
@@ -1494,11 +1606,32 @@ def get_or_generate_course_quiz(
 
 @app.post("/api/course/{course_name}/quiz/answers")
 def save_course_quiz_answers(course_name: str, req: QuizAnswersRequest):
-    """Persist user course quiz responses directly into PostgreSQL."""
+    """Persist user course quiz responses directly into PostgreSQL and quiz history."""
     clean_course = str(course_name).strip()
     course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
     email = req.user_email or "anonymous"
     db_manager.save_quiz_attempt("course", course_slug, email, req.answers, req.score or 0, req.completed or False)
+
+    target_quiz_id = req.quiz_id
+    if not target_quiz_id:
+        hist = db_manager.get_course_quiz_history(clean_course, user_email=email)
+        if hist and hist[0].get("quiz_id"):
+            target_quiz_id = hist[0]["quiz_id"]
+
+    if target_quiz_id:
+        existing_item = db_manager.get_course_quiz_history_by_id(target_quiz_id)
+        quiz_json = (existing_item.get("quiz_json") if existing_item else None) or db_manager.get_saved_course_quiz(clean_course) or {}
+        tot_q = len(quiz_json.get("questions") or [])
+        db_manager.save_course_quiz_history(
+            course_name=clean_course,
+            quiz_id=target_quiz_id,
+            quiz_data=quiz_json,
+            user_email=email,
+            answers=req.answers,
+            score=req.score or 0,
+            total_questions=tot_q,
+            completed=req.completed or False
+        )
     return {"status": "success", "success": True}
 
 
@@ -1509,6 +1642,90 @@ def reset_course_quiz_answers(course_name: str, email: Optional[str] = Query(Non
     course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
     db_manager.delete_quiz_attempt("course", course_slug, email or "anonymous")
     return {"status": "success", "success": True}
+
+
+@app.post("/api/course/{course_name}/quiz/explanation")
+def get_detailed_course_quiz_explanation(course_name: str, req: CourseQuizExplanationRequest):
+    """Generate or retrieve detailed explanation for a course quiz question using RAG."""
+    clean_course = str(course_name or "").strip()
+    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+    q_id = str(req.question_id)
+
+    # 1. Check cache first if not regenerating
+    if not req.regenerate:
+        cached = db_manager.get_course_quiz_explanation(clean_course, q_id)
+        if cached:
+            return {
+                "detailed_explanation": cached,
+                "cached": True,
+                "model": "Cached"
+            }
+
+    # 2. Find relevant lecture cues
+    lecture_title = clean_course
+    cues = []
+    target_vid = req.lecture_id
+    if target_vid:
+        saved_vid = db_manager.get_saved_video(target_vid)
+        if saved_vid:
+            lecture_title = saved_vid.get("title") or f"Lecture {target_vid}"
+            cues = saved_vid.get("cues") or []
+
+    # If no specific cues found for that lecture, collect from course lectures
+    if not cues:
+        course_info = db_manager.get_course_details(clean_course)
+        if course_info and course_info.get("lectures"):
+            for l in course_info["lectures"]:
+                vid = l.get("video_id") or l.get("videoId")
+                if vid:
+                    v_saved = db_manager.get_saved_video(vid)
+                    if v_saved and v_saved.get("cues"):
+                        cues.extend(v_saved["cues"][:15])
+
+    # 3. Generate detailed explanation using RAG
+    try:
+        explanation_data = pinecone_rag_engine.generate_detailed_quiz_explanation(
+            video_id=target_vid or course_slug,
+            lecture_title=lecture_title,
+            question=req.question,
+            options=req.options,
+            correct_index=req.correct_index,
+            explanation=req.explanation or "",
+            timestamp=req.timestamp or "00:00",
+            cues=cues
+        )
+
+        # 4. Save to database
+        db_manager.save_course_quiz_explanation(
+            clean_course,
+            q_id,
+            explanation_data["detailed_explanation"]
+        )
+
+        return explanation_data
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to generate detailed course quiz explanation: {str(e)}"
+        )
+
+
+@app.get("/api/course/{course_name}/quiz/history")
+def get_course_quiz_history(course_name: str, email: Optional[str] = Query(None)):
+    """Retrieve historical quiz runs for a course."""
+    clean_course = str(course_name or "").strip()
+    history = db_manager.get_course_quiz_history(clean_course, user_email=email)
+    return {"history": history, "course_name": clean_course}
+
+
+@app.get("/api/course/{course_name}/quiz/history/{quiz_id}")
+def get_course_quiz_history_run(course_name: str, quiz_id: str):
+    """Retrieve a specific historical quiz run by ID."""
+    clean_course = str(course_name or "").strip()
+    quiz_run = db_manager.get_course_quiz_history_by_id(quiz_id)
+    if not quiz_run:
+        raise HTTPException(status_code=404, detail=f"Quiz history for '{quiz_id}' not found.")
+    return quiz_run
 
 
 # ==============================================================================

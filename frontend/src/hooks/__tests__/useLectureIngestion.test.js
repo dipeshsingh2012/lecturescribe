@@ -129,7 +129,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     expect(global.fetch).toHaveBeenLastCalledWith(
       expect.stringContaining('/api/lecture/1233458452/transcribe?email=student%40example.com'),
-      { method: 'POST' }
+      expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) })
     );
     expect(result.current.activeData.cues).toEqual(lecturePayload.cues);
     expect(result.current.activeData.transcript_available).toBe(true);
@@ -141,6 +141,72 @@ describe('useLectureIngestion hook functionality', () => {
     );
     const cached = JSON.parse(localStorage.getItem('lecturescribe_cached_videos') || '{}');
     expect(cached['1233458452'].cues).toEqual(lecturePayload.cues);
+  });
+
+  it('polls an async transcription job and initializes the tutor after loading fresh cues', async () => {
+    const lecturePayload = {
+      videoId: '1233458452',
+      title: 'Introduction to Generative AI',
+      cues: [{ time: '00:00', text: 'Welcome to class.' }],
+      transcript_available: true
+    };
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          videoId: '1233458452',
+          title: lecturePayload.title,
+          cues: [],
+          transcript_available: false
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ job_id: 'job-123', status: 'queued', stage: 'queued' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ job_id: 'job-123', status: 'completed', stage: 'completed' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => lecturePayload
+      });
+
+    const initChatMessages = vi.fn();
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: 'student@example.com',
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/1233458452');
+    });
+    await act(async () => {
+      await result.current.handleGenerateTranscript();
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/transcription-jobs/job-123?email=student%40example.com'),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+    expect(result.current.activeData.cues).toEqual(lecturePayload.cues);
+    expect(initChatMessages).toHaveBeenCalledOnce();
+    expect(initChatMessages).toHaveBeenCalledWith(
+      lecturePayload.title,
+      '1233458452',
+      lecturePayload.cues,
+      { preserveCleared: true }
+    );
+    expect(localStorage.getItem('lecturescribe_transcription_jobs')).toBe('{}');
   });
 
   it('loads instantly from client cache if already cached', async () => {
@@ -443,5 +509,114 @@ describe('useLectureIngestion hook functionality', () => {
     // Stored course_name should now be updated to Data Science
     const stored = JSON.parse(localStorage.getItem('lecturescribe_cached_videos') || '{}');
     expect(stored['998877'].course_name).toBe('Data Science');
+  });
+
+  it('handles terminal failed status during async polling and clears stored job', async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          videoId: '556677',
+          title: 'Failed Lecture',
+          cues: [],
+          transcript_available: false
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ job_id: 'job-err', status: 'queued', stage: 'queued' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          job_id: 'job-err',
+          status: 'failed',
+          stage: 'failed',
+          error: 'Vimeo audio stream unreachable'
+        })
+      });
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: null,
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages: vi.fn()
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://vimeo.com/556677');
+    });
+    await act(async () => {
+      await result.current.handleGenerateTranscript();
+    });
+
+    expect(result.current.transcriptionLoading).toBe(false);
+    expect(result.current.transcriptionError).toBe('Vimeo audio stream unreachable');
+    expect(localStorage.getItem('lecturescribe_transcription_jobs')).toBe('{}');
+  });
+
+  it('resumes polling a pending job from localStorage when lecture loads', async () => {
+    const lecturePayload = {
+      videoId: '889900',
+      title: 'Resumed Lecture',
+      cues: [{ time: '00:05', text: 'Resumed text' }],
+      transcript_available: true
+    };
+    localStorage.setItem(
+      'lecturescribe_transcription_jobs',
+      JSON.stringify({ '889900': { job_id: 'job-resumed' } })
+    );
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          job_id: 'job-resumed',
+          status: 'completed',
+          stage: 'completed'
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => lecturePayload
+      });
+
+    const initChatMessages = vi.fn();
+    const { result, rerender } = renderHook(
+      (props) =>
+        useLectureIngestion({
+          userEmail: null,
+          selectedCourse: null,
+          setSelectedCourse: vi.fn(),
+          activeCourseData: null,
+          effectiveCourses: [],
+          fetchUserLibrary: vi.fn(),
+          navigateTo: vi.fn(),
+          initChatMessages,
+          ...props
+        }),
+      { initialProps: {} }
+    );
+
+    // Simulate an imported video being active with pending job in localStorage
+    await act(async () => {
+      result.current.setActiveData({
+        videoId: '889900',
+        title: 'Resumed Lecture',
+        cues: [],
+        transcript_available: false
+      });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/transcription-jobs/job-resumed'),
+      expect.any(Object)
+    );
   });
 });

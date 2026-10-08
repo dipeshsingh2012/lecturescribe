@@ -262,6 +262,44 @@ describe('useAITutor hook functionality', () => {
     expect(autopopulatedVideos).toEqual(['v10', 'v20', 'v30']);
   });
 
+  it('preserves a cleared Tutor conversation when a transcript job completes', async () => {
+    let autopopulateCallCount = 0;
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/api/chat/autopopulate')) {
+        autopopulateCallCount++;
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      }
+      if (opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'success' }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+    });
+
+    const { result, rerender } = renderHook(
+      ({ data }) => useAITutor(data, null),
+      { initialProps: { data: { videoId: 'v10', cues: [] } } }
+    );
+    await act(async () => {
+      await result.current.clearChatHistory();
+    });
+    await act(async () => {
+      result.current.initChatMessages(
+        'Lecture',
+        'v10',
+        [{ time: '00:00', text: 'New transcript.' }],
+        { preserveCleared: true }
+      );
+      rerender({
+        data: {
+          videoId: 'v10',
+          cues: [{ time: '00:00', text: 'New transcript.' }]
+        }
+      });
+    });
+
+    expect(autopopulateCallCount).toBe(0);
+  });
+
   it('handles autopopulateChat network failure gracefully without crashing', async () => {
     global.fetch = vi.fn().mockImplementation((url) => {
       if (url.includes('/api/chat/history')) {

@@ -193,10 +193,12 @@ export function useAITutor(activeData, googleUser) {
     }
   };
 
-  const initChatMessages = (title, videoId = null, cues = undefined) => {
+  const initChatMessages = (title, videoId = null, cues = undefined, options = {}) => {
     const targetVid = videoId || activeData?.videoId;
     if (targetVid) {
-      clearedInSessionRef.current = false;
+      if (!options.preserveCleared || targetVid !== currentVideoIdRef.current) {
+        clearedInSessionRef.current = false;
+      }
       currentVideoIdRef.current = targetVid;
       const targetCues = cues ?? (
         targetVid === activeDataRef.current?.videoId

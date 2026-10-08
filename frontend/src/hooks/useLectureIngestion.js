@@ -18,6 +18,7 @@ export function useLectureIngestion({
   const [loading, setLoading] = useState(false);
   const [transcriptionLoading, setTranscriptionLoading] = useState(false);
   const [transcriptionError, setTranscriptionError] = useState(null);
+  const [transcriptionStage, setTranscriptionStage] = useState(null);
   const [error, setError] = useState(null);
   const [cacheNotice, setCacheNotice] = useState(null);
   const [activeData, setActiveData] = useState(null);
@@ -32,14 +33,20 @@ export function useLectureIngestion({
   });
 
   const activeDataRef = useRef(activeData);
+  const transcriptionControllerRef = useRef(null);
+  const resumedJobRef = useRef(null);
   useEffect(() => {
     activeDataRef.current = activeData;
   }, [activeData]);
 
   useEffect(() => {
+    transcriptionControllerRef.current?.abort();
     setTranscriptionError(null);
     setTranscriptionLoading(false);
+    setTranscriptionStage(null);
   }, [activeData?.videoId]);
+
+  useEffect(() => () => transcriptionControllerRef.current?.abort(), []);
 
   useEffect(() => {
     if (error || cacheNotice) {
@@ -63,21 +70,149 @@ export function useLectureIngestion({
     }
   };
 
+  const saveTranscriptionJob = (videoId, job) => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('lecturescribe_transcription_jobs') || '{}');
+      if (job) stored[videoId] = job;
+      else delete stored[videoId];
+      localStorage.setItem('lecturescribe_transcription_jobs', JSON.stringify(stored));
+    } catch {}
+  };
+
+  const pollTranscriptionJob = async (jobId, videoId, controller) => {
+    let delayMs = 1000;
+    let consecutiveErrors = 0;
+    while (!controller.signal.aborted) {
+      const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/lecture/transcription-jobs/${encodeURIComponent(jobId)}${emailParam}`,
+          { signal: controller.signal }
+        );
+        const status = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(status.detail || `Server returned status ${response.status}`);
+        }
+        consecutiveErrors = 0;
+        setTranscriptionStage(status.stage || status.status);
+        saveTranscriptionJob(videoId, { job_id: jobId, status: status.status });
+
+        if (status.status === 'failed') {
+          saveTranscriptionJob(videoId, null);
+          const failure = new Error(status.error || 'Transcript generation failed.');
+          failure.permanent = true;
+          throw failure;
+        }
+        if (status.status === 'completed') {
+          const lectureResponse = await fetch(
+            `${API_BASE}/api/lecture/${encodeURIComponent(videoId)}${emailParam}`,
+            { signal: controller.signal }
+          );
+          const lecture = await lectureResponse.json().catch(() => ({}));
+          if (!lectureResponse.ok) {
+            throw new Error(lecture.detail || `Server returned status ${lectureResponse.status}`);
+          }
+          if (!Array.isArray(lecture.cues) ||
+              !lecture.cues.some((cue) => String(cue?.text || '').trim())) {
+            throw new Error('Transcription completed, but the saved lecture has no transcript cues.');
+          }
+          setActiveData((current) => current?.videoId === videoId ? { ...current, ...lecture } : current);
+          setCachedVideos((previous) => {
+            const updated = { ...previous, [videoId]: { ...previous[videoId], ...lecture } };
+            try {
+              localStorage.setItem('lecturescribe_cached_videos', JSON.stringify(updated));
+            } catch {}
+            return updated;
+          });
+          saveTranscriptionJob(videoId, null);
+          if (activeDataRef.current?.videoId === videoId &&
+              typeof initChatMessages === 'function') {
+            initChatMessages(
+              lecture.title || activeDataRef.current?.title,
+              videoId,
+              lecture.cues,
+              { preserveCleared: true }
+            );
+          }
+          setTranscriptionStage('completed');
+          return;
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        if (err.permanent) throw err;
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= 5) {
+          throw err;
+        }
+      }
+
+      await new Promise((resolve) => {
+        const onAbort = () => {
+          clearTimeout(timeout);
+          controller.signal.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        const timeout = setTimeout(() => {
+          controller.signal.removeEventListener('abort', onAbort);
+          resolve();
+        }, delayMs);
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+      });
+      delayMs = Math.min(Math.round(delayMs * 1.7), 10000);
+    }
+  };
+
+  useEffect(() => {
+    const videoId = activeData?.videoId;
+    if (!videoId || resumedJobRef.current === videoId) return;
+    let storedJobs;
+    try {
+      storedJobs = JSON.parse(localStorage.getItem('lecturescribe_transcription_jobs') || '{}');
+    } catch {
+      return;
+    }
+    const job = storedJobs[videoId];
+    if (!job?.job_id) return;
+    resumedJobRef.current = videoId;
+    const controller = new AbortController();
+    transcriptionControllerRef.current = controller;
+    setTranscriptionLoading(true);
+    pollTranscriptionJob(job.job_id, videoId, controller)
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setTranscriptionError(err.message || 'Failed to retrieve transcript status.');
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTranscriptionLoading(false);
+      });
+    return () => controller.abort();
+  }, [activeData?.videoId]);
+
   const handleGenerateTranscript = async () => {
     const videoId = activeData?.videoId;
     if (!videoId || transcriptionLoading) return;
 
+    transcriptionControllerRef.current?.abort();
+    const controller = new AbortController();
+    transcriptionControllerRef.current = controller;
     setTranscriptionLoading(true);
     setTranscriptionError(null);
+    setTranscriptionStage('queued');
     try {
       const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
       const response = await fetch(
         `${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/transcribe${emailParam}`,
-        { method: 'POST' }
+        { method: 'POST', signal: controller.signal }
       );
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data.detail || `Server returned status ${response.status}`);
+      }
+      if (data.job_id) {
+        saveTranscriptionJob(videoId, { job_id: data.job_id, status: data.status });
+        await pollTranscriptionJob(data.job_id, videoId, controller);
+        return;
       }
 
       setActiveData((current) => current?.videoId === videoId ? { ...current, ...data } : current);
@@ -91,10 +226,13 @@ export function useLectureIngestion({
       if (typeof initChatMessages === 'function') {
         initChatMessages(data.title || activeData.title, videoId, data.cues);
       }
+      setTranscriptionStage('completed');
     } catch (err) {
-      setTranscriptionError(err.message || 'Failed to generate a transcript for this video.');
+      if (!controller.signal.aborted) {
+        setTranscriptionError(err.message || 'Failed to generate a transcript for this video.');
+      }
     } finally {
-      setTranscriptionLoading(false);
+      if (!controller.signal.aborted) setTranscriptionLoading(false);
     }
   };
 
@@ -102,11 +240,19 @@ export function useLectureIngestion({
     targetUrl = urlInput,
     pushRoute = true,
     targetCourse = null,
-    stayOnCoursePage = false
+    stayOnCoursePage = false,
+    seekTimestamp = null
   ) => {
     const rawUrl = targetUrl || urlInput;
     if (!rawUrl.trim()) return;
     const vidId = extractVideoId(rawUrl);
+
+    let targetSeek = seekTimestamp;
+    if (!targetSeek && rawUrl.includes('?t=')) {
+      const match = rawUrl.match(/[?&]t=([^&#]+)/);
+      if (match) targetSeek = decodeURIComponent(match[1]);
+    }
+    const timeParam = targetSeek ? `?t=${encodeURIComponent(targetSeek)}` : '';
 
     let effectiveCourse = targetCourse || activeCourseData?.course_name || selectedCourse || null;
     if (effectiveCourse) {
@@ -121,13 +267,19 @@ export function useLectureIngestion({
     if (!stayOnCoursePage && pushRoute && vidId) {
       if (effectiveCourse) {
         setSelectedCourse(effectiveCourse);
-        navigateTo(`/course/${normalizeCourseSlug(effectiveCourse)}/lecture/${vidId}`);
+        navigateTo(`/course/${normalizeCourseSlug(effectiveCourse)}/lecture/${vidId}${timeParam}`);
       } else {
-        navigateTo(`/lecture/${vidId}`);
+        navigateTo(`/lecture/${vidId}${timeParam}`);
       }
     }
 
     if (!stayOnCoursePage && activeData && (activeData.videoId === vidId || extractVideoId(activeData.sourceUrl) === vidId)) {
+      if (targetSeek) {
+        const coursePath = effectiveCourse
+          ? `/course/${normalizeCourseSlug(effectiveCourse)}/lecture/${vidId}${timeParam}`
+          : `/lecture/${vidId}${timeParam}`;
+        navigateTo(coursePath, true);
+      }
       setCacheNotice("⚡ Video is already active. Transcripts and summary were reused.");
       return;
     }
@@ -162,7 +314,7 @@ export function useLectureIngestion({
           transcript_available: transcriptAvailable,
           transcript_message: cachedTranscriptMessage
         });
-        if (typeof initChatMessages === 'function') {
+        if (transcriptAvailable && typeof initChatMessages === 'function') {
           initChatMessages(cached.title, vidId, cached.cues);
         }
       }
@@ -244,7 +396,9 @@ export function useLectureIngestion({
         
         if (!stayOnCoursePage) {
           setActiveData(enrichedData);
-          if (typeof initChatMessages === 'function') {
+          if (Array.isArray(data.cues) &&
+              data.cues.some((cue) => String(cue?.text || '').trim()) &&
+              typeof initChatMessages === 'function') {
             initChatMessages(data.title, data.videoId, data.cues);
           }
         }
@@ -289,6 +443,7 @@ export function useLectureIngestion({
     setLoading,
     transcriptionLoading,
     transcriptionError,
+    transcriptionStage,
     error,
     setError,
     cacheNotice,

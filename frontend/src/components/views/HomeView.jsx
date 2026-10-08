@@ -45,6 +45,7 @@ export default function HomeView({
   cacheNotice,
   handlePasteUrl,
   handleTranscribe,
+  handleCueClick,
   loading,
   error,
   handleClearCourse,
@@ -378,8 +379,25 @@ export default function HomeView({
           lectureBreakdown={courseQuiz.lectureBreakdown}
           fetchOrGenerateQuiz={courseQuiz.fetchOrGenerateQuiz}
           selectAnswer={courseQuiz.selectAnswer}
+          finishQuiz={courseQuiz.finishQuiz}
           resetQuiz={courseQuiz.resetQuiz}
-          handleSelectLecture={(vid, cName) => handleTranscribe(`https://vimeo.com/${vid}`, false, cName)}
+          detailedExplanations={courseQuiz.detailedExplanations}
+          explanationLoading={courseQuiz.explanationLoading}
+          expandedExplanation={courseQuiz.expandedExplanation}
+          setExpandedExplanation={courseQuiz.setExpandedExplanation}
+          fetchDetailedExplanation={courseQuiz.fetchDetailedExplanation}
+          quizHistory={courseQuiz.quizHistory}
+          historyLoading={courseQuiz.historyLoading}
+          fetchQuizHistory={courseQuiz.fetchQuizHistory}
+          loadPastQuiz={courseQuiz.loadPastQuiz}
+          reviewMode={courseQuiz.reviewMode}
+          handleSelectLecture={(vid, cName, ts) => {
+            const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';
+            handleTranscribe(`https://vimeo.com/${vid}${tParam}`, false, cName, false, ts);
+            if (typeof handleCueClick === 'function' && ts) {
+              setTimeout(() => handleCueClick(ts), 350);
+            }
+          }}
           currentTheme={currentTheme}
         />
       ) : courseViewTab === 'tutor' ? (

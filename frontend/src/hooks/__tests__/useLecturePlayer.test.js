@@ -180,4 +180,87 @@ describe('useLecturePlayer hook functionality', () => {
       expect(result.current.activeCueIdx).toBe(2);
     }
   });
+
+  it('silently auto-resumes playback from saved progress in database', async () => {
+    const mockSetCurrentTime = vi.fn().mockResolvedValue(undefined);
+    const VimeoPlayer = (await import('@vimeo/player')).default;
+    VimeoPlayer.mockImplementationOnce(() => ({
+      on: vi.fn(),
+      off: vi.fn(),
+      ready: vi.fn().mockImplementation((cb) => Promise.resolve()),
+      getCurrentTime: vi.fn().mockResolvedValue(0),
+      setCurrentTime: mockSetCurrentTime,
+      getDuration: vi.fn().mockResolvedValue(3600),
+      play: vi.fn().mockResolvedValue(undefined)
+    }));
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        progress: {
+          last_timestamp: '14:20',
+          last_seconds: 860,
+          duration_seconds: 3600,
+          progress_percent: 23.9,
+          active_cue_idx: 1
+        }
+      })
+    });
+
+    const activeData = {
+      videoId: 'v100',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '14:20', text: 'Topic 1' }
+      ]
+    };
+
+    const iframe = document.createElement('iframe');
+    const { result } = renderHook(() => {
+      const hook = useLecturePlayer(activeData, 'student@example.com');
+      hook.iframeRef.current = iframe;
+      return hook;
+    });
+
+    // Wait for async ready resolution
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/progress/lecture?video_id=v100&user_email=student%40example.com')
+    );
+    expect(mockSetCurrentTime).toHaveBeenCalledWith(860);
+  });
+
+  it('handleCueClick saves progress immediately to backend', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'success' })
+    });
+
+    const activeData = {
+      videoId: 'v100',
+      cues: [
+        { time: '05:00', text: 'Middle' },
+        { time: '10:00', text: 'End' }
+      ]
+    };
+
+    const { result } = renderHook(() => useLecturePlayer(activeData, 'student@example.com'));
+
+    await act(async () => {
+      result.current.handleCueClick('05:00');
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/progress/lecture'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"last_timestamp":"05:00"')
+      })
+    );
+    expect(result.current.activeCueIdx).toBe(0);
+  });
 });

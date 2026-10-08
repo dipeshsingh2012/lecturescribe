@@ -5,6 +5,7 @@ import {
   getFileTypeBadge,
   extractVideoId,
   parseTimestampToSeconds,
+  formatSecondsToTimestamp,
   cleanSubmissionFallback,
   truncateEnd
 } from '../formatters';
@@ -182,6 +183,16 @@ describe('formatters utility functions', () => {
       const truncated = truncateEnd(longCourse, 25);
       expect(truncated).toBe('Applied Mathematics for D...');
       expect(truncated.endsWith('...')).toBe(true);
+    });
+  });
+
+  describe('formatSecondsToTimestamp', () => {
+    it('formats seconds into MM:SS or HH:MM:SS accurately', () => {
+      expect(formatSecondsToTimestamp(0)).toBe('00:00');
+      expect(formatSecondsToTimestamp(null)).toBe('00:00');
+      expect(formatSecondsToTimestamp(65)).toBe('01:05');
+      expect(formatSecondsToTimestamp(860)).toBe('14:20');
+      expect(formatSecondsToTimestamp(3665)).toBe('1:01:05');
     });
   });
 });

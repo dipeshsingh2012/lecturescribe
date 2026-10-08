@@ -196,6 +196,15 @@ class GenerateLectureSummaryRequest(BaseModel):
     bypass_cache: Optional[bool] = False
 
 
+class SaveLectureProgressRequest(BaseModel):
+    video_id: str
+    user_email: Optional[str] = None
+    last_timestamp: str = "00:00"
+    last_seconds: float = 0.0
+    duration_seconds: float = 0.0
+    active_cue_idx: int = 0
+
+
 class TranscriptionDispatchRequest(BaseModel):
     job_id: str
 
@@ -1529,6 +1538,63 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
         "video_id": vid,
         "summary": saved_record,
         "cached": False
+    }
+
+
+# ==============================================================================
+# Lecture Playback Progress Endpoints
+# ==============================================================================
+
+@app.get("/api/progress/lecture")
+def get_lecture_progress_endpoint(
+    video_id: str = Query(..., description="Lecture video ID"),
+    user_email: Optional[str] = Query(None, description="User email")
+):
+    """Retrieve the saved playback progress for a lecture."""
+    vid = str(video_id).strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="video_id parameter is required.")
+    prog = db_manager.get_lecture_progress(vid, user_email=user_email)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "progress": prog
+    }
+
+
+@app.post("/api/progress/lecture")
+def save_lecture_progress_endpoint(req: SaveLectureProgressRequest):
+    """Save or update the playback progress for a lecture."""
+    vid = str(req.video_id).strip()
+    if not vid or vid == "active":
+        raise HTTPException(status_code=400, detail="A valid video_id is required.")
+    item = db_manager.save_lecture_progress(
+        video_id=vid,
+        last_timestamp=req.last_timestamp,
+        last_seconds=req.last_seconds,
+        duration_seconds=req.duration_seconds,
+        active_cue_idx=req.active_cue_idx,
+        user_email=req.user_email
+    )
+    return {
+        "status": "success",
+        "video_id": vid,
+        "progress": item
+    }
+
+
+@app.get("/api/progress/user")
+def get_user_progress_endpoint(
+    user_email: Optional[str] = Query(None, description="User email"),
+    video_ids: Optional[str] = Query(None, description="Comma-separated video IDs")
+):
+    """Retrieve progress mapping for all lectures belonging to a user or course."""
+    v_list = [v.strip() for v in video_ids.split(",") if v.strip()] if video_ids else None
+    progress_map = db_manager.get_user_progress_map(user_email=user_email, video_ids=v_list)
+    return {
+        "status": "success",
+        "count": len(progress_map),
+        "progress": progress_map
     }
 
 

@@ -83,6 +83,7 @@ class RelationalDBManager:
         self._course_quiz_history_memory: List[Dict[str, Any]] = []
         self._course_quiz_explanations_memory: Dict[str, Dict[str, str]] = {}
         self._readings_memory_cache: List[Dict[str, Any]] = []
+        self._progress_memory_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -399,6 +400,24 @@ class RelationalDBManager:
                             ON lecturescribe_lecture_summaries (video_id, COALESCE(user_email, ''), summary_type);
                         CREATE INDEX IF NOT EXISTS idx_lecture_summaries_vid 
                             ON lecturescribe_lecture_summaries (video_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_lecture_progress (
+                            id SERIAL PRIMARY KEY,
+                            video_id VARCHAR(128) NOT NULL,
+                            user_email VARCHAR(255) NOT NULL DEFAULT 'anonymous',
+                            last_timestamp VARCHAR(32) NOT NULL DEFAULT '00:00',
+                            last_seconds DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                            duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                            progress_percent DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                            active_cue_idx INTEGER NOT NULL DEFAULT 0,
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            CONSTRAINT uq_lecture_progress_user_video UNIQUE (user_email, video_id)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_lecture_progress_user_email 
+                            ON lecturescribe_lecture_progress (user_email);
+                        CREATE INDEX IF NOT EXISTS idx_lecture_progress_video_id 
+                            ON lecturescribe_lecture_progress (video_id);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_fleet_runs (
                             request_id VARCHAR(128) PRIMARY KEY,
@@ -1044,6 +1063,205 @@ class RelationalDBManager:
         """Fetch a single summary for a video and summary_type."""
         all_sums = self.get_lecture_summaries(video_id, user_email)
         return all_sums.get(summary_type.strip().lower())
+
+    def save_lecture_progress(
+        self,
+        video_id: str,
+        last_timestamp: str,
+        last_seconds: float,
+        duration_seconds: float = 0.0,
+        active_cue_idx: int = 0,
+        user_email: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Save or update lecture playback progress in PostgreSQL and In-Memory cache."""
+        if not video_id:
+            return None
+
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else "anonymous"
+        clean_ts = (last_timestamp or "00:00").strip()
+        safe_secs = max(0.0, float(last_seconds or 0.0))
+        safe_dur = max(0.0, float(duration_seconds or 0.0))
+        safe_idx = max(0, int(active_cue_idx or 0))
+
+        if safe_dur > 0:
+            progress_pct = min(100.0, max(0.0, round((safe_secs / safe_dur) * 100.0, 1)))
+        else:
+            progress_pct = 0.0
+
+        item = {
+            "video_id": video_id,
+            "user_email": clean_email,
+            "last_timestamp": clean_ts,
+            "last_seconds": safe_secs,
+            "duration_seconds": safe_dur,
+            "progress_percent": progress_pct,
+            "active_cue_idx": safe_idx,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_lecture_progress (
+                                video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (user_email, video_id) DO UPDATE SET
+                                last_timestamp = EXCLUDED.last_timestamp,
+                                last_seconds = EXCLUDED.last_seconds,
+                                duration_seconds = CASE WHEN EXCLUDED.duration_seconds > 0 THEN EXCLUDED.duration_seconds ELSE lecturescribe_lecture_progress.duration_seconds END,
+                                progress_percent = EXCLUDED.progress_percent,
+                                active_cue_idx = EXCLUDED.active_cue_idx,
+                                updated_at = NOW()
+                            RETURNING id, video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at;
+                        """, (video_id, clean_email, clean_ts, safe_secs, safe_dur, progress_pct, safe_idx))
+                        row = cursor.fetchone()
+                        if row:
+                            item["id"] = row["id"]
+                            item["video_id"] = row["video_id"]
+                            item["user_email"] = row["user_email"]
+                            item["last_timestamp"] = row["last_timestamp"]
+                            item["last_seconds"] = float(row["last_seconds"])
+                            item["duration_seconds"] = float(row["duration_seconds"])
+                            item["progress_percent"] = float(row["progress_percent"])
+                            item["active_cue_idx"] = int(row["active_cue_idx"])
+                            if isinstance(row["updated_at"], (datetime.date, datetime.datetime)):
+                                item["updated_at"] = row["updated_at"].isoformat()
+                        conn.commit()
+                        self._progress_memory_cache[(clean_email, video_id)] = item
+                        return item
+            except Exception as e:
+                print(f"[PostgreSQL Notice] save_lecture_progress fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        self._progress_memory_cache[(clean_email, video_id)] = item
+        return item
+
+    def get_lecture_progress(
+        self,
+        video_id: str,
+        user_email: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve the last playback progress for a lecture."""
+        if not video_id:
+            return None
+
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        if clean_email and clean_email != "anonymous":
+                            cursor.execute("""
+                                SELECT id, video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at
+                                FROM lecturescribe_lecture_progress
+                                WHERE video_id = %s AND user_email IN (%s, 'anonymous')
+                                ORDER BY CASE WHEN user_email = %s THEN 0 ELSE 1 END, updated_at DESC
+                                LIMIT 1;
+                            """, (video_id, clean_email, clean_email))
+                        else:
+                            cursor.execute("""
+                                SELECT id, video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at
+                                FROM lecturescribe_lecture_progress
+                                WHERE video_id = %s
+                                ORDER BY updated_at DESC
+                                LIMIT 1;
+                            """, (video_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            return {
+                                "id": row["id"],
+                                "video_id": row["video_id"],
+                                "user_email": row["user_email"],
+                                "last_timestamp": row["last_timestamp"],
+                                "last_seconds": float(row["last_seconds"]),
+                                "duration_seconds": float(row["duration_seconds"]),
+                                "progress_percent": float(row["progress_percent"]),
+                                "active_cue_idx": int(row["active_cue_idx"]),
+                                "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None
+                            }
+            except Exception as e:
+                print(f"[PostgreSQL Notice] get_lecture_progress fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # In-memory fallback
+        if clean_email and (clean_email, video_id) in self._progress_memory_cache:
+            return self._progress_memory_cache[(clean_email, video_id)]
+        if ("anonymous", video_id) in self._progress_memory_cache:
+            return self._progress_memory_cache[("anonymous", video_id)]
+        for (em, vid), data in self._progress_memory_cache.items():
+            if vid == video_id:
+                return data
+        return None
+
+    def get_user_progress_map(
+        self,
+        user_email: Optional[str] = None,
+        video_ids: Optional[List[str]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return a mapping of video_id -> progress for all lectures of a user or list of videos."""
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        res_map: Dict[str, Dict[str, Any]] = {}
+
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        query = """
+                            SELECT DISTINCT ON (video_id)
+                                video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at
+                            FROM lecturescribe_lecture_progress
+                            WHERE 1=1
+                        """
+                        params = []
+                        if clean_email and clean_email != "anonymous":
+                            query += " AND user_email IN (%s, 'anonymous')"
+                            params.append(clean_email)
+                        if video_ids:
+                            query += " AND video_id = ANY(%s)"
+                            params.append(video_ids)
+                        query += " ORDER BY video_id, CASE WHEN user_email = %s THEN 0 ELSE 1 END, updated_at DESC;"
+                        params.append(clean_email or "anonymous")
+
+                        cursor.execute(query, tuple(params))
+                        rows = cursor.fetchall() or []
+                        for row in rows:
+                            res_map[row["video_id"]] = {
+                                "video_id": row["video_id"],
+                                "user_email": row["user_email"],
+                                "last_timestamp": row["last_timestamp"],
+                                "last_seconds": float(row["last_seconds"]),
+                                "duration_seconds": float(row["duration_seconds"]),
+                                "progress_percent": float(row["progress_percent"]),
+                                "active_cue_idx": int(row["active_cue_idx"]),
+                                "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None
+                            }
+                        return res_map
+            except Exception as e:
+                print(f"[PostgreSQL Notice] get_user_progress_map fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # In-memory fallback
+        for (em, vid), data in self._progress_memory_cache.items():
+            if not video_ids or vid in video_ids:
+                if not clean_email or em in (clean_email, "anonymous"):
+                    if vid not in res_map or (clean_email and em == clean_email):
+                        res_map[vid] = data
+        return res_map
 
     def save_quiz(self, video_id: str, quiz_data: Dict[str, Any]) -> bool:
         """Persist generated quiz questions and metadata to PostgreSQL and In-Memory cache."""
@@ -2484,6 +2702,14 @@ class RelationalDBManager:
                             "course_name": u.get("course_name") or canonical_name
                         })
 
+                    try:
+                        v_ids = [l["video_id"] for l in lectures if l.get("video_id")]
+                        prog_map = self.get_user_progress_map(user_email=user_email, video_ids=v_ids)
+                        for l in lectures:
+                            l["progress"] = prog_map.get(l.get("video_id"))
+                    except Exception:
+                        pass
+
                     return {
                         "course_name": canonical_name,
                         "lecture_count": len(lectures),
@@ -2553,7 +2779,7 @@ class RelationalDBManager:
                         ORDER BY last_viewed_at DESC;
                     """, (clean_email,))
                     rows = cursor.fetchall() or []
-                    return [
+                    items = [
                         {
                             "videoId": r["video_id"],
                             "video_id": r["video_id"],
@@ -2571,6 +2797,14 @@ class RelationalDBManager:
                         }
                         for r in rows
                     ]
+                    try:
+                        v_ids = [it["video_id"] for it in items]
+                        prog_map = self.get_user_progress_map(user_email=clean_email, video_ids=v_ids)
+                        for it in items:
+                            it["progress"] = prog_map.get(it["video_id"])
+                    except Exception:
+                        pass
+                    return items
         finally:
             conn.close()
 

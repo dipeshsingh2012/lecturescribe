@@ -98,7 +98,7 @@ export default function App() {
   const effectiveCourse = selectedCourse || course.activeCourseData?.course_name || activeData?.course_name || null;
   const resources = useResources(activeData?.videoId, effectiveCourse, auth.googleUser);
   const tutor = useAITutor(activeData, auth.googleUser);
-  const player = useLecturePlayer(activeData);
+  const player = useLecturePlayer(activeData, auth.googleUser?.email);
   const quiz = useLectureQuiz(activeData);
   const summary = useLectureSummary(activeData, auth.googleUser?.email);
 

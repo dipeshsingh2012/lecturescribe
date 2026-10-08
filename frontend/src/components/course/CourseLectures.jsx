@@ -243,6 +243,27 @@ export default function CourseLectures({
                   }}
                 />
               </Box>
+
+              {item.progress && item.progress.progress_percent > 0 && (
+                <Box sx={{ mt: 1.5, pt: 1, borderTop: '1px dashed var(--border-color)' }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                    <Typography variant="caption" sx={{ color: 'var(--text-secondary)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 0.5, fontWeight: 600 }}>
+                      ⏱️ {item.progress.progress_percent >= 90 ? 'Completed' : `Resume at ${item.progress.last_timestamp || '00:00'}`}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: currentTheme.palette.primary, fontWeight: 700, fontSize: '0.72rem' }}>
+                      {Math.round(item.progress.progress_percent)}%
+                    </Typography>
+                  </Box>
+                  <Box sx={{ width: '100%', height: 4, borderRadius: 2, bgcolor: 'var(--border-color)', overflow: 'hidden' }}>
+                    <Box sx={{
+                      width: `${Math.min(100, Math.max(0, item.progress.progress_percent))}%`,
+                      height: '100%',
+                      bgcolor: item.progress.progress_percent >= 90 ? '#10b981' : currentTheme.palette.primary,
+                      transition: 'width 0.3s ease'
+                    }} />
+                  </Box>
+                </Box>
+              )}
             </CardContent>
 
             <Divider sx={{ borderColor: currentTheme.palette.cardBorder }} />
@@ -260,7 +281,9 @@ export default function CourseLectures({
                   '&:hover': { bgcolor: currentTheme.palette.primaryHover }
                 }}
               >
-                Study Lecture →
+                {item.progress && item.progress.progress_percent > 0 && item.progress.progress_percent < 90
+                  ? `Resume (${item.progress.last_timestamp}) →`
+                  : 'Study Lecture →'}
               </Button>
 
               <Box sx={{ display: 'flex', gap: 0.5 }}>

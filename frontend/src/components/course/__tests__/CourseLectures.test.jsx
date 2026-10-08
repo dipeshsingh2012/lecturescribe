@@ -114,4 +114,42 @@ describe('CourseLectures', () => {
     expect(headerDriveBadge).toBeInTheDocument();
     expect(headerDriveBadge).toHaveAttribute('href', 'https://drive.google.com/drive/folders/test-folder-123');
   });
+
+  it('renders progress bar and resume button when playback progress exists', () => {
+    const handleTranscribe = vi.fn();
+    const lectures = [
+      {
+        video_id: '998877',
+        video_url: 'https://vimeo.com/998877',
+        video_title: 'Classical Mechanics Lecture 1',
+        total_duration_seconds: 3600,
+        progress: {
+          last_timestamp: '24:15',
+          last_seconds: 1455,
+          duration_seconds: 3600,
+          progress_percent: 40.4
+        }
+      }
+    ];
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={lectures}
+        handleTranscribe={handleTranscribe}
+        handleDeleteFromLibrary={vi.fn()}
+        handleClearCourse={vi.fn()}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Resume at 24:15/i)).toBeInTheDocument();
+    expect(screen.getByText('40%')).toBeInTheDocument();
+
+    const resumeBtn = screen.getByRole('button', { name: /Resume \(24:15\) →/i });
+    expect(resumeBtn).toBeInTheDocument();
+    fireEvent.click(resumeBtn);
+    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/998877', true, 'Physics 101');
+  });
 });

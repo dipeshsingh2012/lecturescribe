@@ -29,7 +29,7 @@ else:
 # Constants & Timezone
 IST = ZoneInfo("Asia/Kolkata")
 CACHE_KEY = "moodle_ical_events_cache"
-DEFAULT_CACHE_TTL = 1800  # 30 minutes
+DEFAULT_CACHE_TTL = 43200  # 12 hours (12 * 3600 seconds)
 
 # The only two Cloud Scheduler cron slots (IST). Both deliver the same full-day agenda.
 SLOT_LABELS: Dict[str, str] = {
@@ -249,9 +249,26 @@ def parse_ical_content(ics_text: str | bytes) -> List[Dict[str, Any]]:
 
 class MoodleCalendarService:
     def __init__(self, redis_client=None):
-        self.redis = redis_client
+        self._custom_redis = redis_client
         self._memory_cache: Optional[Dict[str, Any]] = None
         self._cache_timestamp: float = 0
+
+    @property
+    def redis(self):
+        """Resolve Redis client dynamically from redis_service if not explicitly provided."""
+        if self._custom_redis is not None:
+            return self._custom_redis
+        try:
+            from backend.redis_service import redis_cache
+            if redis_cache and redis_cache.enabled and redis_cache.client:
+                return redis_cache.client
+        except Exception:
+            pass
+        return None
+
+    @redis.setter
+    def redis(self, value):
+        self._custom_redis = value
 
     def fetch_raw_feed(self, url: Optional[str] = None) -> str:
         """Fetch raw ics feed from Moodle LMS."""
@@ -268,7 +285,7 @@ class MoodleCalendarService:
             return ""
 
     def get_events(self, refresh: bool = False) -> List[Dict[str, Any]]:
-        """Get parsed events, utilizing Redis or in-memory cache with 30-min TTL."""
+        """Get parsed events, utilizing Redis or in-memory cache with 12-hour TTL."""
         now_ts = time.time()
 
         # 1. Check in-memory / redis cache unless refresh requested

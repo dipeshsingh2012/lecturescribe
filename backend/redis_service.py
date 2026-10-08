@@ -371,6 +371,35 @@ class RedisCacheService:
             return False
 
     # ---------------------------------------------------------
+    # Calendar Events Cache Operations
+    # ---------------------------------------------------------
+
+    def get_calendar_events(self, key: str = "moodle_ical_events_cache") -> Optional[List[Dict[str, Any]]]:
+        """Retrieve cached Moodle calendar events."""
+        if not self.client or not self.enabled:
+            return None
+        try:
+            raw = self.client.get(key)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    return data
+        except Exception as e:
+            print(f"[Redis Cache Warning] Calendar cache read error: {e}")
+        return None
+
+    def set_calendar_events(self, events: List[Dict[str, Any]], key: str = "moodle_ical_events_cache", ttl_seconds: int = 43200) -> bool:
+        """Cache calendar events in Redis (default TTL: 12 hours / 43200s)."""
+        if not self.client or not self.enabled:
+            return False
+        try:
+            self.client.setex(key, ttl_seconds, json.dumps(events))
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] Calendar cache write error: {e}")
+            return False
+
+    # ---------------------------------------------------------
     # Invalidation & Administration
     # ---------------------------------------------------------
 

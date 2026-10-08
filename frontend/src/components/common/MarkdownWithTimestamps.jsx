@@ -91,21 +91,23 @@ export default function MarkdownWithTimestamps({
   // Parse inline timestamps and tool citations in bot messages and make them clickable
   const renderMessageWithTimestamps = (text) => {
     if (!text) return null;
-    const parts = text.split(/(\[(?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+\]|【[^】]+】)/g);
+    const parts = text.split(/(\[(?:\d{1,2}:\d{2}(?::\d{2})?(?:[\s,\-–—]+)?)+\]|【[^】]+】)/g);
     if (parts.length === 1) return text;
     return parts.map((part, pIdx) => {
-      const match = part.match(/^\[((?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+)\]$/);
+      const match = part.match(/^\[((?:\d{1,2}:\d{2}(?::\d{2})?(?:[\s,\-–—]+)?)+)\]$/);
       if (match) {
         const tsList = match[1].match(/\d{1,2}:\d{2}(?::\d{2})?/g);
         if (tsList && tsList.length > 0) {
           if (tsList.length === 1) {
             return renderTimestampButton(tsList[0], pIdx);
           }
+          const isRange = /[-–—]/.test(match[1]);
+          const separator = isRange ? '–' : ', ';
           return (
             <span key={pIdx} style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
               {tsList.map((ts, idx) => (
                 <React.Fragment key={idx}>
-                  {idx > 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>,</span>}
+                  {idx > 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{separator}</span>}
                   {renderTimestampButton(ts, `${pIdx}-${idx}`)}
                 </React.Fragment>
               ))}
@@ -265,6 +267,23 @@ export default function MarkdownWithTimestamps({
       // Some model responses use *{n} instead of the LaTeX subscript _{n}.
       .replace(/(\\(?:hat|bar|vec|tilde)\{[^{}\n]+\}|\\(?:beta|alpha|sigma|theta|mu|tau))\*\{([^{}\n]+)\}/g, '$1_{$2}')
       .replace(/\\mathcal\{N\}!\s*\\left/g, '\\mathcal{N}\\left')
+      // Protect unescaped pipes | inside LaTeX math expressions \(...\), \[...\], and $$...$$
+      // In markdown tables, unescaped | acts as a column delimiter before math is parsed,
+      // which tears equations apart across table cells. In LaTeX / KaTeX, {\vert} renders
+      // as | without colliding with markdown table syntax.
+      .replace(/\\([(\[])([\s\S]*?)\\([)\]])/g, (_match, open, math, close) => {
+        const fixedMath = math.replace(/(?<!\\)\|/g, '{\\vert}');
+        return `\\${open}${fixedMath}\\${close}`;
+      })
+      .replace(/\$\$([\s\S]*?)\$\$/g, (_match, math) => {
+        const fixedMath = math.replace(/(?<!\\)\|/g, '{\\vert}');
+        return `$$${fixedMath}$$`;
+      })
+      // Also protect set-builder pipes \{ ... | ... \} or \left\{ ... | ... \right\} inside inline $...$
+      .replace(/\$([^\n$]*?\\(?:\{|left\\{)[\s\S]*?\\(?:\}|right\\\})[^\n$]*?)\$/g, (_match, math) => {
+        const fixedMath = math.replace(/(?<!\\)\|/g, '{\\vert}');
+        return `$${fixedMath}$`;
+      })
       // Normalize LaTeX display math \[ ... \] to $$ ... $$
       .replace(/\\\[([\s\S]*?)\\\]/g, (_match, equation) => `$$${equation}$$`)
       // Normalize LaTeX inline math \( ... \) to $ ... $

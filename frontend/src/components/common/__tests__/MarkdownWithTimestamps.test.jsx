@@ -185,4 +185,77 @@ describe('MarkdownWithTimestamps', () => {
     expect(screen.getByRole('button', { name: /42:19/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /42:33/i })).toBeInTheDocument();
   });
+
+  it('correctly renders four fundamental subspaces table and timestamps with math inside tables and ranges', () => {
+    const handleCueClick = vi.fn();
+    const content = `The professor introduced the **four fundamental subspaces** that are naturally associated with any real \\(m\\times n\\) matrix \\(A\\).
+
+| Subspace | Definition | Ambient space |
+|----------|------------|---------------|
+| **Column space** (or range) \\(\\displaystyle \\mathcal{C}(A)=\\{A\\mathbf{x}\\;|\\;\\mathbf{x}\\in\\mathbb{R}^{n}\\}\\) | All linear combinations of the columns of \\(A\\) | \\(\\mathbb{R}^{m}\\) |
+| **Null space** (or kernel) \\(\\displaystyle \\mathcal{N}(A)=\\{\\mathbf{x}\\in\\mathbb{R}^{n}\\;|\\;A\\mathbf{x}=0\\}\\) | Vectors that are sent to the zero vector by \\(A\\) | \\(\\mathbb{R}^{n}\\) |
+| **Row space** \\(\\displaystyle \\mathcal{C}(A^{\\mathsf{T}})=\\{A^{\\mathsf{T}}\\mathbf{y}\\;|\\;\\mathbf{y}\\in\\mathbb{R}^{m}\\}\\) | Column space of the transpose, i.e., all linear combinations of the rows of \\(A\\) | \\(\\mathbb{R}^{n}\\) |
+| **Left null space** \\(\\displaystyle \\mathcal{N}(A^{\\mathsf{T}})=\\{\\mathbf{y}\\in\\mathbb{R}^{m}\\;|\\;A^{\\mathsf{T}}\\mathbf{y}=0\\}\\) | Vectors orthogonal to every column of \\(A\\) (or equivalently, orthogonal to the row space) | \\(\\mathbb{R}^{m}\\) |
+
+These four subspaces are paired as two for the matrix \\(A\\) (column space and null space) and two for its transpose \\(A^{\\mathsf{T}}\\) (row space and left‑null space).  
+
+**Citation from the lecture:** The professor announced “let’s look at the four fundamental subspaces associated with the matrix” at **[41:06]**, and explicitly listed them as “two for \\(A\\) … null space of \\(A\\) …” and “two for \\(A^{\\mathsf{T}}\\)” between **[42:06]–[42:27]** in **Applied Mathematics for Data Science and AI – Live Session 8**.`;
+
+    const { container } = render(
+      <MarkdownWithTimestamps content={content} onCueClick={handleCueClick} />
+    );
+
+    // Table must be rendered as a <table> element
+    const table = container.querySelector('table');
+    expect(table).toBeInTheDocument();
+    // Headers
+    expect(screen.getByText('Subspace')).toBeInTheDocument();
+    expect(screen.getByText('Definition')).toBeInTheDocument();
+    expect(screen.getByText('Ambient space')).toBeInTheDocument();
+    // Table rows
+    const rows = container.querySelectorAll('tbody tr');
+    expect(rows.length).toBe(4);
+    // Each row must have exactly 3 cells matching the 3 table headers
+    for (const row of rows) {
+      expect(row.querySelectorAll('td').length).toBe(3);
+    }
+    // Check cell content of Row 0
+    const row0Cells = rows[0].querySelectorAll('td');
+    expect(row0Cells[0].textContent).toContain('Column space');
+    expect(row0Cells[1].textContent).toContain('All linear combinations of the columns of');
+    expect(row0Cells[2].textContent).toContain('R');
+
+    // Math rendered in KaTeX
+    expect(container.querySelectorAll('.katex').length).toBeGreaterThan(0);
+
+    // Timestamps clickable: [41:06] and the range [42:06]–[42:27]
+    expect(screen.getByRole('button', { name: /41:06/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /42:06/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /42:27/i })).toBeInTheDocument();
+  });
+
+  it('renders range timestamps inside single brackets like [42:06–42:27] as distinct jump buttons', () => {
+    const handleCueClick = vi.fn();
+    render(
+      <MarkdownWithTimestamps
+        content="See lecture portion [42:06–42:27] and [10:00-10:45]."
+        onCueClick={handleCueClick}
+      />
+    );
+
+    const btn1 = screen.getByRole('button', { name: /42:06/i });
+    const btn2 = screen.getByRole('button', { name: /42:27/i });
+    const btn3 = screen.getByRole('button', { name: /10:00/i });
+    const btn4 = screen.getByRole('button', { name: /10:45/i });
+
+    expect(btn1).toBeInTheDocument();
+    expect(btn2).toBeInTheDocument();
+    expect(btn3).toBeInTheDocument();
+    expect(btn4).toBeInTheDocument();
+
+    fireEvent.click(btn1);
+    expect(handleCueClick).toHaveBeenCalledWith('42:06');
+    fireEvent.click(btn2);
+    expect(handleCueClick).toHaveBeenCalledWith('42:27');
+  });
 });

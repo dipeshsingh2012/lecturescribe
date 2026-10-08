@@ -41,13 +41,28 @@ describe('LectureSummary component', () => {
     expect(screen.getByRole('button', { name: /Copy Markdown/i })).toBeInTheDocument();
   });
 
-  it('renders submission prose and target word count when viewMode is submission', () => {
+  it('renders submission prose and word count when viewMode is submission', () => {
     const hook = createHookMock({ viewMode: 'submission' });
     render(<LectureSummary summaryHook={hook} handleCueClick={vi.fn()} />);
 
     expect(screen.getByText(sampleSummary.submissionText)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Copy for Submission/i })).toBeInTheDocument();
-    expect(screen.getByText(/Target: 300–450 words/i)).toBeInTheDocument();
+    expect(screen.getByText(/14 words/i)).toBeInTheDocument();
+  });
+
+  it('renders mathematical formulas in submission prose using KaTeX', () => {
+    const mathSubmission = {
+      ...sampleSummary,
+      submissionText: 'Formal definitions were provided: \\(d_{i,j}\\) denotes the edit distance for source string \\(X\\).'
+    };
+    const hook = createHookMock({
+      viewMode: 'submission',
+      currentSummary: mathSubmission
+    });
+    const { container } = render(<LectureSummary summaryHook={hook} handleCueClick={vi.fn()} />);
+
+    expect(container.querySelectorAll('.katex').length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).not.toContain('\\(d_{i,j}\\)');
   });
 
   it('triggers generateSummary when clicking regenerate button', () => {

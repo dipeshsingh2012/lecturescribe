@@ -1310,17 +1310,18 @@ class Llama3PineconeRAGStore:
         is_30min = "30 min" in query_lower
 
         if is_comprehensive:
-            target_words = max(word_count, 350)
-            min_w, max_w = 280, 450
+            target_words = max(word_count, 600)
             system_prompt = (
-                f"You are an Indian M.Tech graduate student drafting an academic assignment submission report. "
-                f"Write a comprehensive, professional academic summary report of approximately {target_words} words "
-                f"(between {min_w} and {max_w} words) covering the core topics, methodologies, and technical insights from the lecture. "
-                "Organize your report into 2-3 clear paragraphs separated by a blank line. "
-                "Do not include conversational filler, timestamps, or raw citations. Output clean academic prose."
+                "You are an Indian M.Tech graduate student drafting an in-depth academic assignment submission report. "
+                "Write an exhaustive, thorough, and academically rigorous multi-paragraph submission report covering "
+                "all core topics, methodologies, mathematical models, algorithms, and technical insights from the lecture. "
+                "Do NOT restrict yourself to a short word limit or artificially condense the material; provide complete, "
+                "in-depth coverage across multiple well-developed paragraphs separated by blank lines. "
+                "STRICT NON-HALLUCINATION: Strictly ground your report in the lecture material provided. "
+                "Do not include conversational filler, timestamps, or raw citations. Format all mathematical notation cleanly with standard LaTeX ($...$)."
             )
-            user_content = f"Synthesize this lecture insight into a comprehensive multi-paragraph academic submission report: {original_text[:8000]}"
-            max_tokens_val = 800
+            user_content = f"Synthesize this lecture insight into an exhaustive, multi-paragraph academic submission report without word count restrictions:\n\n{original_text[:35000]}"
+            max_tokens_val = 2500
         elif is_concepts:
             target_words = max(word_count, 250)
             min_w, max_w = 200, 350
@@ -1383,7 +1384,7 @@ class Llama3PineconeRAGStore:
                 r = requests.post(url, headers=headers, json=payload, timeout=20)
                 if r.status_code == 200:
                     raw_output = r.json()["choices"][0]["message"]["content"].strip()
-                    final_sub = self._clean_for_submission(raw_output, target_words=target_words + 25)
+                    final_sub = self._clean_for_submission(raw_output) if is_comprehensive else self._clean_for_submission(raw_output, target_words=target_words + 25)
                     words = final_sub.split()
                     
                     # Ensure minimum academic paragraph length if source point was brief
@@ -1410,7 +1411,7 @@ class Llama3PineconeRAGStore:
                 r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
                 if r.status_code == 200:
                     raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    final_sub = self._clean_for_submission(raw_output, target_words=target_words + 25)
+                    final_sub = self._clean_for_submission(raw_output) if is_comprehensive else self._clean_for_submission(raw_output, target_words=target_words + 25)
                     return {
                         "status": "success",
                         "submission_text": final_sub,
@@ -1422,7 +1423,7 @@ class Llama3PineconeRAGStore:
 
         # Intelligent local fallback: preserve sentence boundaries up to target_words
         words = clean_base.split()
-        if len(words) <= target_words:
+        if is_comprehensive or len(words) <= target_words:
             final_sub = clean_base
         else:
             truncated = " ".join(words[:target_words])
@@ -1481,11 +1482,29 @@ class Llama3PineconeRAGStore:
         groq_key = os.getenv("GROQ_API_KEY", "")
 
         system_prompt = (
-            f"You are an AI Tutor for lecture: '{title}'. Unpack the unabridged transcript "
-            "chronologically into distinct Markdown chapters using ## headers. Ground every statement "
-            "with exact inline [MM:SS] timestamps."
+            f"You are an Expert Academic AI Tutor creating an exhaustive, in-depth study guide for the lecture: '{title}'.\n\n"
+            "MISSION & EXHAUSTIVE DEPTH:\n"
+            "- Do NOT artificially shorten, compress, or constrain your summary by word limits. Provide a full, exhaustive, in-depth academic breakdown that thoroughly covers the entire lecture from beginning to end.\n"
+            "- Unpack the chronological progression of the lecture into comprehensive Markdown chapters using `##` headers with clear timestamps (e.g. `## 1. Introduction & Foundational Concepts [00:00 - 18:24]`).\n"
+            "- Under each chapter, provide comprehensive narrative explanations, core definitions, mathematical formulations, algorithmic steps, concrete examples, and theoretical trade-offs introduced by the instructor.\n\n"
+            "STRICT NON-HALLUCINATION & FACTUAL ACCURACY PROTOCOL:\n"
+            "- Strictly ground all explanations, definitions, mathematical models, and examples in the provided lecture transcript.\n"
+            "- NEVER invent or hallucinate topics, formulas, external theorems, or statements that the professor did not discuss in this lecture.\n"
+            "- Ground every major statement, claim, and concept with its exact inline `[MM:SS]` timestamp from the transcript.\n\n"
+            "MATHEMATICAL & SCIENTIFIC NOTATION:\n"
+            "- Format all mathematical notation, variables, and formulas using standard LaTeX: single dollar signs for inline math (e.g., `$d_{i,j}$`, `$\\mathbb{R}^2$`) and double dollar signs for block equations (`$$...$$`).\n"
+            "- Use `_` for subscripts (e.g., `$x_{1}$`), never `*`.\n"
+            "- When writing equations in markdown tables, do not use raw unescaped pipe `|` symbols (use `\\mid` or `\\vert`).\n\n"
+            "STRUCTURE & RIGOR:\n"
+            "- For every technical topic covered, explain the 'why', the 'how', the formal definition, and the concrete example or counter-example used in class.\n"
+            "- Include bulleted key takeaways, comparison tables where appropriate, and synthesis sections."
         )
-        user_prompt = f"Task: {user_original_request}\n\nTranscript Content:\n{transcript_str}"
+        user_prompt = (
+            f"Generate a full, exhaustive academic summary and study guide for this lecture based on the complete transcript.\n"
+            f"Do not restrict by word count; cover every topic, example, and derivation thoroughly and accurately without hallucination.\n\n"
+            f"Lecture Title: {title}\n\n"
+            f"Transcript Content:\n{transcript_str}"
+        )
 
         # 1. Groq GPT-OSS 120B
         if groq_key:
@@ -1522,7 +1541,7 @@ class Llama3PineconeRAGStore:
             payload = {
                 "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096}
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192}
             }
             headers = {"Content-Type": "application/json"}
 

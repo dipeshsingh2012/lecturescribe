@@ -1537,7 +1537,11 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
     if len(pinecone_rag_engine.local_chunks) == 0:
         pinecone_rag_engine.ingest_transcript(vid, title, cues)
 
-    prompt = "Create a summary for a 15 min read" if summary_type == "15_min" else "Generate Full Comprehensive Summary"
+    prompt = (
+        "Create a summary for a 15 min read"
+        if summary_type == "15_min"
+        else "Generate Full Comprehensive Summary without word limits; provide an exhaustive, in-depth academic study guide and full synthesis grounded strictly in the transcript."
+    )
 
     res = process_chat_message(
         user_prompt=prompt,
@@ -1552,8 +1556,7 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
 
     markdown_text = res.get("reply") or ""
     submission_text = res.get("submission_text") or pinecone_rag_engine._clean_for_submission(
-        markdown_text,
-        target_words=120 if summary_type == "15_min" else 350
+        markdown_text
     )
     word_count = len([w for w in submission_text.split() if w])
     citations = res.get("citations") or []

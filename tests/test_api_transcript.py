@@ -260,7 +260,13 @@ Today we discuss forward kinematics.
         saved_video = {"title": "Lecture", "cues": []}
         refreshed_job = {**job, "task_name": "task-resource"}
         with (
-            patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_ENABLED": "true"}),
+            patch.dict(
+                os.environ,
+                {
+                    "ASYNC_TRANSCRIPTION_ENABLED": "true",
+                    "TRANSCRIPTION_SERVICE_URL": "https://transcription.example",
+                },
+            ),
             patch("backend.main.db_manager.get_saved_video", return_value=saved_video),
             patch("backend.main.db_manager.create_transcription_job", return_value=job),
             patch("backend.main.enqueue_transcription_task", return_value="task-resource") as enqueue,
@@ -288,7 +294,13 @@ Today we discuss forward kinematics.
             "created": False,
         }
         with (
-            patch.dict(os.environ, {"ASYNC_TRANSCRIPTION_ENABLED": "true"}),
+            patch.dict(
+                os.environ,
+                {
+                    "ASYNC_TRANSCRIPTION_ENABLED": "true",
+                    "TRANSCRIPTION_SERVICE_URL": "https://transcription.example",
+                },
+            ),
             patch("backend.main.db_manager.get_saved_video", return_value={"cues": []}),
             patch("backend.main.db_manager.create_transcription_job", return_value=job),
             patch("backend.main.enqueue_transcription_task") as enqueue,

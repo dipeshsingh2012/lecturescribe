@@ -533,10 +533,18 @@ export default function AITutor({
                         fontSize: '0.88rem',
                         lineHeight: '1.65',
                         color: 'var(--text-primary)',
-                        fontFamily: 'inherit',
-                        whiteSpace: 'pre-wrap'
+                        fontFamily: 'inherit'
                       }}>
-                        {submissionText || 'Generating condensed submission...'}
+                        {submissionText ? (
+                          <MarkdownWithTimestamps
+                            content={submissionText}
+                            citations={msg.citations}
+                            onCueClick={handleCueClick}
+                            onCrossLectureClick={handleCrossLectureClick}
+                          />
+                        ) : (
+                          'Generating condensed submission...'
+                        )}
                       </div>
                     </div>
                   )}

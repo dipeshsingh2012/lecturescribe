@@ -28,15 +28,10 @@ export default function LectureSummary({
     transcriptAvailable
   } = summaryHook;
 
-  const targetLabel = '300–450 words';
-  const minTarget = 260;
-  const maxTarget = 480;
-
   const currentSubmissionText = currentSummary?.submissionText || '';
   const wordCount = currentSummary?.wordCount || (
     currentSubmissionText ? currentSubmissionText.trim().split(/\s+/).filter(Boolean).length : 0
   );
-  const isTargetRange = wordCount >= minTarget && wordCount <= maxTarget;
 
   return (
     <div style={{
@@ -181,17 +176,17 @@ export default function LectureSummary({
           {viewMode === 'submission' && Boolean(currentSubmissionText) && (
             <span style={{
               fontSize: '0.74rem',
-              color: isTargetRange ? '#10b981' : 'var(--text-secondary)',
+              color: 'var(--text-secondary)',
               fontWeight: 600,
               display: 'inline-flex',
               alignItems: 'center',
               gap: '4px',
               padding: '2px 8px',
               borderRadius: '12px',
-              background: isTargetRange ? 'rgba(16, 185, 129, 0.12)' : 'var(--card-bg)',
-              border: isTargetRange ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid var(--border-color)'
+              background: 'var(--card-bg)',
+              border: '1px solid var(--border-color)'
             }}>
-              {isTargetRange ? '✓' : '•'} {wordCount} words (Target: {targetLabel})
+              • {wordCount} words
             </span>
           )}
 
@@ -361,11 +356,19 @@ export default function LectureSummary({
               fontSize: '0.92rem',
               lineHeight: '1.75',
               color: 'var(--text-primary)',
-              whiteSpace: 'pre-wrap',
               boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
             }}
           >
-            {currentSubmissionText || 'No submission prose available.'}
+            {currentSubmissionText ? (
+              <MarkdownWithTimestamps
+                content={currentSubmissionText}
+                citations={currentSummary?.citations || []}
+                onCueClick={handleCueClick}
+                onCrossLectureClick={handleCrossLectureClick}
+              />
+            ) : (
+              <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No submission prose available.</p>
+            )}
           </div>
         )}
       </div>

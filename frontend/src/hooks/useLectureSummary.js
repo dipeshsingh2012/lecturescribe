@@ -6,7 +6,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
   const email = userEmail || activeData?.user_email || null;
 
   const [summaries, setSummaries] = useState({});
-  const [activeSummaryType, setActiveSummaryType] = useState('15_min'); // '15_min' | 'comprehensive'
+  const [activeSummaryType, setActiveSummaryType] = useState('comprehensive');
   const [viewMode, setViewMode] = useState('study'); // 'study' | 'submission'
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -132,7 +132,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
     }, 2000);
   }, []);
 
-  const currentSummary = summaries[activeSummaryType] || null;
+  const currentSummary = summaries[activeSummaryType] || summaries['comprehensive'] || summaries['15_min'] || null;
 
   return {
     summaries,

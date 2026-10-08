@@ -6,8 +6,6 @@ import {
   Check,
   RefreshCw,
   Sparkles,
-  Clock,
-  Award,
   AlertCircle
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
@@ -19,8 +17,6 @@ export default function LectureSummary({
 }) {
   const {
     currentSummary,
-    activeSummaryType,
-    setActiveSummaryType,
     viewMode,
     setViewMode,
     loading,
@@ -32,10 +28,9 @@ export default function LectureSummary({
     transcriptAvailable
   } = summaryHook;
 
-  const is15Min = activeSummaryType === '15_min';
-  const targetLabel = is15Min ? '100–150 words' : '300–450 words';
-  const minTarget = is15Min ? 85 : 260;
-  const maxTarget = is15Min ? 165 : 480;
+  const targetLabel = '300–450 words';
+  const minTarget = 260;
+  const maxTarget = 480;
 
   const currentSubmissionText = currentSummary?.submissionText || '';
   const wordCount = currentSummary?.wordCount || (
@@ -91,73 +86,19 @@ export default function LectureSummary({
           </div>
         </div>
 
-        {/* Depth Selector & Regenerate */}
+        {/* Action: Regenerate */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <div style={{
-            display: 'inline-flex',
-            background: 'var(--panel-bg)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '8px',
-            padding: '2px',
-            gap: '2px'
-          }}>
-            <button
-              type="button"
-              onClick={() => setActiveSummaryType('15_min')}
-              aria-label="15-Minute Overview"
-              style={{
-                background: activeSummaryType === '15_min' ? 'var(--theme-primary)' : 'transparent',
-                color: activeSummaryType === '15_min' ? '#ffffff' : 'var(--text-secondary)',
-                border: 'none',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                fontSize: '0.75rem',
-                fontWeight: activeSummaryType === '15_min' ? 700 : 500,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <Clock size={12} />
-              <span>15-Min Overview</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSummaryType('comprehensive')}
-              aria-label="Comprehensive Report"
-              style={{
-                background: activeSummaryType === 'comprehensive' ? 'var(--theme-primary)' : 'transparent',
-                color: activeSummaryType === 'comprehensive' ? '#ffffff' : 'var(--text-secondary)',
-                border: 'none',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                fontSize: '0.75rem',
-                fontWeight: activeSummaryType === 'comprehensive' ? 700 : 500,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <Award size={12} />
-              <span>Full Comprehensive</span>
-            </button>
-          </div>
-
           <button
             type="button"
-            onClick={() => generateSummary(activeSummaryType, true)}
+            onClick={() => generateSummary('comprehensive', true)}
             disabled={generating || !transcriptAvailable}
             title="Regenerate this summary from transcript"
             aria-label="Regenerate summary"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px',
-              padding: '5px 10px',
+              gap: '6px',
+              padding: '6px 12px',
               borderRadius: '8px',
               fontSize: '0.75rem',
               fontWeight: 600,
@@ -333,7 +274,7 @@ export default function LectureSummary({
           }}>
             <Sparkles className="loading-pulse" size={26} color="var(--theme-primary)" />
             <h4 style={{ margin: '14px 0 4px', color: 'var(--text-primary)', fontSize: '0.98rem' }}>
-              Synthesizing {is15Min ? '15-Minute Overview' : 'Comprehensive Report'}...
+              Synthesizing Full Summary...
             </h4>
             <p style={{ margin: 0, fontSize: '0.82rem' }}>
               Extracting core topics, timestamp references, and academic prose from transcript cues.
@@ -362,14 +303,14 @@ export default function LectureSummary({
               <FileText size={22} color="var(--theme-primary)" />
             </div>
             <h4 style={{ margin: '0 0 8px', color: 'var(--text-primary)', fontSize: '1rem', fontWeight: 700 }}>
-              No {is15Min ? '15-Min Overview' : 'Comprehensive Report'} Generated Yet
+              No Summary Generated Yet
             </h4>
             <p style={{ margin: '0 0 18px', maxWidth: '420px', fontSize: '0.84rem', lineHeight: '1.5' }}>
-              Click below to generate a focused academic summary and submission-ready prose from this lecture.
+              Click below to generate a comprehensive academic summary and submission-ready prose from this lecture.
             </p>
             <button
               type="button"
-              onClick={() => generateSummary(activeSummaryType, true)}
+              onClick={() => generateSummary('comprehensive', true)}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -386,11 +327,22 @@ export default function LectureSummary({
               }}
             >
               <Sparkles size={16} />
-              <span>Generate {is15Min ? '15-Min Overview' : 'Full Summary'}</span>
+              <span>Generate Full Summary</span>
             </button>
           </div>
         ) : viewMode === 'study' ? (
-          <div className="summary-markdown-container">
+          <div
+            className="summary-markdown-container"
+            style={{
+              background: 'var(--card-bg)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '10px',
+              padding: '24px 28px',
+              color: 'var(--text-primary)',
+              lineHeight: '1.75',
+              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
+            }}
+          >
             <MarkdownWithTimestamps
               content={currentSummary.markdownText}
               citations={currentSummary.citations}
@@ -399,71 +351,21 @@ export default function LectureSummary({
             />
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{
-              padding: '12px 16px',
-              borderRadius: '8px',
-              background: 'rgba(0, 117, 237, 0.08)',
-              border: '1px solid rgba(0, 117, 237, 0.2)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              flexWrap: 'wrap'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Award size={16} color="var(--theme-primary)" />
-                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  Canvas / LMS Assignment Submission (Graduate Academic Tone)
-                </span>
-              </div>
-              <span style={{
-                fontSize: '0.74rem',
-                fontWeight: 700,
-                color: isTargetRange ? '#10b981' : 'var(--text-secondary)'
-              }}>
-                Target: {targetLabel} ({wordCount} words)
-              </span>
-            </div>
-
-            <div style={{
+          <div
+            className="summary-submission-container"
+            style={{
               background: 'var(--card-bg)',
               border: '1px solid var(--border-color)',
               borderRadius: '10px',
-              padding: '18px 20px',
+              padding: '24px 28px',
               fontSize: '0.92rem',
               lineHeight: '1.75',
               color: 'var(--text-primary)',
               whiteSpace: 'pre-wrap',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
-            }}>
-              {currentSubmissionText || 'No submission prose available.'}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
-              <button
-                type="button"
-                onClick={() => copyText(currentSubmissionText, 'submission')}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '9px 18px',
-                  borderRadius: '8px',
-                  background: copiedField === 'submission' ? '#10b981' : 'var(--theme-primary)',
-                  color: '#ffffff',
-                  border: 'none',
-                  fontSize: '0.86rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'background 0.2s ease',
-                  boxShadow: '0 2px 8px rgba(0, 117, 237, 0.2)'
-                }}
-              >
-                {copiedField === 'submission' ? <Check size={16} /> : <Copy size={16} />}
-                <span>{copiedField === 'submission' ? 'Copied to Clipboard!' : 'Copy Submission to Clipboard'}</span>
-              </button>
-            </div>
+              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
+            }}
+          >
+            {currentSubmissionText || 'No submission prose available.'}
           </div>
         )}
       </div>

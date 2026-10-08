@@ -10,7 +10,7 @@ describe('useLectureSummary hook', () => {
   it('initializes with default state', () => {
     const { result } = renderHook(() => useLectureSummary(null));
     expect(result.current.summaries).toEqual({});
-    expect(result.current.activeSummaryType).toBe('15_min');
+    expect(result.current.activeSummaryType).toBe('comprehensive');
     expect(result.current.viewMode).toBe('study');
     expect(result.current.loading).toBe(false);
     expect(result.current.generating).toBe(false);

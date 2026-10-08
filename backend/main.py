@@ -1556,9 +1556,8 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
     )
 
     markdown_text = res.get("reply") or ""
-    submission_text = res.get("submission_text") or pinecone_rag_engine._clean_for_submission(
-        markdown_text
-    )
+    raw_sub_text = res.get("submission_text") or markdown_text
+    submission_text = pinecone_rag_engine._clean_for_submission(raw_sub_text, preserve_paragraphs=True)
     word_count = len([w for w in submission_text.split() if w])
     citations = res.get("citations") or []
     model = res.get("model") or ""

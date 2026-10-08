@@ -1271,7 +1271,9 @@ class Llama3PineconeRAGStore:
         preserve_paragraphs: bool = True,
         allow_bold: bool = False
     ) -> str:
-        """Strip markdown syntax, timestamps, and AI boilerplate while preserving paragraphs."""
+        """Lightweight sanitization of markdown symbols and timestamps; the LLM handles formatting at source."""
+        if not text:
+            return ""
         cleaned = text.strip()
         cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
@@ -1279,11 +1281,16 @@ class Llama3PineconeRAGStore:
         if not allow_bold:
             cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
             cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
-        cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*\d{1,2}:\d{2}(?::\d{2})?)?\]", "", cleaned)
-        cleaned = re.sub(r"(?i)^here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*", "", cleaned)
-        cleaned = re.sub(r"(?i)^based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*", "", cleaned)
-        cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found\s+regarding\s+[^:.\n]*[:.\n]*\s*", "", cleaned)
-        cleaned = re.sub(r"(?i)here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*", "", cleaned)
+
+        # Strip timestamp brackets e.g. [01:23] or [00:00 - 15:20]
+        cleaned = re.sub(r"\[\s*\d{1,2}:\d{2}(?::\d{2})?(?:[,\s\-–—]+\d{1,2}:\d{2}(?::\d{2})?)*\s*\]", "", cleaned)
+
+        # Strip conversational AI preamble or boilerplate
+        cleaned = re.sub(r"(?im)^\s*(here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*|based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*|here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*)", "", cleaned)
+
+        # Fix spacing before punctuation caused by removing timestamps
+        cleaned = re.sub(r"\s+([.,!?;:])", r"\1", cleaned)
+
         if preserve_paragraphs:
             lines = [re.sub(r"[ \t]+", " ", line).strip() for line in cleaned.splitlines()]
             cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
@@ -1298,35 +1305,45 @@ class Llama3PineconeRAGStore:
         word_count: int = 100,
         query: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Synthesize plain-text MTech student submission version with query-adaptive word counts."""
+        """Synthesize authentic student submission writeup in flowing narrative prose."""
         if not original_text or not original_text.strip():
             raise ValueError("original_text cannot be empty.")
         if re.search(r"<\s*function\s*=", original_text):
             raise ValueError("Input contains raw unexecuted function call tags.")
 
         query_lower = (query or "").lower().strip()
-        is_comprehensive = any(k in query_lower for k in ["comprehensive", "full summary", "detailed summary", "full comprehensive"])
+        is_comprehensive = any(k in query_lower for k in ["comprehensive", "full summary", "detailed summary", "full comprehensive", "summary"])
         is_concepts = any(k in query_lower for k in ["concept", "definition", "key concepts", "definitions", "terminology"])
-        is_30min = "30 min" in query_lower
+
+        clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
 
         if is_comprehensive:
-            target_words = max(word_count, 600)
+            target_words = max(word_count, 650)
             system_prompt = (
-                "You are an Indian M.Tech graduate student drafting an in-depth academic assignment submission report. "
-                "Write an exhaustive, thorough, and academically rigorous multi-paragraph submission report covering "
-                "all core topics, methodologies, mathematical models, algorithms, and technical insights from the lecture. "
-                "Do NOT restrict yourself to a short word limit or artificially condense the material; provide complete, "
-                "in-depth coverage across multiple well-developed paragraphs separated by blank lines. "
-                "STRICT NON-HALLUCINATION: Strictly ground your report in the lecture material provided. "
-                "Do not include conversational filler, timestamps, or raw citations. Format all mathematical notation cleanly with standard LaTeX ($...$)."
+                "You are an enrolled graduate student submitting an academic assignment writeup that synthesizes the lecture session. "
+                "Write in an authentic, natural, first-person reflective narrative voice "
+                "('In this session, we transitioned...', 'During the hands-on coding walkthrough, we used...', 'Next, we looked at...', 'We then covered...', 'Finally, we discussed...'). "
+                "Explain what the instructor covered and taught, citing classroom examples, student questions and discussions, problem statements, datasets, metrics, and theoretical deductions. "
+                "\n\nCRITICAL FORMATTING RULES:\n"
+                "1. PURE NARRATIVE PROSE: Output cohesive, flowing paragraphs separated by a single blank line.\n"
+                "2. ABSOLUTELY NO TITLES OR METADATA: Do NOT write 'Study Guide:', 'Submission Report:', 'Assignment:', 'Lecture:', or any document header. Start immediately with the first sentence of the narrative.\n"
+                "3. ABSOLUTELY NO OUTLINE HEADERS OR SECTION NUMBERS: Never output '1. Introduction...', '2. Practical...', 'Overview', 'Core Definitions', or markdown hashes ('#', '##').\n"
+                "4. ABSOLUTELY NO BULLET POINTS OR TABLES: Do not use dashed lists ('- item'), markdown tables, or horizontal dividers ('---').\n"
+                "5. PLAIN READABLE FORMULAS: Do NOT use raw LaTeX delimiters or blocks like $$...$$, $...$, \\text{...}, or \\frac{...}{...}. Express equations conversationally in standard ASCII (e.g. Y = M*X + C, C = Y_mean - M * X_mean, MSE = average of squared errors).\n"
+                "6. NO TIMESTAMPS OR CITATIONS: Do not include [MM:SS] timestamp brackets.\n"
+                "7. If enumerating a specific technical deduction (such as reasons for squaring errors), format as clean numbered sentences within the narrative (e.g. '1. ... 2. ...').\n"
+                "The output must read as an intelligent, clear, authentic student assignment submission in continuous prose."
             )
-            user_content = f"Synthesize this lecture insight into an exhaustive, multi-paragraph academic submission report without word count restrictions:\n\n{original_text[:35000]}"
+            user_content = (
+                f"Synthesize the following lecture study guide into an authentic, flowing student submission writeup in continuous narrative prose (approx {target_words} words):\n\n"
+                f"{original_text[:35000]}"
+            )
             max_tokens_val = 2500
         elif is_concepts:
             target_words = max(word_count, 250)
             min_w, max_w = 200, 350
             system_prompt = (
-                f"You are an Indian M.Tech graduate student drafting an academic assignment submission glossary. "
+                f"You are an enrolled graduate student drafting an academic assignment submission glossary. "
                 f"Write a structured compilation of the key technical concepts and definitions from the lecture of approximately {target_words} words "
                 f"(between {min_w} and {max_w} words). "
                 "Format each definition clearly with the concept term followed by its definition on separate lines. "
@@ -1334,32 +1351,18 @@ class Llama3PineconeRAGStore:
             )
             user_content = f"Synthesize these lecture definitions into a structured academic key concepts submission: {original_text[:8000]}"
             max_tokens_val = 650
-        elif is_30min:
-            target_words = max(word_count, 200)
-            min_w, max_w = 160, 260
-            system_prompt = (
-                f"You are an Indian M.Tech graduate student drafting an academic assignment submission. "
-                f"Write a detailed academic summary paragraph of approximately {target_words} words "
-                f"(between {min_w} and {max_w} words) thoroughly explaining the core academic takeaways from the provided text. "
-                "Do not include markdown headers, bullet points, citations, or timestamps. Output clean academic prose."
-            )
-            clean_base = self._clean_for_submission(original_text, target_words=target_words * 2)
-            user_content = f"Synthesize this lecture insight into an academic submission paragraph: {clean_base}"
-            max_tokens_val = 500
         else:
             target_words = word_count or 120
-            min_w, max_w = 80, 150
+            min_w, max_w = 80, 160
             system_prompt = (
-                f"You are an Indian M.Tech graduate student drafting an academic submission. "
-                f"Write a comprehensive, professional submission paragraph of approximately {target_words} words "
-                f"(strictly between {min_w} and {max_w} words) thoroughly explaining the core academic takeaways from the provided text. "
-                "Do not include markdown headers, bullet points, citations, or timestamps. Output plain text only."
+                f"You are an enrolled graduate student drafting a submission answer for an academic assignment. "
+                f"Write a comprehensive, professional submission response in flowing narrative prose of approximately {target_words} words "
+                f"(strictly between {min_w} and {max_w} words) thoroughly explaining the core technical takeaways. "
+                "Do not include document headers, section titles, markdown bullet points, citations, timestamps, or raw LaTeX delimiters ($...$). "
+                "Output clean, authentic student narrative prose only."
             )
-            clean_base = self._clean_for_submission(original_text, target_words=target_words * 2)
-            user_content = f"Synthesize this lecture insight into a full graduate submission paragraph: {clean_base}"
-            max_tokens_val = 350
-
-        clean_base = self._clean_for_submission(original_text, target_words=target_words * 2)
+            user_content = f"Synthesize this lecture insight into an authentic student submission paragraph in continuous prose: {clean_base}"
+            max_tokens_val = 400
 
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -1378,15 +1381,15 @@ class Llama3PineconeRAGStore:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content}
                     ],
-                    "temperature": 0.3,
+                    "temperature": 0.25,
                     "max_tokens": max_tokens_val
                 }
-                r = requests.post(url, headers=headers, json=payload, timeout=20)
+                r = requests.post(url, headers=headers, json=payload, timeout=45)
                 if r.status_code == 200:
                     raw_output = r.json()["choices"][0]["message"]["content"].strip()
-                    final_sub = self._clean_for_submission(raw_output) if is_comprehensive else self._clean_for_submission(raw_output, target_words=target_words + 25)
+                    final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
                     words = final_sub.split()
-                    
+
                     # Ensure minimum academic paragraph length if source point was brief
                     if len(words) < 40 and len(clean_base.split()) >= len(words):
                         final_sub = f"{final_sub}\n\nThe lecture emphasized these principles as key analytical foundations for system design and theoretical evaluation."
@@ -1406,12 +1409,12 @@ class Llama3PineconeRAGStore:
                 api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_key}"
                 payload = {
                     "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
-                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_tokens_val}
+                    "generationConfig": {"temperature": 0.25, "maxOutputTokens": max_tokens_val}
                 }
-                r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+                r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
                 if r.status_code == 200:
                     raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    final_sub = self._clean_for_submission(raw_output) if is_comprehensive else self._clean_for_submission(raw_output, target_words=target_words + 25)
+                    final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
                     return {
                         "status": "success",
                         "submission_text": final_sub,
@@ -1439,6 +1442,7 @@ class Llama3PineconeRAGStore:
             "word_count": len(final_sub.split()),
             "model": "Local Extractor"
         }
+
     def _build_summary_response(self, text: str, model_name: str, title: str, video_id: str) -> Dict[str, Any]:
         """Helper to extract timestamps and format summary response."""
         citations = []

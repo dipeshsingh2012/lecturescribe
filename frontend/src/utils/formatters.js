@@ -81,26 +81,23 @@ export const cleanSubmissionFallback = (text, targetWords = 120, query = '') => 
   if (!text) return '';
   const queryLower = (query || '').toLowerCase();
   let adaptiveTarget = targetWords;
-  if (queryLower.includes('comprehensive') || queryLower.includes('full summary')) {
-    adaptiveTarget = 350;
+  if (queryLower.includes('comprehensive') || queryLower.includes('full summary') || queryLower.includes('summary')) {
+    adaptiveTarget = 650;
   } else if (queryLower.includes('concept') || queryLower.includes('definition')) {
     adaptiveTarget = 250;
-  } else if (queryLower.includes('30 min')) {
-    adaptiveTarget = 200;
   }
 
+  // Lightweight strip of bot preambles, timestamps, and basic markdown formatting
   let cleaned = text
     .replace(/^(based on (the )?(professor's )?(lecture|transcript|video|explanation|sources)[^:.\n]*?[,.:]+\s*)/i, '')
-    .replace(/^(we can identify|we see that|we can observe|it can be seen that)\s+/i, '')
     .replace(/^(here('s| is) (what|a summary|my takeaway|the answer)[^:.,\n]*[:.,\n]+)/i, '')
-    .replace(/^(certainly|sure thing|as an ai|in this lecture)[^:.,\n]*[:.,\n]+/i, '')
     .replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g, '')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/`([^`]+)`/g, '$1');
 
-  // Normalize lines while preserving paragraph and item breaks
+  // Normalize lines while preserving paragraph breaks
   const lines = cleaned.split('\n').map(l => l.replace(/[ \t]+/g, ' ').trim());
   cleaned = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 

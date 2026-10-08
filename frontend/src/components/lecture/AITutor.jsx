@@ -373,10 +373,6 @@ export default function AITutor({
             targetLabel = '200–350';
             minTarget = 180;
             maxTarget = 380;
-          } else if (promptLower.includes('30 min')) {
-            targetLabel = '160–250';
-            minTarget = 140;
-            maxTarget = 270;
           }
           const isTargetRange = submissionWords >= minTarget && submissionWords <= maxTarget;
 

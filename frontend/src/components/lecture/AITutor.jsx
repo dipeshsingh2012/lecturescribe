@@ -497,6 +497,9 @@ export default function AITutor({
                   lineHeight: '1.6',
                   wordBreak: 'break-word',
                   overflowWrap: 'break-word',
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  overflowX: 'auto',
                   border: msg.sender === 'bot' ? (currentMsgMode === 'submission' ? '1px solid rgba(0, 117, 237, 0.25)' : '1px solid var(--border-color)') : 'none',
                   boxShadow: currentMsgMode === 'submission' && msg.sender === 'bot' ? '0 2px 8px rgba(0, 117, 237, 0.08)' : '0 1px 3px rgba(0,0,0,0.06)'
                 }}>

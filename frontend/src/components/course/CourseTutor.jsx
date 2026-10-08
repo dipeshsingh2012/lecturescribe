@@ -320,7 +320,11 @@ export default function CourseTutor({
                       fontSize: '0.9rem',
                       lineHeight: 1.6,
                       color: currentTheme.palette.textPrimary,
-                      wordBreak: 'break-word'
+                      wordBreak: 'break-word',
+                      overflowWrap: 'break-word',
+                      minWidth: 0,
+                      maxWidth: '100%',
+                      overflowX: 'auto'
                     }}
                   >
                     <MarkdownWithTimestamps

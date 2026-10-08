@@ -193,3 +193,51 @@ mark,
 .active-speaker-icon {
   animation: speakerBounce 1.6s ease-in-out infinite;
 }
+
+/* KaTeX Mathematical Formulas Overflow & Containment */
+.katex-display {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding: 6px 2px;
+  margin: 0.5rem 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.4) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+.katex-display::-webkit-scrollbar {
+  height: 4px;
+}
+
+.katex-display::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 4px;
+}
+
+.katex {
+  max-width: 100%;
+}
+
+p .katex,
+li .katex {
+  display: inline-block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  vertical-align: middle;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.4) transparent;
+}
+
+p .katex::-webkit-scrollbar,
+li .katex::-webkit-scrollbar {
+  height: 3px;
+}
+
+p .katex::-webkit-scrollbar-thumb,
+li .katex::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.3);
+  border-radius: 3px;
+}

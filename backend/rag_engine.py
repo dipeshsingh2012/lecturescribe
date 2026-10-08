@@ -798,18 +798,6 @@ class Llama3PineconeRAGStore:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.3-70b-versatile",
-                "display": "Groq Llama 3.3 70B Versatile"
-            })
-            candidates.append({
-                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
-                "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.1-8b-instant",
-                "display": "Groq Llama 3.1 8B Instant"
-            })
-            candidates.append({
-                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
-                "auth_header": f"Bearer {groq_key}",
                 "model_name": "openai/gpt-oss-120b",
                 "display": "Groq GPT-OSS 120B"
             })
@@ -819,18 +807,24 @@ class Llama3PineconeRAGStore:
                 "model_name": "openai/gpt-oss-20b",
                 "display": "Groq GPT-OSS 20B"
             })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "qwen/qwen3.8-27b",
+                "display": "Groq Qwen 3.8 27B"
+            })
         if gemini_key:
+            candidates.append({
+                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "auth_header": f"Bearer {gemini_key}",
+                "model_name": "gemini-2.5-flash",
+                "display": "Gemini 2.5 Flash (OpenAI API)"
+            })
             candidates.append({
                 "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "auth_header": f"Bearer {gemini_key}",
                 "model_name": "gemini-2.0-flash",
                 "display": "Gemini 2.0 Flash (OpenAI API)"
-            })
-            candidates.append({
-                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-1.5-flash",
-                "display": "Gemini 1.5 Flash (OpenAI API)"
             })
             candidates.append({
                 "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -1097,27 +1091,33 @@ class Llama3PineconeRAGStore:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.3-70b-versatile",
-                "display": "Groq Llama 3.3 70B Versatile"
+                "model_name": "openai/gpt-oss-120b",
+                "display": "Groq GPT-OSS 120B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.1-8b-instant",
-                "display": "Groq Llama 3.1 8B Instant"
+                "model_name": "openai/gpt-oss-20b",
+                "display": "Groq GPT-OSS 20B"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "qwen/qwen3.8-27b",
+                "display": "Groq Qwen 3.8 27B"
             })
         if gemini_key:
             candidates.append({
                 "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-2.0-flash",
-                "display": "Gemini 2.0 Flash (OpenAI API)"
+                "model_name": "gemini-2.5-flash",
+                "display": "Gemini 2.5 Flash (OpenAI API)"
             })
             candidates.append({
                 "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-1.5-flash",
-                "display": "Gemini 1.5 Flash (OpenAI API)"
+                "model_name": "gemini-2.0-flash",
+                "display": "Gemini 2.0 Flash (OpenAI API)"
             })
 
         if not candidates:
@@ -1388,7 +1388,7 @@ class Llama3PineconeRAGStore:
         # 1. Groq Provider Chain (cascade across candidate models)
         if groq_key:
             import requests
-            groq_models = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
+            groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
 
@@ -1407,7 +1407,6 @@ class Llama3PineconeRAGStore:
                     if r.status_code == 200:
                         raw_output = r.json()["choices"][0]["message"]["content"].strip()
                         final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
-
                         return {
                             "status": "success",
                             "submission_text": final_sub,
@@ -1422,7 +1421,7 @@ class Llama3PineconeRAGStore:
         # 2. Gemini Provider Chain (cascade across candidate models)
         if gemini_key:
             import requests
-            gemini_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.8-flash"]
+            gemini_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]
 
             for gm_model in gemini_models:
                 try:
@@ -1915,7 +1914,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -1950,7 +1949,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.8-flash"]:
+            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2149,7 +2148,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -2185,7 +2184,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.8-flash"]:
+            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2345,7 +2344,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
 
         # Try Groq first
         if groq_key:
-            for model_name in ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]:
+            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -2374,7 +2373,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
 
         # Try Gemini as fallback
         if gemini_key:
-            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.8-flash"]:
+            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],

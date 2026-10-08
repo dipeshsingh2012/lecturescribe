@@ -12,6 +12,7 @@ import json
 import math
 import time
 import random
+import hashlib
 from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
 from dotenv import load_dotenv
@@ -104,11 +105,11 @@ class Llama3PineconeRAGStore:
             return False
 
     def _generate_embedding(self, text: str) -> List[float]:
-        """Generate 768-dim deterministic embedding vector."""
+        """Generate 768-dim deterministic embedding vector independent of PYTHONHASHSEED."""
         words = re.findall(r"\w+", text.lower())
         vec = [0.0] * 768
         for idx, word in enumerate(words):
-            word_hash = hash(word) % 768
+            word_hash = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16) % 768
             vec[word_hash] += 1.0 / (idx + 1)
         
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
@@ -1271,10 +1272,14 @@ class Llama3PineconeRAGStore:
         preserve_paragraphs: bool = True,
         allow_bold: bool = False
     ) -> str:
-        """Lightweight sanitization of markdown symbols and timestamps; the LLM handles formatting at source."""
+        """Lightweight sanitization of markdown symbols, timestamps, and OCR artifacts; LLM handles formatting at source."""
         if not text:
             return ""
         cleaned = text.strip()
+        # Normalize non-breaking spaces and hyphens
+        cleaned = cleaned.replace("\u00a0", " ").replace("\u2011", "-")
+
+        # Strip code fences and ticks
         cleaned = re.sub(r"```[\s\S]*?```", "", cleaned)
         cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
         cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
@@ -1282,13 +1287,16 @@ class Llama3PineconeRAGStore:
             cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
             cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
 
-        # Strip timestamp brackets e.g. [01:23] or [00:00 - 15:20]
-        cleaned = re.sub(r"\[\s*\d{1,2}:\d{2}(?::\d{2})?(?:[,\s\-–—]+\d{1,2}:\d{2}(?::\d{2})?)*\s*\]", "", cleaned)
+        # Strip timestamps e.g. [01:23], [1:30:01, 1:33:03], or [00:00 - 15:20]
+        cleaned = re.sub(r"\[\s*\d{1,2}(?::\d{2}){1,2}(?:\s*[-–—,]\s*\d{1,2}(?::\d{2}){1,2})*\s*\]", "", cleaned)
+
+        # Strip CJK/OCR transcription glitch characters
+        cleaned = re.sub(r"[\u4e00-\u9fff]", "", cleaned)
 
         # Strip conversational AI preamble or boilerplate
         cleaned = re.sub(r"(?im)^\s*(here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*|based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*|here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*)", "", cleaned)
 
-        # Fix spacing before punctuation caused by removing timestamps
+        # Fix spacing before punctuation caused by removing timestamps or symbols
         cleaned = re.sub(r"\s+([.,!?;:])", r"\1", cleaned)
 
         if preserve_paragraphs:
@@ -1315,7 +1323,8 @@ class Llama3PineconeRAGStore:
         is_comprehensive = any(k in query_lower for k in ["comprehensive", "full summary", "detailed summary", "full comprehensive", "summary"])
         is_concepts = any(k in query_lower for k in ["concept", "definition", "key concepts", "definitions", "terminology"])
 
-        clean_base = self._clean_for_submission(original_text, target_words=word_count * 2)
+        # Sanitize base text once and pass clean_base across all prompt branches to avoid context poisoning
+        clean_base = self._clean_for_submission(original_text, preserve_paragraphs=True)
 
         if is_comprehensive:
             target_words = max(word_count, 650)
@@ -1336,7 +1345,7 @@ class Llama3PineconeRAGStore:
             )
             user_content = (
                 f"Synthesize the following lecture study guide into an authentic, flowing student submission writeup in continuous narrative prose (approx {target_words} words):\n\n"
-                f"{original_text[:35000]}"
+                f"{clean_base[:35000]}"
             )
             max_tokens_val = 2500
         elif is_concepts:
@@ -1349,7 +1358,7 @@ class Llama3PineconeRAGStore:
                 "Format each definition clearly with the concept term followed by its definition on separate lines. "
                 "Do not include conversational filler, timestamps, or raw citations."
             )
-            user_content = f"Synthesize these lecture definitions into a structured academic key concepts submission: {original_text[:8000]}"
+            user_content = f"Synthesize these lecture definitions into a structured academic key concepts submission:\n\n{clean_base[:8000]}"
             max_tokens_val = 650
         else:
             target_words = word_count or 120
@@ -1361,7 +1370,7 @@ class Llama3PineconeRAGStore:
                 "Do not include document headers, section titles, markdown bullet points, citations, timestamps, or raw LaTeX delimiters ($...$). "
                 "Output clean, authentic student narrative prose only."
             )
-            user_content = f"Synthesize this lecture insight into an authentic student submission paragraph in continuous prose: {clean_base}"
+            user_content = f"Synthesize this lecture insight into an authentic student submission paragraph in continuous prose:\n\n{clean_base[:4000]}"
             max_tokens_val = 400
 
         groq_key = os.getenv("GROQ_API_KEY", "")
@@ -1370,74 +1379,86 @@ class Llama3PineconeRAGStore:
         if not (groq_key or gemini_key):
             raise RuntimeError("No LLM keys configured for submission generation.")
 
+        # 1. Groq Provider Chain (cascade across candidate models)
         if groq_key:
-            try:
-                import requests
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": "openai/gpt-oss-120b",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content}
-                    ],
-                    "temperature": 0.25,
-                    "max_tokens": max_tokens_val
-                }
-                r = requests.post(url, headers=headers, json=payload, timeout=45)
-                if r.status_code == 200:
-                    raw_output = r.json()["choices"][0]["message"]["content"].strip()
-                    final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
-                    words = final_sub.split()
+            import requests
+            groq_models = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"]
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
 
-                    # Ensure minimum academic paragraph length if source point was brief
-                    if len(words) < 40 and len(clean_base.split()) >= len(words):
-                        final_sub = f"{final_sub}\n\nThe lecture emphasized these principles as key analytical foundations for system design and theoretical evaluation."
-
-                    return {
-                        "status": "success",
-                        "submission_text": final_sub,
-                        "word_count": len(final_sub.split()),
-                        "model": "Groq GPT-OSS 120B"
+            for g_model in groq_models:
+                try:
+                    payload = {
+                        "model": g_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content}
+                        ],
+                        "temperature": 0.25,
+                        "max_tokens": max_tokens_val
                     }
-            except Exception as ge:
-                print(f"⚠️ [Submission Generation Notice] Groq failed ({ge}). Trying Gemini fallback...")
+                    r = requests.post(url, headers=headers, json=payload, timeout=45)
+                    if r.status_code == 200:
+                        raw_output = r.json()["choices"][0]["message"]["content"].strip()
+                        final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
 
+                        return {
+                            "status": "success",
+                            "submission_text": final_sub,
+                            "word_count": len(final_sub.split()),
+                            "model": f"Groq {g_model}"
+                        }
+                    else:
+                        print(f"⚠️ [Submission Generator] Groq model {g_model} returned HTTP {r.status_code}: {r.text[:120]}")
+                except Exception as ge:
+                    print(f"⚠️ [Submission Generator] Groq model {g_model} error ({ge}). Cascading...")
+
+        # 2. Gemini Provider Chain (cascade across candidate models)
         if gemini_key:
-            try:
-                import requests
-                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_key}"
-                payload = {
-                    "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
-                    "generationConfig": {"temperature": 0.25, "maxOutputTokens": max_tokens_val}
-                }
-                r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
-                if r.status_code == 200:
-                    raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
-                    return {
-                        "status": "success",
-                        "submission_text": final_sub,
-                        "word_count": len(final_sub.split()),
-                        "model": "Gemini 3.8 Flash"
-                    }
-            except Exception:
-                pass
+            import requests
+            gemini_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.8-flash"]
 
-        # Intelligent local fallback: preserve sentence boundaries up to target_words
+            for gm_model in gemini_models:
+                try:
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{gm_model}:generateContent?key={gemini_key}"
+                    payload = {
+                        "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
+                        "generationConfig": {"temperature": 0.25, "maxOutputTokens": max_tokens_val}
+                    }
+                    r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
+                    if r.status_code == 200:
+                        raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
+                        return {
+                            "status": "success",
+                            "submission_text": final_sub,
+                            "word_count": len(final_sub.split()),
+                            "model": f"Google {gm_model}"
+                        }
+                    else:
+                        print(f"⚠️ [Submission Generator] Gemini {gm_model} returned HTTP {r.status_code}: {r.text[:120]}")
+                except Exception as gme:
+                    print(f"⚠️ [Submission Generator] Gemini {gm_model} error ({gme}). Cascading...")
+
+        # 3. Clean Local Fallback without mid-sentence slicing or robotic string injection
+        print("⚠️ [Submission Generator] All LLM providers failed or rate-limited. Using clean local fallback.")
         words = clean_base.split()
         if is_comprehensive or len(words) <= target_words:
             final_sub = clean_base
         else:
-            truncated = " ".join(words[:target_words])
-            last_p = max(truncated.rfind('.'), truncated.rfind('!'), truncated.rfind('?'))
-            if last_p > int(len(truncated) * 0.7):
-                final_sub = truncated[:last_p + 1]
+            candidate = " ".join(words[:target_words])
+            last_punct = -1
+            for punct in [".", "!", "?"]:
+                pos = candidate.rfind(punct)
+                if pos > last_punct:
+                    last_punct = pos
+            if last_punct > int(len(candidate) * 0.6):
+                final_sub = candidate[:last_punct + 1]
             else:
-                final_sub = truncated + "."
+                final_sub = candidate.rstrip(",;:- ") + "."
 
         return {
-            "status": "success",
+            "status": "partial_fallback",
             "submission_text": final_sub,
             "word_count": len(final_sub.split()),
             "model": "Local Extractor"

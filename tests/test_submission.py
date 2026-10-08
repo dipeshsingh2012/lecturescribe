@@ -65,6 +65,26 @@ Here's what I found regarding machine learning paradigms."""
                 )
                 self.assertGreaterEqual(result["word_count"], 300)
 
+    def test_clean_submission_three_part_timestamps_and_ocr_artifacts(self):
+        """Verify three-part timestamps, comma lists, and CJK/OCR glitches are cleanly removed."""
+        raw = "Errors (|Y_i - Y_pred住宅|) were discussed [1:30:01, 1:33:03] with non-breaking\u00a0space."
+        cleaned = pinecone_rag_engine._clean_for_submission(raw)
+        self.assertNotIn("[1:30:01, 1:33:03]", cleaned)
+        self.assertNotIn("住宅", cleaned)
+        self.assertNotIn("\u00a0", cleaned)
+        self.assertIn("Errors (|Y_i - Y_pred|) were discussed", cleaned)
+
+    def test_deterministic_embedding_generation(self):
+        """Verify _generate_embedding is deterministic and 768-dimensional."""
+        v1 = pinecone_rag_engine._generate_embedding("machine learning regression paradigms")
+        v2 = pinecone_rag_engine._generate_embedding("machine learning regression paradigms")
+        self.assertEqual(len(v1), 768)
+        self.assertEqual(v1, v2)
+        # Verify vector norm is ~1.0
+        import math
+        norm = math.sqrt(sum(x * x for x in v1))
+        self.assertAlmostEqual(norm, 1.0, places=4)
+
     def test_generate_submission_fail_fast_no_keys(self):
         """Verify fail-fast exception when no LLM keys are configured."""
         import os

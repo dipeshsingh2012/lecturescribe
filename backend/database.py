@@ -2618,6 +2618,88 @@ class RelationalDBManager:
         finally:
             conn.close()
 
+    def resolve_course_canonical_name(self, course_identifier: str) -> str:
+        """
+        Resolve a course slug (e.g. 'machine-learning-paradigms') or raw name
+        (e.g. 'Machine Learning Paradigms') to the canonical course name stored in DB.
+        If no match is found, returns clean input or formatted title as fallback.
+        """
+        if not course_identifier or not course_identifier.strip():
+            return "General Lectures"
+
+        clean = course_identifier.strip()
+        slug_norm = to_course_slug(clean)
+        slug_as_space = clean.replace("-", " ")
+
+        conn = None
+        try:
+            if HAS_PSYCOPG2 and self.postgres_url:
+                conn = self._get_connection()
+                with conn.cursor() as cursor:
+                    # Check videos first
+                    cursor.execute("""
+                        SELECT course_name FROM lecturescribe_videos
+                        WHERE course_name IS NOT NULL AND course_name != ''
+                          AND (
+                              LOWER(course_name) = LOWER(%s)
+                              OR LOWER(course_name) = LOWER(%s)
+                              OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s
+                          )
+                        LIMIT 1;
+                    """, (clean, slug_as_space, slug_norm))
+                    row = cursor.fetchone()
+                    if row and row.get("course_name"):
+                        return row["course_name"]
+
+                    # Check user library
+                    cursor.execute("""
+                        SELECT course_name FROM lecturescribe_user_library
+                        WHERE course_name IS NOT NULL AND course_name != ''
+                          AND (
+                              LOWER(course_name) = LOWER(%s)
+                              OR LOWER(course_name) = LOWER(%s)
+                              OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s
+                          )
+                        LIMIT 1;
+                    """, (clean, slug_as_space, slug_norm))
+                    row = cursor.fetchone()
+                    if row and row.get("course_name"):
+                        return row["course_name"]
+
+                    # Check readings
+                    cursor.execute("""
+                        SELECT course_name FROM lecturescribe_course_readings
+                        WHERE course_name IS NOT NULL AND course_name != ''
+                          AND (
+                              LOWER(course_name) = LOWER(%s)
+                              OR LOWER(course_name) = LOWER(%s)
+                              OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s
+                          )
+                        LIMIT 1;
+                    """, (clean, slug_as_space, slug_norm))
+                    row = cursor.fetchone()
+                    if row and row.get("course_name"):
+                        return row["course_name"]
+        except Exception as e:
+            print(f"[PostgreSQL Notice] resolve_course_canonical_name fallback: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+        # In-memory checks
+        for r in getattr(self, "_readings_memory_cache", []):
+            c = r.get("course_name") or ""
+            if to_course_slug(c) == slug_norm or c.lower() == clean.lower() or c.lower() == slug_as_space.lower():
+                return c
+
+        for v in self._memory_cache.values():
+            if isinstance(v, dict):
+                c = v.get("course_name") or ""
+                if to_course_slug(c) == slug_norm or c.lower() == clean.lower():
+                    return c
+
+        return clean if not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean) else clean.replace("-", " ").title()
+
     def get_course_details(self, course_name: str, user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Fetch aggregated course info and its lecture list.
@@ -3134,8 +3216,11 @@ class RelationalDBManager:
         return target
 
     def get_course_readings(self, course_name: str) -> List[Dict[str, Any]]:
-        """Retrieve all extracted and curated readings for a course."""
+        """Retrieve all extracted and curated readings for a course by name or slug."""
         clean_course = (course_name or "General Lectures").strip()
+        slug_norm = to_course_slug(clean_course)
+        slug_as_space = clean_course.replace("-", " ")
+
         conn = None
         if HAS_PSYCOPG2 and self.postgres_url:
             try:
@@ -3147,8 +3232,10 @@ class RelationalDBManager:
                                source_context, web_links, created_at
                         FROM lecturescribe_course_readings
                         WHERE LOWER(course_name) = LOWER(%s)
+                           OR LOWER(course_name) = LOWER(%s)
+                           OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s
                         ORDER BY id ASC;
-                    """, (clean_course,))
+                    """, (clean_course, slug_as_space, slug_norm))
                     rows = cursor.fetchall()
                     results = []
                     for r in rows:
@@ -3167,6 +3254,8 @@ class RelationalDBManager:
         return [
             r for r in self._readings_memory_cache
             if r.get("course_name", "").lower() == clean_course.lower()
+            or r.get("course_name", "").lower() == slug_as_space.lower()
+            or to_course_slug(r.get("course_name", "")) == slug_norm
         ]
 
     def save_course_reading(self, course_name: str, reading: Dict[str, Any]) -> Dict[str, Any]:
@@ -3260,8 +3349,11 @@ class RelationalDBManager:
         return True
 
     def clear_course_readings(self, course_name: str) -> bool:
-        """Clear all readings for a course."""
+        """Clear all readings for a course by name or slug."""
         clean_course = (course_name or "General Lectures").strip()
+        slug_norm = to_course_slug(clean_course)
+        slug_as_space = clean_course.replace("-", " ")
+
         conn = None
         if HAS_PSYCOPG2 and self.postgres_url:
             try:
@@ -3270,8 +3362,10 @@ class RelationalDBManager:
                     with conn.cursor() as cursor:
                         cursor.execute("""
                             DELETE FROM lecturescribe_course_readings
-                            WHERE LOWER(course_name) = LOWER(%s);
-                        """, (clean_course,))
+                            WHERE LOWER(course_name) = LOWER(%s)
+                               OR LOWER(course_name) = LOWER(%s)
+                               OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s;
+                        """, (clean_course, slug_as_space, slug_norm))
                         conn.commit()
                 return True
             except Exception as e:
@@ -3283,6 +3377,8 @@ class RelationalDBManager:
         self._readings_memory_cache = [
             r for r in self._readings_memory_cache
             if r.get("course_name", "").lower() != clean_course.lower()
+            and r.get("course_name", "").lower() != slug_as_space.lower()
+            and to_course_slug(r.get("course_name", "")) != slug_norm
         ]
         return True
 

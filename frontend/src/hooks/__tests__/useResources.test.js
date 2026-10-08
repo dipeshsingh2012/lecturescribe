@@ -121,7 +121,7 @@ describe('useResources hook functionality', () => {
       if (url.includes('/api/lecture/vid-1/resources')) {
         return Promise.resolve({ ok: true, json: async () => ({ resources: lectureRes }) });
       }
-      if (url.includes('/api/course/CS101/resources')) {
+      if (url.includes('/api/course/cs101/resources') || url.includes('/api/course/CS101/resources')) {
         return Promise.resolve({ ok: true, json: async () => ({ resources: courseRes }) });
       }
       return Promise.resolve({ ok: true, json: async () => ({ resources: [] }) });

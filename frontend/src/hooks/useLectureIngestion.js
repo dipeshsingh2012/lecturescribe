@@ -376,7 +376,8 @@ export function useLectureIngestion({
 
     try {
       const userParam = userEmail ? `&email=${encodeURIComponent(userEmail)}` : '';
-      const courseParam = effectiveCourse ? `&course_name=${encodeURIComponent(effectiveCourse)}` : '';
+      const courseSlug = effectiveCourse ? normalizeCourseSlug(effectiveCourse) : '';
+      const courseParam = courseSlug ? `&course_name=${encodeURIComponent(courseSlug)}` : '';
       const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}${courseParam}`);
       if (res.ok) {
         const data = await res.json();

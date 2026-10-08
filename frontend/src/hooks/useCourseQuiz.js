@@ -24,11 +24,11 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const lastSlugRef = useRef(courseSlug);
 
   const fetchQuizHistory = useCallback(async () => {
-    if (!cleanCourse) return;
+    if (!courseSlug) return;
     setHistoryLoading(true);
     try {
       const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/history${emailParam}`);
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/history${emailParam}`);
       if (res.ok) {
         const data = await res.json();
         setQuizHistory(data.history || []);
@@ -38,10 +38,10 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     } finally {
       setHistoryLoading(false);
     }
-  }, [cleanCourse, userEmail]);
+  }, [courseSlug, userEmail]);
 
   const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
-    if (!cleanCourse) return;
+    if (!courseSlug) return;
     setQuizLoading(true);
     setQuizError(null);
     setReviewMode(false);
@@ -51,7 +51,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         payload.num_questions = numQuestions;
       }
       const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz${emailParam}`, {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz${emailParam}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -70,7 +70,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         setDetailedExplanations({});
         // Reset answers in database if regenerating
         const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-        fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/answers${delEmail}`, {
+        fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers${delEmail}`, {
           method: 'DELETE'
         }).catch(() => {});
       } else if (data.user_answers && Object.keys(data.user_answers).length > 0) {
@@ -84,7 +84,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     } finally {
       setQuizLoading(false);
     }
-  }, [cleanCourse, userEmail, fetchQuizHistory]);
+  }, [courseSlug, userEmail, fetchQuizHistory]);
 
   // Switch quiz state ONLY when truly switching to a different course
   useEffect(() => {
@@ -110,7 +110,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
     try {
       const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/explanation${emailParam}`, {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/explanation${emailParam}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -141,7 +141,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     } finally {
       setExplanationLoading(prev => ({ ...prev, [loadingKey]: false }));
     }
-  }, [cleanCourse, userEmail]);
+  }, [courseSlug, cleanCourse, userEmail]);
 
   const selectAnswer = useCallback((questionId, optionIndex) => {
     setSelectedAnswers((prev) => {
@@ -150,7 +150,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       const next = { ...prev, [questionId]: optionIndex };
 
       // Persist directly to Relational Database and history
-      if (cleanCourse) {
+      if (courseSlug) {
         const total = quizData?.questions?.length || 0;
         const currentScore = (quizData?.questions || []).reduce((acc, q) => {
           const choice = next[q.id];
@@ -158,7 +158,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         }, 0);
         const isDone = total > 0 && Object.keys(next).length === total;
 
-        fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/answers`, {
+        fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -175,16 +175,16 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
       return next;
     });
-  }, [cleanCourse, quizData, userEmail, fetchQuizHistory]);
+  }, [courseSlug, quizData, userEmail, fetchQuizHistory]);
 
   const finishQuiz = useCallback(() => {
-    if (!cleanCourse || !quizData) return;
+    if (!courseSlug || !quizData) return;
     const currentScore = (quizData?.questions || []).reduce((acc, q) => {
       const choice = selectedAnswers[q.id];
       return choice === q.correct_index ? acc + 1 : acc;
     }, 0);
 
-    fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/answers`, {
+    fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -195,24 +195,24 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         quiz_id: quizData?.quiz_id
       })
     }).then(() => fetchQuizHistory()).catch(() => {});
-  }, [cleanCourse, quizData, selectedAnswers, userEmail, fetchQuizHistory]);
+  }, [courseSlug, quizData, selectedAnswers, userEmail, fetchQuizHistory]);
 
   const resetQuiz = useCallback(() => {
     setSelectedAnswers({});
     setReviewMode(false);
-    if (cleanCourse) {
+    if (courseSlug) {
       const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-      fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/answers${delEmail}`, {
+      fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers${delEmail}`, {
         method: 'DELETE'
       }).catch(() => {});
     }
-  }, [cleanCourse, userEmail]);
+  }, [courseSlug, userEmail]);
 
   const loadPastQuiz = useCallback(async (quizId, forReplay = false) => {
-    if (!cleanCourse || !quizId) return;
+    if (!courseSlug || !quizId) return;
     setQuizLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(cleanCourse)}/quiz/history/${encodeURIComponent(quizId)}`);
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/history/${encodeURIComponent(quizId)}`);
       if (!res.ok) throw new Error('Unable to load past quiz');
       const data = await res.json();
       const quizJson = data.quiz_json || {};
@@ -233,7 +233,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     } finally {
       setQuizLoading(false);
     }
-  }, [cleanCourse]);
+  }, [courseSlug]);
 
   const totalQuestions = quizData?.questions?.length || 0;
   const answeredCount = Object.keys(selectedAnswers).length;

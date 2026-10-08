@@ -108,7 +108,7 @@ describe('useCourseQuiz hook', () => {
 
     // Verify DB sync call was made for Q1
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/course/Applied%20Mathematics/quiz/answers'),
+      expect.stringContaining('/api/course/applied-mathematics/quiz/answers'),
       expect.objectContaining({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -143,7 +143,7 @@ describe('useCourseQuiz hook', () => {
 
     // Verify DB delete call was made
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/course/Applied%20Mathematics/quiz/answers?email=student%40example.com'),
+      expect.stringContaining('/api/course/applied-mathematics/quiz/answers?email=student%40example.com'),
       expect.objectContaining({
         method: 'DELETE'
       })
@@ -266,7 +266,7 @@ describe('useCourseQuiz hook', () => {
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/course/Calculus%201/quiz/answers'),
+      expect.stringContaining('/api/course/calculus-1/quiz/answers'),
       expect.objectContaining({
         method: 'POST',
         body: expect.stringContaining('"completed":true')

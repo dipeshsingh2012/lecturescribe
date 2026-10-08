@@ -48,6 +48,16 @@ class TestReadingEndpoints(unittest.TestCase):
         self.assertTrue(data["count"] >= 1)
         self.assertTrue(any("Introduction to Algorithms" in r["title"] for r in data["readings"]))
 
+    def test_get_course_readings_by_slug(self):
+        # Slug version of "Algorithms & Data Structures" -> "algorithms-data-structures"
+        slug = "algorithms-data-structures"
+        res = self.client.get(f"/api/course/{slug}/readings")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertTrue(data["count"] >= 1)
+        self.assertTrue(any("Introduction to Algorithms" in r["title"] for r in data["readings"]))
+
     def test_delete_course_reading(self):
         reading_id = self.saved_item["id"]
         res = self.client.delete(f"/api/course/reading/{reading_id}")

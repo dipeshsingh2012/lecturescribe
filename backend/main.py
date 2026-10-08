@@ -2223,10 +2223,11 @@ def get_lecture_resources(video_id: str, course_name: Optional[str] = Query(None
 @app.get("/api/course/{course_name}/resources")
 def get_course_resources(course_name: str):
     """Retrieve all resources attached across a course with fresh signed download URLs."""
-    cname = course_name.strip()
-    if not cname:
+    raw_name = course_name.strip()
+    if not raw_name:
         raise HTTPException(status_code=400, detail="course_name is required.")
-    items = db_manager.get_course_resources(cname)
+    cname = db_manager.resolve_course_canonical_name(raw_name)
+    items = db_manager.get_course_resources(raw_name)
     for r in items:
         if r.get("blob_name"):
             r["view_url"] = gcs_storage_service.generate_download_signed_url(r["blob_name"], disposition="inline")
@@ -2260,11 +2261,12 @@ def delete_resource(resource_id: int, user_email: str = Query(..., description="
 
 @app.get("/api/course/{course_name}/readings")
 def get_course_readings(course_name: str):
-    """Retrieve all extracted textbooks, ebooks, and journals for a course."""
-    cname = course_name.strip()
-    if not cname:
+    """Retrieve all extracted textbooks, ebooks, and journals for a course by name or slug."""
+    raw_name = course_name.strip()
+    if not raw_name:
         raise HTTPException(status_code=400, detail="course_name is required.")
-    items = db_manager.get_course_readings(cname)
+    cname = db_manager.resolve_course_canonical_name(raw_name)
+    items = db_manager.get_course_readings(raw_name)
     return {"status": "success", "course_name": cname, "readings": items, "count": len(items)}
 
 
@@ -2274,10 +2276,13 @@ def extract_course_readings(course_name: str):
     Manual on-demand extraction of recommended books and journals
     from lecture transcripts and uploaded slide decks (.pptx / .pdf).
     Enriches with Google Books metadata and persists to PostgreSQL.
+    Supports course name or URL slug.
     """
-    cname = course_name.strip()
-    if not cname:
+    raw_name = course_name.strip()
+    if not raw_name:
         raise HTTPException(status_code=400, detail="course_name is required.")
+    cname = db_manager.resolve_course_canonical_name(raw_name)
+    slug_norm = to_course_slug(raw_name)
 
     # 1. Gather all transcripts across lectures in this course
     transcripts_summary_parts: List[str] = []
@@ -2289,8 +2294,10 @@ def extract_course_readings(course_name: str):
                     SELECT v.video_id, v.title
                     FROM lecturescribe_videos v
                     WHERE LOWER(v.course_name) = LOWER(%s)
+                       OR LOWER(v.course_name) = LOWER(%s)
+                       OR regexp_replace(LOWER(v.course_name), '[^a-z0-9]+', '-', 'g') = %s
                     ORDER BY v.created_at ASC LIMIT 15;
-                """, (cname,))
+                """, (cname, raw_name, slug_norm))
                 course_vids = cursor.fetchall()
             conn.close()
         else:

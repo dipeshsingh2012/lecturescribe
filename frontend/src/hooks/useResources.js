@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { API_BASE } from '../utils/constants';
+import { normalizeCourseSlug } from '../utils/routing';
 
 export function useResources(activeVideoId, selectedCourse, googleUser) {
   const [rawLectureResources, setRawLectureResources] = useState([]);
@@ -124,11 +125,12 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       setCourseResources([]);
       return;
     }
+    const slug = normalizeCourseSlug(courseName) || courseName;
     setCourseResourcesLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/resources`, {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/resources`, {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
@@ -149,11 +151,12 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       setCourseReadings([]);
       return;
     }
+    const slug = normalizeCourseSlug(courseName) || courseName;
     setCourseReadingsLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/readings`, {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/readings`, {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
@@ -172,9 +175,10 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const triggerExtractReadings = async (courseName) => {
     const cname = courseName || selectedCourse;
     if (!cname) return { status: "error", error: "Course name required" };
+    const slug = normalizeCourseSlug(cname) || cname;
     setIsExtractingReadings(true);
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(cname)}/extract-readings`, {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/extract-readings`, {
         method: 'POST'
       });
       if (res.ok) {

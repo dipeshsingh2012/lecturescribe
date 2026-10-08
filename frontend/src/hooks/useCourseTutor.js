@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { API_BASE } from '../utils/constants';
+import { normalizeCourseSlug } from '../utils/routing';
 
 export function useCourseTutor(courseName, userEmail = null) {
+  const courseSlug = normalizeCourseSlug(courseName) || (courseName || '').trim();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -18,11 +20,11 @@ export function useCourseTutor(courseName, userEmail = null) {
   }, [messages.length]);
 
   const fetchHistory = useCallback(async () => {
-    if (!courseName) return;
+    if (!courseSlug) return;
     try {
       setError(null);
       const emailParam = userEmail ? `?user_email=${encodeURIComponent(userEmail)}` : '';
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/tutor/history${emailParam}`);
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/tutor/history${emailParam}`);
       if (res.ok) {
         const data = await res.json();
         setMessages(data.messages || []);
@@ -30,7 +32,7 @@ export function useCourseTutor(courseName, userEmail = null) {
     } catch (err) {
       console.warn("Failed to fetch course tutor history:", err);
     }
-  }, [courseName, userEmail]);
+  }, [courseSlug, userEmail]);
 
   useEffect(() => {
     fetchHistory();
@@ -38,7 +40,7 @@ export function useCourseTutor(courseName, userEmail = null) {
 
   const sendMessage = async (promptText = null) => {
     const textToSend = (promptText ?? input).trim();
-    if (!textToSend || loading || !courseName) return;
+    if (!textToSend || loading || !courseSlug) return;
 
     const tempUserMsg = {
       id: `temp_user_${Date.now()}`,
@@ -53,7 +55,7 @@ export function useCourseTutor(courseName, userEmail = null) {
     setError(null);
 
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/tutor/chat`, {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/tutor/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -87,10 +89,10 @@ export function useCourseTutor(courseName, userEmail = null) {
   };
 
   const clearHistory = async () => {
-    if (!courseName) return;
+    if (!courseSlug) return;
     try {
       const emailParam = userEmail ? `?user_email=${encodeURIComponent(userEmail)}` : '';
-      await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/tutor/history${emailParam}`, {
+      await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/tutor/history${emailParam}`, {
         method: 'DELETE'
       });
       setMessages([]);
@@ -101,10 +103,10 @@ export function useCourseTutor(courseName, userEmail = null) {
   };
 
   const deleteMessage = async (messageId) => {
-    if (!courseName || !messageId) return;
+    if (!courseSlug || !messageId) return;
     try {
       const emailParam = userEmail ? `?user_email=${encodeURIComponent(userEmail)}` : '';
-      await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}/tutor/message/${encodeURIComponent(messageId)}${emailParam}`, {
+      await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/tutor/message/${encodeURIComponent(messageId)}${emailParam}`, {
         method: 'DELETE'
       });
       setMessages(prev => prev.filter(m => m.id !== messageId));

@@ -362,7 +362,7 @@ def extract_readings_with_llm(
     system_prompt = (
         f"You are an expert academic curriculum assistant analyzing course materials for '{course_name}'. "
         "Your task is to identify and extract any textbooks, reference books, ebooks, journal articles, "
-        "or academic papers explicitly mentioned, assigned, or recommended by the instructor. "
+        "or academic papers explicitly mentioned, assigned, or recommended by the professor. "
         "Look for book titles, authors, editions, syllabus readings, textbook slide references, and reading assignments.\n\n"
         "Return ONLY a valid JSON array of objects with the following keys:\n"
         "- title: (string) Full book or article title\n"

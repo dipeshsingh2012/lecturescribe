@@ -1296,6 +1296,11 @@ class Llama3PineconeRAGStore:
         # Strip conversational AI preamble or boilerplate
         cleaned = re.sub(r"(?im)^\s*(here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*|based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*|here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*)", "", cleaned)
 
+        # Standardize terminology: Lecturer is always 'the professor', never 'the instructor'
+        cleaned = re.sub(r"\b[tT]he\s+[iI]nstructor\b", "the professor", cleaned)
+        cleaned = re.sub(r"\b[iI]nstructor('s)?\b", r"professor\1", cleaned)
+        cleaned = re.sub(r"\b[iI]nstructors\b", "professors", cleaned)
+
         # Fix spacing before punctuation caused by removing timestamps or symbols
         cleaned = re.sub(r"\s+([.,!?;:])", r"\1", cleaned)
 
@@ -1329,19 +1334,20 @@ class Llama3PineconeRAGStore:
         if is_comprehensive:
             target_words = max(word_count, 650)
             system_prompt = (
-                "You are an enrolled graduate student submitting an academic assignment writeup that synthesizes the lecture session. "
-                "Write in an authentic, natural, first-person reflective narrative voice "
-                "('In this session, we transitioned...', 'During the hands-on coding walkthrough, we used...', 'Next, we looked at...', 'We then covered...', 'Finally, we discussed...'). "
-                "Explain what the instructor covered and taught, citing classroom examples, student questions and discussions, problem statements, datasets, metrics, and theoretical deductions. "
-                "\n\nCRITICAL FORMATTING RULES:\n"
-                "1. PURE NARRATIVE PROSE: Output cohesive, flowing paragraphs separated by a single blank line.\n"
-                "2. ABSOLUTELY NO TITLES OR METADATA: Do NOT write 'Study Guide:', 'Submission Report:', 'Assignment:', 'Lecture:', or any document header. Start immediately with the first sentence of the narrative.\n"
-                "3. ABSOLUTELY NO OUTLINE HEADERS OR SECTION NUMBERS: Never output '1. Introduction...', '2. Practical...', 'Overview', 'Core Definitions', or markdown hashes ('#', '##').\n"
-                "4. ABSOLUTELY NO BULLET POINTS OR TABLES: Do not use dashed lists ('- item'), markdown tables, or horizontal dividers ('---').\n"
-                "5. PLAIN READABLE FORMULAS: Do NOT use raw LaTeX delimiters or blocks like $$...$$, $...$, \\text{...}, or \\frac{...}{...}. Express equations conversationally in standard ASCII (e.g. Y = M*X + C, C = Y_mean - M * X_mean, MSE = average of squared errors).\n"
-                "6. NO TIMESTAMPS OR CITATIONS: Do not include [MM:SS] timestamp brackets.\n"
-                "7. If enumerating a specific technical deduction (such as reasons for squaring errors), format as clean numbered sentences within the narrative (e.g. '1. ... 2. ...').\n"
-                "The output must read as an intelligent, clear, authentic student assignment submission in continuous prose."
+                "You are an enrolled graduate student writing an authentic, free-text academic assignment submission that synthesizes a lecture session. "
+                "Write in a natural, first-person reflective student voice ('In this session, we started by...', 'During the notebook demo, we used...', 'Next, we looked at...'). "
+                "Your goal is to sound like an intelligent, grounded engineering student writing notes—NOT an AI assistant, marketing writer, or textbook narrator.\n\n"
+                "STRICT GROUNDING & CONTENT RULES:\n"
+                "- Thoroughly explain what the professor covered and taught, citing classroom examples, student questions and discussions, problem statements, datasets, metrics, and theoretical deductions.\n\n"
+                "STRICT RULES & CONSTRAINTS:\n"
+                "1. TERMINOLOGY: Always refer to the lecturer as 'the professor'. Never use 'instructor', 'speaker', or 'lecturer'.\n"
+                "2. NO AI FLUFF OR DRAMATIC ADJECTIVES: Never use words like 'lively', 'vibrant', 'fascinating', 'delve', 'pivotal', 'crucial', 'cornerstone', 'testament', or 'nuanced'. Use matter-of-fact phrasing ('In the Q&A', 'We discussed', 'A student asked').\n"
+                "3. NO TITLES OR METADATA: Do NOT write 'Study Guide:', 'Submission Report:', 'Assignment:', 'Lecture:', or any document header. Start immediately with the first sentence of the narrative.\n"
+                "4. NO OUTLINES, SECTION HEADERS, OR BULLETS: Strictly continuous paragraphs separated by a single blank line. Absolutely no markdown hashes ('#', '##'), section numbers ('1. Introduction...'), bullet points, or tables.\n"
+                "5. CLEAN ASCII MATH: Express equations as clean code-style plain text (e.g., Y = M*X + C, MSE = (1/N) * sum((Y_i - Yhat_i)^2)). Never spell out formulas phonetically (e.g., avoid 'sum over i of...'), and do NOT use raw LaTeX delimiters ($...$, $$...$$, \\text{...}, or \\frac{...}{...}).\n"
+                "6. NATURAL PACING: Vary sentence lengths. Mix short, direct statements with technical explanations to avoid monotonic, computer-generated rhythm.\n"
+                "7. NO META-CLOSINGS: Do not end with philosophical takeaways (e.g., avoid 'The session left me convinced that...'). End immediately when the technical explanation of the last topic finishes.\n"
+                "8. NO TIMESTAMPS: Never output brackets like [MM:SS] or time references."
             )
             user_content = (
                 f"Synthesize the following lecture study guide into an authentic, flowing student submission writeup in continuous narrative prose (approx {target_words} words):\n\n"
@@ -1511,7 +1517,7 @@ class Llama3PineconeRAGStore:
             "MISSION & EXHAUSTIVE DEPTH:\n"
             "- Do NOT artificially shorten, compress, or constrain your summary by word limits. Provide a full, exhaustive, in-depth academic breakdown that thoroughly covers the entire lecture from beginning to end.\n"
             "- Unpack the chronological progression of the lecture into comprehensive Markdown chapters using `##` headers with clear timestamps (e.g. `## 1. Introduction & Foundational Concepts [00:00 - 18:24]`).\n"
-            "- Under each chapter, provide comprehensive narrative explanations, core definitions, mathematical formulations, algorithmic steps, concrete examples, and theoretical trade-offs introduced by the instructor.\n\n"
+            "- Under each chapter, provide comprehensive narrative explanations, core definitions, mathematical formulations, algorithmic steps, concrete examples, and theoretical trade-offs introduced by the professor.\n\n"
             "STRICT NON-HALLUCINATION & FACTUAL ACCURACY PROTOCOL:\n"
             "- Strictly ground all explanations, definitions, mathematical models, and examples in the provided lecture transcript.\n"
             "- NEVER invent or hallucinate topics, formulas, external theorems, or statements that the professor did not discuss in this lecture.\n"

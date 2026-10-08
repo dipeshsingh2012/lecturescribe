@@ -95,7 +95,9 @@ export const cleanSubmissionFallback = (text, targetWords = 120, query = '') => 
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/`([^`]+)`/g, '$1');
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\bthe\s+instructor\b/gi, 'the professor')
+    .replace(/\binstructor('s)?\b/gi, 'professor$1');
 
   // Normalize lines while preserving paragraph breaks
   const lines = cleaned.split('\n').map(l => l.replace(/[ \t]+/g, ' ').trim());

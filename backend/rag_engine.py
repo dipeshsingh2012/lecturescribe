@@ -1227,17 +1227,35 @@ class Llama3PineconeRAGStore:
                         messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
 
                 if not final_answer:
-                    messages.append({
+                    # Compile retrieved tool observations into a clean synthesis prompt
+                    # to prevent models from generating raw tool calls when tools are disabled
+                    tool_context_snippets = []
+                    for m in messages:
+                        if m.get("role") == "tool" and m.get("content"):
+                            snippet = str(m.get("content"))[:2500]
+                            tool_context_snippets.append(snippet)
+
+                    compiled_context = "\n\n".join(tool_context_snippets) if tool_context_snippets else ""
+                    synth_messages = [
+                        {"role": "system", "content": system_prompt},
+                    ]
+                    if compiled_context:
+                        synth_messages.append({
+                            "role": "system",
+                            "content": f"Course materials and lecture references retrieved for this query:\n{compiled_context}"
+                        })
+                    synth_messages.append({
                         "role": "user",
-                        "content": "Please synthesize a final, clear academic answer grounded in the course material."
+                        "content": f"{query}\n\nPlease synthesize a comprehensive, final academic answer grounded in the course lectures and materials above. Do not output function calls or JSON."
                     })
+
                     payload = {
                         "model": model_name,
-                        "messages": messages,
-                        "max_tokens": 1500,
+                        "messages": synth_messages,
+                        "max_tokens": 2048,
                         "temperature": 0.3
                     }
-                    resp = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+                    resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
                     if resp.status_code == 200:
                         data = resp.json()
                         final_answer = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()

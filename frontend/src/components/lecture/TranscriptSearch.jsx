@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Search, Copy, Check, ChevronDown, ChevronUp, Volume2 } from 'lucide-react';
+import { Search, Copy, Check, ChevronDown, ChevronUp, Volume2, X } from 'lucide-react';
 
 export default function TranscriptSearch({
   displayCues = [],
@@ -220,13 +220,47 @@ export default function TranscriptSearch({
                   width: '100%',
                   background: 'var(--card-bg)',
                   border: '1px solid var(--border-color)',
-                  padding: '7px 12px 7px 32px',
+                  padding: searchQuery ? '7px 32px 7px 32px' : '7px 12px 7px 32px',
                   borderRadius: '6px',
                   color: 'var(--text-primary)',
                   fontSize: '0.84rem',
                   outline: 'none'
                 }}
               />
+              {Boolean(searchQuery) && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Clear transcript search"
+                  title="Clear search"
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)',
+                    padding: '3px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '50%',
+                    transition: 'all 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = 'var(--text-primary)';
+                    e.currentTarget.style.background = 'rgba(100, 116, 139, 0.15)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--text-secondary)';
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              )}
             </div>
             {handleCopyTranscript && (
               <button

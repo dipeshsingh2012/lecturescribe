@@ -259,4 +259,35 @@ describe('TranscriptSearch', () => {
       expect.objectContaining({ behavior: 'smooth', block: 'center' })
     );
   });
+
+  it('renders clear search button only when searchQuery is non-empty and resets search when clicked', () => {
+    const setSearchQuery = vi.fn();
+    const { rerender } = render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery=""
+        setSearchQuery={setSearchQuery}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Clear transcript search/i })).not.toBeInTheDocument();
+
+    rerender(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery="eigen"
+        setSearchQuery={setSearchQuery}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+      />
+    );
+
+    const clearBtn = screen.getByRole('button', { name: /Clear transcript search/i });
+    expect(clearBtn).toBeInTheDocument();
+
+    fireEvent.click(clearBtn);
+    expect(setSearchQuery).toHaveBeenCalledWith('');
+  });
 });

@@ -258,4 +258,34 @@ These four subspaces are paired as two for the matrix \\(A\\) (column space and 
     fireEvent.click(btn2);
     expect(handleCueClick).toHaveBeenCalledWith('42:27');
   });
+
+  it('copies mathematical formulas as clean LaTeX without duplicating characters like R2R2', async () => {
+    await import('katex/dist/contrib/copy-tex.mjs');
+    const { container } = render(
+      <MarkdownWithTimestamps content="If each data point is said to lie in \( \mathbb{R}^{2} \), it means two features." />
+    );
+
+    const katexEl = container.querySelector('.katex');
+    expect(katexEl).toBeInTheDocument();
+
+    const range = document.createRange();
+    range.selectNodeContents(container);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const clipboardData = {
+      data: {},
+      setData(type, val) {
+        this.data[type] = val;
+      }
+    };
+
+    const copyEvent = new Event('copy', { bubbles: true, cancelable: true });
+    copyEvent.clipboardData = clipboardData;
+    document.dispatchEvent(copyEvent);
+
+    expect(clipboardData.data['text/plain']).toContain('$\\mathbb{R}^{2}$');
+    expect(clipboardData.data['text/plain']).not.toContain('R2R2');
+  });
 });

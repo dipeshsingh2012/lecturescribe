@@ -767,6 +767,82 @@ class TestCourseQuizImprovements(unittest.TestCase):
         self.assertEqual(run_data["answers"], {"1": 0})
         self.assertEqual(len(run_data["quiz_json"]["questions"]), 1)
 
+    def test_is_trivial_or_greeting_question_detects_bad_questions(self):
+        """Verify that questions testing greetings or filler options are flagged and rejected."""
+        bad_q = {
+            "id": 1,
+            "question": "In 'Applied Mathematics for Data Science and AI Live session -5 (30 / 9 / 2026)' at 00:00, which concept or statement is emphasized regarding Applied Mathematics?",
+            "options": [
+                "Namaste,...",
+                "A counterexample showing the condition fails in general vector spaces.",
+                "An introductory greeting with no mathematical bearing.",
+                "A proof relying on an unverified physical assumption."
+            ],
+            "correct_index": 2,
+            "explanation": "Discussed at [00:00]."
+        }
+        self.assertTrue(pinecone_rag_engine._is_trivial_or_greeting_question(bad_q))
+
+        good_q = {
+            "id": 1,
+            "question": "Which property defines an orthogonal matrix $Q$?",
+            "options": [
+                "$Q^{\\top}Q = I$",
+                "$\\det(Q) = 0$",
+                "All eigenvalues of $Q$ are strictly negative",
+                "$Q$ is always upper triangular"
+            ],
+            "correct_index": 0,
+            "explanation": "Orthogonal matrices satisfy $Q^{\\top}Q = I$ preserving inner products."
+        }
+        self.assertFalse(pinecone_rag_engine._is_trivial_or_greeting_question(good_q))
+
+    def test_sanitize_quiz_question_text_strips_lecture_title_and_timestamp(self):
+        """Verify that lecture title and episodic timestamp preambles are stripped from question stem."""
+        raw = "In 'Applied Mathematics for Data Science and AI Live session -5 (30 / 9 / 2026)' at 00:00, which concept or statement is emphasized?"
+        cleaned = pinecone_rag_engine._sanitize_quiz_question_text(raw)
+        self.assertNotIn("Applied Mathematics for Data Science", cleaned)
+        self.assertNotIn("00:00", cleaned)
+        self.assertTrue(cleaned.startswith("Which concept"))
+
+    def test_conversational_filler_excludes_long_early_greetings(self):
+        """Verify that early cues with greetings are marked as filler even if length > 60 chars."""
+        long_early_greeting = "Namaste to all of you. Welcome to Applied Mathematics for Data Science and AI Live session -5. Can everyone hear me clearly?"
+        self.assertTrue(pinecone_rag_engine._is_conversational_filler(long_early_greeting, "00:00"))
+        self.assertTrue(pinecone_rag_engine._is_conversational_filler(long_early_greeting, "01:15"))
+
+        academic_early = "A linear subspace must contain the zero vector and be closed under linear combinations."
+        self.assertFalse(pinecone_rag_engine._is_conversational_filler(academic_early, "00:45"))
+
+    def test_sanitize_quiz_payload_removes_bad_questions_and_reindexes(self):
+        """Verify that sanitize_quiz_payload purges greeting questions and updates IDs."""
+        from backend.main import sanitize_quiz_payload
+        payload = {
+            "questions": [
+                {
+                    "id": 1,
+                    "question": "In 'Session 1' at 00:00, what is stated?",
+                    "options": ["Namaste", "Theorem", "Proof", "None"],
+                    "correct_index": 0
+                },
+                {
+                    "id": 2,
+                    "question": "In 'Session 1' at 12:30, what characterizes the null space of matrix $A$?",
+                    "options": [
+                        "Solutions to $A\\mathbf{x} = \\mathbf{0}$",
+                        "All column linear combinations",
+                        "Eigenvectors with eigenvalue 1",
+                        "The row echelon pivot columns"
+                    ],
+                    "correct_index": 0
+                }
+            ]
+        }
+        cleaned = sanitize_quiz_payload(payload)
+        self.assertEqual(len(cleaned["questions"]), 1)
+        self.assertEqual(cleaned["questions"][0]["id"], 1)
+        self.assertEqual(cleaned["questions"][0]["question"], "What characterizes the null space of matrix $A$?")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -541,6 +541,40 @@ class CourseQuizExplanationRequest(BaseModel):
     regenerate: Optional[bool] = False
 
 
+def sanitize_quiz_payload(quiz_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Filter out non-academic, greeting, or filler questions from cached/saved quizzes."""
+    if not quiz_data or not isinstance(quiz_data, dict):
+        return quiz_data
+    qs = quiz_data.get("questions")
+    if not isinstance(qs, list):
+        return quiz_data
+
+    clean_qs = []
+    has_modified = False
+    for q in qs:
+        if not isinstance(q, dict):
+            continue
+        if pinecone_rag_engine._is_trivial_or_greeting_question(q):
+            has_modified = True
+            continue
+        sanitized_q = dict(q)
+        orig_text = str(sanitized_q.get("question") or "")
+        clean_text = pinecone_rag_engine._sanitize_quiz_question_text(orig_text)
+        if clean_text != orig_text:
+            sanitized_q["question"] = clean_text
+            has_modified = True
+        clean_qs.append(sanitized_q)
+
+    if has_modified:
+        for idx, q in enumerate(clean_qs):
+            q["id"] = idx + 1
+        quiz_data = dict(quiz_data)
+        quiz_data["questions"] = clean_qs
+        quiz_data["total_questions"] = len(clean_qs)
+
+    return quiz_data
+
+
 @app.get("/api/lecture/{video_id}/quiz")
 @app.post("/api/lecture/{video_id}/quiz")
 def get_or_generate_lecture_quiz(
@@ -559,33 +593,37 @@ def get_or_generate_lecture_quiz(
     if not is_regenerate and redis_cache:
         cached_quiz = redis_cache.get_quiz(clean_vid)
         if cached_quiz:
-            print(f"⚡ [Redis Hit] Returning cached quiz for video '{clean_vid}'.")
-            if email:
-                attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
-                if attempt:
-                    cached_quiz = dict(cached_quiz)
-                    cached_quiz["user_answers"] = attempt.get("answers", {})
-                    cached_quiz["user_score"] = attempt.get("score", 0)
-                    cached_quiz["user_completed"] = attempt.get("completed", False)
-                    cached_quiz["is_completed"] = attempt.get("completed", False)
-            return cached_quiz
+            cached_quiz = sanitize_quiz_payload(cached_quiz)
+            if cached_quiz and len(cached_quiz.get("questions") or []) > 0:
+                print(f"⚡ [Redis Hit] Returning cached quiz for video '{clean_vid}'.")
+                if email:
+                    attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
+                    if attempt:
+                        cached_quiz = dict(cached_quiz)
+                        cached_quiz["user_answers"] = attempt.get("answers", {})
+                        cached_quiz["user_score"] = attempt.get("score", 0)
+                        cached_quiz["user_completed"] = attempt.get("completed", False)
+                        cached_quiz["is_completed"] = attempt.get("completed", False)
+                return cached_quiz
 
     # 2. Check Relational Database Persistence
     if not is_regenerate:
         db_quiz = db_manager.get_saved_quiz(clean_vid)
         if db_quiz and db_quiz.get("questions"):
-            print(f"💾 [PostgreSQL Hit] Returning persisted quiz for video '{clean_vid}'.")
-            if redis_cache:
-                redis_cache.set_quiz(clean_vid, db_quiz, ttl_seconds=86400)
-            if email:
-                attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
-                if attempt:
-                    db_quiz = dict(db_quiz)
-                    db_quiz["user_answers"] = attempt.get("answers", {})
-                    db_quiz["user_score"] = attempt.get("score", 0)
-                    db_quiz["user_completed"] = attempt.get("completed", False)
-                    db_quiz["is_completed"] = attempt.get("completed", False)
-            return db_quiz
+            db_quiz = sanitize_quiz_payload(db_quiz)
+            if db_quiz and len(db_quiz.get("questions") or []) > 0:
+                print(f"💾 [PostgreSQL Hit] Returning persisted quiz for video '{clean_vid}'.")
+                if redis_cache:
+                    redis_cache.set_quiz(clean_vid, db_quiz, ttl_seconds=86400)
+                if email:
+                    attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
+                    if attempt:
+                        db_quiz = dict(db_quiz)
+                        db_quiz["user_answers"] = attempt.get("answers", {})
+                        db_quiz["user_score"] = attempt.get("score", 0)
+                        db_quiz["user_completed"] = attempt.get("completed", False)
+                        db_quiz["is_completed"] = attempt.get("completed", False)
+                return db_quiz
 
     # 3. Retrieve Saved Video & Cues from DB
     saved = db_manager.get_saved_video(clean_vid)
@@ -1697,33 +1735,37 @@ def get_or_generate_course_quiz(
     if not is_regenerate and redis_cache:
         cached_quiz = redis_cache.get_course_quiz(course_slug)
         if cached_quiz:
-            print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
-            if email:
-                attempt = db_manager.get_quiz_attempt("course", course_slug, email)
-                if attempt:
-                    cached_quiz = dict(cached_quiz)
-                    cached_quiz["user_answers"] = attempt.get("answers", {})
-                    cached_quiz["user_score"] = attempt.get("score", 0)
-                    cached_quiz["user_completed"] = attempt.get("completed", False)
-                    cached_quiz["is_completed"] = attempt.get("completed", False)
-            return cached_quiz
+            cached_quiz = sanitize_quiz_payload(cached_quiz)
+            if cached_quiz and len(cached_quiz.get("questions") or []) > 0:
+                print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
+                if email:
+                    attempt = db_manager.get_quiz_attempt("course", course_slug, email)
+                    if attempt:
+                        cached_quiz = dict(cached_quiz)
+                        cached_quiz["user_answers"] = attempt.get("answers", {})
+                        cached_quiz["user_score"] = attempt.get("score", 0)
+                        cached_quiz["user_completed"] = attempt.get("completed", False)
+                        cached_quiz["is_completed"] = attempt.get("completed", False)
+                return cached_quiz
 
     # 2. Check Database Persistence
     if not is_regenerate:
         db_quiz = db_manager.get_saved_course_quiz(clean_course)
         if db_quiz and db_quiz.get("questions"):
-            print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
-            if redis_cache:
-                redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)
-            if email:
-                attempt = db_manager.get_quiz_attempt("course", course_slug, email)
-                if attempt:
-                    db_quiz = dict(db_quiz)
-                    db_quiz["user_answers"] = attempt.get("answers", {})
-                    db_quiz["user_score"] = attempt.get("score", 0)
-                    db_quiz["user_completed"] = attempt.get("completed", False)
-                    db_quiz["is_completed"] = attempt.get("completed", False)
-            return db_quiz
+            db_quiz = sanitize_quiz_payload(db_quiz)
+            if db_quiz and len(db_quiz.get("questions") or []) > 0:
+                print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
+                if redis_cache:
+                    redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)
+                if email:
+                    attempt = db_manager.get_quiz_attempt("course", course_slug, email)
+                    if attempt:
+                        db_quiz = dict(db_quiz)
+                        db_quiz["user_answers"] = attempt.get("answers", {})
+                        db_quiz["user_score"] = attempt.get("score", 0)
+                        db_quiz["user_completed"] = attempt.get("completed", False)
+                        db_quiz["is_completed"] = attempt.get("completed", False)
+                return db_quiz
 
     # 3. Retrieve Course & Lecture list from DB
     course_info = db_manager.get_course_details(clean_course, user_email=email)

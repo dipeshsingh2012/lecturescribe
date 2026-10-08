@@ -1558,23 +1558,61 @@ class Llama3PineconeRAGStore:
         raise RuntimeError("All LLM providers failed to generate summary.")
 
     @staticmethod
-    def _is_conversational_filler(text: str) -> bool:
-        """Detect greeting, roll-call, or conversational filler cues."""
+    def _parse_time_to_seconds(time_str: str) -> float:
+        """Parse HH:MM:SS or MM:SS to seconds."""
+        if not time_str:
+            return 0.0
+        parts = str(time_str).strip().split(":")
+        try:
+            if len(parts) == 3:
+                return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+            elif len(parts) == 2:
+                return float(parts[0]) * 60 + float(parts[1])
+            return float(parts[0])
+        except (ValueError, TypeError):
+            return 0.0
+
+    @classmethod
+    def _is_conversational_filler(cls, text: str, time_str: str = "") -> bool:
+        """Detect greeting, roll-call, audio-check, or conversational filler cues."""
         if not text:
             return True
         t = text.strip()
         if len(t) < 15:
             return True
+
+        # First 2.5 minutes (0 to 150 seconds): strict greeting / session setup filter
+        sec = cls._parse_time_to_seconds(time_str)
+        if 0.0 <= sec <= 150.0:
+            early_pattern = re.compile(
+                r'(namaste|good morning|good afternoon|good evening|hello|hi\b|welcome|'
+                r'can you hear me|am i audible|audio check|mic check|screen visible|'
+                r'live session|session \d+|attendance|let us start|let me share)',
+                re.IGNORECASE
+            )
+            if early_pattern.search(t):
+                academic_keywords = re.compile(
+                    r'\b(matrix|vector|subspace|eigen|derivative|integral|theorem|proof|algorithm|loss|gradient|distribution|probability)\b',
+                    re.IGNORECASE
+                )
+                if not academic_keywords.search(t):
+                    return True
+
         filler_pattern = re.compile(
-            r'^(namaste|good morning|good afternoon|good evening|hello|hi|welcome|'
+            r'^(namaste|good morning|good afternoon|good evening|hello|hi\b|welcome|'
             r'can you hear me|am i audible|are you there|are people there|is my screen|'
             r'audio check|mic check|attendance|roll call|yes sir|no sir|okay sir|thank you|'
             r'bye bye|goodbye|see you|let us start|let me share|give me a second|give me a minute)',
             re.IGNORECASE
         )
         if filler_pattern.search(t):
-            if len(t) < 60:
+            academic_keywords = re.compile(
+                r'\b(matrix|vector|subspace|eigen|derivative|integral|theorem|proof|algorithm|loss|gradient|distribution|probability|dimension|rank|null space)\b',
+                re.IGNORECASE
+            )
+            if not academic_keywords.search(t):
                 return True
+
         return False
 
     @classmethod
@@ -1583,7 +1621,8 @@ class Llama3PineconeRAGStore:
         substantive = []
         for c in (cues or []):
             txt = str(c.get("text") or "").strip()
-            if not cls._is_conversational_filler(txt):
+            ts = str(c.get("time") or "00:00")
+            if not cls._is_conversational_filler(txt, ts):
                 substantive.append(c)
         if len(substantive) >= 2:
             return substantive
@@ -1594,12 +1633,17 @@ class Llama3PineconeRAGStore:
     def _sanitize_quiz_question_text(cls, text: str) -> str:
         """
         Sanitize quiz questions to be concept-first and self-contained,
-        stripping episodic timestamp preambles and fixing math formatting.
+        stripping episodic timestamp preambles, lecture title references, and fixing math formatting.
         """
         if not text:
             return ""
         cleaned = str(text).strip()
         patterns = [
+            # In 'Lecture Title' (date) at MM:SS, ...
+            r"^In\s+['\"‘“][^'\"’”]+['\"’”]\s*(?:\([^)]*\)\s*)?(?:at\s+\d{1,2}:\d{2}(?::\d{2})?,?\s*)?(?:,\s*)?",
+            # In session 5 at MM:SS, ...
+            r"^In\s+(?:the\s+)?(?:session|live\s+session|lecture|class|module)\s*[-–—0-9]*\s*(?:\([^)]*\)\s*)?(?:at\s+\d{1,2}:\d{2}(?::\d{2})?,?\s*)?(?:,\s*)?",
+            # When the lecturer mentions...
             r"^(?:When|As)\s+(?:the\s+)?(?:lecturer|instructor|professor|speaker)\s+(?:mentions?|discusses?|introduces?|explains?|states?)\s+[^,]+,\s*(?:at\s+\d{1,2}:\d{2}(?::\d{2})?,?\s*)?",
             r"^In\s+(?:the\s+)?[^,]+(?:described|discussed|introduced|mentioned|taught)\s+at\s+\d{1,2}:\d{2}(?::\d{2})?,?\s*",
             r"^(?:At|Around)\s+\d{1,2}:\d{2}(?::\d{2})?,?\s*(?:when\s+[^,]+,\s*)?",
@@ -1618,6 +1662,54 @@ class Llama3PineconeRAGStore:
         if cleaned:
             cleaned = cleaned[0].upper() + cleaned[1:]
         return cleaned or str(text).strip()
+
+    @classmethod
+    def _is_trivial_or_greeting_question(cls, q: Dict[str, Any]) -> bool:
+        """
+        Detect and discard questions that test greetings, pleasantries, mic checks,
+        or other non-academic filler.
+        """
+        if not isinstance(q, dict):
+            return True
+        q_text = str(q.get("question") or "").lower()
+        explanation = str(q.get("explanation") or "").lower()
+        options = [str(opt).lower() for opt in (q.get("options") or [])]
+        all_text = " ".join([q_text, explanation] + options)
+
+        banned_phrases = [
+            "namaste",
+            "introductory greeting",
+            "greeting with no mathematical",
+            "greeting with no",
+            "pleasantry",
+            "audio check",
+            "mic check",
+            "am i audible",
+            "can you hear me",
+            "screen sharing",
+            "attendance check",
+            "roll call",
+            "welcome the class",
+            "welcome the students",
+            "opening greeting",
+        ]
+        for phrase in banned_phrases:
+            if phrase in all_text:
+                return True
+
+        stem_banned = [
+            r'\bat\s+00:00\b',
+            r'\bat\s+0:00\b',
+            r'\bfirst\s+words?\b',
+            r'\bopening\s+statement\b',
+            r'\bhow\s+does\s+the\s+lecture\s+begin\b',
+            r'\bwhat\s+greeting\b',
+        ]
+        for sb in stem_banned:
+            if re.search(sb, q_text):
+                return True
+
+        return False
 
     @classmethod
     def _balance_and_shuffle_options(cls, options: List[str], correct_idx: int) -> Tuple[List[str], int]:
@@ -1680,12 +1772,13 @@ class Llama3PineconeRAGStore:
             "Strict Guidelines:\n"
             f"1. Generate exactly {target_count} multiple-choice questions covering different chronological segments of the lecture.\n"
             "2. Concept-First Framing: Each question must directly test an underlying concept, theorem, definition, mechanism, proof, or practical trade-off. "
-            "STRICTLY FORBIDDEN: NEVER use episodic phrasing or mention timestamps in the question stem (e.g. 'When the lecturer mentions...', 'At 41:32...', 'According to the lecture...'). "
+            "STRICTLY FORBIDDEN: NEVER use episodic phrasing or mention timestamps or lecture titles in the question stem (e.g. 'When the lecturer mentions...', 'At 41:32...', 'In Lecture 5...', 'According to the lecture...'). "
             "The question must be completely self-contained and conceptual.\n"
-            "3. Timestamp as Validation: The 'timestamp' field serves strictly for factual citation/verification so students can review the lecture. Timestamps must NEVER appear inside the 'question' text itself.\n"
-            "4. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$, $x$, $y$). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
-            "5. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D) — do NOT bias towards option A.\n"
-            "6. Question format:\n"
+            "3. STRICTLY PROHIBITED TOPICS: NEVER test introductory greetings, welcome remarks, speaker introductions, pleasantries, attendance, audio/mic checks, screen sharing checks, or administrative remarks (e.g. 'Namaste', 'Good morning', 'Can you hear me', 'Welcome to the session'). NEVER create questions where an option is a greeting or 'An introductory greeting with no mathematical bearing'. Only test substantive academic theory, equations, algorithms, and practical applications.\n"
+            "4. Timestamp as Validation: The 'timestamp' field serves strictly for factual citation/verification so students can review the lecture. Timestamps must NEVER appear inside the 'question' text itself.\n"
+            "5. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$, $x$, $y$). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
+            "6. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D) — do NOT bias towards option A.\n"
+            "7. Question format:\n"
             "   - 'id': integer (1, 2, 3...)\n"
             "   - 'question': clear, conceptually self-contained question text with LaTeX math where applicable\n"
             "   - 'options': array of exactly 4 strings (A, B, C, D)\n"
@@ -1693,7 +1786,7 @@ class Llama3PineconeRAGStore:
             "   - 'explanation': thorough pedagogical explanation of why this answer is correct, citing the exact timestamp (e.g. [43:34]) and including LaTeX math where applicable\n"
             "   - 'timestamp': timestamp string (e.g. '43:34' or '01:02:13') from the transcript corresponding to this topic\n"
             "   - 'difficulty': 'easy', 'medium', or 'hard'\n"
-            "7. Return ONLY a single valid JSON object matching this schema:\n"
+            "8. Return ONLY a single valid JSON object matching this schema:\n"
             "{\n"
             '  "questions": [\n'
             '    {\n'
@@ -1738,12 +1831,16 @@ class Llama3PineconeRAGStore:
                 return None
 
             cleaned_qs = []
-            for idx, q in enumerate(raw_qs):
+            for q in raw_qs:
                 if not isinstance(q, dict):
                     continue
+                if self._is_trivial_or_greeting_question(q):
+                    continue
                 q_text = self._sanitize_quiz_question_text(str(q.get("question") or ""))
+                if not q_text or len(q_text) < 8:
+                    continue
                 opts = [str(opt).strip() for opt in (q.get("options") or [])]
-                if not q_text or len(opts) != 4:
+                if len(opts) != 4 or any(len(opt) == 0 for opt in opts):
                     continue
                 raw_correct_idx = q.get("correct_index", 0)
                 shuffled_opts, balanced_idx = self._balance_and_shuffle_options(opts, raw_correct_idx)
@@ -1755,7 +1852,7 @@ class Llama3PineconeRAGStore:
                     diff = "medium"
 
                 cleaned_qs.append({
-                    "id": idx + 1,
+                    "id": len(cleaned_qs) + 1,
                     "question": q_text,
                     "options": shuffled_opts,
                     "correct_index": balanced_idx,
@@ -1895,12 +1992,13 @@ class Llama3PineconeRAGStore:
             "Strict Guidelines:\n"
             f"1. Coverage & Balance: The questions MUST be distributed across all the lectures in this course so far. Ensure every lecture is represented.\n"
             "2. Concept-First Framing: Each question must directly test an underlying concept, theorem, definition, mechanism, proof, or practical trade-off. "
-            "STRICTLY FORBIDDEN: NEVER use episodic phrasing or mention timestamps in the question stem (e.g. 'When the lecturer mentions...', 'At 41:32...', 'According to the lecture...'). "
+            "STRICTLY FORBIDDEN: NEVER use episodic phrasing, mention timestamps, or reference lecture titles/numbers in the question stem (e.g. 'In Lecture 2...', 'When the lecturer mentions...', 'At 41:32...', 'In session 5...', 'According to the lecture...'). "
             "The question must be completely self-contained and conceptual.\n"
-            "3. Timestamp as Validation: The 'timestamp', 'lecture_id', and 'lecture_title' fields serve strictly for factual citation/verification so students can review the exact lecture moment. Timestamps must NEVER appear inside the 'question' text itself.\n"
-            "4. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$, $x$, $y$). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
-            "5. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D) — do NOT bias towards option A.\n"
-            "6. Question format:\n"
+            "3. STRICTLY PROHIBITED TOPICS: NEVER test introductory greetings, welcome remarks, pleasantries, attendance, audio/mic checks, screen sharing checks, or administrative chatter (e.g. 'Namaste', 'Good morning', 'Can you hear me', 'Welcome'). NEVER create questions where an option is a greeting or 'An introductory greeting with no mathematical bearing'. Only test substantive academic theory, equations, algorithms, and practical applications.\n"
+            "4. Timestamp as Validation: The 'timestamp', 'lecture_id', and 'lecture_title' fields serve strictly for factual citation/verification so students can review the exact lecture moment. Timestamps and lecture titles must NEVER appear inside the 'question' text itself.\n"
+            "5. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$, $x$, $y$). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
+            "6. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D) — do NOT bias towards option A.\n"
+            "7. Question format:\n"
             "   - 'id': integer (1, 2, 3...)\n"
             "   - 'question': clear, conceptually self-contained question text with LaTeX math where applicable\n"
             "   - 'options': array of exactly 4 strings (A, B, C, D)\n"
@@ -1910,7 +2008,7 @@ class Llama3PineconeRAGStore:
             "   - 'lecture_title': title of the lecture this question tests\n"
             "   - 'timestamp': timestamp string (e.g. '43:34') from that lecture\n"
             "   - 'difficulty': 'easy', 'medium', or 'hard'\n"
-            "7. Return ONLY a single valid JSON object matching this schema:\n"
+            "8. Return ONLY a single valid JSON object matching this schema:\n"
             "{\n"
             '  "questions": [\n'
             '    {\n'
@@ -1957,12 +2055,16 @@ class Llama3PineconeRAGStore:
                 return None
 
             cleaned_qs = []
-            for idx, q in enumerate(raw_qs):
+            for q in raw_qs:
                 if not isinstance(q, dict):
                     continue
+                if self._is_trivial_or_greeting_question(q):
+                    continue
                 q_text = self._sanitize_quiz_question_text(str(q.get("question") or ""))
+                if not q_text or len(q_text) < 8:
+                    continue
                 opts = [str(opt).strip() for opt in (q.get("options") or [])]
-                if not q_text or len(opts) != 4:
+                if len(opts) != 4 or any(len(opt) == 0 for opt in opts):
                     continue
                 raw_correct_idx = q.get("correct_index", 0)
                 shuffled_opts, balanced_idx = self._balance_and_shuffle_options(opts, raw_correct_idx)
@@ -1972,7 +2074,7 @@ class Llama3PineconeRAGStore:
                 lect_title = str(q.get("lecture_title") or "").strip()
 
                 if not lect_id or not lect_title:
-                    fallback_lect = valid_lectures[idx % len(valid_lectures)]
+                    fallback_lect = valid_lectures[len(cleaned_qs) % len(valid_lectures)]
                     lect_id = lect_id or fallback_lect["video_id"]
                     lect_title = lect_title or fallback_lect["title"]
 
@@ -1982,7 +2084,7 @@ class Llama3PineconeRAGStore:
                     diff = "medium"
 
                 cleaned_qs.append({
-                    "id": idx + 1,
+                    "id": len(cleaned_qs) + 1,
                     "question": q_text,
                     "options": shuffled_opts,
                     "correct_index": balanced_idx,

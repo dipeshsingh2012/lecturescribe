@@ -3,6 +3,7 @@ import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
 import AITutor from '../lecture/AITutor';
 import LectureQuiz from '../lecture/LectureQuiz';
+import LectureSummary from '../lecture/LectureSummary';
 import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function LectureWorkspace({
@@ -59,6 +60,8 @@ export default function LectureWorkspace({
   handleSendMessage,
   currentTheme,
   quiz,
+  summary,
+  summaryHook = summary || {},
   quizData = quiz?.quizData,
   quizLoading = quiz?.quizLoading,
   quizError = quiz?.quizError,
@@ -132,8 +135,14 @@ export default function LectureWorkspace({
         currentTheme={currentTheme}
       />
 
-      {/* Right Panel: Instant Search Drawer, Practice Quiz, or AI Tutor */}
-      {activeTab === 'transcript' ? (
+      {/* Right Panel: Summary, Instant Search Drawer, Practice Quiz, or AI Tutor */}
+      {activeTab === 'summary' ? (
+        <LectureSummary
+          summaryHook={summaryHook}
+          handleCueClick={handleCueClick}
+          handleCrossLectureClick={handleCrossLectureClick}
+        />
+      ) : activeTab === 'transcript' ? (
         <TranscriptSearch
           displayCues={displayCues}
           searchQuery={searchQuery}

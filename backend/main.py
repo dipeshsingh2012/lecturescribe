@@ -187,6 +187,15 @@ class RegenerateSummaryRequest(BaseModel):
     video_id: str
 
 
+class GenerateLectureSummaryRequest(BaseModel):
+    video_id: str
+    summary_type: str = "15_min"
+    video_title: Optional[str] = None
+    cues: Optional[List[Dict[str, Any]]] = None
+    user_email: Optional[str] = None
+    bypass_cache: Optional[bool] = False
+
+
 class TranscriptionDispatchRequest(BaseModel):
     job_id: str
 
@@ -1281,6 +1290,20 @@ def autopopulate_chat(req: AutoPopulateRequest):
                     model=res.get("model", ""),
                     web_sources=res.get("web_sources", [])
                 )
+                # Also persist to dedicated lecture summaries table
+                stype = "15_min" if "15" in prompt else "comprehensive"
+                sub_text = res.get("submission_text", "")
+                wc = len([w for w in sub_text.split() if w]) if sub_text else 0
+                db_manager.save_lecture_summary(
+                    video_id=vid,
+                    summary_type=stype,
+                    markdown_text=res["reply"],
+                    submission_text=sub_text,
+                    citations=res.get("citations", []),
+                    word_count=wc,
+                    model=res.get("model", ""),
+                    user_email=req.user_email
+                )
                 time.sleep(0.01)  # 10ms monotonic timestamp spacing
             except Exception as save_err:
                 print(f"⚠️ [Autopopulate Save Error for prompt {idx}]: {save_err}")
@@ -1404,6 +1427,108 @@ def regenerate_summary(req: RegenerateSummaryRequest):
         "video_id": video_id,
         "title": title,
         "summarySections": new_summary
+    }
+
+
+# ==============================================================================
+# Dedicated Lecture Summary & Submission Endpoints
+# ==============================================================================
+
+@app.get("/api/summary/lecture")
+def get_lecture_summaries_endpoint(
+    video_id: str = Query(..., description="Vimeo video ID"),
+    user_email: Optional[str] = Query(None, description="User email for personalized summaries")
+):
+    """
+    Retrieve all saved lecture summaries (15_min, comprehensive) for a video.
+    """
+    vid = str(video_id).strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="video_id parameter is required.")
+
+    summaries = db_manager.get_lecture_summaries(vid, user_email=user_email)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "count": len(summaries),
+        "summaries": summaries
+    }
+
+
+@app.post("/api/summary/generate")
+def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
+    """
+    Generate or regenerate a dedicated lecture summary (15_min or comprehensive)
+    and persist it to lecturescribe_lecture_summaries without polluting chat logs.
+    """
+    vid = str(req.video_id).strip()
+    if not vid or vid == "active":
+        raise HTTPException(status_code=400, detail="A valid video_id is required.")
+
+    summary_type = req.summary_type.strip().lower()
+    if summary_type not in ["15_min", "comprehensive"]:
+        summary_type = "15_min" if "15" in summary_type else "comprehensive"
+
+    # Return existing summary if cached and bypass_cache is False
+    if not req.bypass_cache:
+        existing = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
+        if existing and existing.get("markdownText"):
+            return {
+                "status": "success",
+                "video_id": vid,
+                "summary": existing,
+                "cached": True
+            }
+
+    saved_vid = db_manager.get_saved_video(vid)
+    title = (req.video_title or (saved_vid.get("title") if saved_vid else None) or "Lecture").strip()
+    cues = req.cues or (saved_vid.get("cues") if saved_vid else None) or []
+    if not cues:
+        raise HTTPException(status_code=404, detail=f"No cues found for video {vid} to generate summary.")
+
+    # Prime RAG engine transcript chunks if needed
+    if len(pinecone_rag_engine.local_chunks) == 0:
+        pinecone_rag_engine.ingest_transcript(vid, title, cues)
+
+    prompt = "Create a summary for a 15 min read" if summary_type == "15_min" else "Generate Full Comprehensive Summary"
+
+    res = process_chat_message(
+        user_prompt=prompt,
+        video_id=vid,
+        video_title=title,
+        cues=cues,
+        user_email=req.user_email,
+        bypass_cache=req.bypass_cache or False,
+        chat_history=[],
+        save_to_db=False  # Do not pollute chat logs!
+    )
+
+    markdown_text = res.get("reply") or ""
+    submission_text = res.get("submission_text") or pinecone_rag_engine._clean_for_submission(
+        markdown_text,
+        target_words=120 if summary_type == "15_min" else 350
+    )
+    word_count = len([w for w in submission_text.split() if w])
+    citations = res.get("citations") or []
+    model = res.get("model") or ""
+
+    db_manager.save_lecture_summary(
+        video_id=vid,
+        summary_type=summary_type,
+        markdown_text=markdown_text,
+        submission_text=submission_text,
+        citations=citations,
+        word_count=word_count,
+        model=model,
+        user_email=req.user_email
+    )
+
+    saved_record = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "summary": saved_record,
+        "cached": False
     }
 
 

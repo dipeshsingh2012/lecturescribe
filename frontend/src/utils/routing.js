@@ -35,7 +35,7 @@ export const getLectureTabFromPath = (path = (typeof window !== 'undefined' ? `$
 
   const query = path.includes('?') ? path.slice(path.indexOf('?') + 1).split('#')[0] : '';
   const tab = new URLSearchParams(query).get('tab');
-  return tab === 'tutor' || tab === 'quiz' ? tab : 'transcript';
+  return tab === 'summary' || tab === 'tutor' || tab === 'quiz' ? tab : 'transcript';
 };
 
 export const getCourseNameFromPath = (path = (typeof window !== 'undefined' ? window.location.pathname : '/')) => {

@@ -14,6 +14,7 @@ import { useAITutor } from './hooks/useAITutor';
 import { useLecturePlayer } from './hooks/useLecturePlayer';
 import { useLectureIngestion } from './hooks/useLectureIngestion';
 import useLectureQuiz from './hooks/useLectureQuiz';
+import useLectureSummary from './hooks/useLectureSummary';
 
 import Header from './components/layout/Header';
 import HomeView from './components/views/HomeView';
@@ -99,6 +100,7 @@ export default function App() {
   const tutor = useAITutor(activeData, auth.googleUser);
   const player = useLecturePlayer(activeData);
   const quiz = useLectureQuiz(activeData);
+  const summary = useLectureSummary(activeData, auth.googleUser?.email);
 
   // Hub / Route Navigation
   const handleBackToHub = () => {
@@ -151,6 +153,13 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // When user is on or switches to Summary tab, ensure summary is loaded if empty
+  useEffect(() => {
+    if (activeTab === 'summary' && activeData?.videoId && Object.keys(summary.summaries).length === 0 && !summary.loading) {
+      summary.fetchSummaries(activeData.videoId, auth.googleUser?.email);
+    }
+  }, [activeTab, activeData?.videoId]);
 
   // When user is on or switches to AI Tutor tab, ensure chat history / autopopulate runs if empty
   useEffect(() => {
@@ -295,6 +304,7 @@ export default function App() {
             handleSendMessage={tutor.handleSendMessage}
             currentTheme={currentTheme}
             quiz={quiz}
+            summary={summary}
           />
         )}
 

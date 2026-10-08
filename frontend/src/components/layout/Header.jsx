@@ -15,6 +15,7 @@ import {
   Search,
   Bot,
   HelpCircle,
+  FileText,
   Cloud,
   Folder,
   LogOut,
@@ -74,6 +75,27 @@ export default function Header({
               border: '1px solid rgba(255, 255, 255, 0.15)'
             }}>
               <button
+                aria-label="Lecture Summary"
+                onClick={() => setActiveTab('summary')}
+                style={{
+                  background: activeTab === 'summary' ? '#ffffff' : 'transparent',
+                  color: activeTab === 'summary' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
+                  border: 'none',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <FileText size={15} /> Summary
+              </button>
+              <button
+                aria-label="AI Tutor"
                 onClick={() => setActiveTab('tutor')}
                 style={{
                   background: activeTab === 'tutor' ? '#ffffff' : 'transparent',

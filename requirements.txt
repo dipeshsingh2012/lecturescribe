@@ -12,6 +12,8 @@ requests>=2.31.0
 
 # Relational Database (Cloud PostgreSQL / Neon DB)
 psycopg2-binary>=2.9.9
+alembic>=1.13.0
+sqlalchemy>=2.0.0
 
 # Distributed Caching (Hosted Redis Cloud / Upstash)
 redis>=5.0.0

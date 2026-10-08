@@ -62,15 +62,20 @@ describe('Header', () => {
       />
     );
 
+    const summaryBtn = screen.getByRole('button', { name: /Summary/i });
     const tutorBtn = screen.getByRole('button', { name: /AI Tutor/i });
     const quizBtn = screen.getByRole('button', { name: /Quiz/i });
     const searchBtn = screen.getByRole('button', { name: /Search/i });
     const gdriveBtn = screen.getByRole('button', { name: /Save to Google Drive/i });
 
+    expect(summaryBtn).toBeInTheDocument();
     expect(tutorBtn).toBeInTheDocument();
     expect(quizBtn).toBeInTheDocument();
     expect(searchBtn).toBeInTheDocument();
     expect(gdriveBtn).toBeInTheDocument();
+
+    fireEvent.click(summaryBtn);
+    expect(setActiveTab).toHaveBeenCalledWith('summary');
 
     fireEvent.click(tutorBtn);
     expect(setActiveTab).toHaveBeenCalledWith('tutor');

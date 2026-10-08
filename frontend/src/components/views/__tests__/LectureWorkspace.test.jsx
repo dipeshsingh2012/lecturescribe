@@ -10,7 +10,8 @@ describe('LectureWorkspace', () => {
   const activeData = {
     videoId: '445566',
     title: 'Operating Systems',
-    course_name: 'CS301'
+    course_name: 'CS301',
+    cues: [{ time: '02:00', text: 'Kernel architecture.' }]
   };
 
   const baseProps = {
@@ -101,6 +102,51 @@ describe('LectureWorkspace', () => {
 
     expect(screen.getByText('Lecture Practice Quiz')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Generate Quiz/i })).toBeInTheDocument();
+  });
+
+  it('renders LectureSummary on the right when activeTab is summary', () => {
+    const summaryHook = {
+      summaries: {
+        '15_min': {
+          id: 1,
+          videoId: '445566',
+          summaryType: '15_min',
+          markdownText: 'Executive summary content',
+          submissionText: 'Submission text content',
+          wordCount: 120
+        }
+      },
+      currentSummary: {
+        id: 1,
+        videoId: '445566',
+        summaryType: '15_min',
+        markdownText: 'Executive summary content',
+        submissionText: 'Submission text content',
+        wordCount: 120
+      },
+      activeSummaryType: '15_min',
+      setActiveSummaryType: vi.fn(),
+      viewMode: 'study',
+      setViewMode: vi.fn(),
+      loading: false,
+      generating: false,
+      error: null,
+      copiedField: null,
+      copyText: vi.fn(),
+      generateSummary: vi.fn(),
+      transcriptAvailable: true
+    };
+
+    render(
+      <LectureWorkspace
+        {...baseProps}
+        activeTab="summary"
+        summaryHook={summaryHook}
+      />
+    );
+
+    expect(screen.getByText('Summary & Submissions')).toBeInTheDocument();
+    expect(screen.getByText('Executive summary content')).toBeInTheDocument();
   });
 });
 

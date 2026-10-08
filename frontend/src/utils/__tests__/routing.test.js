@@ -53,6 +53,7 @@ describe('routing utility functions', () => {
 
     describe('getLectureTabFromPath', () => {
       it('reads tab selection only from lecture routes', () => {
+        expect(getLectureTabFromPath('/lecture/123?tab=summary')).toBe('summary');
         expect(getLectureTabFromPath('/lecture/123?tab=quiz')).toBe('quiz');
         expect(getLectureTabFromPath('/course/data-science/lecture/123?tab=tutor')).toBe('tutor');
       });

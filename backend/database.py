@@ -381,6 +381,25 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_pg_course_chat_slug ON lecturescribe_course_chat_logs(course_slug);
                         CREATE INDEX IF NOT EXISTS idx_pg_course_chat_user ON lecturescribe_course_chat_logs(user_email);
 
+                        CREATE TABLE IF NOT EXISTS lecturescribe_lecture_summaries (
+                            id SERIAL PRIMARY KEY,
+                            video_id VARCHAR(128) NOT NULL REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            user_email VARCHAR(255),
+                            summary_type VARCHAR(64) NOT NULL,
+                            markdown_text TEXT NOT NULL,
+                            submission_text TEXT DEFAULT '',
+                            citations_json JSONB DEFAULT '[]'::jsonb,
+                            word_count INT DEFAULT 0,
+                            model VARCHAR(128) DEFAULT '',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_lecture_summaries_key 
+                            ON lecturescribe_lecture_summaries (video_id, COALESCE(user_email, ''), summary_type);
+                        CREATE INDEX IF NOT EXISTS idx_lecture_summaries_vid 
+                            ON lecturescribe_lecture_summaries (video_id);
+
                         CREATE TABLE IF NOT EXISTS lecturescribe_fleet_runs (
                             request_id VARCHAR(128) PRIMARY KEY,
                             tenant_id VARCHAR(128) NOT NULL,
@@ -890,6 +909,141 @@ class RelationalDBManager:
 
         if video_id in self._memory_cache:
             self._memory_cache[video_id]["summarySections"] = summary_sections
+
+    def save_lecture_summary(
+        self,
+        video_id: str,
+        summary_type: str,
+        markdown_text: str,
+        submission_text: str = "",
+        citations: Optional[List[Dict[str, Any]]] = None,
+        word_count: Optional[int] = None,
+        model: str = "",
+        user_email: Optional[str] = None
+    ) -> bool:
+        """Save or update a lecture summary in lecturescribe_lecture_summaries."""
+        if not video_id or not summary_type or not markdown_text:
+            return False
+
+        clean_type = summary_type.strip().lower()
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        calculated_word_count = word_count
+        if calculated_word_count is None:
+            text_to_count = submission_text.strip() if submission_text and submission_text.strip() else markdown_text.strip()
+            calculated_word_count = len([w for w in text_to_count.split() if w])
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_lecture_summaries (
+                            video_id, user_email, summary_type, markdown_text,
+                            submission_text, citations_json, word_count, model,
+                            created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW())
+                        ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
+                        SET markdown_text = EXCLUDED.markdown_text,
+                            submission_text = EXCLUDED.submission_text,
+                            citations_json = EXCLUDED.citations_json,
+                            word_count = EXCLUDED.word_count,
+                            model = EXCLUDED.model,
+                            updated_at = NOW();
+                    """, (
+                        video_id,
+                        clean_email,
+                        clean_type,
+                        markdown_text,
+                        submission_text or "",
+                        json.dumps(citations or []),
+                        calculated_word_count,
+                        model or ""
+                    ))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Notice] save_lecture_summary error: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_lecture_summaries(
+        self,
+        video_id: str,
+        user_email: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetch all saved lecture summaries (15_min, comprehensive, etc.) for a video.
+        Returns a dictionary keyed by summary_type.
+        """
+        if not video_id:
+            return {}
+
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        conn = None
+        summaries: Dict[str, Any] = {}
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            SELECT id, video_id, user_email, summary_type, markdown_text,
+                                   submission_text, citations_json, word_count, model,
+                                   created_at, updated_at
+                            FROM lecturescribe_lecture_summaries
+                            WHERE video_id = %s AND (user_email = %s OR user_email IS NULL)
+                            ORDER BY (user_email = %s) DESC, updated_at DESC;
+                        """, (video_id, clean_email, clean_email))
+                    else:
+                        cursor.execute("""
+                            SELECT id, video_id, user_email, summary_type, markdown_text,
+                                   submission_text, citations_json, word_count, model,
+                                   created_at, updated_at
+                            FROM lecturescribe_lecture_summaries
+                            WHERE video_id = %s
+                            ORDER BY updated_at DESC;
+                        """, (video_id,))
+
+                    rows = cursor.fetchall() or []
+                    for row in rows:
+                        stype = row["summary_type"]
+                        if stype not in summaries:
+                            raw_cit = row.get("citations_json")
+                            citations = raw_cit if isinstance(raw_cit, list) else (json.loads(raw_cit) if raw_cit else [])
+                            summaries[stype] = {
+                                "id": row["id"],
+                                "videoId": row["video_id"],
+                                "userEmail": row.get("user_email"),
+                                "summaryType": stype,
+                                "markdownText": row.get("markdown_text") or "",
+                                "submissionText": row.get("submission_text") or "",
+                                "citations": citations,
+                                "wordCount": row.get("word_count") or 0,
+                                "model": row.get("model") or "",
+                                "createdAt": row.get("created_at").isoformat() if row.get("created_at") else None,
+                                "updatedAt": row.get("updated_at").isoformat() if row.get("updated_at") else None
+                            }
+            return summaries
+        except Exception as e:
+            print(f"[PostgreSQL Notice] get_lecture_summaries error: {e}")
+            return {}
+        finally:
+            if conn:
+                conn.close()
+
+    def get_lecture_summary(
+        self,
+        video_id: str,
+        summary_type: str,
+        user_email: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch a single summary for a video and summary_type."""
+        all_sums = self.get_lecture_summaries(video_id, user_email)
+        return all_sums.get(summary_type.strip().lower())
 
     def save_quiz(self, video_id: str, quiz_data: Dict[str, Any]) -> bool:
         """Persist generated quiz questions and metadata to PostgreSQL and In-Memory cache."""

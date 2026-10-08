@@ -2308,8 +2308,24 @@ def extract_course_readings(course_name: str):
     for cv in course_vids:
         vid = cv["video_id"]
         title = cv["title"]
-        saved_vid = db_manager.get_saved_video(vid)
-        cues = (saved_vid.get("cues") or []) if saved_vid else []
+        cues = []
+        try:
+            if db_manager.postgres_url and db_manager._schema_initialized:
+                conn = db_manager._get_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT timestamp as time, text 
+                        FROM lecturescribe_transcript_cues 
+                        WHERE video_id = %s 
+                        ORDER BY id ASC;
+                    """, (vid,))
+                    cues = cursor.fetchall() or []
+                conn.close()
+            elif vid in db_manager._memory_cache:
+                cues = db_manager._memory_cache[vid].get("cues") or []
+        except Exception:
+            cues = []
+
         if cues:
             head_cues = cues[:40]
             tail_cues = cues[40:][-20:] if len(cues) > 40 else []

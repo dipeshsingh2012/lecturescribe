@@ -32,6 +32,7 @@ import {
   FileText
 } from 'lucide-react';
 import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/formatters';
+import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function CourseLibrary({
   courseResourcesLoading = false,
@@ -59,12 +60,15 @@ export default function CourseLibrary({
   const [extractSuccessMsg, setExtractSuccessMsg] = useState('');
 
   const courseDisplayName = activeCourseData?.course_name || selectedCourse || 'Course Library';
+  const exactCourseSlug =
+    activeCourseData?.course_slug ||
+    (activeCourseData?.course_name ? normalizeCourseSlug(activeCourseData.course_name) : normalizeCourseSlug(selectedCourse));
 
   // Trigger manual book extraction
   const handleExtractClick = async () => {
     if (!triggerExtractReadings) return;
     setExtractSuccessMsg('');
-    const res = await triggerExtractReadings(courseDisplayName);
+    const res = await triggerExtractReadings(exactCourseSlug || courseDisplayName);
     if (res && res.status === 'success') {
       const added = res.newly_extracted_count || 0;
       setExtractSuccessMsg(

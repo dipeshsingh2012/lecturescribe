@@ -135,6 +135,51 @@ def search_web_reading_links(title: str, author: str = "", course_name: str = ""
     return combined_results[:4]
 
 
+def _parse_readings_json(raw_json_str: str) -> List[Dict[str, Any]]:
+    """Resilient JSON parser that handles markdown codeblocks, root wrappers, and truncated JSON arrays."""
+    if not raw_json_str or not raw_json_str.strip():
+        return []
+    clean_str = re.sub(r"^```(?:json)?\s*", "", raw_json_str.strip())
+    clean_str = re.sub(r"\s*```$", "", clean_str).strip()
+
+    # 1. Direct parse (Array or Dict wrapper)
+    try:
+        parsed = json.loads(clean_str)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            for k in ("readings", "books", "items", "results"):
+                if isinstance(parsed.get(k), list):
+                    return parsed[k]
+    except Exception:
+        pass
+
+    # 2. Try completing truncated JSON with standard closures
+    for suffix in ["]", "}]", "\"\n}]", "\"}]", "}\n]"]:
+        try:
+            parsed = json.loads(clean_str + suffix)
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, dict):
+                for k in ("readings", "books", "items", "results"):
+                    if isinstance(parsed.get(k), list):
+                        return parsed[k]
+        except Exception:
+            continue
+
+    # 3. Regex fallback: extract any individually complete object with a title field
+    extracted = []
+    object_matches = re.finditer(r'\{[^{}]*\"title\"\s*:\s*\"[^\"]+\"[^{}]*\}', clean_str)
+    for m in object_matches:
+        try:
+            obj = json.loads(m.group(0))
+            if isinstance(obj, dict) and obj.get("title"):
+                extracted.append(obj)
+        except Exception:
+            continue
+    return extracted
+
+
 def extract_readings_with_llm(
     course_name: str,
     transcripts_summary: str,
@@ -142,7 +187,7 @@ def extract_readings_with_llm(
 ) -> List[Dict[str, Any]]:
     """
     Use LLM to extract reading materials, textbooks, and journal articles
-    from transcripts and slides.
+    from transcripts and slides with multi-model fallback and resilient JSON recovery.
     """
     groq_key = os.getenv("GROQ_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -163,7 +208,7 @@ def extract_readings_with_llm(
         "- source_type: ('transcript' | 'slide_ppt' | 'syllabus')\n"
         "- source_context: (string) Specific context or timestamp/slide where mentioned\n\n"
         "If no specific books or papers are mentioned, output an empty JSON array: []. "
-        "Do not include any explanation or markdown formatting."
+        "Do not include any explanation or markdown formatting outside the JSON array."
     )
 
     user_prompt = (
@@ -173,46 +218,58 @@ def extract_readings_with_llm(
         "Extracted Readings JSON:"
     )
 
-    raw_json_str = ""
+    items: List[Dict[str, Any]] = []
 
-    # 1. Try Groq
+    # 1. Try Groq (try fast instruction models first, then OSS models)
     if groq_key:
-        try:
-            from openai import OpenAI
-            client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-            resp = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=1200,
-                temperature=0.1
-            )
-            raw_json_str = resp.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"[LLM Groq Readings Notice] {e}")
+        from openai import OpenAI
+        groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+        groq_candidates = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+        for g_model in groq_candidates:
+            try:
+                resp = groq_client.chat.completions.create(
+                    model=g_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    max_tokens=3500,
+                    temperature=0.1
+                )
+                raw_out = resp.choices[0].message.content or ""
+                parsed = _parse_readings_json(raw_out)
+                if parsed:
+                    items = parsed
+                    break
+            except Exception as e:
+                print(f"[LLM Groq Readings Notice ({g_model})] {e}")
 
-    # 2. Try Gemini
-    if not raw_json_str and gemini_key:
-        try:
-            from openai import OpenAI
-            client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
-            resp = client.chat.completions.create(
-                model="gemini-3.8-flash",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=1200,
-                temperature=0.1
-            )
-            raw_json_str = resp.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"[LLM Gemini Readings Notice] {e}")
+    # 2. Try Gemini (cascade flash-lite -> flash -> latest)
+    if not items and gemini_key:
+        from openai import OpenAI
+        gemini_client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
+        gemini_candidates = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+        for gem_model in gemini_candidates:
+            try:
+                resp = gemini_client.chat.completions.create(
+                    model=gem_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    max_tokens=3500,
+                    temperature=0.1
+                )
+                raw_out = resp.choices[0].message.content or ""
+                parsed = _parse_readings_json(raw_out)
+                if parsed:
+                    items = parsed
+                    break
+            except Exception as e:
+                print(f"[LLM Gemini Readings Notice ({gem_model})] {e}")
 
-    # 3. Try OpenAI / Ollama
-    if not raw_json_str and (openai_key or openai_base):
+    # 3. Try OpenAI / Ollama fallback
+    if not items and (openai_key or openai_base):
         try:
             from openai import OpenAI
             client = OpenAI(
@@ -225,28 +282,20 @@ def extract_readings_with_llm(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1200,
+                max_tokens=3500,
                 temperature=0.1
             )
-            raw_json_str = resp.choices[0].message.content.strip()
+            raw_out = resp.choices[0].message.content or ""
+            items = _parse_readings_json(raw_out)
         except Exception as e:
             print(f"[LLM OpenAI Readings Notice] {e}")
 
-    items = []
-    if raw_json_str:
-        try:
-            clean_str = re.sub(r"^```(?:json)?\s*", "", raw_json_str)
-            clean_str = re.sub(r"\s*```$", "", clean_str)
-            parsed = json.loads(clean_str)
-            if isinstance(parsed, list):
-                items = parsed
-        except Exception as e:
-            print(f"[Readings JSON Parse Error] {e} on string: {raw_json_str[:200]}")
-
-    # Deduplicate items by lowercased title
+    # Deduplicate items by lowercased alphanumeric title
     deduped: List[Dict[str, Any]] = []
     seen_titles = set()
     for item in items:
+        if not isinstance(item, dict):
+            continue
         t = (item.get("title") or "").strip()
         if not t or len(t) < 3:
             continue

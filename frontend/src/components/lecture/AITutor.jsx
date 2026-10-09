@@ -256,8 +256,10 @@ export default function AITutor({
           minHeight: 0,
           overflowY: 'auto',
           overflowX: 'hidden',
-          overscrollBehavior: 'contain',
-          padding: '18px 20px',
+          overscrollBehavior: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
+          padding: '14px 16px',
           display: 'flex',
           flexDirection: 'column',
           gap: '14px'

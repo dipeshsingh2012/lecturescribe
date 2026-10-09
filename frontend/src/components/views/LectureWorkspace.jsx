@@ -1,10 +1,11 @@
 import React from 'react';
-import { Bot, FileText, HelpCircle, Search } from 'lucide-react';
+import { Bot, FileText, HelpCircle, Search, Paperclip } from 'lucide-react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
 import AITutor from '../lecture/AITutor';
 import LectureQuiz from '../lecture/LectureQuiz';
 import LectureSummary from '../lecture/LectureSummary';
+import LectureResourcesShelf from '../lecture/LectureResourcesShelf';
 import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function LectureWorkspace({
@@ -180,12 +181,23 @@ export default function LectureWorkspace({
           className={`lecture-mobile-tab-btn ${activeTab === 'transcript' ? 'active' : ''}`}
           onClick={() => typeof setActiveTab === 'function' && setActiveTab('transcript')}
         >
-          <Search size={15} />
+          <Search size={14} />
           <span>Transcript</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-label="Resources"
+          aria-selected={activeTab === 'resources'}
+          className={`lecture-mobile-tab-btn ${activeTab === 'resources' ? 'active' : ''}`}
+          onClick={() => typeof setActiveTab === 'function' && setActiveTab('resources')}
+        >
+          <Paperclip size={14} />
+          <span>Resources</span>
         </button>
       </nav>
 
-      {/* Right / Tool Panel: Summary, Instant Search Drawer, Practice Quiz, or AI Tutor */}
+      {/* Right / Tool Panel: Summary, Instant Search Drawer, Practice Quiz, Resources, or AI Tutor */}
       <div className="lecture-tool-panel">
         {activeTab === 'summary' ? (
           <LectureSummary
@@ -224,6 +236,20 @@ export default function LectureWorkspace({
             fetchDetailedExplanation={fetchDetailedExplanation}
             transcriptAvailable={transcriptAvailable}
           />
+        ) : activeTab === 'resources' ? (
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px', background: 'var(--panel-bg)', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
+            <LectureResourcesShelf
+              lectureResources={lectureResources}
+              lectureResourcesLoading={lectureResourcesLoading}
+              googleUser={googleUser}
+              handleDeleteResource={handleDeleteResource}
+              activeData={activeData}
+              activeCourseData={activeCourseData}
+              selectedCourse={selectedCourse}
+              openPreviewModal={openPreviewModal}
+              openUploadModal={openUploadModal}
+            />
+          </div>
         ) : (
           <AITutor
             webSearchEnabled={webSearchEnabled}

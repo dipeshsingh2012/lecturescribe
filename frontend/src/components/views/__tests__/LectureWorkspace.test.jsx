@@ -165,6 +165,7 @@ describe('LectureWorkspace', () => {
     const tutorTab = screen.getByRole('tab', { name: /AI Tutor/i });
     const quizTab = screen.getByRole('tab', { name: /Quiz/i });
     const transcriptTab = screen.getByRole('tab', { name: /Transcript/i });
+    const resourcesTab = screen.getByRole('tab', { name: /Resources/i });
 
     tutorTab.click();
     expect(setActiveTab).toHaveBeenCalledWith('tutor');
@@ -174,6 +175,31 @@ describe('LectureWorkspace', () => {
 
     transcriptTab.click();
     expect(setActiveTab).toHaveBeenCalledWith('transcript');
+
+    resourcesTab.click();
+    expect(setActiveTab).toHaveBeenCalledWith('resources');
+  });
+
+  it('renders LectureResourcesShelf in tool panel when activeTab is resources', () => {
+    const resources = [
+      {
+        id: 'res-1',
+        title: 'Weekly Lecture Notes',
+        filename: 'notes.pdf',
+        file_type: 'pdf',
+        file_size_bytes: 1024,
+        created_at: '2026-09-01T00:00:00Z'
+      }
+    ];
+    render(
+      <LectureWorkspace
+        {...baseProps}
+        activeTab="resources"
+        lectureResources={resources}
+      />
+    );
+
+    expect(screen.getAllByText('Weekly Lecture Notes').length).toBeGreaterThan(0);
   });
 });
 

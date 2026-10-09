@@ -152,7 +152,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1500,
+                max_tokens=4000,
                 temperature=0.2
             )
             raw = resp.choices[0].message.content.strip()
@@ -175,7 +175,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1500,
+                max_tokens=4000,
                 temperature=0.2
             )
             raw = resp.choices[0].message.content.strip()
@@ -201,7 +201,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1024,
+                max_tokens=3500,
                 temperature=0.2
             )
             raw = resp.choices[0].message.content.strip()

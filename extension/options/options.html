@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LectureScribe Extension Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="ls-options-container">
+    <header class="ls-header">
+      <div class="ls-brand">
+        <div class="ls-logo">🎓</div>
+        <div>
+          <h1>LectureScribe Settings</h1>
+          <p class="ls-subtitle">Configure Vimeo video capture and app connectivity</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="ls-main">
+      <form id="settings-form">
+        <!-- Connectivity Section -->
+        <section class="ls-card">
+          <h2>Server & App Connectivity</h2>
+          <p class="ls-card-desc">Specify where your LectureScribe frontend and backend instances are hosted.</p>
+
+          <div class="ls-form-group">
+            <label for="web-app-url">LectureScribe Web App URL</label>
+            <input 
+              type="url" 
+              id="web-app-url" 
+              placeholder="http://localhost:5173" 
+              required
+            >
+            <div class="ls-preset-group">
+              <button type="button" class="ls-preset-btn" data-target="web-app-url" data-val="http://localhost:5173">Local Dev (5173)</button>
+              <button type="button" class="ls-preset-btn" data-target="web-app-url" data-val="http://localhost:3000">Local (3000)</button>
+            </div>
+            <span class="ls-help">Target URL opened when launching lecture workspaces.</span>
+          </div>
+
+          <div class="ls-form-group">
+            <label for="api-url">LectureScribe Backend API URL</label>
+            <div class="ls-input-with-action">
+              <input 
+                type="url" 
+                id="api-url" 
+                placeholder="http://localhost:8000" 
+                required
+              >
+              <button type="button" id="test-connection-btn" class="ls-btn ls-btn-outline">
+                Test Connection
+              </button>
+            </div>
+            <div id="connection-status" class="ls-connection-status"></div>
+            <div class="ls-preset-group">
+              <button type="button" class="ls-preset-btn" data-target="api-url" data-val="http://localhost:8000">Local API (8000)</button>
+              <button type="button" class="ls-preset-btn" data-target="api-url" data-val="https://lecturescribe-api-4hysn7vtva-uc.a.run.app">Cloud Run Prod</button>
+            </div>
+            <span class="ls-help">Backend API used for cache lookups and transcript generation.</span>
+          </div>
+        </section>
+
+        <!-- Player Overlay Badge Section -->
+        <section class="ls-card">
+          <h2>On-Page Floating Badge</h2>
+          <p class="ls-card-desc">Control the floating button that appears over Vimeo players inside LMS systems (Canvas, Blackboard, Coursera, etc.).</p>
+
+          <div class="ls-form-group ls-checkbox-group">
+            <label class="ls-checkbox-label">
+              <input type="checkbox" id="show-floating-badge" checked>
+              <span>Enable floating LectureScribe badge over embedded players</span>
+            </label>
+          </div>
+
+          <div class="ls-form-group">
+            <label for="badge-position">Badge Screen Position</label>
+            <select id="badge-position">
+              <option value="top-right">Top Right (Default)</option>
+              <option value="top-left">Top Left</option>
+              <option value="bottom-right">Bottom Right</option>
+              <option value="bottom-left">Bottom Left</option>
+            </select>
+          </div>
+
+          <div class="ls-form-group">
+            <label for="default-tab">Default Workspace Tab</label>
+            <select id="default-tab">
+              <option value="transcript">Transcript & Interactive Player</option>
+              <option value="summary">AI Executive Summary</option>
+              <option value="tutor">AI RAG Tutor</option>
+            </select>
+          </div>
+        </section>
+
+        <!-- Google Cloud Storage (GCS) Section -->
+        <section class="ls-card">
+          <h2>Google Cloud Storage (GCS)</h2>
+          <p class="ls-card-desc">Configure the destination bucket and path for 1-click video and lecture bundle uploads.</p>
+
+          <div class="ls-form-group">
+            <label for="gcs-bucket-name">GCS Bucket Name</label>
+            <div class="ls-input-with-action">
+              <input 
+                type="text" 
+                id="gcs-bucket-name" 
+                placeholder="lecturescribe-resources"
+              >
+              <button type="button" id="test-gcs-btn" class="ls-btn ls-btn-outline">
+                Check GCS
+              </button>
+            </div>
+            <div id="gcs-status-msg" class="ls-connection-status"></div>
+            <span class="ls-help">Target Google Cloud Storage bucket (e.g. <code>lecturescribe-resources</code> or your custom bucket).</span>
+          </div>
+
+          <div class="ls-form-group">
+            <label for="gcs-folder-prefix">Storage Folder Prefix</label>
+            <input 
+              type="text" 
+              id="gcs-folder-prefix" 
+              placeholder="lectures"
+            >
+            <span class="ls-help">Files will be saved under: <code>gs://[bucket]/[prefix]/[video_id]/</code></span>
+          </div>
+        </section>
+
+        <div class="ls-form-actions">
+          <button type="submit" id="save-btn" class="ls-btn ls-btn-primary">
+            Save Preferences
+          </button>
+          <button type="button" id="reset-btn" class="ls-btn ls-btn-outline">
+            Restore Defaults
+          </button>
+          <span id="save-msg" class="ls-save-msg"></span>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
+

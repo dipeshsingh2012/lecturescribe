@@ -12,6 +12,7 @@ jspm_packages/
 # Production build outputs
 dist/
 frontend/dist/
+extension/dist/
 build/
 
 # Python

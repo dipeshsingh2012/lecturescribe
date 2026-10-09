@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LectureScribe - Vimeo Capture</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="ls-popup">
+    <!-- Header -->
+    <header class="ls-header">
+      <div class="ls-brand">
+        <div class="ls-logo">🎓</div>
+        <div class="ls-title-group">
+          <h1>LectureScribe</h1>
+          <span class="ls-subtitle">Vimeo Video Capture & AI Tutor</span>
+        </div>
+      </div>
+      <div class="ls-header-actions">
+        <div id="backend-status" class="ls-status-pill checking" title="LectureScribe API Status">
+          <span class="ls-status-dot"></span>
+          <span id="backend-status-text">Checking...</span>
+        </div>
+        <button id="open-settings-btn" class="ls-icon-btn" title="Extension Settings">⚙️</button>
+      </div>
+    </header>
+
+    <!-- Detected Videos Section -->
+    <section class="ls-section">
+      <div class="ls-section-header">
+        <h2>Detected on Current Tab</h2>
+        <span id="detected-count" class="ls-badge-count">0</span>
+      </div>
+
+      <div id="videos-list" class="ls-video-list">
+        <!-- Rendered dynamically -->
+        <div class="ls-empty-state">
+          <div class="ls-empty-icon">🔍</div>
+          <p>Scanning active tab for Vimeo lectures and embedded players...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Manual Capture Section -->
+    <section class="ls-section ls-manual-section">
+      <div class="ls-section-header">
+        <h2>Manual Video Ingest</h2>
+      </div>
+      <form id="manual-form" class="ls-manual-form">
+        <div class="ls-input-wrapper">
+          <input 
+            type="text" 
+            id="manual-url-input" 
+            placeholder="Paste Vimeo URL or ID (e.g. 76979871)"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <button type="submit" id="manual-submit-btn" class="ls-btn ls-btn-primary">
+            Open
+          </button>
+        </div>
+        <div id="manual-error" class="ls-error-msg"></div>
+      </form>
+    </section>
+
+    <!-- Footer -->
+    <footer class="ls-footer">
+      <a href="#" id="open-home-btn" class="ls-footer-link">🏠 Go to LectureScribe</a>
+      <span class="ls-version">v1.0.0</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,187 @@
+/* LectureScribe Content Script Overlay Styles */
+.ls-badge-container {
+  position: absolute;
+  z-index: 2147483647;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  user-select: none;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+.ls-badge-container * {
+  box-sizing: border-box;
+}
+
+/* Positions */
+.ls-badge-top-right {
+  top: 12px;
+  right: 12px;
+}
+
+.ls-badge-top-left {
+  top: 12px;
+  left: 12px;
+}
+
+.ls-badge-bottom-right {
+  bottom: 12px;
+  right: 12px;
+}
+
+.ls-badge-bottom-left {
+  bottom: 12px;
+  left: 12px;
+}
+
+/* Floating Pill Button */
+.ls-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(17, 24, 39, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #ffffff;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ls-pill:hover {
+  background: rgba(30, 27, 75, 0.95);
+  border-color: rgba(167, 139, 250, 0.8);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+  transform: translateY(-1px);
+}
+
+.ls-pill-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #a855f7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.ls-pill-label {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #f3f4f6;
+}
+
+.ls-pill-id {
+  font-size: 11px;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Expanded Actions Dropdown */
+.ls-actions-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 6px;
+  min-width: 180px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+  z-index: 2147483647;
+}
+
+.ls-badge-container.ls-open .ls-actions-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ls-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: transparent;
+  color: #cbd5e1;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.15s ease;
+}
+
+.ls-action-btn:hover {
+  background: #1e293b;
+  color: #ffffff;
+}
+
+.ls-action-btn.ls-primary {
+  background: #4f46e5;
+  color: #ffffff;
+}
+
+.ls-action-btn.ls-primary:hover {
+  background: #4338ca;
+}
+
+.ls-action-btn-icon {
+  font-size: 14px;
+}
+
+.ls-badge-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  margin-left: 4px;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ls-badge-close:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Temporary Toast Notification */
+.ls-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #1e1b4b;
+  color: #e0e7ff;
+  border: 1px solid #6366f1;
+  padding: 10px 16px;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 2147483647;
+  animation: ls-slide-in 0.25s ease forwards;
+}
+
+@keyframes ls-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

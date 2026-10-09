@@ -25,17 +25,23 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Could not extract Vimeo video ID from: {url}")
 
 
-def fetch_player_config(video_id: str) -> Dict[str, Any]:
+def fetch_player_config(
+    video_id: str,
+    h_hash: Optional[str] = None,
+    referer: Optional[str] = None
+) -> Dict[str, Any]:
     """Fetch Vimeo player config JSON to get video metadata and text tracks."""
+    query = f"?h={h_hash}" if h_hash else ""
     urls_to_try = [
-        f"https://player.vimeo.com/video/{video_id}/config",
-        f"https://player.vimeo.com/video/{video_id}/config?byline=0&portrait=0",
+        f"https://player.vimeo.com/video/{video_id}/config{query}",
+        f"https://player.vimeo.com/video/{video_id}/config?byline=0&portrait=0" + (f"&h={h_hash}" if h_hash else ""),
     ]
 
+    effective_referer = referer if (referer and referer.startswith("http")) else "https://vimeo.com/"
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Referer": "https://vimeo.com/",
+        "Referer": effective_referer,
         "Accept": "application/json",
     }
 

@@ -806,6 +806,17 @@ def get_transcript(
             if drive_url:
                 saved["drive_folder_url"] = drive_url
                 saved["driveFolderUrl"] = drive_url
+            # Check if self-hosted video is stored in GCS
+            gcs_video = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=effective_course)
+            if gcs_video:
+                saved["gcs_video_url"] = gcs_video["view_url"]
+                saved["gcsVideoUrl"] = gcs_video["view_url"]
+                saved["video_url"] = gcs_video["view_url"]
+                saved["gcs_blob_name"] = gcs_video["blob_name"]
+                saved["video_source"] = "gcs"
+            else:
+                saved["video_source"] = "vimeo"
+
             if email and email.strip():
                 db_manager.record_user_lecture(
                     user_email=email,
@@ -885,6 +896,9 @@ def get_transcript(
                 redis_cache.invalidate_user(email.strip())
 
         drive_url = db_manager.get_drive_folder_url(video_id, email)
+        gcs_video = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=derived_course)
+        gcs_url = gcs_video["view_url"] if gcs_video else None
+
         return {
             "videoId": video_id,
             "title": title,
@@ -899,6 +913,10 @@ def get_transcript(
             "pineconeIndexedChunks": pinecone_chunks,
             "drive_folder_url": drive_url,
             "driveFolderUrl": drive_url,
+            "gcs_video_url": gcs_url,
+            "gcsVideoUrl": gcs_url,
+            "gcs_blob_name": gcs_video["blob_name"] if gcs_video else None,
+            "video_source": "gcs" if gcs_video else "vimeo",
             "cached": False
         }
 
@@ -2529,6 +2547,162 @@ class CloudUploadRequest(BaseModel):
     job_id: Optional[str] = None
 
 
+class GCSUploadRequest(BaseModel):
+    video_id: str
+    url: Optional[str] = None
+    title: Optional[str] = None
+    bucket_name: Optional[str] = None
+    folder_prefix: Optional[str] = "lectures"
+    summary_content: Optional[str] = None
+    course_name: Optional[str] = None
+    h_hash: Optional[str] = None
+    referer: Optional[str] = None
+    player_config: Optional[Dict[str, Any]] = None
+    upload_video: bool = True
+
+
+@app.get("/api/cloud/gcs/status")
+def get_gcs_status(bucket: Optional[str] = None):
+    """Check GCS credentials and bucket readiness."""
+    target_bucket = bucket or gcs_storage_service.bucket_name
+    client = gcs_storage_service._get_client()
+    return {
+        "status": "online" if client else "emulated",
+        "bucket": target_bucket,
+        "authenticated": client is not None
+    }
+
+
+@app.post("/api/cloud/gcs/upload-bundle")
+def upload_lecture_bundle_to_gcs(req: GCSUploadRequest):
+    """
+    Directly upload full Lecture Bundle (summary, transcript, captions, metadata, and progressive MP4 video)
+    to Google Cloud Storage (GCS).
+    Supports client-provided player_config from authenticated browser sessions.
+    """
+    video_id = req.video_id.strip() if req.video_id else ""
+    if req.url and not video_id:
+        try:
+            video_id = extract_video_id(req.url)
+        except Exception:
+            pass
+
+    if not video_id:
+        raise HTTPException(status_code=400, detail="A valid video_id or Vimeo URL is required.")
+
+    target_bucket = req.bucket_name or gcs_storage_service.bucket_name
+    print(f"\n==================================================================")
+    print(f"📥 [API POST /api/cloud/gcs/upload-bundle Received]")
+    print(f"   Video ID:        {video_id}")
+    print(f"   Upload Video:    {req.upload_video}")
+    print(f"   Bucket Target:   {target_bucket}")
+    print(f"   Folder Prefix:   {req.folder_prefix}")
+    print(f"   Embed Hash (?h): {req.h_hash or 'None'}")
+    print(f"   Referer:         {req.referer or 'None'}")
+    print(f"   Client Config:   {'Present' if req.player_config else 'None'}")
+    print(f"==================================================================")
+
+    saved = db_manager.get_saved_video(video_id)
+    cues: List[Dict[str, str]] = []
+    vtt_content = ""
+    title = req.title or (saved.get("title") if saved else None) or "Lecture"
+    streams_info = None
+    config = req.player_config
+    config_error = None
+
+    # If player_config was not sent by the browser extension, try fetching it via backend
+    if not config:
+        print(f"🔍 [GCS Upload] Fetching player config via backend for video {video_id}...")
+        try:
+            config = fetch_player_config(video_id, h_hash=req.h_hash, referer=req.referer)
+        except Exception as e:
+            config_error = str(e)
+            print(f"⚠️ [Vimeo Config Notice during GCS upload]: {e}")
+    else:
+        print(f"✨ [GCS Upload] Using client-authenticated player config from browser extension.")
+
+    # Process config if available
+    if config:
+        try:
+            streams_info = get_video_download_streams(config, video_id)
+            if not title or title == "Lecture":
+                title = streams_info.get("title", f"Lecture {video_id}")
+
+            prog_count = len(streams_info.get("progressive_streams", []))
+            hls_status = "Available" if streams_info.get("hls", {}).get("master_url") else "None"
+            print(f"📊 [GCS Streams Extracted] Progressive MP4: {prog_count} formats | HLS: {hls_status}")
+
+            tracks = get_text_tracks(config)
+            if tracks:
+                track = next((t for t in tracks if t.get("default")), tracks[0])
+                vtt_url = track.get("url") or track.get("src")
+                if vtt_url:
+                    vtt_content = fetch_vtt(vtt_url)
+                    raw_segments = parse_vtt(vtt_content)
+                    cues = [
+                        {"start": s["start"], "time": format_timestamp(s["start"]), "text": s["text"]}
+                        for s in raw_segments
+                    ]
+                    print(f"📝 [GCS Captions Extracted] {len(cues)} cues segments downloaded.")
+        except Exception as e:
+            print(f"⚠️ [Vimeo Parsing Notice during GCS upload]: {e}")
+
+    # Fallback to database cache if available
+    if not cues and saved and saved.get("cues"):
+        cues = saved.get("cues", [])
+        if not title or title == "Lecture":
+            title = saved.get("title", f"Lecture {video_id}")
+        print(f"💾 [GCS Cache Hit] Retrieved {len(cues)} cues from local PostgreSQL database.")
+
+    # Disallow false success: if video config failed and no transcript/cues exist, raise error
+    if not cues and not streams_info and not (saved and saved.get("cues")):
+        detail_msg = (
+            f"Vimeo returned 403 Forbidden for video {video_id}. "
+            "This video is protected, private, or domain-restricted. "
+            "Please play the video in your browser so the LectureScribe extension can capture the session config."
+        ) if "403" in str(config_error or "") else (
+            f"Could not retrieve lecture content: {config_error or 'No captions or stream tracks found'}"
+        )
+        raise HTTPException(status_code=403 if "403" in str(config_error or "") else 400, detail=detail_msg)
+
+    summary_md = req.summary_content
+    if not summary_md:
+        sections = saved.get("summarySections") if saved else None
+        if not sections and cues:
+            sections = generate_summary_sections(cues, title)
+
+        if sections:
+            s_lines = [f"# Executive Summary: {title}", "", "---", ""]
+            for sec in sections:
+                s_lines.append(f"### {sec.get('title', 'Section')}")
+                for pt in sec.get("points", []):
+                    s_lines.append(f"- {pt}")
+                s_lines.append("")
+            summary_md = "\n".join(s_lines)
+
+    # Consolidate prefix into unified course hierarchy: courses/<course-slug>/lectures
+    effective_prefix = req.folder_prefix
+    if not effective_prefix or effective_prefix == "lectures":
+        raw_cname = (saved.get("course_name") if saved else None) or extract_course_name(title)
+        clean_cname = re.sub(r'[^a-zA-Z0-9\- ]', '', raw_cname.lower())
+        cslug = re.sub(r'\s+', '-', clean_cname.strip()) or "general"
+        effective_prefix = f"courses/{cslug}/lectures"
+
+    result = gcs_storage_service.upload_lecture_bundle(
+        video_id=video_id,
+        title=title,
+        vtt_content=vtt_content,
+        cues=cues,
+        summary_content=summary_md,
+        streams_info=streams_info,
+        bucket_name=req.bucket_name,
+        prefix=effective_prefix,
+        upload_video=req.upload_video,
+        referer=req.referer
+    )
+    return result
+
+
 @app.get("/api/video/download-options")
 def get_download_options(url: str = Query(..., description="Vimeo URL or Video ID")):
     """Extract direct progressive MP4 downloads, adaptive HLS streams, and CLI download commands."""
@@ -2715,6 +2889,31 @@ def trigger_cron_alert(
     except Exception as e:
         print(f"❌ [Cron Trigger Alert Error]: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to execute cron alert: {str(e)}")
+
+
+@app.get("/api/videos/sync-status")
+def get_videos_sync_status():
+    """Retrieve current GCS video migration tracking status and summary."""
+    tracking_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "sync_tracking.json"))
+    if os.path.exists(tracking_path):
+        try:
+            with open(tracking_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read tracking state: {e}")
+    return {
+        "version": 1,
+        "last_updated": None,
+        "summary": {
+            "total_tracked": 0,
+            "success": 0,
+            "already_cached": 0,
+            "failed": 0,
+            "pending": 0,
+            "total_size_mb": 0.0
+        },
+        "videos": {}
+    }
 
 
 # -------------------------------------------------------------

@@ -173,7 +173,7 @@ export default function LecturePlayer({
         </Tooltip>
       </Box>
 
-      {/* Embedded Vimeo Player */}
+      {/* Video Player (GCS Native Video or Vimeo Embed Fallback) */}
       <Box
         sx={{
           display: { xs: videoCollapsed ? 'none' : 'block', md: 'block' },
@@ -188,17 +188,40 @@ export default function LecturePlayer({
           flexShrink: 0
         }}
       >
-        <iframe
-          ref={iframeRef}
-          src={`https://player.vimeo.com/video/${activeData.videoId}?api=1&autoplay=0&title=0&byline=0&portrait=0`}
-          width="100%"
-          height="100%"
-          frameBorder="0"
-          allow="autoplay; fullscreen; picture-in-picture"
-          allowFullScreen
-          title={activeData.title}
-          style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}
-        ></iframe>
+        {(activeData.gcs_video_url || activeData.gcsVideoUrl) ? (
+          <video
+            ref={iframeRef}
+            src={activeData.gcs_video_url || activeData.gcsVideoUrl}
+            controls
+            playsInline
+            preload="metadata"
+            style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, objectFit: 'contain' }}
+            title={activeData.title}
+          >
+            {(activeData.captions_vtt_url || activeData.captionsUrl) && (
+              <track
+                kind="subtitles"
+                src={activeData.captions_vtt_url || activeData.captionsUrl}
+                srcLang="en"
+                label="English"
+                default
+              />
+            )}
+            Your browser does not support the video tag.
+          </video>
+        ) : (
+          <iframe
+            ref={iframeRef}
+            src={`https://player.vimeo.com/video/${activeData.videoId}?api=1&autoplay=0&title=0&byline=0&portrait=0`}
+            width="100%"
+            height="100%"
+            frameBorder="0"
+            allow="autoplay; fullscreen; picture-in-picture"
+            allowFullScreen
+            title={activeData.title}
+            style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}
+          ></iframe>
+        )}
       </Box>
 
       {/* Minimized Video Bar on Mobile */}
@@ -249,6 +272,26 @@ export default function LecturePlayer({
           >
             {videoCollapsed ? 'Show Video' : 'Minimize Video'}
           </Button>
+          {(activeData.gcs_video_url || activeData.gcsVideoUrl) && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '4px 10px',
+                borderRadius: '16px',
+                background: 'rgba(34, 197, 94, 0.1)',
+                border: '1px solid rgba(34, 197, 94, 0.3)',
+                color: '#16a34a',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                flexShrink: 0
+              }}
+              title="Streaming high-speed video directly from Google Cloud Storage"
+            >
+              <span>● Cloud Storage Video</span>
+            </span>
+          )}
           {driveFolderUrl && (
             <a
               href={driveFolderUrl}

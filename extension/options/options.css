@@ -1,0 +1,254 @@
+/* LectureScribe Options Page Styles */
+:root {
+  --bg-primary: #0b0f19;
+  --bg-secondary: #111827;
+  --bg-card: #1f2937;
+  --bg-input: #111827;
+  --text-primary: #f9fafb;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  --accent-primary: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-gradient: linear-gradient(135deg, #6366f1, #8b5cf6);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-focus: #818cf8;
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+  --success: #10b981;
+  --danger: #ef4444;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 40px 20px;
+}
+
+.ls-options-container {
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.ls-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 20px;
+}
+
+.ls-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ls-logo {
+  font-size: 32px;
+  background: var(--accent-gradient);
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+
+.ls-brand h1 {
+  font-size: 22px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.ls-subtitle {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.ls-main form {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.ls-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ls-card h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.ls-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: -10px;
+  margin-bottom: 4px;
+}
+
+.ls-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ls-form-group label {
+  font-weight: 500;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.ls-form-group input[type="text"],
+.ls-form-group input[type="url"],
+.ls-form-group select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: #ffffff;
+  padding: 10px 12px;
+  font-size: 13px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.ls-form-group input:focus,
+.ls-form-group select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.ls-input-with-action {
+  display: flex;
+  gap: 8px;
+}
+
+.ls-input-with-action input {
+  flex: 1;
+}
+
+.ls-help {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ls-preset-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.ls-preset-btn {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ls-preset-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+  border-color: var(--accent-primary);
+}
+
+.ls-checkbox-group {
+  padding-top: 4px;
+}
+
+.ls-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.ls-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.ls-connection-status {
+  font-size: 12px;
+  min-height: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ls-connection-status.success {
+  color: var(--success);
+}
+
+.ls-connection-status.error {
+  color: var(--danger);
+}
+
+.ls-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.ls-btn {
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+}
+
+.ls-btn-primary {
+  background: var(--accent-gradient);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+}
+
+.ls-btn-primary:hover {
+  opacity: 0.95;
+  transform: translateY(-1px);
+}
+
+.ls-btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.ls-btn-outline:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+}
+
+.ls-save-msg {
+  font-size: 13px;
+  color: var(--success);
+  font-weight: 500;
+}
+

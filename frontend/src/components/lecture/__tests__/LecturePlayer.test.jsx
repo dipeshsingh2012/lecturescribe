@@ -182,4 +182,54 @@ describe('LecturePlayer', () => {
     expect(lectureTitle).toBeInTheDocument();
     expect(lectureTitle).toHaveAttribute('aria-label', 'Applied Mathematics for Data Science and AI – Live Session 5 (30 / 9 / 2026)');
   });
+
+  it('renders native video tag and "Cloud Storage Video" badge when gcs_video_url is present', () => {
+    const activeData = {
+      videoId: '1234158181',
+      title: 'Introduction to AI in Healthcare Live session -3',
+      course_name: 'Introduction to AI in Healthcare',
+      duration: '1:00:00',
+      total_cues: 50,
+      cues: [{ time: '00:00', text: 'Welcome' }],
+      gcs_video_url: 'https://storage.googleapis.com/lecturescribe-resources/video.mp4',
+      captions_vtt_url: 'https://storage.googleapis.com/lecturescribe-resources/captions.vtt'
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={{ course_name: 'Introduction to AI in Healthcare' }}
+        selectedCourse="Introduction to AI in Healthcare"
+        setSelectedCourse={vi.fn()}
+        userLibrary={[]}
+        effectiveCourses={[]}
+        setActiveData={vi.fn()}
+        navigateTo={vi.fn()}
+        iframeRef={{ current: null }}
+        copied={false}
+        handleCopyTranscript={vi.fn()}
+        googleUser={null}
+        openUploadModal={vi.fn()}
+        lectureResources={[]}
+        lectureResourcesLoading={false}
+        handleDeleteResource={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Verify Cloud Storage Video badge is rendered
+    expect(screen.getByText(/Cloud Storage Video/i)).toBeInTheDocument();
+
+    // Verify video tag is rendered instead of iframe
+    const videoEl = document.querySelector('video');
+    expect(videoEl).toBeInTheDocument();
+    expect(videoEl).toHaveAttribute('src', 'https://storage.googleapis.com/lecturescribe-resources/video.mp4');
+
+    const trackEl = document.querySelector('track');
+    expect(trackEl).toBeInTheDocument();
+    expect(trackEl).toHaveAttribute('src', 'https://storage.googleapis.com/lecturescribe-resources/captions.vtt');
+
+    expect(document.querySelector('iframe')).toBeNull();
+  });
 });
+

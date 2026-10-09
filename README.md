@@ -18,6 +18,7 @@
 - 🤖 **Pinecone Vector RAG Tutor + Agentic Tool Loop:** Semantic RAG chatbot powered by dense embeddings, an RRF-fused reranker, and a 4-step agent that can fetch the full lecture outline, search the transcript, pull a bounded time window, or ground itself against DuckDuckGo + Wikipedia. All answers carry clickable inline `[MM:SS]` timestamps and a pill-bar of structured citations.
 - 📊 **Structured Executive AI Summaries:** Automatically generates structured takeaway sections (Course Structure, Core Concepts, Thrust Areas, Q&A) on every ingest — reused on all future loads.
 - 🎬 **Embedded Vimeo Player Integration:** Synchronized video playback using `@vimeo/player` SDK with active cue highlighting during playback.
+- 🧩 **Chrome Browser Extension:** 1-click Vimeo video capture from any LMS (Canvas, Blackboard, Coursera, Moodle) or webpage with floating on-player action badges and instant workspace sync.
 - 💾 **Relational Database:** Persistent storage powered directly by Cloud PostgreSQL (Neon DB / Supabase / RDS) for multi-user libraries, transcripts, and full chat history with per-message model tags.
 - 🚀 **Hosted Redis Query Cache:** Optional Upstash / Redis Cloud / local Redis with configurable 30-day TTL — identical repeat queries return in **<1 ms**.
 - 🧾 **Academic Submission Mode:** Every AI answer includes a condensed 100–150 word graduate-tone submission with word-count badge and 1-click copy, so students can paste directly into assignment responses.

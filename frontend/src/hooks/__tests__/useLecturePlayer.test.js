@@ -263,4 +263,36 @@ describe('useLecturePlayer hook functionality', () => {
     );
     expect(result.current.activeCueIdx).toBe(0);
   });
+
+  it('supports HTML5 video element with custom adapter', async () => {
+    const activeData = {
+      videoId: 'v100',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '01:00', text: 'Topic 1' }
+      ]
+    };
+
+    const videoEl = document.createElement('video');
+    videoEl.currentTime = 0;
+    Object.defineProperty(videoEl, 'duration', { value: 120, configurable: true });
+    videoEl.play = vi.fn().mockResolvedValue(undefined);
+    videoEl.pause = vi.fn();
+
+    const { result } = renderHook(() => {
+      const hook = useLecturePlayer(activeData);
+      hook.iframeRef.current = videoEl;
+      return hook;
+    });
+
+    // Cue seeking on video element
+    await act(async () => {
+      result.current.handleCueClick('01:00');
+    });
+
+    expect(videoEl.currentTime).toBe(60);
+    expect(videoEl.play).toHaveBeenCalled();
+    expect(result.current.activeCueIdx).toBe(1);
+  });
 });
+

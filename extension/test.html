@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LectureScribe Extension Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      margin: 0;
+      padding: 40px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .container {
+      max-width: 800px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+      color: #818cf8;
+    }
+    p {
+      color: #94a3b8;
+      margin-bottom: 24px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .player-wrapper {
+      position: relative;
+      padding-bottom: 56.25%; /* 16:9 aspect ratio */
+      height: 0;
+      overflow: hidden;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      margin-bottom: 24px;
+      background: #000;
+    }
+    .player-wrapper iframe {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+    }
+    .card {
+      background: #1e293b;
+      padding: 20px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 13px;
+    }
+    .card h3 {
+      margin-top: 0;
+      color: #f1f5f9;
+    }
+    ul {
+      margin: 0;
+      padding-left: 20px;
+      color: #cbd5e1;
+    }
+    li {
+      margin-bottom: 8px;
+    }
+    code {
+      background: #334155;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      color: #a5b4fc;
+    }
+    a {
+      color: #60a5fa;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎓 LectureScribe Test Bed</h1>
+    <p>This page embeds a sample public Vimeo video to test the <strong>LectureScribe</strong> browser extension.</p>
+
+    <!-- Embedded Vimeo Player Frame -->
+    <div class="player-wrapper">
+      <iframe 
+        src="https://player.vimeo.com/video/76979871?h=8272103f6e&title=0&byline=0&portrait=0" 
+        width="640" 
+        height="360" 
+        frameborder="0" 
+        allow="autoplay; fullscreen; picture-in-picture" 
+        allowfullscreen
+        title="Sample Vimeo Video (The New Vimeo Player)">
+      </iframe>
+    </div>
+
+    <div class="card">
+      <h3>What to check on this page:</h3>
+      <ul>
+        <li><strong>Floating Action Badge:</strong> You should see a <code>🎓 LectureScribe #76979871</code> pill badge floating over the top-right corner of the player above. Click it to inspect the quick action dropdown!</li>
+        <li><strong>Extension Toolbar Icon:</strong> The extension icon in your browser toolbar should show a badge badge number <code>1</code>.</li>
+        <li><strong>Popup Inspector:</strong> Click the toolbar icon to view the detected video title, ID, cache status, and workspace launch buttons.</li>
+        <li><strong>External Link Test:</strong> Right-click this link: <a href="https://vimeo.com/76979871" target="_blank">Sample Vimeo Link</a> and check the context menu for <code>🎓 Open Vimeo Video in LectureScribe</code>.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
+

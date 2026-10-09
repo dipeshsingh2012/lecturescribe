@@ -1,0 +1,306 @@
+{
+  "version": 1,
+  "last_updated": "2026-10-09T15:15:25.554770+00:00",
+  "summary": {
+    "total_tracked": 36,
+    "success": 0,
+    "already_cached": 0,
+    "failed": 0,
+    "pending": 35,
+    "total_size_mb": 0
+  },
+  "videos": {
+    "1225764089": {
+      "video_id": "1225764089",
+      "title": "Applied Mathematics preperatory Live session -8 (10/09/2026)",
+      "course_name": "Applied Mathematics preperatory",
+      "course_slug": "applied-mathematics-preperatory",
+      "status": "DRY_RUN_READY",
+      "attempts": 1,
+      "last_attempt_at": "2026-10-09T15:15:24.253708+00:00",
+      "error": null,
+      "error_category": null
+    },
+    "1227064480": {
+      "video_id": "1227064480",
+      "title": "Introduction to Generative AI Live session -1 (15 / 9 / 2026)",
+      "course_name": "Introduction to Generative AI",
+      "course_slug": "introduction-to-generative-ai",
+      "status": "IN_PROGRESS",
+      "attempts": 1,
+      "last_attempt_at": "2026-10-09T15:15:25.554746+00:00"
+    },
+    "1227064793": {
+      "video_id": "1227064793",
+      "title": "Introduction to Research Live session -1 (15 / 9 / 2026)",
+      "course_name": "Introduction to Research",
+      "course_slug": "introduction-to-research",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1227442004": {
+      "video_id": "1227442004",
+      "title": "Introduction to Speech and Natural Language Processing Live session -1 (16 / 9 / 2026)",
+      "course_name": "Introduction to Speech and Natural Language Processing",
+      "course_slug": "introduction-to-speech-and-natural-language-processing",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1227454777": {
+      "video_id": "1227454777",
+      "title": "Applied Mathemartics for Data Science and AI Live session -1 (16 / 9 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1227770906": {
+      "video_id": "1227770906",
+      "title": "Introduction to AI in Healthcare Live session -1 (16 / 9 / 2026)",
+      "course_name": "Introduction to AI in Healthcare",
+      "course_slug": "introduction-to-ai-in-healthcare",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1228259148": {
+      "video_id": "1228259148",
+      "title": "Introduction to Financial Analytics Live session -1 (18 / 9 / 2026)",
+      "course_name": "Introduction to Financial Analytics",
+      "course_slug": "introduction-to-financial-analytics",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1228350943": {
+      "video_id": "1228350943",
+      "title": "Applied Mathemartics for Data Science and AI Live session -2 (19 / 9 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1228351347": {
+      "video_id": "1228351347",
+      "title": "Introduction to Computer Vision Live session -1 (19/ 9 / 2026)",
+      "course_name": "Introduction to Computer Vision",
+      "course_slug": "introduction-to-computer-vision",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1228351648": {
+      "video_id": "1228351648",
+      "title": "Data Science Lab Live session -1 (19 / 9 / 2026)",
+      "course_name": "Data Science Lab",
+      "course_slug": "data-science-lab",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1229246914": {
+      "video_id": "1229246914",
+      "title": "Introduction to Generative AI Live session -2 (22 / 9 / 2026)",
+      "course_name": "Introduction to Generative AI",
+      "course_slug": "introduction-to-generative-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1229247139": {
+      "video_id": "1229247139",
+      "title": "Introduction to Research Live session -1 (22 / 9 / 2026)",
+      "course_name": "Introduction to Research",
+      "course_slug": "introduction-to-research",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1229629089": {
+      "video_id": "1229629089",
+      "title": "Introduction to Speech and Natural Language Processing Live session -2(23 / 9 / 2026)",
+      "course_name": "Introduction to Speech and Natural Language Processing",
+      "course_slug": "introduction-to-speech-and-natural-language-processing",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1229675046": {
+      "video_id": "1229675046",
+      "title": "Applied Mathemartics for Data Science and AI Live session -3 (23 / 9 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1230001154": {
+      "video_id": "1230001154",
+      "title": "Machine Learning Paradigms Live Session -1 (24 / 9 / 2026)",
+      "course_name": "Machine Learning Paradigms",
+      "course_slug": "machine-learning-paradigms",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1230303559": {
+      "video_id": "1230303559",
+      "title": "Data Science Lab Live session -2 (25 / 9 / 2026)",
+      "course_name": "Data Science Lab",
+      "course_slug": "data-science-lab",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1230314346": {
+      "video_id": "1230314346",
+      "title": "Introduction to Financial Analytics Live session -2 (25 / 9 / 2026)",
+      "course_name": "Introduction to Financial Analytics",
+      "course_slug": "introduction-to-financial-analytics",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1230497057": {
+      "video_id": "1230497057",
+      "title": "Applied Mathemartics for Data Science and AI Live session -4 (26 / 9 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1230497610": {
+      "video_id": "1230497610",
+      "title": "Introduction to Computer Vision Live session -2 (26/ 9 / 2026)",
+      "course_name": "Introduction to Computer Vision",
+      "course_slug": "introduction-to-computer-vision",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1230498025": {
+      "video_id": "1230498025",
+      "title": "Data Science Lab Live session -3 (26 / 9 / 2026)",
+      "course_name": "Data Science Lab",
+      "course_slug": "data-science-lab",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1230620022": {
+      "video_id": "1230620022",
+      "title": "Project I LS 2",
+      "course_name": "Project I LS",
+      "course_slug": "project-i-ls",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1231269535": {
+      "video_id": "1231269535",
+      "title": "Introduction to Financial Analytics Live session -3 (28 / 9 / 2026)",
+      "course_name": "Introduction to Financial Analytics",
+      "course_slug": "introduction-to-financial-analytics",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1231382434": {
+      "video_id": "1231382434",
+      "title": "Introduction to Research Live session -3 (29 / 9 / 2026)",
+      "course_name": "Introduction to Research",
+      "course_slug": "introduction-to-research",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1231770905": {
+      "video_id": "1231770905",
+      "title": "Introduction to Speech and Natural Language Processing Live session -3(20 / 9 / 2026)",
+      "course_name": "Introduction to Speech and Natural Language Processing",
+      "course_slug": "introduction-to-speech-and-natural-language-processing",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1231771477": {
+      "video_id": "1231771477",
+      "title": "Applied Mathemartics for Data Science and AI Live session -5 (30 / 9 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1232143032": {
+      "video_id": "1232143032",
+      "title": "Machine Learning Paradigms Live Session -2 ( 1 / 10 / 2026)",
+      "course_name": "Machine Learning Paradigms",
+      "course_slug": "machine-learning-paradigms",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1232143710": {
+      "video_id": "1232143710",
+      "title": "Introduction to AI in Healthcare Live session -2 (1 / 10 / 2026)",
+      "course_name": "Introduction to AI in Healthcare",
+      "course_slug": "introduction-to-ai-in-healthcare",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1232608502": {
+      "video_id": "1232608502",
+      "title": "Machine Learning Paradigms Live Session -3 ( 3 / 10 / 2026)",
+      "course_name": "machine-learning-paradigms",
+      "course_slug": "machine-learning-paradigms",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1232608760": {
+      "video_id": "1232608760",
+      "title": "Applied Mathemartics for Data Science and AI Live session -6 ( 3  / 10 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1233235751": {
+      "video_id": "1233235751",
+      "title": "Introduction to Generative AI Live session -3 (5 / 20 / 2026)",
+      "course_name": "Introduction to Generative AI",
+      "course_slug": "introduction-to-generative-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1233236193": {
+      "video_id": "1233236193",
+      "title": "Applied Mathemartics for Data Science and AI Live session -7 ( 5 / 10 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1233458452": {
+      "video_id": "1233458452",
+      "title": "Introduction to Generative AI Live session -4 (6 / 20 / 2026)",
+      "course_name": "Introduction to Generative AI",
+      "course_slug": "introduction-to-generative-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1233458901": {
+      "video_id": "1233458901",
+      "title": "Introduction to Research Live session -4 ( 6/ 10 / 2026)",
+      "course_name": "Introduction to Research",
+      "course_slug": "introduction-to-research",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1233856717": {
+      "video_id": "1233856717",
+      "title": "Introduction to Speech and Natural Language Processing Live session -4( 7 / 10 / 2026)",
+      "course_name": "Introduction To Speech And Natural Language Processing",
+      "course_slug": "introduction-to-speech-and-natural-language-processing",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1233857150": {
+      "video_id": "1233857150",
+      "title": "Applied Mathemartics for Data Science and AI Live session -8 ( 7 / 10 / 2026)",
+      "course_name": "Applied Mathemartics for Data Science and AI",
+      "course_slug": "applied-mathemartics-for-data-science-and-ai",
+      "status": "PENDING",
+      "attempts": 0
+    },
+    "1234158573": {
+      "video_id": "1234158573",
+      "title": "Machine Learning Paradigms Live Session -4 ( 8 / 10 / 2026)",
+      "course_name": "machine-learning-paradigms",
+      "course_slug": "machine-learning-paradigms",
+      "status": "PENDING",
+      "attempts": 0
+    }
+  }
+}

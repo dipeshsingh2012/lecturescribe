@@ -3,6 +3,68 @@ import Player from '@vimeo/player';
 import { API_BASE } from '../utils/constants';
 import { parseTimestampToSeconds, formatSecondsToTimestamp } from '../utils/formatters';
 
+function createHtml5VideoAdapter(videoEl) {
+  const listeners = new Map();
+
+  const wrapHandler = (event, fn) => {
+    return () => {
+      fn({ seconds: videoEl.currentTime, duration: videoEl.duration });
+    };
+  };
+
+  return {
+    on(event, fn) {
+      if (!listeners.has(event)) {
+        listeners.set(event, new Map());
+      }
+      const wrapped = wrapHandler(event, fn);
+      listeners.get(event).set(fn, wrapped);
+      videoEl.addEventListener(event, wrapped);
+    },
+    off(event, fn) {
+      const eventMap = listeners.get(event);
+      if (eventMap && eventMap.has(fn)) {
+        const wrapped = eventMap.get(fn);
+        videoEl.removeEventListener(event, wrapped);
+        eventMap.delete(fn);
+      }
+    },
+    ready() {
+      if (videoEl.readyState >= 1) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        const onLoaded = () => {
+          videoEl.removeEventListener('loadedmetadata', onLoaded);
+          resolve();
+        };
+        videoEl.addEventListener('loadedmetadata', onLoaded);
+      });
+    },
+    getDuration() {
+      return Promise.resolve(videoEl.duration || 0);
+    },
+    getCurrentTime() {
+      return Promise.resolve(videoEl.currentTime || 0);
+    },
+    setCurrentTime(sec) {
+      try {
+        videoEl.currentTime = sec;
+        return Promise.resolve(sec);
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    },
+    play() {
+      return videoEl.play ? videoEl.play() : Promise.resolve();
+    },
+    pause() {
+      videoEl.pause();
+      return Promise.resolve();
+    }
+  };
+}
+
 export function useLecturePlayer(activeData, userEmail = null) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -43,7 +105,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
     return () => clearTimeout(timer);
   }, [searchQuery, activeData]);
 
-  // Connect Vimeo Player SDK to track current playhead timestamp and sync progress
+  // Connect Vimeo Player SDK or HTML5 Video adapter to track current playhead timestamp and sync progress
   useEffect(() => {
     if (iframeRef.current && activeData) {
       try {
@@ -62,7 +124,9 @@ export function useLecturePlayer(activeData, userEmail = null) {
           }
         }
 
-        const player = new Player(iframeRef.current);
+        const player = iframeRef.current.tagName === 'VIDEO'
+          ? createHtml5VideoAdapter(iframeRef.current)
+          : new Player(iframeRef.current);
         playerRef.current = player;
 
         const saveProgressToDb = async (sec, cueIdx) => {
@@ -249,18 +313,25 @@ export function useLecturePlayer(activeData, userEmail = null) {
 
     // Persist progress immediately on manual cue click
     if (activeData?.videoId) {
-      fetch(`${API_BASE}/api/progress/lecture`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_id: activeData.videoId,
-          user_email: userEmail || 'anonymous',
-          last_timestamp: timestampStr,
-          last_seconds: secs,
-          duration_seconds: durationRef.current || 0,
-          active_cue_idx: targetIdx
-        })
-      }).catch(e => console.warn("Could not save progress on cue click:", e));
+      try {
+        const p = fetch(`${API_BASE}/api/progress/lecture`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            video_id: activeData.videoId,
+            user_email: userEmail || 'anonymous',
+            last_timestamp: timestampStr,
+            last_seconds: secs,
+            duration_seconds: durationRef.current || 0,
+            active_cue_idx: targetIdx
+          })
+        });
+        if (p && typeof p.catch === 'function') {
+          p.catch(e => console.warn("Could not save progress on cue click:", e));
+        }
+      } catch (e) {
+        console.warn("Could not save progress on cue click:", e);
+      }
     }
   };
 

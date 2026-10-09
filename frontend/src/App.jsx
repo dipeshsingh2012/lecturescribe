@@ -281,6 +281,7 @@ export default function App() {
             lectureResourcesLoading={resources.lectureResourcesLoading}
             handleDeleteResource={resources.handleDeleteResource}
             activeTab={activeTab}
+            setActiveTab={setActiveTab}
             displayCues={player.displayCues}
             searchQuery={player.searchQuery}
             setSearchQuery={player.setSearchQuery}

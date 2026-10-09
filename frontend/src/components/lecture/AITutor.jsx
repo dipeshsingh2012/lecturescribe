@@ -1027,7 +1027,8 @@ export default function AITutor({
 
       {/* Simple Input Text Box */}
       <div style={{
-        padding: '12px 20px',
+        padding: '10px 16px',
+        paddingBottom: 'max(10px, env(safe-area-inset-bottom, 10px))',
         background: 'var(--panel-bg)',
         borderTop: '1px solid var(--border-color)',
         flexShrink: 0

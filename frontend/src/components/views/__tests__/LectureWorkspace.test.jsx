@@ -148,5 +148,32 @@ describe('LectureWorkspace', () => {
     expect(screen.getByText('Summary & Submissions')).toBeInTheDocument();
     expect(screen.getByText('Executive summary content')).toBeInTheDocument();
   });
+
+  it('renders mobile navigation tabs and calls setActiveTab when clicked', () => {
+    const setActiveTab = vi.fn();
+    render(
+      <LectureWorkspace
+        {...baseProps}
+        activeTab="summary"
+        setActiveTab={setActiveTab}
+      />
+    );
+
+    const mobileNav = screen.getByRole('tablist', { name: /Lecture Navigation Tabs/i });
+    expect(mobileNav).toBeInTheDocument();
+
+    const tutorTab = screen.getByRole('tab', { name: /AI Tutor/i });
+    const quizTab = screen.getByRole('tab', { name: /Quiz/i });
+    const transcriptTab = screen.getByRole('tab', { name: /Transcript/i });
+
+    tutorTab.click();
+    expect(setActiveTab).toHaveBeenCalledWith('tutor');
+
+    quizTab.click();
+    expect(setActiveTab).toHaveBeenCalledWith('quiz');
+
+    transcriptTab.click();
+    expect(setActiveTab).toHaveBeenCalledWith('transcript');
+  });
 });
 

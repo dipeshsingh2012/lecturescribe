@@ -1,4 +1,5 @@
 import React from 'react';
+import { Bot, FileText, HelpCircle, Search } from 'lucide-react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
 import AITutor from '../lecture/AITutor';
@@ -30,6 +31,7 @@ export default function LectureWorkspace({
   lectureResourcesLoading,
   handleDeleteResource,
   activeTab,
+  setActiveTab = () => {},
   displayCues,
   searchQuery,
   setSearchQuery,
@@ -108,7 +110,7 @@ export default function LectureWorkspace({
   };
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 60px)', overflow: 'hidden' }}>
+    <div className="lecture-workspace-layout">
       {/* Left Panel: Real Embedded Vimeo Player */}
       <LecturePlayer
         activeData={activeData}
@@ -135,75 +137,125 @@ export default function LectureWorkspace({
         currentTheme={currentTheme}
       />
 
-      {/* Right Panel: Summary, Instant Search Drawer, Practice Quiz, or AI Tutor */}
-      {activeTab === 'summary' ? (
-        <LectureSummary
-          summaryHook={summaryHook}
-          handleCueClick={handleCueClick}
-          handleCrossLectureClick={handleCrossLectureClick}
-        />
-      ) : activeTab === 'transcript' ? (
-        <TranscriptSearch
-          displayCues={displayCues}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          handleCueClick={handleCueClick}
-          activeCueIdx={activeCueIdx}
-          copied={copied}
-          handleCopyTranscript={handleCopyTranscript}
-          transcriptAvailable={transcriptAvailable}
-        />
-      ) : activeTab === 'quiz' ? (
-        <LectureQuiz
-          quizData={quizData}
-          quizLoading={quizLoading}
-          quizError={quizError}
-          selectedAnswers={selectedAnswers}
-          isCompleted={isCompleted}
-          score={score}
-          totalQuestions={totalQuestions}
-          answeredCount={answeredCount}
-          fetchOrGenerateQuiz={fetchOrGenerateQuiz}
-          selectAnswer={selectAnswer}
-          resetQuiz={resetQuiz}
-          handleCueClick={handleCueClick}
-          currentTheme={currentTheme}
-          detailedExplanations={detailedExplanations}
-          explanationLoading={explanationLoading}
-          fetchDetailedExplanation={fetchDetailedExplanation}
-          transcriptAvailable={transcriptAvailable}
-        />
-      ) : (
-        <AITutor
-          webSearchEnabled={webSearchEnabled}
-          setWebSearchEnabled={setWebSearchEnabled}
-          clearChatHistory={clearChatHistory}
-          deleteChatMessage={deleteChatMessage}
-          chatMessages={chatMessages}
-          setChatMessages={setChatMessages}
-          viewMode={viewMode}
-          submissionSummaries={submissionSummaries}
-          cleanSubmissionFallback={cleanSubmissionFallback}
-          handleCueClick={handleCueClick}
-          handleCrossLectureClick={handleCrossLectureClick}
-          copiedPromptId={copiedPromptId}
-          copyUserPrompt={copyUserPrompt}
-          copiedSubmissionId={copiedSubmissionId}
-          copySubmissionText={copySubmissionText}
-          copiedResponseId={copiedResponseId}
-          copyBotResponse={copyBotResponse}
-          regenerateResponse={regenerateResponse}
-          regeneratingId={regeneratingId}
-          chatLoading={chatLoading}
-          chatInput={chatInput}
-          setChatInput={setChatInput}
-          chatInputRef={chatInputRef}
-          chatEndRef={chatEndRef}
-          handleSendMessage={handleSendMessage}
-          transcriptAvailable={transcriptAvailable}
-          videoId={activeData?.videoId}
-        />
-      )}
+      {/* Mobile Tab Navigation Bar (Visible only on mobile / screens < 900px) */}
+      <nav className="lecture-mobile-nav" role="tablist" aria-label="Lecture Navigation Tabs">
+        <button
+          type="button"
+          role="tab"
+          aria-label="AI Tutor"
+          aria-selected={activeTab === 'tutor' || !['summary', 'transcript', 'quiz'].includes(activeTab)}
+          className={`lecture-mobile-tab-btn ${activeTab === 'tutor' || !['summary', 'transcript', 'quiz'].includes(activeTab) ? 'active' : ''}`}
+          onClick={() => typeof setActiveTab === 'function' && setActiveTab('tutor')}
+        >
+          <Bot size={15} />
+          <span>AI Tutor</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-label="Summary"
+          aria-selected={activeTab === 'summary'}
+          className={`lecture-mobile-tab-btn ${activeTab === 'summary' ? 'active' : ''}`}
+          onClick={() => typeof setActiveTab === 'function' && setActiveTab('summary')}
+        >
+          <FileText size={15} />
+          <span>Summary</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-label="Quiz"
+          aria-selected={activeTab === 'quiz'}
+          className={`lecture-mobile-tab-btn ${activeTab === 'quiz' ? 'active' : ''}`}
+          onClick={() => typeof setActiveTab === 'function' && setActiveTab('quiz')}
+        >
+          <HelpCircle size={15} />
+          <span>Quiz</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-label="Transcript"
+          aria-selected={activeTab === 'transcript'}
+          className={`lecture-mobile-tab-btn ${activeTab === 'transcript' ? 'active' : ''}`}
+          onClick={() => typeof setActiveTab === 'function' && setActiveTab('transcript')}
+        >
+          <Search size={15} />
+          <span>Transcript</span>
+        </button>
+      </nav>
+
+      {/* Right / Tool Panel: Summary, Instant Search Drawer, Practice Quiz, or AI Tutor */}
+      <div className="lecture-tool-panel">
+        {activeTab === 'summary' ? (
+          <LectureSummary
+            summaryHook={summaryHook}
+            handleCueClick={handleCueClick}
+            handleCrossLectureClick={handleCrossLectureClick}
+          />
+        ) : activeTab === 'transcript' ? (
+          <TranscriptSearch
+            displayCues={displayCues}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            handleCueClick={handleCueClick}
+            activeCueIdx={activeCueIdx}
+            copied={copied}
+            handleCopyTranscript={handleCopyTranscript}
+            transcriptAvailable={transcriptAvailable}
+          />
+        ) : activeTab === 'quiz' ? (
+          <LectureQuiz
+            quizData={quizData}
+            quizLoading={quizLoading}
+            quizError={quizError}
+            selectedAnswers={selectedAnswers}
+            isCompleted={isCompleted}
+            score={score}
+            totalQuestions={totalQuestions}
+            answeredCount={answeredCount}
+            fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+            selectAnswer={selectAnswer}
+            resetQuiz={resetQuiz}
+            handleCueClick={handleCueClick}
+            currentTheme={currentTheme}
+            detailedExplanations={detailedExplanations}
+            explanationLoading={explanationLoading}
+            fetchDetailedExplanation={fetchDetailedExplanation}
+            transcriptAvailable={transcriptAvailable}
+          />
+        ) : (
+          <AITutor
+            webSearchEnabled={webSearchEnabled}
+            setWebSearchEnabled={setWebSearchEnabled}
+            clearChatHistory={clearChatHistory}
+            deleteChatMessage={deleteChatMessage}
+            chatMessages={chatMessages}
+            setChatMessages={setChatMessages}
+            viewMode={viewMode}
+            submissionSummaries={submissionSummaries}
+            cleanSubmissionFallback={cleanSubmissionFallback}
+            handleCueClick={handleCueClick}
+            handleCrossLectureClick={handleCrossLectureClick}
+            copiedPromptId={copiedPromptId}
+            copyUserPrompt={copyUserPrompt}
+            copiedSubmissionId={copiedSubmissionId}
+            copySubmissionText={copySubmissionText}
+            copiedResponseId={copiedResponseId}
+            copyBotResponse={copyBotResponse}
+            regenerateResponse={regenerateResponse}
+            regeneratingId={regeneratingId}
+            chatLoading={chatLoading}
+            chatInput={chatInput}
+            setChatInput={setChatInput}
+            chatInputRef={chatInputRef}
+            chatEndRef={chatEndRef}
+            handleSendMessage={handleSendMessage}
+            transcriptAvailable={transcriptAvailable}
+            videoId={activeData?.videoId}
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -43,27 +43,26 @@ export default function Header({
   currentTheme
 }) {
   return (
-    <header style={{
+    <header className="app-header" style={{
       background: currentTheme.palette.headerGradient || currentTheme.palette.headerBg,
       color: currentTheme.palette.headerText || '#ffffff',
       borderBottom: '1px solid rgba(255, 255, 255, 0.15)',
-      padding: '0 24px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
       height: '62px',
       boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)'
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, fontSize: '1.15rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700 }}>
         <span
-          style={{ color: '#ffffff', fontWeight: 800, fontSize: '1.15rem', letterSpacing: '-0.3px', cursor: 'pointer' }}
+          className="app-brand-title"
           onClick={handleBackToHub}
         >
           LearnScribe LMS
         </span>
       </div>
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 1.5 } }}>
         {activeData && (
           <>
             <Box sx={{

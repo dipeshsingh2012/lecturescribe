@@ -57,15 +57,7 @@ export default function LecturePlayer({
     activeData.cues.some((cue) => String(cue?.text || '').trim());
 
   return (
-    <div style={{
-      flex: '1.2',
-      padding: '24px',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '16px',
-      overflowY: 'auto',
-      borderRight: '1px solid var(--border-color)'
-    }}>
+    <div className="lecture-player-panel">
       {/* Breadcrumb Navigation */}
       <Box
         component="nav"
@@ -205,7 +197,7 @@ export default function LecturePlayer({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-        <h1 style={{ fontSize: '1.3rem', fontWeight: 700, lineHeight: 1.3, margin: 0, flex: '1 1 240px' }}>
+        <h1 className="lecture-title">
           {activeData.title}
         </h1>
         {driveFolderUrl && (

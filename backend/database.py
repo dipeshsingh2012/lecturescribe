@@ -2813,6 +2813,7 @@ class RelationalDBManager:
 
                     return {
                         "course_name": canonical_name,
+                        "course_slug": to_course_slug(canonical_name),
                         "lecture_count": len(lectures),
                         "latest_viewed_at": lectures[0]["last_viewed_at"] if lectures else None,
                         "thumbnail_video_id": lectures[0]["video_id"] if lectures else None,
@@ -2853,8 +2854,10 @@ class RelationalDBManager:
                     "course_name": c_name
                 })
         if mem_lectures:
+            c_title = mem_lectures[0]["course_name"]
             return {
-                "course_name": mem_lectures[0]["course_name"],
+                "course_name": c_title,
+                "course_slug": to_course_slug(c_title),
                 "lecture_count": len(mem_lectures),
                 "latest_viewed_at": None,
                 "thumbnail_video_id": mem_lectures[0]["video_id"],
@@ -2895,6 +2898,7 @@ class RelationalDBManager:
                             "last_viewed_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
                             "created_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
                             "course_name": r.get("course_name") or extract_course_name(r.get("title", "")),
+                            "course_slug": to_course_slug(r.get("course_name") or extract_course_name(r.get("title", ""))),
                         }
                         for r in rows
                     ]

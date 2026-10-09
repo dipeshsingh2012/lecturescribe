@@ -382,19 +382,26 @@ export function useLectureIngestion({
       const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}${courseParam}`);
       if (res.ok) {
         const data = await res.json();
-        let finalCourse = effectiveCourse || data.course_name;
+        let finalCourse = data.course_name || effectiveCourse;
         if (finalCourse) {
           const match = effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === normalizeCourseSlug(finalCourse));
           if (match) finalCourse = match.course_name;
           if (!stayOnCoursePage) {
             setSelectedCourse(finalCourse);
+            const targetSlug = data.course_slug || normalizeCourseSlug(finalCourse);
             if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/lecture/') || window.location.pathname.includes('%20') || window.location.pathname.includes(' '))) {
-              navigateTo(`/course/${normalizeCourseSlug(finalCourse)}/lecture/${data.videoId}`, true);
+              navigateTo(`/course/${targetSlug}/lecture/${data.videoId}`, true);
             }
           }
         }
         const existingDriveUrl = data.drive_folder_url || data.driveFolderUrl || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(data.videoId))?.drive_folder_url || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(data.videoId))?.driveFolderUrl;
-        const enrichedData = { ...data, course_name: finalCourse, drive_folder_url: existingDriveUrl || data.drive_folder_url, driveFolderUrl: existingDriveUrl || data.driveFolderUrl };
+        const enrichedData = {
+          ...data,
+          course_name: finalCourse,
+          course_slug: data.course_slug || (finalCourse ? normalizeCourseSlug(finalCourse) : null),
+          drive_folder_url: existingDriveUrl || data.drive_folder_url,
+          driveFolderUrl: existingDriveUrl || data.driveFolderUrl
+        };
         
         if (!stayOnCoursePage) {
           setActiveData(enrichedData);

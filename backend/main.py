@@ -788,8 +788,11 @@ def get_transcript(
                 "This video was imported, but no transcript or captions are available."
             )
             raw_course = course_name if isinstance(course_name, str) else None
-            effective_course = ((raw_course and raw_course.strip()) or saved.get("course_name") or "General Lectures").strip()
+            candidate_course = ((raw_course and raw_course.strip()) or saved.get("course_name") or "General Lectures").strip()
+            # If candidate_course is a slug, resolve it to canonical display course name
+            effective_course = db_manager.resolve_course_canonical_name(candidate_course) if candidate_course else "General Lectures"
             saved["course_name"] = effective_course
+            saved["course_slug"] = to_course_slug(effective_course)
             if raw_course and raw_course.strip():
                 try:
                     conn = db_manager._get_connection()
@@ -873,7 +876,8 @@ def get_transcript(
         source_url = f"https://vimeo.com/{video_id}"
         caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
         raw_course = course_name if isinstance(course_name, str) else None
-        derived_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
+        candidate_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
+        derived_course = db_manager.resolve_course_canonical_name(candidate_course) if candidate_course else "General Lectures"
 
         # 3. Save to Relational DB (PostgreSQL)
         db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
@@ -912,6 +916,7 @@ def get_transcript(
             "transcript_available": transcript_available,
             "transcript_message": transcript_message,
             "course_name": derived_course,
+            "course_slug": to_course_slug(derived_course),
             "pineconeIndexedChunks": pinecone_chunks,
             "drive_folder_url": drive_url,
             "driveFolderUrl": drive_url,

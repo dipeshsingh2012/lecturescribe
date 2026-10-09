@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": "2026-10-09T18:45:57.761827+00:00",
+  "last_updated": "2026-10-09T19:03:39.500997+00:00",
   "summary": {
     "total_tracked": 36,
-    "success": 6,
+    "success": 8,
     "already_cached": 1,
     "failed": 0,
-    "pending": 29,
-    "total_size_mb": 1914.58
+    "pending": 27,
+    "total_size_mb": 2513.97
   },
   "videos": {
     "1225764089": {
@@ -141,31 +141,45 @@
       "title": "Applied Mathemartics for Data Science and AI Live session -2 (19 / 9 / 2026)",
       "course_name": "Applied Mathemartics for Data Science and AI",
       "course_slug": "applied-mathemartics-for-data-science-and-ai",
-      "status": "IN_PROGRESS",
+      "status": "SUCCESS",
       "attempts": 2,
       "last_attempt_at": "2026-10-09T18:45:57.761794+00:00",
       "error": null,
-      "error_category": null
+      "error_category": null,
+      "blob_name": "courses/applied-mathemartics-for-data-science-and-ai/lectures/1228350943/Applied_Mathemartics_for_Data_Science_and_AI_Live_session_-2__19___9___2026_.mp4",
+      "gcs_uri": "gs://lecturescribe-resources/courses/applied-mathemartics-for-data-science-and-ai/lectures/1228350943/",
+      "size_mb": 321.07,
+      "duration_seconds": 596.2,
+      "has_video": true,
+      "has_captions": true,
+      "cues_count": 1965
     },
     "1228351347": {
       "video_id": "1228351347",
       "title": "Introduction to Computer Vision Live session -1 (19/ 9 / 2026)",
       "course_name": "Introduction to Computer Vision",
       "course_slug": "introduction-to-computer-vision",
-      "status": "DRY_RUN_READY",
-      "attempts": 1,
-      "last_attempt_at": "2026-10-09T15:15:35.649317+00:00",
+      "status": "SUCCESS",
+      "attempts": 2,
+      "last_attempt_at": "2026-10-09T18:55:55.529313+00:00",
       "error": null,
-      "error_category": null
+      "error_category": null,
+      "blob_name": "courses/introduction-to-computer-vision/lectures/1228351347/Introduction_to_Computer_Vision_Live_session_-1__19__9___2026_.mp4",
+      "gcs_uri": "gs://lecturescribe-resources/courses/introduction-to-computer-vision/lectures/1228351347/",
+      "size_mb": 278.32,
+      "duration_seconds": 462.5,
+      "has_video": true,
+      "has_captions": true,
+      "cues_count": 974
     },
     "1228351648": {
       "video_id": "1228351648",
       "title": "Data Science Lab Live session -1 (19 / 9 / 2026)",
       "course_name": "Data Science Lab",
       "course_slug": "data-science-lab",
-      "status": "DRY_RUN_READY",
-      "attempts": 1,
-      "last_attempt_at": "2026-10-09T15:15:37.483288+00:00",
+      "status": "IN_PROGRESS",
+      "attempts": 2,
+      "last_attempt_at": "2026-10-09T19:03:39.500961+00:00",
       "error": null,
       "error_category": null
     },

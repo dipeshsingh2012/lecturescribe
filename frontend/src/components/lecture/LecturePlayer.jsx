@@ -334,14 +334,18 @@ export default function LecturePlayer({
         <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
 
         {(() => {
-          const effectiveCourse = activeCourseData?.course_name || activeData.course_name || selectedCourse || (userLibrary.find(l => l.video_id === activeData.videoId)?.course_name) || 'General Lectures';
-          const courseSlug = normalizeCourseSlug(effectiveCourse);
           const displayCourseName = (
             activeCourseData?.course_name ||
-            effectiveCourses.find(c => normalizeCourseSlug(c.course_name) === courseSlug)?.course_name ||
-            (effectiveCourse.includes('-') && effectiveCourse === effectiveCourse.toLowerCase()
-              ? effectiveCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-              : effectiveCourse)
+            activeData.course_name ||
+            effectiveCourses.find(c => c.course_slug === activeData.course_slug || normalizeCourseSlug(c.course_name) === normalizeCourseSlug(selectedCourse))?.course_name ||
+            userLibrary.find(l => String(l.video_id) === String(activeData.videoId))?.course_name ||
+            selectedCourse ||
+            'General Lectures'
+          );
+          const courseSlug = (
+            activeCourseData?.course_slug ||
+            activeData.course_slug ||
+            normalizeCourseSlug(displayCourseName)
           );
           return (
             <Tooltip title={displayCourseName} arrow placement="top" enterDelay={150}>

@@ -247,11 +247,11 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
 
   // Synchronize document title with currently active lecture or course route
   useEffect(() => {
-    const courseTitle = activeCourseData?.course_name || selectedCourse;
+    const canonicalCourse = activeCourseData?.course_name || activeData?.course_name || selectedCourse;
     if (activeData?.title) {
       document.title = `${activeData.title} | LectureScribe`;
-    } else if (courseTitle) {
-      document.title = `${courseTitle} | Course | LectureScribe`;
+    } else if (canonicalCourse) {
+      document.title = `${canonicalCourse} | Course | LectureScribe`;
     } else {
       document.title = 'LectureScribe - LMS & Lecture AI Workspace';
     }

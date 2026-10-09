@@ -24,22 +24,28 @@ export default function TranscriptSearch({
   // Auto-scroll active cue into center view as video plays (Webex style)
   useEffect(() => {
     if (!autoScroll) return;
-    if (activeCueIdx >= 0 && cueRefs.current[activeCueIdx]) {
+    if (activeCueIdx >= 0 && cueRefs.current[activeCueIdx] && scrollContainerRef.current) {
       const activeEl = cueRefs.current[activeCueIdx];
-      // For scrubbing/seeking jumps, center instantly without animation lag; for normal playback, scroll smoothly
+      const container = scrollContainerRef.current;
       const isJump = Math.abs(activeCueIdx - (prevActiveCueRef.current ?? activeCueIdx)) > 1;
       const scrollBehavior = isJump ? 'auto' : 'smooth';
       prevActiveCueRef.current = activeCueIdx;
 
+      // Calculate relative offset within the scrollable container so parent window never scrolls
+      const targetTop = activeEl.offsetTop - (container.clientHeight / 2) + (activeEl.clientHeight / 2);
+      if (typeof container.scrollTo === 'function') {
+        container.scrollTo({
+          top: Math.max(0, targetTop),
+          behavior: scrollBehavior
+        });
+      } else {
+        container.scrollTop = Math.max(0, targetTop);
+      }
       if (typeof activeEl?.scrollIntoView === 'function') {
         activeEl.scrollIntoView({
           behavior: scrollBehavior,
           block: 'center'
         });
-      } else if (scrollContainerRef.current) {
-        const container = scrollContainerRef.current;
-        const targetTop = activeEl.offsetTop - (container.clientHeight / 2);
-        container.scrollTop = Math.max(0, targetTop);
       }
     }
   }, [activeCueIdx, autoScroll]);
@@ -47,12 +53,13 @@ export default function TranscriptSearch({
   const onCueClick = (cueTime, idx) => {
     setAutoScroll(true);
     handleCueClick(cueTime);
-    if (cueRefs.current[idx]) {
-      if (typeof cueRefs.current[idx]?.scrollIntoView === 'function') {
-        cueRefs.current[idx].scrollIntoView({
-          behavior: 'smooth',
-          block: 'center'
-        });
+    if (cueRefs.current[idx] && scrollContainerRef.current) {
+      const container = scrollContainerRef.current;
+      const targetTop = cueRefs.current[idx].offsetTop - (container.clientHeight / 2) + (cueRefs.current[idx].clientHeight / 2);
+      try {
+        container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+      } catch {
+        container.scrollTop = Math.max(0, targetTop);
       }
     }
   };
@@ -78,24 +85,20 @@ export default function TranscriptSearch({
   }, [displayCues, checkScroll]);
 
   const scrollToTop = () => {
-    if (typeof transcriptStartRef.current?.scrollIntoView === 'function') {
-      transcriptStartRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    } else if (scrollContainerRef.current) {
+    if (scrollContainerRef.current) {
       if (typeof scrollContainerRef.current.scrollTo === 'function') {
-        scrollContainerRef.current.scrollTo({
-          top: 0,
-          behavior: 'smooth'
-        });
+        scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
       } else {
         scrollContainerRef.current.scrollTop = 0;
       }
     }
+    if (typeof transcriptStartRef.current?.scrollIntoView === 'function') {
+      transcriptStartRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   };
 
   const scrollToBottom = () => {
-    if (typeof transcriptEndRef.current?.scrollIntoView === 'function') {
-      transcriptEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    } else if (scrollContainerRef.current) {
+    if (scrollContainerRef.current) {
       if (typeof scrollContainerRef.current.scrollTo === 'function') {
         scrollContainerRef.current.scrollTo({
           top: scrollContainerRef.current.scrollHeight,
@@ -105,17 +108,39 @@ export default function TranscriptSearch({
         scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
       }
     }
+    if (typeof transcriptEndRef.current?.scrollIntoView === 'function') {
+      transcriptEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   };
 
   return (
-    <div style={{ flex: 1, background: 'var(--panel-bg)', display: 'flex', flexDirection: 'column' }}>
-      <div className="css-1xdwfcd" style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+    <div style={{
+      flex: 1,
+      minWidth: 0,
+      minHeight: 0,
+      background: 'var(--panel-bg)',
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      maxHeight: '100%',
+      overflow: 'hidden',
+      position: 'relative'
+    }}>
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+        position: 'relative',
+        flex: 1
+      }}>
         <div style={{
           padding: '10px 16px',
           borderBottom: '1px solid var(--border-color)',
           display: 'flex',
           flexDirection: 'column',
-          gap: '8px'
+          gap: '8px',
+          flexShrink: 0
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -296,7 +321,16 @@ export default function TranscriptSearch({
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          style={{ flex: 1, overflowY: 'auto', padding: '6px 10px' }}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '6px 10px',
+            position: 'relative',
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y'
+          }}
         >
           <div ref={transcriptStartRef} />
           {!transcriptAvailable ? (

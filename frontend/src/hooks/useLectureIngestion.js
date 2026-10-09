@@ -317,6 +317,7 @@ export function useLectureIngestion({
         if (transcriptAvailable && typeof initChatMessages === 'function') {
           initChatMessages(cached.title, vidId, cached.cues);
         }
+
       }
       setUrlInput('');
 

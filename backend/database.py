@@ -1123,7 +1123,7 @@ class RelationalDBManager:
                                 duration_seconds = CASE WHEN EXCLUDED.duration_seconds > 0 THEN EXCLUDED.duration_seconds ELSE lecturescribe_lecture_progress.duration_seconds END,
                                 progress_percent = CASE
                                     WHEN EXCLUDED.duration_seconds > 0 THEN EXCLUDED.progress_percent
-                                    WHEN lecturescribe_lecture_progress.duration_seconds > 0 THEN LEAST(100.0, GREATEST(0.0, ROUND((EXCLUDED.last_seconds / lecturescribe_lecture_progress.duration_seconds) * 100.0, 1)))
+                                    WHEN lecturescribe_lecture_progress.duration_seconds > 0 THEN LEAST(100.0, GREATEST(0.0, ROUND(((EXCLUDED.last_seconds / lecturescribe_lecture_progress.duration_seconds) * 100.0)::numeric, 1)))
                                     ELSE EXCLUDED.progress_percent
                                 END,
                                 active_cue_idx = EXCLUDED.active_cue_idx,

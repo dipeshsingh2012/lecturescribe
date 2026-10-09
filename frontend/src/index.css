@@ -331,11 +331,12 @@ li .katex::-webkit-scrollbar-thumb {
   .lecture-player-panel {
     flex: none;
     width: 100%;
-    padding: 8px 12px 8px 12px;
-    gap: 8px;
+    padding: 10px 14px 10px 14px;
+    gap: 10px;
     border-right: none;
     border-bottom: 1px solid var(--border-color);
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .desktop-only-shelf {
@@ -370,7 +371,7 @@ li .katex::-webkit-scrollbar-thumb {
     min-width: 0;
     display: inline-flex;
     align-items: center;
-    justifyContent: center;
+    justify-content: center;
     gap: 4px;
     padding: 6px 6px;
     border-radius: 8px;

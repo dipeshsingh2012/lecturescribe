@@ -803,7 +803,8 @@ def get_transcript(
             if saved_cues:
                 algolia_service.ingest_cues(video_id, saved["title"], saved_cues)
                 pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved_cues)
-            drive_url = db_manager.get_drive_folder_url(video_id, email)
+            clean_email = email.strip() if isinstance(email, str) else None
+            drive_url = db_manager.get_drive_folder_url(video_id, clean_email)
             if drive_url:
                 saved["drive_folder_url"] = drive_url
                 saved["driveFolderUrl"] = drive_url
@@ -818,9 +819,9 @@ def get_transcript(
             else:
                 saved["video_source"] = "vimeo"
 
-            if email and email.strip():
+            if clean_email:
                 db_manager.record_user_lecture(
-                    user_email=email,
+                    user_email=clean_email,
                     video_id=video_id,
                     title=saved["title"],
                     duration=saved.get("duration", "Unknown"),
@@ -829,7 +830,7 @@ def get_transcript(
                     drive_folder_url=drive_url
                 )
                 if redis_cache:
-                    redis_cache.invalidate_user(email.strip())
+                    redis_cache.invalidate_user(clean_email)
             return saved
 
         # 2. Extract fresh video config from Vimeo
@@ -2963,6 +2964,22 @@ def get_single_video_status(video_id: str):
         "course_name": course_name,
         "tracking_status": tracking_info.get("status") or ("ALREADY_CACHED" if gcs_video else "UNKNOWN")
     }
+
+
+@app.get("/api/videos/{video_id}/stream")
+def stream_video_direct(video_id: str):
+    """Directly stream or redirect to the GCS signed URL for a lecture video."""
+    from fastapi.responses import RedirectResponse
+    vid = str(video_id).strip()
+    saved = db_manager.get_saved_video(vid)
+    effective_course = saved.get("course_name") if saved else None
+
+    gcs_video = gcs_storage_service.find_lecture_video(video_id=vid, course_name=effective_course)
+    if gcs_video and gcs_video.get("view_url"):
+        return RedirectResponse(url=gcs_video["view_url"], status_code=307)
+
+    # If not found immediately, raise 404
+    raise HTTPException(status_code=404, detail=f"GCS video stream for '{vid}' not yet available.")
 
 
 # -------------------------------------------------------------

@@ -17,7 +17,7 @@ describe('LecturePlayer', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders video iframe, title, and upload button', () => {
+  it('renders video player, title, and upload button', () => {
     const handleCopyTranscript = vi.fn();
     const openUploadModal = vi.fn();
     const activeData = {
@@ -66,6 +66,8 @@ describe('LecturePlayer', () => {
     expect(screen.queryByText(/Database Cache/i)).toBeNull();
     expect(screen.queryByText(/Instant Search/i)).toBeNull();
     expect(screen.queryByText(/Saved in Drive/i)).toBeNull();
+    expect(document.querySelector('video')).toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('renders "Saved in Drive" badge linking to Google Drive when drive_folder_url is present', () => {
@@ -230,6 +232,47 @@ describe('LecturePlayer', () => {
     expect(trackEl).toHaveAttribute('src', 'https://storage.googleapis.com/lecturescribe-resources/captions.vtt');
 
     expect(document.querySelector('iframe')).toBeNull();
+  });
+
+  it('renders custom player controls with skip buttons, playback speed, and volume', () => {
+    const activeData = {
+      videoId: '1234158181',
+      title: 'AI in Healthcare',
+      course_name: 'AI in Healthcare',
+      duration: '45:00',
+      total_cues: 10,
+      cues: [{ time: '00:00', text: 'Welcome' }],
+      gcs_video_url: 'https://storage.googleapis.com/lecturescribe-resources/video.mp4',
+      captions_vtt_url: 'https://storage.googleapis.com/lecturescribe-resources/captions.vtt'
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        currentTheme={mockTheme}
+        iframeRef={{ current: document.createElement('video') }}
+      />
+    );
+
+    // Play button & big center play button
+    expect(screen.getByRole('button', { name: /Play Video/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Play$/i })).toBeInTheDocument();
+
+    // Skip backward / forward 10s buttons
+    expect(screen.getByRole('button', { name: /Rewind 10 seconds/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Fast forward 10 seconds/i })).toBeInTheDocument();
+
+    // Timeline Scrubber
+    expect(screen.getByRole('slider', { name: /Video scrubber timeline/i })).toBeInTheDocument();
+
+    // Playback Speed button
+    const speedBtn = screen.getByRole('button', { name: /Playback speed/i });
+    expect(speedBtn).toBeInTheDocument();
+    expect(speedBtn).toHaveTextContent('1x');
+
+    // Subtitles and Fullscreen buttons
+    expect(screen.getByRole('button', { name: /Disable Subtitles/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Fullscreen/i })).toBeInTheDocument();
   });
 });
 

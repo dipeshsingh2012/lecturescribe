@@ -124,18 +124,19 @@ export default function App() {
   const summary = useLectureSummary(activeData, auth.googleUser?.email);
 
   // Hub / Route Navigation
-  const handleBackToHub = () => {
-    navigateTo(selectedCourse ? `/course/${normalizeCourseSlug(selectedCourse)}` : '/');
+  const handleNavigateHome = () => {
+    setSelectedCourse(null);
+    setDirectCourseData(null);
     setActiveData(null);
     lecture.setError(null);
     setCacheNotice(null);
+    navigateTo('/');
     if (library.fetchUserLibrary) {
       library.fetchUserLibrary(auth.googleUser?.email);
     }
-    if (selectedCourse && course.refetchCourse) {
-      course.refetchCourse(selectedCourse);
-    }
   };
+
+  const handleBackToHub = handleNavigateHome;
 
   const handleSelectCourse = (name) => {
     if (!name) return;
@@ -224,7 +225,8 @@ export default function App() {
           googleUser={auth.googleUser}
           handleGoogleSignIn={auth.handleGoogleSignIn}
           handleGoogleSignOut={auth.handleGoogleSignOut}
-          handleBackToHub={handleBackToHub}
+          handleBackToHub={handleNavigateHome}
+          handleNavigateHome={handleNavigateHome}
           userLibrary={library.userLibrary}
           userMenuAnchor={userMenuAnchor}
           setUserMenuAnchor={setUserMenuAnchor}

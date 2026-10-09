@@ -35,6 +35,7 @@ export default function Header({
   handleGoogleSignIn,
   handleGoogleSignOut,
   handleBackToHub,
+  handleNavigateHome,
   userLibrary = [],
   userMenuAnchor,
   setUserMenuAnchor,
@@ -42,6 +43,8 @@ export default function Header({
   setTheme,
   currentTheme
 }) {
+  const onHomeClick = handleNavigateHome || handleBackToHub;
+
   return (
     <header className="app-header" style={{
       background: currentTheme.palette.headerGradient || currentTheme.palette.headerBg,
@@ -56,7 +59,15 @@ export default function Header({
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700 }}>
         <span
           className="app-brand-title"
-          onClick={handleBackToHub}
+          onClick={onHomeClick}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onHomeClick?.();
+            }
+          }}
         >
           LearnScribe LMS
         </span>
@@ -299,7 +310,7 @@ export default function Header({
               <MenuItem
                 onClick={() => {
                   setUserMenuAnchor(null);
-                  handleBackToHub();
+                  onHomeClick?.();
                 }}
                 sx={{ borderRadius: 1, py: 1 }}
               >

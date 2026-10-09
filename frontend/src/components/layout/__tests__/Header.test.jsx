@@ -38,6 +38,35 @@ describe('Header', () => {
     expect(handleBackToHub).toHaveBeenCalledTimes(1);
   });
 
+  it('invokes handleNavigateHome when clicking brand or pressing Enter', () => {
+    const handleNavigateHome = vi.fn();
+    render(
+      <Header
+        activeData={null}
+        activeTab="transcript"
+        setActiveTab={vi.fn()}
+        openDownloadModal={vi.fn()}
+        googleUser={null}
+        handleGoogleSignIn={vi.fn()}
+        handleGoogleSignOut={vi.fn()}
+        handleNavigateHome={handleNavigateHome}
+        userLibrary={[]}
+        userMenuAnchor={null}
+        setUserMenuAnchor={vi.fn()}
+        currentThemeId="academic"
+        setTheme={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const brand = screen.getByText('LearnScribe LMS');
+    fireEvent.click(brand);
+    expect(handleNavigateHome).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(brand, { key: 'Enter' });
+    expect(handleNavigateHome).toHaveBeenCalledTimes(2);
+  });
+
   it('renders lecture navigation buttons when activeData is present', () => {
     const setActiveTab = vi.fn();
     const openDownloadModal = vi.fn();

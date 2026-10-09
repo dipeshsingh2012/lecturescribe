@@ -241,6 +241,16 @@ class RelationalDBManager:
                             EXCEPTION
                                 WHEN duplicate_column THEN RAISE NOTICE 'column course_name already exists in lecturescribe_videos.';
                             END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_summaries ADD COLUMN is_outdated BOOLEAN NOT NULL DEFAULT FALSE;
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column is_outdated already exists in lecturescribe_summaries.';
+                            END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_lecture_summaries ADD COLUMN is_outdated BOOLEAN NOT NULL DEFAULT FALSE;
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column is_outdated already exists in lecturescribe_lecture_summaries.';
+                            END;
                         END $$;
 
                         CREATE INDEX IF NOT EXISTS idx_pg_cues_vid ON lecturescribe_transcript_cues(video_id);
@@ -440,6 +450,54 @@ class RelationalDBManager:
                         );
                         CREATE INDEX IF NOT EXISTS idx_lecturescribe_fleet_runs_initiative
                             ON lecturescribe_fleet_runs (tenant_id, initiative_id, created_at DESC);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_transcript_reviews (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            video_id VARCHAR(128) NOT NULL REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            review_mode VARCHAR(32) NOT NULL DEFAULT 'audio_grounded',
+                            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+                            error_message TEXT,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_transcription_reviews_vid ON lecturescribe_transcript_reviews(video_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_transcript_suggestions (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            review_id UUID NOT NULL REFERENCES lecturescribe_transcript_reviews(id) ON DELETE CASCADE,
+                            video_id VARCHAR(128) NOT NULL REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            cue_id INT REFERENCES lecturescribe_transcript_cues(id) ON DELETE SET NULL,
+                            start_seconds NUMERIC(10, 2) NOT NULL,
+                            end_seconds NUMERIC(10, 2) NOT NULL,
+                            original_text TEXT NOT NULL,
+                            suggested_text TEXT NOT NULL,
+                            suggestion_type VARCHAR(32) NOT NULL DEFAULT 'correction',
+                            confidence VARCHAR(16) NOT NULL DEFAULT 'medium',
+                            reason TEXT,
+                            status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                            applied_at TIMESTAMP WITH TIME ZONE,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_transcription_sugg_rev ON lecturescribe_transcript_suggestions(review_id);
+                        CREATE INDEX IF NOT EXISTS idx_transcription_sugg_vid ON lecturescribe_transcript_suggestions(video_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_transcript_annotations (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            video_id VARCHAR(128) NOT NULL REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            user_email VARCHAR(255) NOT NULL,
+                            cue_id INT REFERENCES lecturescribe_transcript_cues(id) ON DELETE SET NULL,
+                            start_seconds NUMERIC(10, 2) NOT NULL DEFAULT 0.0,
+                            end_seconds NUMERIC(10, 2) NOT NULL DEFAULT 0.0,
+                            selected_text TEXT NOT NULL,
+                            annotation_type VARCHAR(32) NOT NULL,
+                            color VARCHAR(16),
+                            note_text TEXT,
+                            ai_prompt TEXT,
+                            ai_response TEXT,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_annotations_user_vid ON lecturescribe_transcript_annotations(user_email, video_id);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -963,15 +1021,16 @@ class RelationalDBManager:
                         INSERT INTO lecturescribe_lecture_summaries (
                             video_id, user_email, summary_type, markdown_text,
                             submission_text, citations_json, word_count, model,
-                            created_at, updated_at
+                            is_outdated, created_at, updated_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW())
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, FALSE, NOW(), NOW())
                         ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
                         SET markdown_text = EXCLUDED.markdown_text,
                             submission_text = EXCLUDED.submission_text,
                             citations_json = EXCLUDED.citations_json,
                             word_count = EXCLUDED.word_count,
                             model = EXCLUDED.model,
+                            is_outdated = FALSE,
                             updated_at = NOW();
                     """, (
                         video_id,
@@ -1015,6 +1074,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, video_id, user_email, summary_type, markdown_text,
                                    submission_text, citations_json, word_count, model,
+                                   COALESCE(is_outdated, FALSE) as is_outdated,
                                    created_at, updated_at
                             FROM lecturescribe_lecture_summaries
                             WHERE video_id = %s AND (user_email = %s OR user_email IS NULL)
@@ -1024,6 +1084,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, video_id, user_email, summary_type, markdown_text,
                                    submission_text, citations_json, word_count, model,
+                                   COALESCE(is_outdated, FALSE) as is_outdated,
                                    created_at, updated_at
                             FROM lecturescribe_lecture_summaries
                             WHERE video_id = %s
@@ -1046,6 +1107,7 @@ class RelationalDBManager:
                                 "citations": citations,
                                 "wordCount": row.get("word_count") or 0,
                                 "model": row.get("model") or "",
+                                "isOutdated": bool(row.get("is_outdated", False)),
                                 "createdAt": row.get("created_at").isoformat() if row.get("created_at") else None,
                                 "updatedAt": row.get("updated_at").isoformat() if row.get("updated_at") else None
                             }
@@ -1956,7 +2018,7 @@ class RelationalDBManager:
                         return None
 
                     cursor.execute("""
-                        SELECT timestamp as time, text 
+                        SELECT id, timestamp as time, seconds, text 
                         FROM lecturescribe_transcript_cues 
                         WHERE video_id = %s 
                         ORDER BY id ASC;
@@ -1964,16 +2026,27 @@ class RelationalDBManager:
                     cues = cursor.fetchall() or []
 
                     cursor.execute("""
-                        SELECT sections_json 
+                        SELECT sections_json, COALESCE(is_outdated, FALSE) as is_outdated 
                         FROM lecturescribe_summaries 
                         WHERE video_id = %s 
                         ORDER BY id DESC LIMIT 1;
                     """, (video_id,))
                     s_row = cursor.fetchone()
                     summary_sections = []
-                    if s_row and s_row.get("sections_json"):
-                        raw = s_row["sections_json"]
-                        summary_sections = raw if isinstance(raw, list) else json.loads(raw)
+                    legacy_is_outdated = False
+                    if s_row:
+                        legacy_is_outdated = bool(s_row.get("is_outdated", False))
+                        if s_row.get("sections_json"):
+                            raw = s_row["sections_json"]
+                            summary_sections = raw if isinstance(raw, list) else json.loads(raw)
+
+                    cursor.execute("""
+                        SELECT COALESCE(BOOL_OR(is_outdated), FALSE) as is_outdated
+                        FROM lecturescribe_lecture_summaries
+                        WHERE video_id = %s;
+                    """, (video_id,))
+                    ls_row = cursor.fetchone()
+                    summary_is_outdated = bool(legacy_is_outdated or (ls_row and ls_row.get("is_outdated", False)))
 
                     if not summary_sections and cues:
                         from backend.summary_generator import generate_summary_sections
@@ -1992,6 +2065,8 @@ class RelationalDBManager:
                         "summarySections": summary_sections,
                         "course_name": course_name,
                         "course_slug": to_course_slug(course_name),
+                        "summary_outdated": summary_is_outdated,
+                        "is_outdated": summary_is_outdated,
                         "cached": True
                     }
                     self._memory_cache[video_id] = record
@@ -3408,7 +3483,436 @@ class RelationalDBManager:
             and r.get("course_name", "").lower() != slug_as_space.lower()
             and to_course_slug(r.get("course_name", "")) != slug_norm
         ]
-        return True
+    def update_transcript_cue(self, video_id: str, cue_id: int, new_text: str) -> Optional[Dict[str, Any]]:
+        """Update a single transcript cue, mark summaries outdated, and evict memory cache."""
+        cleaned_text = (new_text or "").strip()
+        conn = None
+        updated_cue = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_transcript_cues
+                        SET text = %s
+                        WHERE id = %s AND video_id = %s
+                        RETURNING id, timestamp, seconds, text;
+                    """, (cleaned_text, cue_id, video_id))
+                    row = cursor.fetchone()
+                    if row:
+                        updated_cue = {
+                            "id": row["id"],
+                            "time": row["timestamp"],
+                            "seconds": row["seconds"],
+                            "text": row["text"]
+                        }
+                        # Mark all summaries for this video as outdated
+                        cursor.execute("""
+                            UPDATE lecturescribe_summaries
+                            SET is_outdated = TRUE
+                            WHERE video_id = %s;
+                        """, (video_id,))
+                        cursor.execute("""
+                            UPDATE lecturescribe_lecture_summaries
+                            SET is_outdated = TRUE
+                            WHERE video_id = %s;
+                        """, (video_id,))
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] update_transcript_cue error: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+        # Invalidate memory cache
+        if video_id in self._memory_cache:
+            self._memory_cache.pop(video_id, None)
+
+        return updated_cue
+
+    def mark_summary_outdated(self, video_id: str) -> None:
+        """Mark all summaries for a video as outdated."""
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE lecturescribe_summaries SET is_outdated = TRUE WHERE video_id = %s;", (video_id,))
+                    cursor.execute("UPDATE lecturescribe_lecture_summaries SET is_outdated = TRUE WHERE video_id = %s;", (video_id,))
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] mark_summary_outdated error: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    def add_annotation(
+        self,
+        video_id: str,
+        user_email: str,
+        selected_text: str,
+        annotation_type: str,
+        cue_id: Optional[int] = None,
+        start_seconds: float = 0.0,
+        end_seconds: float = 0.0,
+        color: Optional[str] = None,
+        note_text: Optional[str] = None,
+        ai_prompt: Optional[str] = None,
+        ai_response: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Save a new highlight, margin note, or embedded AI explanation."""
+        clean_email = (user_email or "anonymous").strip().lower()
+        clean_type = annotation_type.strip().lower() if annotation_type else "highlight"
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_transcript_annotations (
+                            video_id, user_email, cue_id, start_seconds, end_seconds,
+                            selected_text, annotation_type, color, note_text,
+                            ai_prompt, ai_response, created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
+                                  selected_text, annotation_type, color, note_text,
+                                  ai_prompt, ai_response, created_at, updated_at;
+                    """, (
+                        video_id, clean_email, cue_id, start_seconds, end_seconds,
+                        selected_text, clean_type, color, note_text,
+                        ai_prompt, ai_response
+                    ))
+                    row = cursor.fetchone()
+                    conn.commit()
+                    if row:
+                        return {
+                            "id": str(row["id"]),
+                            "videoId": row["video_id"],
+                            "userEmail": row["user_email"],
+                            "cueId": row["cue_id"],
+                            "startSeconds": float(row["start_seconds"]),
+                            "endSeconds": float(row["end_seconds"]),
+                            "selectedText": row["selected_text"],
+                            "annotationType": row["annotation_type"],
+                            "color": row.get("color"),
+                            "noteText": row.get("note_text"),
+                            "aiPrompt": row.get("ai_prompt"),
+                            "aiResponse": row.get("ai_response"),
+                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+                            "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None
+                        }
+        except Exception as e:
+            print(f"[PostgreSQL Notice] add_annotation error: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return None
+
+    def get_annotations(self, video_id: str, user_email: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieve user annotations for a video."""
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        conn = None
+        annotations = []
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            SELECT id, video_id, user_email, cue_id, start_seconds, end_seconds,
+                                   selected_text, annotation_type, color, note_text,
+                                   ai_prompt, ai_response, created_at, updated_at
+                            FROM lecturescribe_transcript_annotations
+                            WHERE video_id = %s AND user_email = %s
+                            ORDER BY start_seconds ASC, created_at ASC;
+                        """, (video_id, clean_email))
+                    else:
+                        cursor.execute("""
+                            SELECT id, video_id, user_email, cue_id, start_seconds, end_seconds,
+                                   selected_text, annotation_type, color, note_text,
+                                   ai_prompt, ai_response, created_at, updated_at
+                            FROM lecturescribe_transcript_annotations
+                            WHERE video_id = %s
+                            ORDER BY start_seconds ASC, created_at ASC;
+                        """, (video_id,))
+                    rows = cursor.fetchall() or []
+                    for row in rows:
+                        annotations.append({
+                            "id": str(row["id"]),
+                            "videoId": row["video_id"],
+                            "userEmail": row["user_email"],
+                            "cueId": row["cue_id"],
+                            "startSeconds": float(row["start_seconds"]),
+                            "endSeconds": float(row["end_seconds"]),
+                            "selectedText": row["selected_text"],
+                            "annotationType": row["annotation_type"],
+                            "color": row.get("color"),
+                            "noteText": row.get("note_text"),
+                            "aiPrompt": row.get("ai_prompt"),
+                            "aiResponse": row.get("ai_response"),
+                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+                            "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None
+                        })
+        except Exception as e:
+            print(f"[PostgreSQL Notice] get_annotations error: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return annotations
+
+    def delete_annotation(self, annotation_id: str, user_email: Optional[str] = None) -> bool:
+        """Delete an annotation by ID."""
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_transcript_annotations
+                            WHERE id = %s AND user_email = %s;
+                        """, (annotation_id, clean_email))
+                    else:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_transcript_annotations
+                            WHERE id = %s;
+                        """, (annotation_id,))
+                    conn.commit()
+                    return cursor.rowcount > 0
+        except Exception as e:
+            print(f"[PostgreSQL Notice] delete_annotation error: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def create_review_job(self, video_id: str, review_mode: str = "audio_grounded") -> str:
+        """Create a new transcript review job and return its UUID."""
+        job_id = str(uuid.uuid4())
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_transcript_reviews (id, video_id, review_mode, status, created_at, updated_at)
+                        VALUES (%s, %s, %s, 'processing', NOW(), NOW());
+                    """, (job_id, video_id, review_mode))
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] create_review_job error: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return job_id
+
+    def get_review_job(self, job_id: Optional[str] = None, video_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get review job details."""
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if job_id:
+                        cursor.execute("""
+                            SELECT id, video_id, review_mode, status, error_message, created_at, updated_at
+                            FROM lecturescribe_transcript_reviews
+                            WHERE id = %s;
+                        """, (job_id,))
+                    elif video_id:
+                        cursor.execute("""
+                            SELECT id, video_id, review_mode, status, error_message, created_at, updated_at
+                            FROM lecturescribe_transcript_reviews
+                            WHERE video_id = %s
+                            ORDER BY created_at DESC LIMIT 1;
+                        """, (video_id,))
+                    else:
+                        return None
+                    row = cursor.fetchone()
+                    if row:
+                        return {
+                            "id": str(row["id"]),
+                            "videoId": row["video_id"],
+                            "reviewMode": row["review_mode"],
+                            "status": row["status"],
+                            "errorMessage": row.get("error_message"),
+                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+                            "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None
+                        }
+        except Exception as e:
+            print(f"[PostgreSQL Notice] get_review_job error: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return None
+
+    def update_review_job(self, job_id: str, status: str, error_message: Optional[str] = None) -> bool:
+        """Update review job status."""
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_transcript_reviews
+                        SET status = %s, error_message = %s, updated_at = NOW()
+                        WHERE id = %s;
+                    """, (status, error_message, job_id))
+                    conn.commit()
+                    return cursor.rowcount > 0
+        except Exception as e:
+            print(f"[PostgreSQL Notice] update_review_job error: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def save_review_suggestions(self, review_id: str, video_id: str, suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Batch save review suggestion candidates."""
+        conn = None
+        saved = []
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    for s in suggestions:
+                        s_id = str(uuid.uuid4())
+                        cue_id = s.get("cue_id")
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_transcript_suggestions (
+                                id, review_id, video_id, cue_id, start_seconds, end_seconds,
+                                original_text, suggested_text, suggestion_type, confidence,
+                                reason, status, created_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', NOW())
+                            RETURNING id, review_id, video_id, cue_id, start_seconds, end_seconds,
+                                      original_text, suggested_text, suggestion_type, confidence,
+                                      reason, status, created_at;
+                        """, (
+                            s_id, review_id, video_id, cue_id,
+                            float(s.get("start_seconds", 0.0)), float(s.get("end_seconds", 0.0)),
+                            s.get("original_text", ""), s.get("suggested_text", ""),
+                            s.get("suggestion_type", "correction"), s.get("confidence", "medium"),
+                            s.get("reason", "")
+                        ))
+                        row = cursor.fetchone()
+                        if row:
+                            saved.append({
+                                "id": str(row["id"]),
+                                "reviewId": str(row["review_id"]),
+                                "videoId": row["video_id"],
+                                "cueId": row["cue_id"],
+                                "startSeconds": float(row["start_seconds"]),
+                                "endSeconds": float(row["end_seconds"]),
+                                "originalText": row["original_text"],
+                                "suggestedText": row["suggested_text"],
+                                "suggestionType": row["suggestion_type"],
+                                "confidence": row["confidence"],
+                                "reason": row.get("reason"),
+                                "status": row["status"],
+                                "createdAt": row["created_at"].isoformat() if row.get("created_at") else None
+                            })
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] save_review_suggestions error: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return saved
+
+    def get_review_suggestions(self, video_id: str, review_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieve candidate review suggestions."""
+        conn = None
+        results = []
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if review_id:
+                        cursor.execute("""
+                            SELECT id, review_id, video_id, cue_id, start_seconds, end_seconds,
+                                   original_text, suggested_text, suggestion_type, confidence,
+                                   reason, status, applied_at, created_at
+                            FROM lecturescribe_transcript_suggestions
+                            WHERE video_id = %s AND review_id = %s
+                            ORDER BY start_seconds ASC, created_at ASC;
+                        """, (video_id, review_id))
+                    else:
+                        cursor.execute("""
+                            SELECT id, review_id, video_id, cue_id, start_seconds, end_seconds,
+                                   original_text, suggested_text, suggestion_type, confidence,
+                                   reason, status, applied_at, created_at
+                            FROM lecturescribe_transcript_suggestions
+                            WHERE video_id = %s
+                            ORDER BY start_seconds ASC, created_at ASC;
+                        """, (video_id,))
+                    rows = cursor.fetchall() or []
+                    for row in rows:
+                        results.append({
+                            "id": str(row["id"]),
+                            "reviewId": str(row["review_id"]),
+                            "videoId": row["video_id"],
+                            "cueId": row["cue_id"],
+                            "startSeconds": float(row["start_seconds"]),
+                            "endSeconds": float(row["end_seconds"]),
+                            "originalText": row["original_text"],
+                            "suggestedText": row["suggested_text"],
+                            "suggestionType": row["suggestion_type"],
+                            "confidence": row["confidence"],
+                            "reason": row.get("reason"),
+                            "status": row["status"],
+                            "appliedAt": row["applied_at"].isoformat() if row.get("applied_at") else None,
+                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None
+                        })
+        except Exception as e:
+            print(f"[PostgreSQL Notice] get_review_suggestions error: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return results
+
+    def update_suggestion_status(self, suggestion_id: str, status: str) -> Optional[Dict[str, Any]]:
+        """Update suggestion status ('accepted', 'rejected', 'pending')."""
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    applied_clause = "NOW()" if status == "accepted" else "NULL"
+                    cursor.execute(f"""
+                        UPDATE lecturescribe_transcript_suggestions
+                        SET status = %s, applied_at = {applied_clause}
+                        WHERE id = %s
+                        RETURNING id, review_id, video_id, cue_id, start_seconds, end_seconds,
+                                  original_text, suggested_text, suggestion_type, confidence,
+                                  reason, status, applied_at;
+                    """, (status, suggestion_id))
+                    row = cursor.fetchone()
+                    conn.commit()
+                    if row:
+                        return {
+                            "id": str(row["id"]),
+                            "reviewId": str(row["review_id"]),
+                            "videoId": row["video_id"],
+                            "cueId": row["cue_id"],
+                            "startSeconds": float(row["start_seconds"]),
+                            "endSeconds": float(row["end_seconds"]),
+                            "originalText": row["original_text"],
+                            "suggestedText": row["suggested_text"],
+                            "suggestionType": row["suggestion_type"],
+                            "confidence": row["confidence"],
+                            "reason": row.get("reason"),
+                            "status": row["status"],
+                            "appliedAt": row["applied_at"].isoformat() if row.get("applied_at") else None
+                        }
+        except Exception as e:
+            print(f"[PostgreSQL Notice] update_suggestion_status error: {e}")
+        finally:
+            if conn:
+                conn.close()
+        return None
 
     def _ts_to_secs(self, ts: str) -> int:
         """Convert MM:SS or HH:MM:SS to total seconds."""

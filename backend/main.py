@@ -79,6 +79,11 @@ from backend.reading_extractor import (
     resolve_digital_book_reader,
     extract_readings_with_llm,
 )
+from backend.transcript_correction import (
+    resolve_lecture_audio_file,
+    review_transcript_cues,
+    explain_selected_transcript_text,
+)
 
 _TRANSCRIPTION_JOB_ID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -215,6 +220,36 @@ class CourseTutorChatRequest(BaseModel):
     message: str
     user_email: Optional[str] = None
     chat_history: Optional[List[Dict[str, Any]]] = None
+
+
+class UpdateCueRequest(BaseModel):
+    text: str
+
+
+class CreateAnnotationRequest(BaseModel):
+    user_email: Optional[str] = "anonymous"
+    selected_text: str
+    annotation_type: str = "highlight"  # highlight, note, ai_explanation
+    cue_id: Optional[int] = None
+    start_seconds: Optional[float] = 0.0
+    end_seconds: Optional[float] = 0.0
+    color: Optional[str] = "yellow"
+    note_text: Optional[str] = None
+    ai_prompt: Optional[str] = None
+    ai_response: Optional[str] = None
+
+
+class ExplainSelectionRequest(BaseModel):
+    selected_text: str
+    prompt_type: Optional[str] = "explain"
+    custom_prompt: Optional[str] = None
+    cue_timestamp: Optional[str] = None
+    start_seconds: Optional[float] = None
+    end_seconds: Optional[float] = None
+
+
+class ReviewTranscriptRequest(BaseModel):
+    review_mode: Optional[str] = "audio_grounded"
 
 
 @app.get("/health")
@@ -919,6 +954,308 @@ def get_transcript(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ==============================================================================
+# Transcript Manual Cue Editing & Invalidation Endpoints
+# ==============================================================================
+
+@app.patch("/api/lecture/{video_id}/cues/{cue_id}")
+def update_transcript_cue_endpoint(video_id: str, cue_id: int, req: UpdateCueRequest):
+    """
+    Manually update a single cue's text, synchronously re-index Algolia and Pinecone,
+    flush Redis cache, and mark the lecture summary as outdated.
+    """
+    vid = str(video_id).strip()
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="Cue text cannot be empty.")
+
+    updated_cue = db_manager.update_transcript_cue(vid, cue_id, req.text.strip())
+    if not updated_cue:
+        raise HTTPException(status_code=404, detail=f"Cue {cue_id} not found for lecture {vid}.")
+
+    # Keep downstream Algolia and Pinecone in sync with canonical updated cues
+    saved = db_manager.get_saved_video(vid)
+    if saved and saved.get("cues"):
+        title = saved.get("title", f"Lecture {vid}")
+        try:
+            algolia_service.ingest_cues(vid, title, saved["cues"])
+        except Exception as a_err:
+            print(f"[Algolia Sync Notice] {a_err}")
+        try:
+            pinecone_rag_engine.ingest_transcript(vid, title, saved["cues"])
+        except Exception as p_err:
+            print(f"[Pinecone Sync Notice] {p_err}")
+
+    if redis_cache:
+        redis_cache.invalidate_video(vid)
+
+    return {
+        "status": "success",
+        "video_id": vid,
+        "cue": updated_cue,
+        "summary_outdated": True
+    }
+
+
+# ==============================================================================
+# Interactive Book Reader: Highlights, Margin Notes & Contextual AI
+# ==============================================================================
+
+@app.get("/api/lecture/{video_id}/annotations")
+def get_transcript_annotations_endpoint(
+    video_id: str,
+    user_email: Optional[str] = Query(None, description="Optional user email filter")
+):
+    """Retrieve all highlights, margin notes, and embedded AI responses for a lecture."""
+    vid = str(video_id).strip()
+    annotations = db_manager.get_annotations(vid, user_email=user_email)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "count": len(annotations),
+        "annotations": annotations
+    }
+
+
+@app.post("/api/lecture/{video_id}/annotations")
+def create_transcript_annotation_endpoint(video_id: str, req: CreateAnnotationRequest):
+    """Create a persistent highlight, margin note, or pinned AI response."""
+    vid = str(video_id).strip()
+    if not req.selected_text or not req.selected_text.strip():
+        raise HTTPException(status_code=400, detail="Selected text is required.")
+
+    annotation = db_manager.add_annotation(
+        video_id=vid,
+        user_email=req.user_email or "anonymous",
+        selected_text=req.selected_text.strip(),
+        annotation_type=req.annotation_type,
+        cue_id=req.cue_id,
+        start_seconds=req.start_seconds or 0.0,
+        end_seconds=req.end_seconds or 0.0,
+        color=req.color,
+        note_text=req.note_text,
+        ai_prompt=req.ai_prompt,
+        ai_response=req.ai_response
+    )
+    if not annotation:
+        raise HTTPException(status_code=500, detail="Failed to save annotation.")
+
+    return {
+        "status": "success",
+        "video_id": vid,
+        "annotation": annotation
+    }
+
+
+@app.delete("/api/lecture/{video_id}/annotations/{annotation_id}")
+def delete_transcript_annotation_endpoint(
+    video_id: str,
+    annotation_id: str,
+    user_email: Optional[str] = Query(None)
+):
+    """Delete a highlight, note, or AI explanation."""
+    deleted = db_manager.delete_annotation(annotation_id, user_email=user_email)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Annotation not found or could not be deleted.")
+    return {"status": "success", "annotation_id": annotation_id}
+
+
+@app.post("/api/lecture/{video_id}/explain-selection")
+def explain_selection_endpoint(video_id: str, req: ExplainSelectionRequest):
+    """Generate a contextual AI explanation, math breakdown, or analogy for selected transcript text."""
+    vid = str(video_id).strip()
+    if not req.selected_text or not req.selected_text.strip():
+        raise HTTPException(status_code=400, detail="No text selected to explain.")
+
+    saved = db_manager.get_saved_video(vid)
+    title = saved.get("title", f"Lecture {vid}") if saved else "Lecture"
+
+    # Grab surrounding context if available
+    context_window = ""
+    if saved and saved.get("cues") and req.start_seconds is not None:
+        target_sec = float(req.start_seconds)
+        nearby = [
+            c.get("text", "") for c in saved["cues"]
+            if abs(float(c.get("seconds", 0)) - target_sec) <= 45
+        ]
+        context_window = " ".join(nearby)
+
+    explanation = explain_selected_transcript_text(
+        selected_text=req.selected_text.strip(),
+        prompt_type=req.prompt_type or "explain",
+        custom_prompt=req.custom_prompt,
+        lecture_title=title,
+        context_window=context_window
+    )
+
+    return {
+        "status": "success",
+        "video_id": vid,
+        "selected_text": req.selected_text.strip(),
+        "prompt_type": req.prompt_type,
+        "explanation": explanation
+    }
+
+
+# ==============================================================================
+# Audio-Grounded Multimodal AI Review & Candidate Edits
+# ==============================================================================
+
+@app.post("/api/lecture/{video_id}/review")
+def trigger_transcript_review_endpoint(video_id: str, req: ReviewTranscriptRequest):
+    """
+    Trigger speech-recognition review and spoken math to LaTeX conversion.
+    Returns candidate suggestions without modifying canonical transcript.
+    """
+    vid = str(video_id).strip()
+    saved = db_manager.get_saved_video(vid)
+    if not saved or not saved.get("cues"):
+        raise HTTPException(status_code=404, detail=f"No cues found for lecture {vid} to review.")
+
+    job_id = db_manager.create_review_job(vid, review_mode=req.review_mode or "audio_grounded")
+
+    audio_path = None
+    try:
+        audio_path = resolve_lecture_audio_file(vid, course_name=saved.get("course_name"))
+        suggestions = review_transcript_cues(
+            cues=saved["cues"],
+            video_title=saved.get("title", f"Lecture {vid}"),
+            audio_path=audio_path,
+            review_mode=req.review_mode or "audio_grounded"
+        )
+        saved_suggs = db_manager.save_review_suggestions(job_id, vid, suggestions)
+        db_manager.update_review_job(job_id, "completed")
+        return {
+            "status": "completed",
+            "job_id": job_id,
+            "video_id": vid,
+            "review_mode": req.review_mode,
+            "audio_verified": bool(audio_path is not None),
+            "count": len(saved_suggs),
+            "suggestions": saved_suggs
+        }
+    except Exception as e:
+        db_manager.update_review_job(job_id, "failed", error_message=str(e))
+        raise HTTPException(status_code=500, detail=f"Transcript review failed: {e}")
+    finally:
+        if audio_path and audio_path.exists():
+            try:
+                audio_path.unlink()
+            except Exception:
+                pass
+
+
+@app.get("/api/lecture/{video_id}/review/status")
+def get_transcript_review_status_endpoint(
+    video_id: str,
+    job_id: Optional[str] = Query(None)
+):
+    """Fetch status and current candidate suggestions for a transcript review."""
+    vid = str(video_id).strip()
+    job = db_manager.get_review_job(job_id=job_id, video_id=vid)
+    suggestions = db_manager.get_review_suggestions(vid, review_id=job["id"] if job else None)
+    return {
+        "status": job.get("status") if job else "none",
+        "job": job,
+        "video_id": vid,
+        "count": len(suggestions),
+        "suggestions": suggestions
+    }
+
+
+@app.post("/api/lecture/{video_id}/review/suggestions/{suggestion_id}/accept")
+def accept_review_suggestion_endpoint(video_id: str, suggestion_id: str):
+    """
+    Accept an AI review suggestion: updates the canonical cue text in PostgreSQL,
+    synchronizes Algolia and Pinecone, flushes Redis, and marks the summary outdated.
+    """
+    vid = str(video_id).strip()
+    suggestions = db_manager.get_review_suggestions(vid)
+    matching = next((s for s in suggestions if s["id"] == suggestion_id), None)
+    if not matching:
+        raise HTTPException(status_code=404, detail="Suggestion not found.")
+
+    cue_id = matching.get("cueId")
+    if not cue_id:
+        # Fallback by matching seconds if cueId wasn't stored
+        saved = db_manager.get_saved_video(vid)
+        if saved and saved.get("cues"):
+            for c in saved["cues"]:
+                if abs(float(c.get("seconds", 0)) - matching["startSeconds"]) <= 2:
+                    cue_id = c.get("id")
+                    break
+
+    if not cue_id:
+        raise HTTPException(status_code=400, detail="Could not resolve matching cue to update.")
+
+    updated_cue = db_manager.update_transcript_cue(vid, cue_id, matching["suggestedText"])
+    db_manager.update_suggestion_status(suggestion_id, "accepted")
+
+    # Invalidate downstream services
+    saved = db_manager.get_saved_video(vid)
+    if saved and saved.get("cues"):
+        title = saved.get("title", f"Lecture {vid}")
+        try:
+            algolia_service.ingest_cues(vid, title, saved["cues"])
+        except Exception:
+            pass
+        try:
+            pinecone_rag_engine.ingest_transcript(vid, title, saved["cues"])
+        except Exception:
+            pass
+
+    if redis_cache:
+        redis_cache.invalidate_video(vid)
+
+    return {
+        "status": "success",
+        "video_id": vid,
+        "suggestion_id": suggestion_id,
+        "cue": updated_cue,
+        "summary_outdated": True
+    }
+
+
+@app.post("/api/lecture/{video_id}/review/suggestions/{suggestion_id}/reject")
+def reject_review_suggestion_endpoint(video_id: str, suggestion_id: str):
+    """Dismiss an AI suggestion without modifying canonical transcript."""
+    updated = db_manager.update_suggestion_status(suggestion_id, "rejected")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Suggestion not found.")
+    return {"status": "success", "suggestion_id": suggestion_id, "status": "rejected"}
+
+
+@app.post("/api/lecture/{video_id}/review/suggestions/{suggestion_id}/undo")
+def undo_review_suggestion_endpoint(video_id: str, suggestion_id: str):
+    """Undo an accepted suggestion: restores original text and resets status to pending."""
+    vid = str(video_id).strip()
+    suggestions = db_manager.get_review_suggestions(vid)
+    matching = next((s for s in suggestions if s["id"] == suggestion_id), None)
+    if not matching:
+        raise HTTPException(status_code=404, detail="Suggestion not found.")
+
+    cue_id = matching.get("cueId")
+    if cue_id:
+        db_manager.update_transcript_cue(vid, cue_id, matching["originalText"])
+
+    db_manager.update_suggestion_status(suggestion_id, "pending")
+
+    # Invalidate downstream services
+    saved = db_manager.get_saved_video(vid)
+    if saved and saved.get("cues"):
+        title = saved.get("title", f"Lecture {vid}")
+        try:
+            algolia_service.ingest_cues(vid, title, saved["cues"])
+            pinecone_rag_engine.ingest_transcript(vid, title, saved["cues"])
+        except Exception:
+            pass
+
+    if redis_cache:
+        redis_cache.invalidate_video(vid)
+
+    return {"status": "success", "suggestion_id": suggestion_id, "status": "pending"}
+
 
 @app.post("/api/search")
 def algolia_search(req: AlgoliaSearchRequest):

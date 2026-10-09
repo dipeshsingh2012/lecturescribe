@@ -221,6 +221,7 @@ export default function App() {
           activeData={activeData}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
+          summaryOutdated={summary.isOutdated || activeData?.is_outdated || activeData?.summary_outdated}
           openDownloadModal={() => auth.openDownloadModal(activeData)}
           googleUser={auth.googleUser}
           handleGoogleSignIn={auth.handleGoogleSignIn}

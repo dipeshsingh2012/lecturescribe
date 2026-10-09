@@ -92,6 +92,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
           ...prev,
           [summaryType]: data.summary
         }));
+        setIsOutdated(false);
       }
     } catch (err) {
       console.error('Error generating lecture summary:', err);
@@ -132,7 +133,19 @@ export default function useLectureSummary(activeData, userEmail = null) {
     }, 2000);
   }, []);
 
+  const [isOutdated, setIsOutdated] = useState(false);
+
   const currentSummary = summaries[activeSummaryType] || summaries['comprehensive'] || summaries['15_min'] || null;
+
+  useEffect(() => {
+    if (activeData?.is_outdated || activeData?.summary_outdated || currentSummary?.isOutdated) {
+      setIsOutdated(true);
+    }
+  }, [activeData?.is_outdated, activeData?.summary_outdated, currentSummary?.isOutdated]);
+
+  const markOutdated = useCallback(() => {
+    setIsOutdated(true);
+  }, []);
 
   return {
     summaries,
@@ -148,7 +161,10 @@ export default function useLectureSummary(activeData, userEmail = null) {
     copyText,
     fetchSummaries,
     generateSummary,
-    transcriptAvailable
+    transcriptAvailable,
+    isOutdated,
+    markOutdated,
+    setIsOutdated
   };
 }
 

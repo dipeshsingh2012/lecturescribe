@@ -32,6 +32,53 @@ except ImportError:
     HAS_ALGOLIA = False
 
 
+def generate_dual_representation(text: str) -> str:
+    """
+    Generate alternate search tokens for formulas and spoken mathematical words.
+    E.g. '$y = mx + c$' -> 'y equals mx plus c' and 'y = mx + c'
+         'y equals mx plus c' -> '$y = mx + c$'
+    """
+    if not text:
+        return ""
+    alts = []
+    if "$" in text:
+        clean_formula = re.sub(r'\$([^\$]+)\$', r'\1', text)
+        alts.append(clean_formula)
+        spoken = clean_formula
+        spoken = re.sub(r'(?i)\by\s*=\s*mx\s*\+\s*c\b', 'y equals mx plus c', spoken)
+        spoken = re.sub(r'(?i)\be\s*=\s*mc\^2\b', 'e equals mc squared', spoken)
+        spoken = re.sub(r'(?i)\ba\^2\s*\+\s*b\^2\s*=\s*c\^2\b', 'a squared plus b squared equals c squared', spoken)
+        spoken = re.sub(r'(?i)\bx\^2\s*\+\s*y\^2\s*=\s*r\^2\b', 'x squared plus y squared equals r squared', spoken)
+        spoken = re.sub(r'\\sin', 'sine', spoken)
+        spoken = re.sub(r'\\cos', 'cosine', spoken)
+        spoken = re.sub(r'\\tan', 'tangent', spoken)
+        spoken = re.sub(r'\\alpha', 'alpha', spoken)
+        spoken = re.sub(r'\\beta', 'beta', spoken)
+        spoken = re.sub(r'\\theta', 'theta', spoken)
+        spoken = re.sub(r'\\int', 'integral', spoken)
+        spoken = re.sub(r'\\sum', 'summation sigma', spoken)
+        spoken = re.sub(r'\\lim', 'limit', spoken)
+        spoken = re.sub(r'=', ' equals ', spoken)
+        spoken = re.sub(r'\+', ' plus ', spoken)
+        spoken = re.sub(r'\^2\b', ' squared ', spoken)
+        spoken = re.sub(r'\^3\b', ' cubed ', spoken)
+        spoken = re.sub(r'\s+', ' ', spoken).strip()
+        alts.append(spoken)
+    else:
+        spoken_patterns = [
+            (r'(?i)\by equals mx plus c\b', '$y = mx + c$ y = mx + c'),
+            (r'(?i)\be equals mc squared\b', '$E = mc^2$ E = mc^2'),
+            (r'(?i)\ba squared plus b squared equals c squared\b', '$a^2 + b^2 = c^2$ a^2 + b^2 = c^2'),
+            (r'(?i)\bx squared plus y squared equals r squared\b', '$x^2 + y^2 = r^2$ x^2 + y^2 = r^2'),
+            (r'(?i)\bsin squared theta plus cos squared theta equals one\b', '$\\sin^2\\theta + \\cos^2\\theta = 1$'),
+        ]
+        for pat, rep in spoken_patterns:
+            if re.search(pat, text):
+                alts.append(rep)
+
+    return " ".join(dict.fromkeys(alts)).strip()
+
+
 class AlgoliaSearchService:
     """Algolia Search API Manager for Instant Transcript Search."""
 
@@ -62,9 +109,6 @@ class AlgoliaSearchService:
                     print(f"[Algolia Service] ALGOLIA_APP_ID / ALGOLIA_API_KEY not configured. Using dynamic indexer.")
                 self.client = None
                 return
-            # Idempotency guard: if a client already exists and credentials haven't changed,
-            # skip the verbose "[Algolia Service] Connected to..." banner. The lifespan block
-            # will print its own short green rule-confirmation line.
             if self.client is not None and not creds_changed and not _first_init:
                 return
             self.client = SearchClientSync(self.app_id, self.api_key)
@@ -80,7 +124,7 @@ class AlgoliaSearchService:
 
         try:
             settings = {
-                "searchableAttributes": ["text", "timestamp", "video_title"],
+                "searchableAttributes": ["text", "alt_text", "timestamp", "video_title"],
                 "attributesForFaceting": ["filterOnly(video_id)"],
                 "customRanking": ["asc(seconds)"]
             }
@@ -112,6 +156,7 @@ class AlgoliaSearchService:
         for idx, c in enumerate(cues):
             ts = c.get("time", "00:00")
             text = c.get("text", "")
+            alt_text = generate_dual_representation(text)
             rec = {
                 "objectID": f"vimeo-{video_id}-{idx}",
                 "video_id": video_id,
@@ -119,6 +164,7 @@ class AlgoliaSearchService:
                 "timestamp": ts,
                 "seconds": self.parse_timestamp_seconds(ts),
                 "text": text,
+                "alt_text": alt_text,
                 "cue_index": idx
             }
             records.append(rec)
@@ -177,12 +223,16 @@ class AlgoliaSearchService:
                 continue
 
             text_lower = rec["text"].lower()
+            alt_lower = (rec.get("alt_text") or "").lower()
+            combined_lower = f"{text_lower} {alt_lower}"
             score = 0
 
             for q_w in q_words:
                 if q_w in text_lower:
                     score += 3
-                if any(w.startswith(q_w) for w in text_lower.split()):
+                elif q_w in alt_lower:
+                    score += 2
+                if any(w.startswith(q_w) for w in combined_lower.split()):
                     score += 2
 
             if score > 0:

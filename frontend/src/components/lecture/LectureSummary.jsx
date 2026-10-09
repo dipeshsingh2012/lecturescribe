@@ -111,6 +111,48 @@ export default function LectureSummary({
         </div>
       </div>
 
+      {/* Outdated Summary Alert Banner */}
+      {summaryHook.isOutdated && (
+        <div style={{
+          padding: '10px 18px',
+          background: 'rgba(245, 158, 11, 0.12)',
+          borderBottom: '1px solid rgba(245, 158, 11, 0.35)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '10px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertCircle size={16} color="#d97706" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: 600 }}>
+              Transcript Modified — Summary May Be Outdated
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => generateSummary('comprehensive', true)}
+            disabled={generating || !transcriptAvailable}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '4px 10px',
+              borderRadius: '6px',
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              background: '#d97706',
+              color: '#ffffff',
+              border: 'none',
+              cursor: generating || !transcriptAvailable ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <RefreshCw size={12} className={generating ? 'loading-pulse' : ''} />
+            <span>Regenerate Summary Now</span>
+          </button>
+        </div>
+      )}
+
       {/* Sub-bar: View Mode Selector & Word Count */}
       <div style={{
         padding: '8px 18px',

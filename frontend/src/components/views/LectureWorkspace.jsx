@@ -161,6 +161,16 @@ export default function LectureWorkspace({
         >
           <FileText size={15} />
           <span>Summary</span>
+          {(summaryHook?.isOutdated || activeData?.is_outdated || activeData?.summary_outdated) && (
+            <span style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              backgroundColor: '#f59e0b',
+              boxShadow: '0 0 6px #f59e0b',
+              marginLeft: '2px'
+            }} />
+          )}
         </button>
         <button
           type="button"
@@ -215,6 +225,10 @@ export default function LectureWorkspace({
             copied={copied}
             handleCopyTranscript={handleCopyTranscript}
             transcriptAvailable={transcriptAvailable}
+            activeData={activeData}
+            setActiveData={setActiveData}
+            summaryHook={summaryHook}
+            googleUser={googleUser}
           />
         ) : activeTab === 'quiz' ? (
           <LectureQuiz

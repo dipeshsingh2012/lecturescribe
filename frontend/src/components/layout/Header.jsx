@@ -30,6 +30,7 @@ export default function Header({
   activeData,
   activeTab,
   setActiveTab,
+  summaryOutdated,
   openDownloadModal,
   googleUser,
   handleGoogleSignIn,
@@ -103,6 +104,19 @@ export default function Header({
                 }}
               >
                 <FileText size={15} /> Summary
+                {(summaryOutdated || activeData?.is_outdated || activeData?.summary_outdated) && (
+                  <span
+                    title="Transcript cues modified — summary may be outdated"
+                    style={{
+                      width: '7px',
+                      height: '7px',
+                      borderRadius: '50%',
+                      backgroundColor: '#f59e0b',
+                      boxShadow: '0 0 6px #f59e0b',
+                      display: 'inline-block'
+                    }}
+                  />
+                )}
               </button>
               <button
                 aria-label="AI Tutor"

@@ -95,6 +95,27 @@ export default function App() {
     setActiveLectureRef(activeData);
   }, [activeData]);
 
+  // When activeData loads with canonical course name, upgrade selectedCourse
+  useEffect(() => {
+    if (activeData?.course_name && activeData.course_name !== selectedCourse) {
+      if (!selectedCourse || normalizeCourseSlug(selectedCourse) === normalizeCourseSlug(activeData.course_name)) {
+        setSelectedCourse(activeData.course_name);
+      }
+    }
+  }, [activeData?.course_name, selectedCourse, setSelectedCourse]);
+
+  // Synchronize document title with active lecture or course route
+  useEffect(() => {
+    const canonicalCourse = course.activeCourseData?.course_name || activeData?.course_name || selectedCourse;
+    if (activeData?.title) {
+      document.title = `${activeData.title} | LectureScribe`;
+    } else if (canonicalCourse) {
+      document.title = `${canonicalCourse} | Course | LectureScribe`;
+    } else {
+      document.title = 'LectureScribe - LMS & Lecture AI Workspace';
+    }
+  }, [activeData?.title, activeData?.course_name, selectedCourse, course.activeCourseData]);
+
   const effectiveCourse = selectedCourse || course.activeCourseData?.course_name || activeData?.course_name || null;
   const resources = useResources(activeData?.videoId, effectiveCourse, auth.googleUser);
   const tutor = useAITutor(activeData, auth.googleUser);

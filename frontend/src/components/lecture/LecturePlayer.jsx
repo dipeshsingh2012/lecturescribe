@@ -337,8 +337,6 @@ export default function LecturePlayer({
           const displayCourseName = (
             activeCourseData?.course_name ||
             activeData.course_name ||
-            effectiveCourses.find(c => c.course_slug === activeData.course_slug || normalizeCourseSlug(c.course_name) === normalizeCourseSlug(selectedCourse))?.course_name ||
-            userLibrary.find(l => String(l.video_id) === String(activeData.videoId))?.course_name ||
             selectedCourse ||
             'General Lectures'
           );

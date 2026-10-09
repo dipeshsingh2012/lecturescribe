@@ -332,5 +332,25 @@ Today we discuss forward kinematics.
         self.assertEqual(allowed.status_code, 200)
         self.assertEqual(allowed.json()["stage"], "transcribing")
 
+    @patch("backend.main.db_manager.get_saved_video")
+    def test_transcript_provides_course_slug_and_canonical_name(self, mock_get_saved):
+        mock_get_saved.return_value = {
+            "videoId": "1234158573",
+            "title": "Machine Learning Paradigms Live Session -4 ( 8 / 10 / 2026)",
+            "duration": 3600,
+            "sourceUrl": "https://vimeo.com/1234158573",
+            "captionLabel": "English",
+            "cues": [{"time": "00:01", "text": "Welcome to ML"}],
+            "summarySections": [],
+            "course_name": "Machine Learning Paradigms",
+            "course_slug": "machine-learning-paradigms",
+            "cached": True
+        }
+        response = self.client.get("/api/transcript?url=https://vimeo.com/1234158573&course_name=machine-learning-paradigms")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["course_name"], "Machine Learning Paradigms")
+        self.assertEqual(data["course_slug"], "machine-learning-paradigms")
+
 if __name__ == "__main__":
     unittest.main()

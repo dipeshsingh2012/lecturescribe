@@ -787,21 +787,9 @@ def get_transcript(
                 None if saved_cues else
                 "This video was imported, but no transcript or captions are available."
             )
-            raw_course = course_name if isinstance(course_name, str) else None
-            candidate_course = ((raw_course and raw_course.strip()) or saved.get("course_name") or "General Lectures").strip()
-            # If candidate_course is a slug, resolve it to canonical display course name
-            effective_course = db_manager.resolve_course_canonical_name(candidate_course) if candidate_course else "General Lectures"
-            saved["course_name"] = effective_course
-            saved["course_slug"] = to_course_slug(effective_course)
-            if raw_course and raw_course.strip():
-                try:
-                    conn = db_manager._get_connection()
-                    with conn:
-                        with conn.cursor() as cursor:
-                            cursor.execute("UPDATE lecturescribe_videos SET course_name = %s WHERE video_id = %s;", (effective_course, video_id))
-                            conn.commit()
-                except Exception as ce:
-                    print(f"⚠️ [Course Update Notice]: {ce}")
+            course_title = saved.get("course_name") or extract_course_name(saved.get("title", ""))
+            saved["course_name"] = course_title
+            saved["course_slug"] = to_course_slug(course_title)
             # Only transcript-backed services can be populated when cues exist.
             if saved_cues:
                 algolia_service.ingest_cues(video_id, saved["title"], saved_cues)
@@ -812,7 +800,7 @@ def get_transcript(
                 saved["drive_folder_url"] = drive_url
                 saved["driveFolderUrl"] = drive_url
             # Check if self-hosted video is stored in GCS
-            gcs_video = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=effective_course)
+            gcs_video = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=course_title)
             if gcs_video:
                 saved["gcs_video_url"] = gcs_video["view_url"]
                 saved["gcsVideoUrl"] = gcs_video["view_url"]
@@ -829,7 +817,7 @@ def get_transcript(
                     title=saved["title"],
                     duration=saved.get("duration", "Unknown"),
                     source_url=saved.get("sourceUrl", f"https://vimeo.com/{video_id}"),
-                    course_name=effective_course,
+                    course_name=course_title,
                     drive_folder_url=drive_url
                 )
                 if redis_cache:

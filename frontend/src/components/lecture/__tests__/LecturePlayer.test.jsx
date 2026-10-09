@@ -185,6 +185,53 @@ describe('LecturePlayer', () => {
     expect(lectureTitle).toHaveAttribute('aria-label', 'Applied Mathematics for Data Science and AI – Live Session 5 (30 / 9 / 2026)');
   });
 
+  it('renders human-readable course name in breadcrumb and navigates using course_slug when selectedCourse is a slug', () => {
+    const mockNavigateTo = vi.fn();
+    const mockSetSelectedCourse = vi.fn();
+    const activeData = {
+      videoId: '1234158573',
+      title: 'Machine Learning Paradigms Live Session -4 ( 8 / 10 / 2026)',
+      course_name: 'Machine Learning Paradigms',
+      course_slug: 'machine-learning-paradigms',
+      duration: '1:30:00'
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={null}
+        selectedCourse="machine-learning-paradigms"
+        setSelectedCourse={mockSetSelectedCourse}
+        userLibrary={[]}
+        effectiveCourses={[]}
+        setActiveData={vi.fn()}
+        navigateTo={mockNavigateTo}
+        iframeRef={{ current: null }}
+        copied={false}
+        handleCopyTranscript={vi.fn()}
+        googleUser={null}
+        openUploadModal={vi.fn()}
+        lectureResources={[]}
+        lectureResourcesLoading={false}
+        handleDeleteResource={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const breadcrumbs = screen.getByRole('navigation', { name: /Breadcrumbs/i });
+    expect(breadcrumbs).toBeInTheDocument();
+
+    // The breadcrumb course button must show the human-readable canonical title, NOT the slug
+    const courseBtn = screen.getByRole('button', { name: 'Machine Learning Paradigms' });
+    expect(courseBtn).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'machine-learning-paradigms' })).toBeNull();
+
+    // Clicking the course button should navigate using the course_slug
+    fireEvent.click(courseBtn);
+    expect(mockNavigateTo).toHaveBeenCalledWith('/course/machine-learning-paradigms');
+    expect(mockSetSelectedCourse).toHaveBeenCalledWith('Machine Learning Paradigms');
+  });
+
   it('renders native video tag and "Cloud Storage Video" badge when gcs_video_url is present', () => {
     const activeData = {
       videoId: '1234158181',

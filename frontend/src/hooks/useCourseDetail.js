@@ -80,6 +80,9 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
           if (data && data.course) {
             lastFetchedRef.current = queryTarget;
             setDirectCourseData(data.course);
+            if (data.course.course_name && data.course.course_name !== selectedCourse) {
+              setSelectedCourse(data.course.course_name);
+            }
           }
         }
       } catch (e) {

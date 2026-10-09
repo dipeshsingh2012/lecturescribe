@@ -1981,6 +1981,7 @@ class RelationalDBManager:
                         if summary_sections:
                             self.update_summary_sections(video_id, summary_sections)
 
+                    course_name = v_row.get("course_name") or extract_course_name(v_row.get("title", ""))
                     record = {
                         "videoId": v_row["video_id"],
                         "title": v_row["title"],
@@ -1989,7 +1990,8 @@ class RelationalDBManager:
                         "captionLabel": v_row["caption_label"],
                         "cues": [dict(c) for c in cues],
                         "summarySections": summary_sections,
-                        "course_name": v_row.get("course_name") or extract_course_name(v_row["title"]),
+                        "course_name": course_name,
+                        "course_slug": to_course_slug(course_name),
                         "cached": True
                     }
                     self._memory_cache[video_id] = record
@@ -2626,82 +2628,41 @@ class RelationalDBManager:
         Resolve a course slug (e.g. 'machine-learning-paradigms') or raw name
         (e.g. 'Machine Learning Paradigms') to the canonical course name stored in DB.
         If no match is found, returns clean input or formatted title as fallback.
+        Never returns a raw hyphenated slug.
         """
         if not course_identifier or not course_identifier.strip():
             return "General Lectures"
 
         clean = course_identifier.strip()
         slug_norm = to_course_slug(clean)
-        slug_as_space = clean.replace("-", " ")
 
         conn = None
         try:
             if HAS_PSYCOPG2 and self.postgres_url:
                 conn = self._get_connection()
                 with conn.cursor() as cursor:
-                    # Check videos first
                     cursor.execute("""
                         SELECT course_name FROM lecturescribe_videos
                         WHERE course_name IS NOT NULL AND course_name != ''
-                          AND (
-                              LOWER(course_name) = LOWER(%s)
-                              OR LOWER(course_name) = LOWER(%s)
-                              OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s
-                          )
+                          AND (LOWER(course_name) = LOWER(%s) OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s)
                         LIMIT 1;
-                    """, (clean, slug_as_space, slug_norm))
+                    """, (clean, slug_norm))
                     row = cursor.fetchone()
                     if row and row.get("course_name"):
                         return row["course_name"]
-
-                    # Check user library
-                    cursor.execute("""
-                        SELECT course_name FROM lecturescribe_user_library
-                        WHERE course_name IS NOT NULL AND course_name != ''
-                          AND (
-                              LOWER(course_name) = LOWER(%s)
-                              OR LOWER(course_name) = LOWER(%s)
-                              OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s
-                          )
-                        LIMIT 1;
-                    """, (clean, slug_as_space, slug_norm))
-                    row = cursor.fetchone()
-                    if row and row.get("course_name"):
-                        return row["course_name"]
-
-                    # Check readings
-                    cursor.execute("""
-                        SELECT course_name FROM lecturescribe_course_readings
-                        WHERE course_name IS NOT NULL AND course_name != ''
-                          AND (
-                              LOWER(course_name) = LOWER(%s)
-                              OR LOWER(course_name) = LOWER(%s)
-                              OR regexp_replace(LOWER(course_name), '[^a-z0-9]+', '-', 'g') = %s
-                          )
-                        LIMIT 1;
-                    """, (clean, slug_as_space, slug_norm))
-                    row = cursor.fetchone()
-                    if row and row.get("course_name"):
-                        return row["course_name"]
-        except Exception as e:
-            print(f"[PostgreSQL Notice] resolve_course_canonical_name fallback: {e}")
+        except Exception:
+            pass
         finally:
             if conn:
                 conn.close()
 
-        # In-memory checks
-        for r in getattr(self, "_readings_memory_cache", []):
-            c = r.get("course_name") or ""
-            if to_course_slug(c) == slug_norm or c.lower() == clean.lower() or c.lower() == slug_as_space.lower():
-                return c
-
         for v in self._memory_cache.values():
             if isinstance(v, dict):
-                c = v.get("course_name") or ""
-                if to_course_slug(c) == slug_norm or c.lower() == clean.lower():
+                c = (v.get("course_name") or "").strip()
+                if c and (to_course_slug(c) == slug_norm or c.lower() == clean.lower()):
                     return c
 
-        return clean if not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean) else clean.replace("-", " ").title()
+        return clean
 
     def get_course_details(self, course_name: str, user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
@@ -2745,12 +2706,10 @@ class RelationalDBManager:
                         """, (user_email.strip().lower(), clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%"))
                         user_lib_rows = cursor.fetchall() or []
 
-                    if not vid_rows and not user_lib_rows:
-                        raise ValueError("No course lectures found in database")
-
+                    first_row = vid_rows[0] if vid_rows else (user_lib_rows[0] if user_lib_rows else {})
                     canonical_name = (
-                        (vid_rows and vid_rows[0].get("course_name")) or
-                        (user_lib_rows and user_lib_rows[0].get("course_name")) or
+                        first_row.get("course_name") or
+                        extract_course_name(first_row.get("title", "")) or
                         clean_name
                     )
 
@@ -2854,7 +2813,10 @@ class RelationalDBManager:
                     "course_name": c_name
                 })
         if mem_lectures:
-            c_title = mem_lectures[0]["course_name"]
+            c_title = self.resolve_course_canonical_name(mem_lectures[0].get("course_name") or clean_name)
+            for m in mem_lectures:
+                m["course_name"] = c_title
+                m["course_slug"] = to_course_slug(c_title)
             return {
                 "course_name": c_title,
                 "course_slug": to_course_slug(c_title),

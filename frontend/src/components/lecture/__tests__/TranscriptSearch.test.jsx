@@ -377,6 +377,42 @@ describe('TranscriptSearch', () => {
     expect(screen.getByText(/AI Transcript Review/i)).toBeInTheDocument();
   });
 
+  it('sends the required review request body when starting an AI review', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ job: { id: 'job_123', status: 'running' }, suggestions: [] })
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    const activeData = { videoId: 'vid_123', cues: [] };
+    const { unmount } = render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={-1}
+        activeData={activeData}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /AI Transcript Review/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Run Review/i }));
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_123/review'),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ review_mode: 'audio_grounded' })
+        }
+      );
+    });
+
+    unmount();
+    vi.unstubAllGlobals();
+  });
+
   it('opens Notes and Highlights drawer when Notes button is clicked', () => {
     const activeData = { videoId: 'vid_123', cues: [] };
     render(
@@ -455,6 +491,505 @@ describe('TranscriptSearch', () => {
     expect(noteBadge).toBeInTheDocument();
 
     global.fetch = originalFetch;
+  });
+
+  it('renders visual highlights and comment badges with camelCase backend annotation data', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_1',
+                cueId: 1,
+                selectedText: 'linear algebra',
+                annotationType: 'highlight',
+                color: 'green',
+                startSeconds: 60.0
+              },
+              {
+                id: 'ann_2',
+                cueId: 1,
+                selectedText: 'linear algebra',
+                annotationType: 'note',
+                noteText: 'Remember this definition',
+                startSeconds: 60.0
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    await waitFor(() => {
+      const mark = document.querySelector('mark');
+      expect(mark).toBeInTheDocument();
+      expect(mark).toHaveTextContent('linear algebra');
+      expect(mark).toHaveStyle({ backgroundColor: 'rgba(187, 247, 208, 0.55)' });
+    });
+
+    const noteBadge = screen.getByRole('button', { name: /View cue comment/i });
+    expect(noteBadge).toBeInTheDocument();
+
+    global.fetch = originalFetch;
+  });
+
+  it('opens text selection toolbar when user selects text within a single cue', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const cueEl = document.querySelector('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'linear algebra',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 })
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    expect(await screen.findByRole('button', { name: /Close selection menu/i })).toBeInTheDocument();
+    expect(screen.getByTitle(/Highlight in yellow/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Add margin comment\/note/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Ask AI to explain selected text/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Copy selected quote/i)).toBeInTheDocument();
+  });
+
+  it('creates highlight on click, calls API, and renders <mark> on transcript', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    const mockFetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations') && (!opts || opts.method === 'GET')) {
+        return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+      }
+      if (url.includes('/annotations') && opts?.method === 'POST') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotation: {
+              id: 'ann_new_1',
+              cueId: body.cue_id,
+              selectedText: body.selected_text,
+              annotationType: 'highlight',
+              color: body.color,
+              startSeconds: body.start_seconds
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const cueEl = document.querySelector('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'linear algebra',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 })
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    const greenBtn = await screen.findByTitle(/Highlight in green/i);
+    fireEvent.click(greenBtn);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_123/annotations'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"color":"green"')
+        })
+      );
+    });
+
+    await waitFor(() => {
+      const mark = document.querySelector('mark');
+      expect(mark).toBeInTheDocument();
+      expect(mark).toHaveTextContent('linear algebra');
+    });
+
+    expect(screen.queryByTitle(/Highlight in green/i)).not.toBeInTheDocument();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('creates margin note, calls API, shows note badge, and note is visible in drawer', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    const mockFetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations') && (!opts || opts.method === 'GET')) {
+        return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+      }
+      if (url.includes('/annotations') && opts?.method === 'POST') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotation: {
+              id: 'ann_note_1',
+              cueId: body.cue_id,
+              selectedText: body.selected_text,
+              annotationType: 'note',
+              noteText: body.note_text,
+              startSeconds: body.start_seconds
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const cueEl = document.querySelector('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'linear algebra',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 })
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    const noteBtn = await screen.findByTitle(/Add margin comment\/note/i);
+    fireEvent.click(noteBtn);
+
+    const textarea = screen.getByPlaceholderText(/Write study notes/i);
+    fireEvent.change(textarea, { target: { value: 'Crucial for exams' } });
+
+    const saveBtn = screen.getByRole('button', { name: /Save Note/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_123/annotations'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"note_text":"Crucial for exams"')
+        })
+      );
+    });
+
+    const badge = await screen.findByRole('button', { name: /View cue comment/i });
+    expect(badge).toBeInTheDocument();
+
+    fireEvent.click(badge);
+    expect(await screen.findByText(/Reader Notes & Highlights/i)).toBeInTheDocument();
+    expect(screen.getByText('Crucial for exams')).toBeInTheDocument();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('asks AI for selection explanation and pins AI explanation as annotation note', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    const mockFetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/explain-selection')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            explanation: 'Linear algebra is the branch of math concerning linear equations and matrices.'
+          })
+        });
+      }
+      if (url.includes('/annotations') && opts?.method === 'POST') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotation: {
+              id: 'ann_ai_1',
+              cueId: body.cue_id,
+              selectedText: body.selected_text,
+              annotationType: 'ai_explanation',
+              aiResponse: body.ai_response,
+              aiPrompt: body.ai_prompt,
+              startSeconds: body.start_seconds
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const cueEl = document.querySelector('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'linear algebra',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 })
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    const askAiBtn = await screen.findByTitle(/Ask AI to explain selected text/i);
+    fireEvent.click(askAiBtn);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_123/explain-selection'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"selected_text":"linear algebra"')
+        })
+      );
+    });
+
+    expect(await screen.findByText(/branch of math concerning linear equations/i)).toBeInTheDocument();
+
+    const pinBtn = screen.getByRole('button', { name: /Pin as Note/i });
+    fireEvent.click(pinBtn);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_123/annotations'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"annotation_type":"ai_explanation"')
+        })
+      );
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it('does NOT open toolbar when selection spans multiple cues', () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'First line of speech.' },
+      { id: 2, time: '01:10', text: 'Second line of speech.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const cueRows = document.querySelectorAll('.transcript-cue-row');
+    const cue0TextNode = cueRows[0].querySelector('.transcript-cue').firstChild;
+    const cue1TextNode = cueRows[1].querySelector('.transcript-cue').firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'First line of speech. Second line of speech.',
+      getRangeAt: () => ({
+        startContainer: cue0TextNode,
+        endContainer: cue1TextNode,
+        commonAncestorContainer: document.body,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 200, height: 40 })
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueRows[0].closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    expect(screen.queryByRole('button', { name: /Close selection menu/i })).not.toBeInTheDocument();
+  });
+
+  it('does not seek video when selecting text or dragging mouse inside cue', () => {
+    const handleCueClick = vi.fn();
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={handleCueClick}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const cueRow = document.querySelector('.transcript-cue-row');
+
+    // Drag simulation with distance > 5px
+    fireEvent.mouseDown(cueRow, { clientX: 100, clientY: 100 });
+    fireEvent.mouseUp(cueRow, { clientX: 140, clientY: 100 });
+    fireEvent.click(cueRow, { clientX: 140, clientY: 100 });
+
+    expect(handleCueClick).not.toHaveBeenCalled();
+  });
+
+  it('surfaces API error in selection toolbar when annotation creation fails', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_123', cues };
+
+    const mockFetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations') && opts?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          json: async () => ({ detail: 'Database connection failed' })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const cueEl = document.querySelector('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'linear algebra',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 })
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    const yellowBtn = await screen.findByTitle(/Highlight in yellow/i);
+    fireEvent.click(yellowBtn);
+
+    expect(await screen.findByText('Database connection failed')).toBeInTheDocument();
+    // Toolbar remains open so user sees the error
+    expect(screen.getByRole('button', { name: /Close selection menu/i })).toBeInTheDocument();
+
+    vi.unstubAllGlobals();
   });
 
   it('pauses auto-scroll on wheel interaction and displays floating Re-center button', () => {

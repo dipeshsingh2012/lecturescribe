@@ -185,34 +185,3 @@
   }
 }
 
-/* GCS Synced Floating Pill & Menu State */
-.ls-pill.ls-pill-gcs-synced {
-  border-color: rgba(56, 189, 248, 0.6);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 12px rgba(14, 165, 233, 0.3);
-}
-
-.ls-pill.ls-pill-gcs-synced .ls-pill-icon {
-  background: linear-gradient(135deg, #0284c7, #38bdf8);
-}
-
-.ls-pill-gcs-badge {
-  font-size: 10px;
-  background: rgba(14, 165, 233, 0.25);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.45);
-  padding: 1px 6px;
-  border-radius: 9999px;
-  font-weight: 600;
-  margin-left: 2px;
-}
-
-.ls-action-btn.ls-gcs-ready {
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  background: rgba(14, 165, 233, 0.1);
-}
-
-.ls-action-btn.ls-gcs-ready:hover {
-  background: rgba(14, 165, 233, 0.2);
-}
-

@@ -155,15 +155,75 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const settings = await getSettings();
       const videoId = message.videoId;
+      const courseSlug = message.courseSlug;
       const tabParam = message.tab ? `?tab=${encodeURIComponent(message.tab)}` : "";
       const base = settings.webAppUrl.replace(/\/+$/, "");
-      const fullUrl = `${base}/lecture/${videoId}${tabParam}`;
+      const fullUrl = courseSlug
+        ? `${base}/course/${courseSlug}/lecture/${videoId}${tabParam}`
+        : `${base}/lecture/${videoId}${tabParam}`;
 
       const createdTab = await ext.tabs.create({
         url: fullUrl,
         index: (sender?.tab?.index ?? 0) + 1
       });
       sendResponse({ success: true, url: fullUrl, tabId: createdTab.id });
+    })();
+    return true;
+  }
+
+  if (message.type === "IMPORT_LECTURE") {
+    (async () => {
+      const settings = await getSettings();
+      const videoId = message.videoId;
+      const apiBase = settings.apiUrl.replace(/\/+$/, "");
+
+      // Look up cached video details across tabs
+      let targetVideo = null;
+      for (const map of tabVideos.values()) {
+        if (map.has(videoId)) {
+          targetVideo = map.get(videoId);
+          break;
+        }
+      }
+
+      const playerConfig = message.playerConfig || targetVideo?.playerConfig || null;
+      const videoDetails = message.videoDetails || (targetVideo?.title ? { title: targetVideo.title } : null);
+      const courseName = message.courseName || targetVideo?.courseName || null;
+      const lmsPageUrl = message.lmsPageUrl || targetVideo?.referer || null;
+
+      try {
+        const resp = await fetch(`${apiBase}/api/extension/import`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_id: videoId,
+            player_config: playerConfig,
+            video_details: videoDetails,
+            course_name: courseName,
+            lms_page_url: lmsPageUrl,
+            email: settings.userEmail || null
+          })
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+          sendResponse({
+            success: false,
+            error: data.detail || `Import failed with status HTTP ${resp.status}`
+          });
+          return;
+        }
+
+        sendResponse({
+          success: true,
+          ...data
+        });
+      } catch (err) {
+        sendResponse({
+          success: false,
+          error: err.message || "Failed to reach LectureScribe API for import"
+        });
+      }
     })();
     return true;
   }
@@ -249,62 +309,6 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "UPLOAD_TO_GCS") {
-    (async () => {
-      const settings = await getSettings();
-      const videoId = message.videoId;
-      const apiBase = settings.apiUrl.replace(/\/+$/, "");
-
-      // Look up cached video details across tabs
-      let targetVideo = null;
-      for (const map of tabVideos.values()) {
-        if (map.has(videoId)) {
-          targetVideo = map.get(videoId);
-          break;
-        }
-      }
-
-      const hHash = message.hHash || targetVideo?.hHash || null;
-      const referer = message.referer || targetVideo?.referer || null;
-      const playerConfig = message.playerConfig || targetVideo?.playerConfig || null;
-
-      try {
-        const resp = await fetch(`${apiBase}/api/cloud/gcs/upload-bundle`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            video_id: videoId,
-            title: message.title || targetVideo?.title || null,
-            bucket_name: settings.gcsBucketName || undefined,
-            folder_prefix: settings.gcsFolderPrefix || "lectures",
-            h_hash: hHash,
-            referer: referer,
-            player_config: playerConfig
-          })
-        });
-
-        const data = await resp.json();
-        if (!resp.ok) {
-          sendResponse({
-            success: false,
-            error: data.detail || `Upload failed with status HTTP ${resp.status}`
-          });
-          return;
-        }
-
-        sendResponse({
-          success: true,
-          ...data
-        });
-      } catch (err) {
-        sendResponse({
-          success: false,
-          error: err.message || "Failed to reach LectureScribe API for GCS upload"
-        });
-      }
-    })();
-    return true;
-  }
-
   return false;
 });
+

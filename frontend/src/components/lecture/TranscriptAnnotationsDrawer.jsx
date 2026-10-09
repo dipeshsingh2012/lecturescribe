@@ -19,12 +19,14 @@ export default function TranscriptAnnotationsDrawer({
   handleCueClick
 }) {
   const [filterType, setFilterType] = useState('all'); // 'all' | 'note' | 'highlight' | 'ai_explanation'
+  const [deleteError, setDeleteError] = useState(null);
 
   if (!open) return null;
 
   const filtered = annotations.filter(a => {
     if (filterType === 'all') return true;
-    return a.annotationType === filterType;
+    const aType = a.annotationType || a.annotation_type || 'highlight';
+    return aType === filterType;
   });
 
   const formatSeconds = (sec) => {
@@ -35,6 +37,7 @@ export default function TranscriptAnnotationsDrawer({
   };
 
   const handleDelete = async (annotationId) => {
+    setDeleteError(null);
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${annotationId}`, {
         method: 'DELETE'
@@ -43,9 +46,13 @@ export default function TranscriptAnnotationsDrawer({
         if (typeof onDeleteAnnotation === 'function') {
           onDeleteAnnotation(annotationId);
         }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setDeleteError(err.detail || 'Failed to delete annotation');
       }
     } catch (err) {
       console.error('Error deleting annotation:', err);
+      setDeleteError(err.message || 'Error deleting annotation');
     }
   };
 
@@ -154,6 +161,28 @@ export default function TranscriptAnnotationsDrawer({
         })}
       </div>
 
+      {/* Error banner */}
+      {deleteError && (
+        <div style={{
+          padding: '8px 12px',
+          background: 'rgba(239, 68, 68, 0.1)',
+          color: '#ef4444',
+          fontSize: '0.74rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          borderBottom: '1px solid rgba(239, 68, 68, 0.2)'
+        }}>
+          <span>{deleteError}</span>
+          <button
+            onClick={() => setDeleteError(null)}
+            style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer' }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       {/* List */}
       <div style={{
         flex: 1,
@@ -183,10 +212,15 @@ export default function TranscriptAnnotationsDrawer({
           </div>
         ) : (
           filtered.map(item => {
-            const formattedTime = formatSeconds(item.startSeconds);
-            const isNote = item.annotationType === 'note';
-            const isAi = item.annotationType === 'ai_explanation';
-            const isHighlight = item.annotationType === 'highlight';
+            const startSec = item.startSeconds !== undefined ? item.startSeconds : (item.start_seconds !== undefined ? item.start_seconds : 0);
+            const formattedTime = formatSeconds(startSec);
+            const annType = item.annotationType || item.annotation_type || 'highlight';
+            const isNote = annType === 'note';
+            const isAi = annType === 'ai_explanation';
+            const isHighlight = annType === 'highlight';
+            const selectedText = item.selectedText || item.selected_text || '';
+            const noteText = item.noteText || item.note_text;
+            const aiResponse = item.aiResponse || item.ai_response;
 
             return (
               <div
@@ -264,17 +298,17 @@ export default function TranscriptAnnotationsDrawer({
                   fontStyle: 'italic',
                   color: 'var(--text-primary)'
                 }}>
-                  "{item.selectedText}"
+                  "{selectedText}"
                 </blockquote>
 
                 {/* Comment / AI Note */}
-                {item.noteText && (
+                {noteText && (
                   <p style={{ fontSize: '0.82rem', margin: '2px 0', color: 'var(--text-primary)', fontWeight: 500 }}>
-                    {item.noteText}
+                    {noteText}
                   </p>
                 )}
 
-                {item.aiResponse && (
+                {aiResponse && (
                   <div style={{
                     fontSize: '0.78rem',
                     color: 'var(--text-primary)',
@@ -284,7 +318,7 @@ export default function TranscriptAnnotationsDrawer({
                     padding: '8px',
                     lineHeight: 1.4
                   }}>
-                    {item.aiResponse}
+                    {aiResponse}
                   </div>
                 )}
               </div>

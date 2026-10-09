@@ -352,5 +352,128 @@ Today we discuss forward kinematics.
         self.assertEqual(data["course_name"], "Machine Learning Paradigms")
         self.assertEqual(data["course_slug"], "machine-learning-paradigms")
 
+    @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.fetch_player_config")
+    @patch("backend.main.get_text_tracks")
+    @patch("backend.main.fetch_vtt")
+    @patch("backend.main.algolia_service.ingest_cues")
+    @patch("backend.main.pinecone_rag_engine.ingest_transcript")
+    @patch("backend.main.db_manager.save_video_transcript")
+    def test_extension_import_with_player_config_and_course(
+        self,
+        mock_save_transcript,
+        mock_pinecone,
+        mock_algolia,
+        mock_fetch_vtt,
+        mock_get_tracks,
+        mock_fetch_config,
+        mock_get_saved_video
+    ):
+        mock_get_saved_video.return_value = None
+        mock_get_tracks.return_value = [
+            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+        ]
+        mock_fetch_vtt.return_value = self.sample_vtt
+        mock_save_transcript.return_value = True
+
+        payload = {
+            "video_id": "1229247139",
+            "player_config": {
+                "video": {
+                    "title": "Captured LMS Lecture",
+                    "duration": 2400
+                }
+            },
+            "course_name": "Distributed Systems",
+            "lms_page_url": "https://canvas.example.edu/courses/456/pages/week-2"
+        }
+
+        response = self.client.post("/api/extension/import", json=payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["videoId"], "1229247139")
+        self.assertEqual(data["title"], "Captured LMS Lecture")
+        self.assertEqual(data["course_name"], "Distributed Systems")
+        self.assertEqual(data["course_slug"], "distributed-systems")
+        self.assertEqual(len(data["cues"]), 2)
+        # fetch_player_config should NOT be called when player_config is provided
+        mock_fetch_config.assert_not_called()
+        mock_save_transcript.assert_called_once()
+        self.assertEqual(mock_save_transcript.call_args[1].get("course_name"), "Distributed Systems")
+
+    @patch("backend.main.db_manager.get_saved_video", return_value=None)
+    @patch("backend.main.fetch_player_config")
+    @patch("backend.main.get_text_tracks")
+    @patch("backend.main.fetch_vtt")
+    @patch("backend.main.algolia_service.ingest_cues")
+    @patch("backend.main.pinecone_rag_engine.ingest_transcript")
+    @patch("backend.main.db_manager.save_video_transcript")
+    def test_extension_import_without_player_config_fetches_vimeo(
+        self,
+        mock_save_transcript,
+        mock_pinecone,
+        mock_algolia,
+        mock_fetch_vtt,
+        mock_get_tracks,
+        mock_fetch_config,
+        mock_get_saved_video
+    ):
+        mock_fetch_config.return_value = {
+            "video": {
+                "title": "Cloud Computing Fundamentals",
+                "duration": 1800
+            }
+        }
+        mock_get_tracks.return_value = [
+            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+        ]
+        mock_fetch_vtt.return_value = self.sample_vtt
+        mock_save_transcript.return_value = True
+
+        payload = {
+            "video_id": "999888777",
+            "course_name": "Cloud Computing"
+        }
+
+        response = self.client.post("/api/extension/import", json=payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["videoId"], "999888777")
+        self.assertEqual(data["title"], "Cloud Computing Fundamentals")
+        self.assertEqual(data["course_name"], "Cloud Computing")
+        mock_fetch_config.assert_called_once_with("999888777")
+
+    @patch("backend.main.db_manager.get_saved_video")
+    def test_extension_import_cache_hit(self, mock_get_saved):
+        mock_get_saved.return_value = {
+            "videoId": "12345",
+            "title": "Cached Lecture",
+            "duration": 3600,
+            "sourceUrl": "https://vimeo.com/12345",
+            "captionLabel": "English",
+            "cues": [{"time": "00:01", "text": "Cached text"}],
+            "summarySections": [],
+            "course_name": "Robotics",
+            "course_slug": "robotics",
+            "cached": True
+        }
+
+        response = self.client.post("/api/extension/import", json={"video_id": "12345"})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["videoId"], "12345")
+        self.assertTrue(data["cached"])
+        self.assertEqual(data["course_name"], "Robotics")
+
+    def test_extension_import_invalid_video_id_raises_400(self):
+        response = self.client.post("/api/extension/import", json={"video_id": ""})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.json())
+
+        response = self.client.post("/api/extension/import", json={"video_id": "not-valid-id"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.json())
+
 if __name__ == "__main__":
     unittest.main()
+

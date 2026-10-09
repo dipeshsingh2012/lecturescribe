@@ -133,6 +133,105 @@ def test_transcript_annotations_crud():
         assert del_resp.json()["status"] == "success"
 
 
+def test_transcript_annotations_camel_and_snake_parity():
+    video_id = "test_vid_annot_parity"
+    fake_annotation = {
+        "id": "anno-uuid-parity",
+        "videoId": video_id,
+        "video_id": video_id,
+        "userEmail": "student@example.com",
+        "user_email": "student@example.com",
+        "cueId": 105,
+        "cue_id": 105,
+        "startSeconds": 10.0,
+        "start_seconds": 10.0,
+        "endSeconds": 15.0,
+        "end_seconds": 15.0,
+        "selectedText": "eigenvectors and eigenvalues",
+        "selected_text": "eigenvectors and eigenvalues",
+        "annotationType": "note",
+        "annotation_type": "note",
+        "color": "blue",
+        "noteText": "Crucial exam topic",
+        "note_text": "Crucial exam topic",
+        "aiPrompt": None,
+        "ai_prompt": None,
+        "aiResponse": None,
+        "ai_response": None,
+        "createdAt": "2026-10-09T20:00:00Z",
+        "created_at": "2026-10-09T20:00:00Z",
+        "updatedAt": "2026-10-09T20:00:00Z",
+        "updated_at": "2026-10-09T20:00:00Z"
+    }
+
+    with patch.object(db_manager, "add_annotation", return_value=fake_annotation) as mock_add, \
+         patch.object(db_manager, "get_annotations", return_value=[fake_annotation]) as mock_get:
+
+        # Test POST with camelCase fields
+        create_resp = client.post(
+            f"/api/lecture/{video_id}/annotations",
+            json={
+                "userEmail": "student@example.com",
+                "selectedText": "eigenvectors and eigenvalues",
+                "annotationType": "note",
+                "cueId": 105,
+                "startSeconds": 10.0,
+                "endSeconds": 15.0,
+                "color": "blue",
+                "noteText": "Crucial exam topic"
+            }
+        )
+        assert create_resp.status_code == 200
+        ann = create_resp.json()["annotation"]
+        # Verify both camelCase and snake_case properties are present and match
+        assert ann["selectedText"] == "eigenvectors and eigenvalues"
+        assert ann["selected_text"] == "eigenvectors and eigenvalues"
+        assert ann["annotationType"] == "note"
+        assert ann["annotation_type"] == "note"
+        assert ann["cueId"] == 105
+        assert ann["cue_id"] == 105
+        assert ann["noteText"] == "Crucial exam topic"
+        assert ann["note_text"] == "Crucial exam topic"
+
+        # Test GET annotations
+        get_resp = client.get(f"/api/lecture/{video_id}/annotations?user_email=student@example.com")
+        assert get_resp.status_code == 200
+        items = get_resp.json()["annotations"]
+        assert len(items) == 1
+        assert items[0]["selectedText"] == "eigenvectors and eigenvalues"
+        assert items[0]["selected_text"] == "eigenvectors and eigenvalues"
+
+
+def test_db_manager_annotation_methods_direct():
+    video_id = "test_vid_direct_db_ann"
+    ann = db_manager.add_annotation(
+        video_id=video_id,
+        user_email="direct_user@example.com",
+        selected_text="matrix rank",
+        annotation_type="highlight",
+        cue_id="42",
+        start_seconds=22.5,
+        end_seconds=27.5,
+        color="pink"
+    )
+    assert ann is not None
+    assert ann["selectedText"] == "matrix rank"
+    assert ann["selected_text"] == "matrix rank"
+    assert ann["annotationType"] == "highlight"
+    assert ann["annotation_type"] == "highlight"
+    assert ann["cueId"] == 42
+    assert ann["cue_id"] == 42
+    assert ann["color"] == "pink"
+
+    # Query annotations
+    all_ann = db_manager.get_annotations(video_id=video_id)
+    assert any(a["id"] == ann["id"] for a in all_ann)
+
+    # Delete annotation
+    deleted = db_manager.delete_annotation(ann["id"])
+    assert deleted is True
+
+
 def test_explain_selection_endpoint():
     video_id = "test_vid_explain"
     resp = client.post(
@@ -147,6 +246,17 @@ def test_explain_selection_endpoint():
     assert data["status"] == "success"
     assert "explanation" in data
     assert len(data["explanation"]) > 5
+
+    # Test camelCase request payload
+    resp_camel = client.post(
+        f"/api/lecture/{video_id}/explain-selection",
+        json={
+            "selectedText": "gradient descent algorithm",
+            "promptType": "math_breakdown"
+        }
+    )
+    assert resp_camel.status_code == 200
+    assert resp_camel.json()["status"] == "success"
 
 
 def test_review_suggestions_accept_reject_undo():

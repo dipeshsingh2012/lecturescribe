@@ -21,32 +21,25 @@
 
 3. **On-Page Floating Action Badge:**
    - Injects a sleek, non-intrusive floating pill directly over detected Vimeo players.
-   - Quick 1-click options:
-     - 🚀 **Open Workspace**: Launches `/lecture/{videoId}`.
-     - 📝 **AI Summary**: Launches `/lecture/{videoId}?tab=summary`.
-     - 🤖 **AI Tutor**: Launches `/lecture/{videoId}?tab=tutor`.
-     - ☁️ **Upload to GCS**: 1-click export of the lecture bundle directly to Google Cloud Storage.
-     - 📋 **Copy Video ID**: Copies clean numeric ID to clipboard.
+   - Provides exactly two dedicated actions:
+     - 🚀 **Open LectureScribe**: Launches the lecture workspace (`/lecture/{videoId}`).
+     - 📥 **Copy to LectureScribe**: Triggers the shared backend ingestion pipeline (extracting transcripts, generating AI summaries, indexing into Pinecone/Algolia, and associating with detected LMS course context), then opens the lecture directly in its course context (`/course/{course_slug}/lecture/{videoId}`).
 
-4. **1-Click Google Cloud Storage (GCS) Export:**
-   - Dedicated **"☁️ Upload to Google Cloud Storage"** button in both the popup and floating player badge.
-   - Automatically packages and uploads to `gs://[bucket]/lectures/[videoId]/`:
-     - `summary.md`: AI Executive Summary & Core Takeaways
-     - `transcript.md`: Verbatim timestamped transcript
-     - `captions.vtt`: WebVTT subtitle track
-     - `metadata.json`: Video specifications, durations, and streaming endpoints
-     - `download_guide.txt`: Offline CLI commands (`ffmpeg`, `yt-dlp`, `vlc`)
-   - Direct clickable link to the folder in the Google Cloud Console.
+4. **LMS Context & Course Detection:**
+   - Automatically detects active LMS course breadcrumbs and page URLs across Canvas, Blackboard, Moodle, and other learning platforms.
+   - Preserves course association during ingestion so newly imported lectures seamlessly link to their respective course workspace.
 
 5. **Extension Action Popup:**
    - Displays real-time count of detected videos on the active browser tab.
    - Live backend status indicator (`http://localhost:8000` or production Cloud Run API).
-   - Instant DB cache check (highlights lectures already summarized and stored).
+   - Instant DB cache check (highlights lectures already saved in database).
+   - Quick actions to **Open in LectureScribe** or **Copy to LectureScribe** directly from the toolbar.
    - Manual ingest form to paste any Vimeo URL or ID on demand.
 
 6. **Context Menu & Deep Linking:**
    - Right-click any Vimeo link: **"🎓 Open Vimeo Video in LectureScribe"**.
    - Configurable host endpoints for local development (`localhost:5173`) and production deployment.
+
 
 ---
 

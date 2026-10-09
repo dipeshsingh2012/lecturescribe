@@ -19,6 +19,15 @@ import TranscriptReviewDrawer from './TranscriptReviewDrawer';
 import TranscriptAnnotationsDrawer from './TranscriptAnnotationsDrawer';
 import TextSelectionToolbar from './TextSelectionToolbar';
 
+const parseTimeToSeconds = (timeStr) => {
+  if (!timeStr || typeof timeStr !== 'string') return 0;
+  const parts = timeStr.trim().split(':').map(Number);
+  if (parts.some(isNaN)) return 0;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return 0;
+};
+
 export default function TranscriptSearch({
   displayCues = [],
   searchQuery,
@@ -63,6 +72,8 @@ export default function TranscriptSearch({
   const pollIntervalRef = useRef(null);
   const isProgrammaticScrollRef = useRef(false);
   const scrollTimeoutRef = useRef(null);
+  const justDismissedToolbarRef = useRef(false);
+  const mouseDownPosRef = useRef({ x: 0, y: 0 });
 
   const videoId = activeData?.videoId;
 
@@ -139,7 +150,11 @@ export default function TranscriptSearch({
     setReviewError(null);
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/review`, {
-        method: 'POST'
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ review_mode: 'audio_grounded' })
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -214,6 +229,12 @@ export default function TranscriptSearch({
   }, [activeCueIdx]);
 
   const onCueClick = (cueTime, idx) => {
+    // If a toolbar or selection was just active/dismissed, do not seek video
+    if (justDismissedToolbarRef.current) {
+      justDismissedToolbarRef.current = false;
+      return;
+    }
+
     // If user is selecting text to annotate or highlight, do not seek player
     if (typeof window !== 'undefined') {
       const sel = window.getSelection();
@@ -251,6 +272,9 @@ export default function TranscriptSearch({
   }, []);
 
   const handleScroll = (e) => {
+    if (selectionToolbar) {
+      setSelectionToolbar(null);
+    }
     const el = e.currentTarget;
     setShowScrollTop(el.scrollTop > 60);
     const isUp = el.scrollHeight - el.scrollTop - el.clientHeight > 40;
@@ -434,7 +458,8 @@ export default function TranscriptSearch({
   };
 
   // Text Selection Toolbar Handling
-  const handleMouseUp = () => {
+  const handleTextSelection = useCallback(() => {
+    if (typeof window === 'undefined') return;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed) return;
 
@@ -443,45 +468,88 @@ export default function TranscriptSearch({
 
     try {
       const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      const containerRect = scrollContainerRef.current?.getBoundingClientRect();
+      const startNode = range.startContainer;
+      const endNode = range.endContainer;
 
-      let targetCue = null;
-      let targetCueIdx = null;
-      let node = selection.anchorNode;
-      while (node && node !== scrollContainerRef.current) {
-        if (node.getAttribute && node.getAttribute('data-cue-idx') !== null) {
-          targetCueIdx = parseInt(node.getAttribute('data-cue-idx'), 10);
-          targetCue = displayCues[targetCueIdx];
-          break;
-        }
-        node = node.parentNode;
+      const getCueRow = (node) => {
+        let curr = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+        return curr?.closest?.('[data-cue-idx]');
+      };
+
+      const startRow = getCueRow(startNode);
+      const endRow = getCueRow(endNode);
+
+      // Must be within transcript cue rows
+      if (!startRow || !endRow) return;
+
+      const startCueIdx = parseInt(startRow.getAttribute('data-cue-idx'), 10);
+      const endCueIdx = parseInt(endRow.getAttribute('data-cue-idx'), 10);
+
+      // If selection spans multiple cues, do not create a corrupt single-cue annotation
+      if (isNaN(startCueIdx) || isNaN(endCueIdx) || startCueIdx !== endCueIdx) {
+        return;
       }
 
-      if (containerRect) {
-        setSelectionToolbar({
-          position: {
-            x: rect.left + rect.width / 2,
-            y: rect.top,
-            top: Math.max(10, rect.top - containerRect.top - 46),
-            left: Math.max(10, Math.min(rect.left - containerRect.left, containerRect.width - 290))
-          },
-          selectedText: text,
-          cueId: targetCue?.id ?? targetCueIdx,
-          startSeconds: targetCue?.seconds || 0,
-          endSeconds: (targetCue?.seconds || 0) + 5
-        });
-      }
+      const targetCue = displayCues[startCueIdx];
+      if (!targetCue) return;
+
+      // Selection must be within the cue text container (.transcript-cue)
+      const getCueText = (node) => {
+        let curr = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+        return curr?.closest?.('.transcript-cue');
+      };
+      if (!getCueText(startNode) && !getCueText(endNode)) return;
+
+      const rect = range.getBoundingClientRect ? range.getBoundingClientRect() : null;
+      const posX = rect ? (rect.left + rect.width / 2) : 200;
+      const posY = rect ? rect.top : 200;
+
+      const startSec = targetCue.seconds !== undefined
+        ? Number(targetCue.seconds)
+        : parseTimeToSeconds(targetCue.time);
+      const nextCue = displayCues[startCueIdx + 1];
+      const nextSec = nextCue?.seconds !== undefined
+        ? Number(nextCue.seconds)
+        : (nextCue?.time ? parseTimeToSeconds(nextCue.time) : startSec + 5);
+      const endSec = Math.max(startSec + 2, nextSec);
+
+      setSelectionToolbar({
+        position: {
+          x: posX,
+          y: posY
+        },
+        selectedText: text,
+        cueId: targetCue.id ?? startCueIdx,
+        startSeconds: startSec,
+        endSeconds: endSec
+      });
     } catch {
       // Ignore selection errors
     }
-  };
+  }, [displayCues]);
 
-  const handleContainerMouseDown = (e) => {
-    if (selectionToolbar && !e.target.closest?.('.text-selection-toolbar')) {
-      setSelectionToolbar(null);
-    }
-  };
+  useEffect(() => {
+    const handleDocMouseDown = (e) => {
+      if (selectionToolbar && !e.target.closest?.('.text-selection-toolbar')) {
+        setSelectionToolbar(null);
+        justDismissedToolbarRef.current = true;
+        setTimeout(() => {
+          justDismissedToolbarRef.current = false;
+        }, 120);
+      }
+    };
+    const handleDocMouseUp = (e) => {
+      if (scrollContainerRef.current?.contains(e.target)) {
+        handleTextSelection();
+      }
+    };
+    document.addEventListener('mousedown', handleDocMouseDown);
+    document.addEventListener('mouseup', handleDocMouseUp);
+    return () => {
+      document.removeEventListener('mousedown', handleDocMouseDown);
+      document.removeEventListener('mouseup', handleDocMouseUp);
+    };
+  }, [selectionToolbar, handleTextSelection]);
 
   // Helper to render mathematical formulas via KaTeX inside cue strings
   const renderMathText = (text, isActive) => {
@@ -537,7 +605,7 @@ export default function TranscriptSearch({
     // Find occurrences of all annotations in this cue text
     const matches = [];
     cueAnnotations.forEach((ann, aIdx) => {
-      const searchStr = (ann.selected_text || '').trim();
+      const searchStr = (ann.selectedText || ann.selected_text || '').trim();
       if (!searchStr) return;
 
       const lowerText = cueText.toLowerCase();
@@ -587,19 +655,23 @@ export default function TranscriptSearch({
 
       const snippet = cueText.slice(m.start, m.end);
       const ann = m.annotation;
-      const isNote = ann.annotation_type === 'note';
-      const isAi = ann.annotation_type === 'ai_explanation';
+      const annType = ann.annotationType || ann.annotation_type || 'highlight';
+      const isNote = annType === 'note';
+      const isAi = annType === 'ai_explanation';
+      const color = ann.color || 'yellow';
+      const noteText = ann.noteText || ann.note_text || '';
+      const aiResponse = ann.aiResponse || ann.ai_response || '';
 
       let bg = 'rgba(254, 240, 138, 0.45)'; // default yellow
       let borderBottom = '2px solid #eab308';
 
-      if (ann.color === 'green') {
+      if (color === 'green') {
         bg = 'rgba(187, 247, 208, 0.55)';
         borderBottom = '2px solid #22c55e';
-      } else if (ann.color === 'blue') {
+      } else if (color === 'blue') {
         bg = 'rgba(191, 219, 254, 0.55)';
         borderBottom = '2px solid #3b82f6';
-      } else if (ann.color === 'pink') {
+      } else if (color === 'pink') {
         bg = 'rgba(251, 207, 232, 0.55)';
         borderBottom = '2px solid #ec4899';
       } else if (isNote) {
@@ -614,15 +686,19 @@ export default function TranscriptSearch({
         <mark
           key={`highlight-${m.id}-${i}`}
           onClick={(e) => {
+            const sel = window.getSelection();
+            if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
+              return;
+            }
             e.stopPropagation();
             setShowAnnotationsDrawer(true);
           }}
           title={
             isNote
-              ? `Note: "${ann.note_text || ''}" (Click to view)`
+              ? `Note: "${noteText}" (Click to view)`
               : isAi
-              ? `AI Explanation: "${ann.ai_response?.slice(0, 100) || ''}"`
-              : `Highlight (${ann.color || 'yellow'}) - Click to view in Notes`
+              ? `AI Explanation: "${aiResponse.slice(0, 100)}"`
+              : `Highlight (${color}) - Click to view in Notes`
           }
           style={{
             backgroundColor: bg,
@@ -655,8 +731,10 @@ export default function TranscriptSearch({
   // Render cue content (highlights or math or text)
   const renderCueContent = (cue, idx, isActive) => {
     const cueAnnotations = (annotations || []).filter(a => {
-      if (a.cue_id !== undefined && (a.cue_id === cue.id || a.cue_id === idx)) return true;
-      if (a.selected_text && cue.text && cue.text.toLowerCase().includes(a.selected_text.toLowerCase())) return true;
+      const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
+      const aText = (a.selectedText || a.selected_text || '').trim();
+      if (aCueId !== undefined && (aCueId === cue.id || aCueId === idx)) return true;
+      if (aText && cue.text && cue.text.toLowerCase().includes(aText.toLowerCase())) return true;
       return false;
     });
 
@@ -991,8 +1069,9 @@ export default function TranscriptSearch({
           onTouchMove={() => {
             if (autoScroll) setAutoScroll(false);
           }}
-          onMouseUp={handleMouseUp}
-          onMouseDown={handleContainerMouseDown}
+          onMouseUp={handleTextSelection}
+          onKeyUp={handleTextSelection}
+          onTouchEnd={handleTextSelection}
           tabIndex={0}
           style={{
             flex: 1,
@@ -1032,7 +1111,25 @@ export default function TranscriptSearch({
               <div
                 key={idx}
                 ref={(el) => { cueRefs.current[idx] = el; }}
-                onClick={() => !isEditing && onCueClick(cue.time, idx)}
+                onClick={(e) => {
+                  if (isEditing) return;
+                  const dist = Math.hypot(
+                    e.clientX - (mouseDownPosRef.current.x || 0),
+                    e.clientY - (mouseDownPosRef.current.y || 0)
+                  );
+                  if (dist > 5) return;
+                  onCueClick(cue.time, idx);
+                }}
+                onMouseDown={(e) => {
+                  mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+                  if (selectionToolbar && !e.target.closest?.('.text-selection-toolbar')) {
+                    setSelectionToolbar(null);
+                    justDismissedToolbarRef.current = true;
+                    setTimeout(() => {
+                      justDismissedToolbarRef.current = false;
+                    }, 120);
+                  }
+                }}
                 onMouseEnter={() => setHoveredCueIdx(idx)}
                 onMouseLeave={() => setHoveredCueIdx(null)}
                 data-cue-idx={idx}
@@ -1172,7 +1269,12 @@ export default function TranscriptSearch({
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                       {/* Note / Comment indicator badge if present on this cue */}
-                      {annotations.some(a => (a.cue_id === cue.id || a.cue_id === idx || (a.selected_text && cue.text?.toLowerCase().includes(a.selected_text.toLowerCase()))) && a.annotation_type === 'note') && (
+                      {annotations.some(a => {
+                        const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
+                        const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
+                        const aType = a.annotationType || a.annotation_type;
+                        return (aCueId === cue.id || aCueId === idx || (aText && cue.text?.toLowerCase().includes(aText))) && aType === 'note';
+                      }) && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1200,7 +1302,12 @@ export default function TranscriptSearch({
                       )}
 
                       {/* AI Explanation badge if present on this cue */}
-                      {annotations.some(a => (a.cue_id === cue.id || a.cue_id === idx || (a.selected_text && cue.text?.toLowerCase().includes(a.selected_text.toLowerCase()))) && a.annotation_type === 'ai_explanation') && (
+                      {annotations.some(a => {
+                        const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
+                        const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
+                        const aType = a.annotationType || a.annotation_type;
+                        return (aCueId === cue.id || aCueId === idx || (aText && cue.text?.toLowerCase().includes(aText))) && aType === 'ai_explanation';
+                      }) && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

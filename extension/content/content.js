@@ -131,6 +131,56 @@
     return document.title ? document.title.replace(/\s*[-|•]\s*Vimeo.*$/i, '').trim() : null;
   }
 
+  // Extract LMS course breadcrumbs or header title
+  function extractLmsCourseContext() {
+    try {
+      // 1. Canvas LMS Breadcrumbs (#breadcrumbs li or nav[aria-label="breadcrumbs"])
+      const canvasCrumbs = document.querySelectorAll('#breadcrumbs li, .breadcrumbs li, nav[aria-label="breadcrumbs"] li');
+      if (canvasCrumbs && canvasCrumbs.length > 1) {
+        for (let i = 1; i < canvasCrumbs.length; i++) {
+          const text = canvasCrumbs[i]?.textContent?.trim();
+          if (text && !['home', 'dashboard', 'courses', 'modules', 'pages', 'assignments', 'announcements'].includes(text.toLowerCase())) {
+            return text;
+          }
+        }
+      }
+
+      // 2. Canvas Course Header elements
+      const canvasHeader = document.querySelector('#section-tabs-header, .course-title, #course_header, .course-header');
+      if (canvasHeader && canvasHeader.textContent && canvasHeader.textContent.trim()) {
+        return canvasHeader.textContent.trim();
+      }
+
+      // 3. Moodle LMS Breadcrumbs
+      const moodleCrumbs = document.querySelectorAll('.breadcrumb-item, .breadcrumb li');
+      if (moodleCrumbs && moodleCrumbs.length > 1) {
+        for (let i = 1; i < moodleCrumbs.length; i++) {
+          const text = moodleCrumbs[i]?.textContent?.trim();
+          if (text && !['home', 'dashboard', 'my courses', 'courses'].includes(text.toLowerCase())) {
+            return text;
+          }
+        }
+      }
+
+      // 4. Blackboard / D2L / Brightspace
+      const bbHeader = document.querySelector('.course-name, #courseMenu_link, #crumb_1, .d2l-navigation-s-header-title');
+      if (bbHeader && bbHeader.textContent && bbHeader.textContent.trim()) {
+        return bbHeader.textContent.trim();
+      }
+
+      // 5. Generic nav breadcrumb links
+      const genericCrumbs = document.querySelectorAll('[aria-label*="breadcrumb" i] a, .breadcrumb a');
+      for (const a of genericCrumbs) {
+        const text = a.textContent?.trim();
+        if (text && text.length > 3 && !['home', 'dashboard', 'my courses', 'courses'].includes(text.toLowerCase())) {
+          return text;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+
   // Toast notification helper
   function showToast(message) {
     const existing = document.querySelector(".ls-toast");
@@ -199,109 +249,54 @@
 
     const openWorkspaceBtn = document.createElement("button");
     openWorkspaceBtn.className = "ls-action-btn ls-primary";
-    openWorkspaceBtn.innerHTML = '<span class="ls-action-btn-icon">🚀</span> Open Workspace';
+    openWorkspaceBtn.innerHTML = '<span class="ls-action-btn-icon">🚀</span> Open LectureScribe';
     openWorkspaceBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       openInLectureScribe(videoId, "transcript");
       container.classList.remove("ls-open");
     });
 
-    const summaryBtn = document.createElement("button");
-    summaryBtn.className = "ls-action-btn";
-    summaryBtn.innerHTML = '<span class="ls-action-btn-icon">📝</span> AI Summary';
-    summaryBtn.addEventListener("click", (e) => {
+    const copyToLectureScribeBtn = document.createElement("button");
+    copyToLectureScribeBtn.className = "ls-action-btn";
+    copyToLectureScribeBtn.innerHTML = '<span class="ls-action-btn-icon">📥</span> Copy to LectureScribe';
+    copyToLectureScribeBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      openInLectureScribe(videoId, "summary");
+      showToast(`Importing lecture #${videoId} to LectureScribe...`);
       container.classList.remove("ls-open");
-    });
 
-    const tutorBtn = document.createElement("button");
-    tutorBtn.className = "ls-action-btn";
-    tutorBtn.innerHTML = '<span class="ls-action-btn-icon">🤖</span> AI Tutor Chat';
-    tutorBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openInLectureScribe(videoId, "tutor");
-      container.classList.remove("ls-open");
-    });
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "ls-action-btn";
-    copyBtn.innerHTML = '<span class="ls-action-btn-icon">📋</span> Copy Video ID';
-    copyBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      try {
-        await navigator.clipboard.writeText(videoId);
-        showToast(`Copied Vimeo ID ${videoId} to clipboard!`);
-      } catch (err) {
-        showToast(`Vimeo ID: ${videoId}`);
-      }
-      container.classList.remove("ls-open");
-    });
-
-    const gcsBtn = document.createElement("button");
-    gcsBtn.className = "ls-action-btn";
-    gcsBtn.innerHTML = '<span class="ls-action-btn-icon">☁️</span> Upload to GCS';
-    gcsBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (gcsBtn.classList.contains("ls-gcs-ready")) {
-        showToast(`Lecture #${videoId} is already archived in GCS! Opening high-speed player...`);
-        openInLectureScribe(videoId, "transcript");
-        container.classList.remove("ls-open");
-        return;
-      }
-      showToast(`Uploading lecture #${videoId} to Google Cloud Storage...`);
-      container.classList.remove("ls-open");
       try {
         const currentVideo = detectedVideos.get(videoId);
+        const lmsCourse = extractLmsCourseContext() || currentVideo?.courseName || null;
+        const lmsUrl = window.location.href;
+
         const res = await ext.runtime.sendMessage({
-          type: "UPLOAD_TO_GCS",
+          type: "IMPORT_LECTURE",
           videoId,
-          title: videoTitle,
-          hHash: currentVideo?.hHash || null,
-          referer: currentVideo?.referer || null,
+          title: videoTitle || currentVideo?.title || null,
+          courseName: lmsCourse,
+          lmsPageUrl: lmsUrl,
           playerConfig: currentVideo?.playerConfig || null
         });
+
         if (res && res.success) {
-          showToast(`✓ Uploaded to ${res.gcs_uri || 'GCS'}`);
-          gcsBtn.classList.add("ls-gcs-ready");
-          pill.classList.add("ls-pill-gcs-synced");
-          openWorkspaceBtn.innerHTML = '<span class="ls-action-btn-icon">⚡</span> Open GCS Stream';
-          const sizeStr = res.video_details?.size_mb ? ` (${res.video_details.size_mb} MB)` : "";
-          gcsBtn.innerHTML = `<span class="ls-action-btn-icon">✓</span> Synced in GCS${sizeStr}`;
+          showToast(`✓ Lecture #${videoId} saved to ${res.course_name || "LectureScribe"}!`);
+          ext.runtime.sendMessage({
+            type: "OPEN_LECTURE",
+            videoId,
+            courseSlug: res.course_slug || null,
+            tab: "transcript"
+          }).catch(() => {});
         } else {
-          showToast(`✕ Upload failed: ${res?.error || 'Check API'}`);
+          showToast(`✕ Import failed: ${res?.error || "Check backend API"}`);
         }
       } catch (err) {
-        showToast(`✕ Upload error: ${err.message}`);
+        showToast(`✕ Import error: ${err.message}`);
       }
     });
 
     menu.appendChild(openWorkspaceBtn);
-    menu.appendChild(summaryBtn);
-    menu.appendChild(tutorBtn);
-    menu.appendChild(gcsBtn);
-    menu.appendChild(copyBtn);
+    menu.appendChild(copyToLectureScribeBtn);
 
-    // Asynchronously check GCS sync status for this video
-    ext.runtime.sendMessage({
-      type: "CHECK_LECTURE_STATUS",
-      videoId: videoId
-    }).then((status) => {
-      if (status && status.success && status.synced_to_gcs) {
-        pill.classList.add("ls-pill-gcs-synced");
-        pill.title = "High-speed video archived in Google Cloud Storage! Click to open.";
-        
-        const gcsBadge = document.createElement("span");
-        gcsBadge.className = "ls-pill-gcs-badge";
-        gcsBadge.textContent = "☁️ GCS Ready";
-        pill.insertBefore(gcsBadge, closeBtn);
-
-        openWorkspaceBtn.innerHTML = '<span class="ls-action-btn-icon">⚡</span> Open GCS Stream';
-        const sizeStr = status.size_mb ? ` (${status.size_mb} MB)` : "";
-        gcsBtn.innerHTML = `<span class="ls-action-btn-icon">✓</span> Synced in GCS${sizeStr}`;
-        gcsBtn.classList.add("ls-gcs-ready");
-      }
-    }).catch(() => {});
 
     // Toggle dropdown menu on pill click
     pill.addEventListener("click", (e) => {
@@ -381,6 +376,8 @@
         }
       }
 
+      const lmsCourse = extractLmsCourseContext();
+      const lmsPageUrl = isPlayerEmbed ? (document.referrer || null) : window.location.href;
       const title = (playerConfig?.video?.title) || getPageTitle() || (isPlayerEmbed ? `Vimeo Embed ${selfId}` : `Vimeo Video ${selfId}`);
       const videoInfo = {
         videoId: selfId,
@@ -389,6 +386,8 @@
         type: isPlayerEmbed ? "player_embed" : "direct_page",
         hHash: hHash,
         referer: document.referrer || window.location.href,
+        lmsPageUrl: lmsPageUrl,
+        courseName: lmsCourse,
         playerConfig: playerConfig,
         detectedAt: Date.now()
       };
@@ -409,6 +408,8 @@
       if (vId) {
         const hHash = extractHHash(src);
         const title = iframe.getAttribute("title") || iframe.getAttribute("aria-label") || `Embedded Lecture ${vId}`;
+        const lmsCourse = extractLmsCourseContext();
+        const lmsPageUrl = window.location.href;
         if (!detectedVideos.has(vId)) {
           const videoInfo = {
             videoId: vId,
@@ -417,6 +418,8 @@
             type: "embedded_iframe",
             hHash: hHash,
             referer: window.location.href,
+            lmsPageUrl: lmsPageUrl,
+            courseName: lmsCourse,
             playerConfig: null,
             detectedAt: Date.now()
           };

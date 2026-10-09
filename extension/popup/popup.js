@@ -155,35 +155,21 @@ function renderVideosList(videos) {
         <button class="ls-btn ls-btn-primary btn-open-main" data-id="${video.videoId}">
           🚀 Open in LectureScribe
         </button>
+        <button class="ls-btn ls-btn-secondary btn-copy-import" data-id="${video.videoId}">
+          📥 Copy to LectureScribe
+        </button>
         <div class="ls-sub-actions">
-          <button class="ls-btn ls-btn-sub btn-summary" data-id="${video.videoId}" title="Open AI Executive Summary">
-            📝 Summary
-          </button>
-          <button class="ls-btn ls-btn-sub btn-tutor" data-id="${video.videoId}" title="Open AI RAG Tutor Chat">
-            🤖 AI Tutor
-          </button>
           <button class="ls-btn ls-btn-sub btn-copy" data-id="${video.videoId}" title="Copy Video ID">
             📋 Copy ID
           </button>
         </div>
-        <div class="ls-gcs-row">
-          <button class="ls-btn ls-btn-gcs btn-gcs-upload" data-id="${video.videoId}" title="Upload full lecture bundle (summary, transcript, captions, metadata) to GCS">
-            ☁️ Upload to Google Cloud Storage
-          </button>
-        </div>
-        <div class="ls-gcs-result" id="gcs-result-${video.videoId}"></div>
+        <div class="ls-import-result" id="import-result-${video.videoId}"></div>
       </div>
     `;
 
     // Hook up buttons
     card.querySelector(".btn-open-main").addEventListener("click", () => {
       openLecture(video.videoId, "transcript");
-    });
-    card.querySelector(".btn-summary").addEventListener("click", () => {
-      openLecture(video.videoId, "summary");
-    });
-    card.querySelector(".btn-tutor").addEventListener("click", () => {
-      openLecture(video.videoId, "tutor");
     });
     card.querySelector(".btn-copy").addEventListener("click", async (e) => {
       try {
@@ -196,68 +182,47 @@ function renderVideosList(videos) {
       }
     });
 
-    // GCS Upload Handler
-    const gcsBtn = card.querySelector(".btn-gcs-upload");
-    const gcsResult = card.querySelector(`#gcs-result-${video.videoId}`);
+    // Copy to LectureScribe (Import) Handler
+    const importBtn = card.querySelector(".btn-copy-import");
+    const importResult = card.querySelector(`#import-result-${video.videoId}`);
 
-    // Check if previously uploaded
-    ext.storage.local.get([`gcs_upload_${video.videoId}`]).then((data) => {
-      const savedUpload = data?.[`gcs_upload_${video.videoId}`];
-      if (savedUpload) {
-        gcsBtn.innerHTML = "✓ Uploaded to GCS";
-        gcsBtn.classList.add("ls-btn-success");
-        const videoStatus = savedUpload.video_uploaded
-          ? `<div style="color: #34d399; font-weight: 600;">🎬 Video MP4 in bucket (${savedUpload.video_details?.size_mb || 0} MB)</div>`
-          : `<div style="color: #94a3b8;">📄 Lecture text bundle uploaded</div>`;
-        gcsResult.innerHTML = `
-          <div class="ls-gcs-success-box">
-            ${videoStatus}
-            <span>Bucket: <code>${savedUpload.gcs_uri || savedUpload.folder}</code></span>
-            ${savedUpload.console_url ? `<a href="${savedUpload.console_url}" target="_blank" class="ls-gcs-link">Open in Google Cloud Console ↗</a>` : ''}
-          </div>
-        `;
-      }
-    }).catch(() => {});
-
-    gcsBtn.addEventListener("click", async () => {
-      gcsBtn.disabled = true;
-      const originalText = gcsBtn.innerHTML;
-      gcsBtn.innerHTML = "⏳ Uploading to GCS...";
-      gcsResult.innerHTML = '<span class="ls-loading-text">Downloading video stream, transcripts & uploading to GCS... (live logs in terminal)</span>';
+    importBtn.addEventListener("click", async () => {
+      importBtn.disabled = true;
+      const originalText = importBtn.innerHTML;
+      importBtn.innerHTML = "⏳ Importing to LectureScribe...";
+      importResult.innerHTML = '<span class="ls-loading-text">Extracting transcripts & generating AI summary...</span>';
 
       try {
         const res = await ext.runtime.sendMessage({
-          type: "UPLOAD_TO_GCS",
+          type: "IMPORT_LECTURE",
           videoId: video.videoId,
           title: video.title,
-          hHash: video.hHash || null,
-          referer: video.referer || null,
+          courseName: video.courseName || null,
+          lmsPageUrl: video.lmsPageUrl || video.referer || null,
           playerConfig: video.playerConfig || null
         });
 
         if (res && res.success) {
-          gcsBtn.innerHTML = "✓ Uploaded to GCS";
-          gcsBtn.classList.add("ls-btn-success");
-          const videoStatus = res.video_uploaded
-            ? `<div style="color: #34d399; font-weight: 600;">🎬 Video MP4 uploaded (${res.video_details?.size_mb || 0} MB)</div>`
-            : `<div style="color: #f59e0b; font-weight: 600;">⚠️ Video stream skipped (${res.video_details?.error || 'Only text files uploaded'})</div>`;
-          gcsResult.innerHTML = `
-            <div class="ls-gcs-success-box">
-              ${videoStatus}
-              <span>Bucket: <code>${res.gcs_uri || res.folder}</code></span>
-              ${res.console_url ? `<a href="${res.console_url}" target="_blank" class="ls-gcs-link">Open in Google Cloud Console ↗</a>` : ''}
-            </div>
-          `;
-          ext.storage.local.set({ [`gcs_upload_${video.videoId}`]: res }).catch(() => {});
+          importBtn.innerHTML = "✓ Copied to LectureScribe";
+          importBtn.classList.add("ls-btn-success");
+          importResult.innerHTML = `<span class="ls-success-text">✓ Saved to ${res.course_name || "LectureScribe"}!</span>`;
+          setTimeout(() => {
+            ext.runtime.sendMessage({
+              type: "OPEN_LECTURE",
+              videoId: video.videoId,
+              courseSlug: res.course_slug || null,
+              tab: "transcript"
+            }).catch(() => {});
+          }, 400);
         } else {
-          gcsBtn.disabled = false;
-          gcsBtn.innerHTML = originalText;
-          gcsResult.innerHTML = `<span class="ls-error-text">✕ ${res?.error || 'Upload failed'}</span>`;
+          importBtn.disabled = false;
+          importBtn.innerHTML = originalText;
+          importResult.innerHTML = `<span class="ls-error-text">✕ ${res?.error || 'Import failed'}</span>`;
         }
       } catch (err) {
-        gcsBtn.disabled = false;
-        gcsBtn.innerHTML = originalText;
-        gcsResult.innerHTML = `<span class="ls-error-text">✕ Error: ${err.message}</span>`;
+        importBtn.disabled = false;
+        importBtn.innerHTML = originalText;
+        importResult.innerHTML = `<span class="ls-error-text">✕ Error: ${err.message}</span>`;
       }
     });
 
@@ -270,9 +235,6 @@ function renderVideosList(videos) {
 
 async function checkVideoCacheStatus(videoId) {
   const statusEl = document.getElementById(`status-tag-${videoId}`);
-  const card = document.querySelector(`.ls-video-card[data-video-id="${videoId}"]`);
-  const gcsBtn = card?.querySelector(".btn-gcs-upload");
-  const gcsResult = card?.querySelector(`#gcs-result-${videoId}`);
   if (!statusEl) return;
 
   try {
@@ -282,32 +244,14 @@ async function checkVideoCacheStatus(videoId) {
     });
 
     if (res && res.success) {
-      if (res.synced_to_gcs) {
-        statusEl.className = "ls-card-tag gcs-synced";
-        const sizeStr = res.size_mb ? ` (${res.size_mb} MB)` : "";
-        statusEl.textContent = `☁️ GCS Synced${sizeStr}`;
-        statusEl.title = "High-speed video archived in Google Cloud Storage. Plays natively in LectureScribe!";
-
-        if (gcsBtn) {
-          gcsBtn.innerHTML = "✓ Synced in GCS";
-          gcsBtn.classList.add("ls-btn-success");
-        }
-        if (gcsResult) {
-          gcsResult.innerHTML = `
-            <div class="ls-gcs-success-box">
-              <div style="color: #38bdf8; font-weight: 600;">🎬 Video archived in Google Cloud Storage ${sizeStr}</div>
-              <span>Bucket: <code>${res.gcs_uri || res.blob_name || 'gs://lecturescribe-resources'}</code></span>
-            </div>
-          `;
-        }
-      } else if (res.cached) {
+      if (res.cached) {
         statusEl.className = "ls-card-tag cached";
-        statusEl.textContent = "✓ In DB (Vimeo)";
-        statusEl.title = "Transcript and summary are cached in DB, but video streams from Vimeo";
+        statusEl.textContent = res.course_name ? `✓ ${res.course_name}` : "✓ In DB";
+        statusEl.title = "Transcript and summary are saved in LectureScribe";
       } else {
         statusEl.className = "ls-card-tag";
-        statusEl.textContent = "Ready to Ingest";
-        statusEl.title = "Video will be transcribed upon opening in LectureScribe";
+        statusEl.textContent = "Ready to Import";
+        statusEl.title = "Click 'Copy to LectureScribe' to ingest";
       }
     } else {
       statusEl.className = "ls-card-tag";
@@ -317,6 +261,7 @@ async function checkVideoCacheStatus(videoId) {
     statusEl.textContent = "Ready";
   }
 }
+
 
 function handleManualSubmit() {
   const raw = manualInput.value.trim();

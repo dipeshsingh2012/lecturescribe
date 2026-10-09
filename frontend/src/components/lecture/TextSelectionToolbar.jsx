@@ -28,10 +28,14 @@ export default function TextSelectionToolbar({
   const [aiResponse, setAiResponse] = useState('');
   const [aiPromptType, setAiPromptType] = useState('explain');
   const [copied, setCopied] = useState(false);
+  const [actionError, setActionError] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!selectedText) return null;
 
   const handleHighlight = async (color = 'yellow') => {
+    setActionError(null);
+    setIsSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations`, {
         method: 'POST',
@@ -46,21 +50,30 @@ export default function TextSelectionToolbar({
           color
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (typeof onAnnotationCreated === 'function') {
-          onAnnotationCreated(data.annotation);
-        }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to create highlight.');
       }
+      const data = await res.json();
+      if (typeof onAnnotationCreated === 'function') {
+        onAnnotationCreated(data.annotation);
+      }
+      if (typeof window !== 'undefined') {
+        window.getSelection()?.removeAllRanges();
+      }
+      onClose();
     } catch (err) {
       console.error('Error creating highlight:', err);
+      setActionError(err.message || 'Error creating highlight');
     } finally {
-      onClose();
+      setIsSubmitting(false);
     }
   };
 
   const handleSaveNote = async () => {
     if (!noteInput.trim()) return;
+    setActionError(null);
+    setIsSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations`, {
         method: 'POST',
@@ -75,16 +88,23 @@ export default function TextSelectionToolbar({
           note_text: noteInput.trim()
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (typeof onAnnotationCreated === 'function') {
-          onAnnotationCreated(data.annotation);
-        }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to save note.');
       }
+      const data = await res.json();
+      if (typeof onAnnotationCreated === 'function') {
+        onAnnotationCreated(data.annotation);
+      }
+      if (typeof window !== 'undefined') {
+        window.getSelection()?.removeAllRanges();
+      }
+      onClose();
     } catch (err) {
       console.error('Error saving note:', err);
+      setActionError(err.message || 'Error saving note');
     } finally {
-      onClose();
+      setIsSubmitting(false);
     }
   };
 
@@ -93,6 +113,7 @@ export default function TextSelectionToolbar({
     setAiPromptType(promptType);
     setAiLoading(true);
     setAiResponse('');
+    setActionError(null);
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/explain-selection`, {
         method: 'POST',
@@ -104,13 +125,15 @@ export default function TextSelectionToolbar({
           end_seconds: endSeconds
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        setAiResponse(data.explanation || 'No explanation generated.');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to generate AI explanation.');
       }
+      const data = await res.json();
+      setAiResponse(data.explanation || 'No explanation generated.');
     } catch (err) {
       console.error('Error asking AI:', err);
-      setAiResponse('Failed to generate AI explanation.');
+      setAiResponse(`Failed to generate AI explanation: ${err.message}`);
     } finally {
       setAiLoading(false);
     }
@@ -118,6 +141,8 @@ export default function TextSelectionToolbar({
 
   const handlePinAiAsNote = async () => {
     if (!aiResponse) return;
+    setActionError(null);
+    setIsSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations`, {
         method: 'POST',
@@ -133,16 +158,23 @@ export default function TextSelectionToolbar({
           ai_response: aiResponse
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (typeof onAnnotationCreated === 'function') {
-          onAnnotationCreated(data.annotation);
-        }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to pin AI explanation.');
       }
+      const data = await res.json();
+      if (typeof onAnnotationCreated === 'function') {
+        onAnnotationCreated(data.annotation);
+      }
+      if (typeof window !== 'undefined') {
+        window.getSelection()?.removeAllRanges();
+      }
+      onClose();
     } catch (err) {
       console.error('Error pinning AI explanation:', err);
+      setActionError(err.message || 'Error pinning AI explanation');
     } finally {
-      onClose();
+      setIsSubmitting(false);
     }
   };
 
@@ -183,7 +215,28 @@ export default function TextSelectionToolbar({
         animation: 'fadeIn 0.15s ease'
       }}
       onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
     >
+      {actionError && (
+        <div style={{
+          fontSize: '0.72rem',
+          color: '#ef4444',
+          background: 'rgba(239, 68, 68, 0.1)',
+          padding: '4px 6px',
+          borderRadius: '4px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <span>{actionError}</span>
+          <button
+            onClick={() => setActionError(null)}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#ef4444' }}
+          >
+            <X size={10} />
+          </button>
+        </div>
+      )}
       {mode === 'menu' && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
           {/* Highlight Color Pickers */}
@@ -197,6 +250,7 @@ export default function TextSelectionToolbar({
               <button
                 key={c.col}
                 onClick={() => handleHighlight(c.col)}
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 title={`Highlight in ${c.col}`}
                 style={{
                   width: '18px',
@@ -217,6 +271,7 @@ export default function TextSelectionToolbar({
           {/* Add Note Button */}
           <button
             onClick={() => setMode('note')}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
             title="Add margin comment/note"
             style={{
               display: 'inline-flex',
@@ -238,6 +293,7 @@ export default function TextSelectionToolbar({
           {/* Ask AI Button */}
           <button
             onClick={() => handleAskAi('explain')}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
             title="Ask AI to explain selected text"
             style={{
               display: 'inline-flex',
@@ -259,6 +315,7 @@ export default function TextSelectionToolbar({
           {/* Copy Quote Button */}
           <button
             onClick={handleCopyQuote}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
             title="Copy selected quote"
             style={{
               display: 'inline-flex',
@@ -277,6 +334,7 @@ export default function TextSelectionToolbar({
           {/* Close */}
           <button
             onClick={onClose}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
             aria-label="Close selection menu"
             style={{
               display: 'inline-flex',
@@ -373,6 +431,7 @@ export default function TextSelectionToolbar({
               <button
                 key={chip.id}
                 onClick={() => handleAskAi(chip.id)}
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
                 style={{
                   fontSize: '0.68rem',
                   padding: '2px 6px',
@@ -415,6 +474,7 @@ export default function TextSelectionToolbar({
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '4px' }}>
               <button
                 onClick={handlePinAiAsNote}
+                disabled={isSubmitting}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -426,10 +486,11 @@ export default function TextSelectionToolbar({
                   color: '#a855f7',
                   fontSize: '0.7rem',
                   fontWeight: 700,
-                  cursor: 'pointer'
+                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                  opacity: isSubmitting ? 0.6 : 1
                 }}
               >
-                <BookmarkPlus size={11} /> Pin as Note
+                <BookmarkPlus size={11} /> {isSubmitting ? 'Pinning...' : 'Pin as Note'}
               </button>
             </div>
           )}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import uuid
 import datetime
 import time
 from pathlib import Path
@@ -84,6 +85,7 @@ class RelationalDBManager:
         self._course_quiz_explanations_memory: Dict[str, Dict[str, str]] = {}
         self._readings_memory_cache: List[Dict[str, Any]] = []
         self._progress_memory_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._annotations_memory_cache: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -3546,13 +3548,61 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
+    def _format_annotation_dict(
+        self,
+        ann_id: str,
+        video_id: str,
+        user_email: str,
+        cue_id: Optional[int],
+        start_seconds: float,
+        end_seconds: float,
+        selected_text: str,
+        annotation_type: str,
+        color: Optional[str] = None,
+        note_text: Optional[str] = None,
+        ai_prompt: Optional[str] = None,
+        ai_response: Optional[str] = None,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Produce consistent annotation dictionary with both camelCase and snake_case properties."""
+        return {
+            "id": str(ann_id),
+            "videoId": video_id,
+            "userEmail": user_email,
+            "cueId": cue_id,
+            "startSeconds": float(start_seconds),
+            "endSeconds": float(end_seconds),
+            "selectedText": selected_text,
+            "annotationType": annotation_type,
+            "color": color,
+            "noteText": note_text,
+            "aiPrompt": ai_prompt,
+            "aiResponse": ai_response,
+            "createdAt": created_at,
+            "updatedAt": updated_at,
+            # snake_case properties for full API parity
+            "video_id": video_id,
+            "user_email": user_email,
+            "cue_id": cue_id,
+            "start_seconds": float(start_seconds),
+            "end_seconds": float(end_seconds),
+            "selected_text": selected_text,
+            "annotation_type": annotation_type,
+            "note_text": note_text,
+            "ai_prompt": ai_prompt,
+            "ai_response": ai_response,
+            "created_at": created_at,
+            "updated_at": updated_at
+        }
+
     def add_annotation(
         self,
         video_id: str,
         user_email: str,
         selected_text: str,
         annotation_type: str,
-        cue_id: Optional[int] = None,
+        cue_id: Optional[Union[int, str]] = None,
         start_seconds: float = 0.0,
         end_seconds: float = 0.0,
         color: Optional[str] = None,
@@ -3563,6 +3613,14 @@ class RelationalDBManager:
         """Save a new highlight, margin note, or embedded AI explanation."""
         clean_email = (user_email or "anonymous").strip().lower()
         clean_type = annotation_type.strip().lower() if annotation_type else "highlight"
+        clean_cue_id = None
+        if cue_id is not None:
+            try:
+                clean_cue_id = int(cue_id)
+            except (ValueError, TypeError):
+                clean_cue_id = None
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         conn = None
         try:
             conn = self._get_connection()
@@ -3579,35 +3637,54 @@ class RelationalDBManager:
                                   selected_text, annotation_type, color, note_text,
                                   ai_prompt, ai_response, created_at, updated_at;
                     """, (
-                        video_id, clean_email, cue_id, start_seconds, end_seconds,
+                        video_id, clean_email, clean_cue_id, float(start_seconds), float(end_seconds),
                         selected_text, clean_type, color, note_text,
                         ai_prompt, ai_response
                     ))
                     row = cursor.fetchone()
                     conn.commit()
                     if row:
-                        return {
-                            "id": str(row["id"]),
-                            "videoId": row["video_id"],
-                            "userEmail": row["user_email"],
-                            "cueId": row["cue_id"],
-                            "startSeconds": float(row["start_seconds"]),
-                            "endSeconds": float(row["end_seconds"]),
-                            "selectedText": row["selected_text"],
-                            "annotationType": row["annotation_type"],
-                            "color": row.get("color"),
-                            "noteText": row.get("note_text"),
-                            "aiPrompt": row.get("ai_prompt"),
-                            "aiResponse": row.get("ai_response"),
-                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
-                            "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None
-                        }
+                        return self._format_annotation_dict(
+                            ann_id=str(row["id"]),
+                            video_id=row["video_id"],
+                            user_email=row["user_email"],
+                            cue_id=row["cue_id"],
+                            start_seconds=row["start_seconds"],
+                            end_seconds=row["end_seconds"],
+                            selected_text=row["selected_text"],
+                            annotation_type=row["annotation_type"],
+                            color=row.get("color"),
+                            note_text=row.get("note_text"),
+                            ai_prompt=row.get("ai_prompt"),
+                            ai_response=row.get("ai_response"),
+                            created_at=row["created_at"].isoformat() if row.get("created_at") else now_iso,
+                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else now_iso
+                        )
         except Exception as e:
             print(f"[PostgreSQL Notice] add_annotation error: {e}")
         finally:
             if conn:
                 conn.close()
-        return None
+
+        # In-memory fallback
+        fallback_ann = self._format_annotation_dict(
+            ann_id=str(uuid.uuid4()),
+            video_id=video_id,
+            user_email=clean_email,
+            cue_id=clean_cue_id,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            selected_text=selected_text,
+            annotation_type=clean_type,
+            color=color,
+            note_text=note_text,
+            ai_prompt=ai_prompt,
+            ai_response=ai_response,
+            created_at=now_iso,
+            updated_at=now_iso
+        )
+        self._annotations_memory_cache.append(fallback_ann)
+        return fallback_ann
 
     def get_annotations(self, video_id: str, user_email: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieve user annotations for a video."""
@@ -3638,33 +3715,46 @@ class RelationalDBManager:
                         """, (video_id,))
                     rows = cursor.fetchall() or []
                     for row in rows:
-                        annotations.append({
-                            "id": str(row["id"]),
-                            "videoId": row["video_id"],
-                            "userEmail": row["user_email"],
-                            "cueId": row["cue_id"],
-                            "startSeconds": float(row["start_seconds"]),
-                            "endSeconds": float(row["end_seconds"]),
-                            "selectedText": row["selected_text"],
-                            "annotationType": row["annotation_type"],
-                            "color": row.get("color"),
-                            "noteText": row.get("note_text"),
-                            "aiPrompt": row.get("ai_prompt"),
-                            "aiResponse": row.get("ai_response"),
-                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
-                            "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None
-                        })
+                        annotations.append(self._format_annotation_dict(
+                            ann_id=str(row["id"]),
+                            video_id=row["video_id"],
+                            user_email=row["user_email"],
+                            cue_id=row["cue_id"],
+                            start_seconds=row["start_seconds"],
+                            end_seconds=row["end_seconds"],
+                            selected_text=row["selected_text"],
+                            annotation_type=row["annotation_type"],
+                            color=row.get("color"),
+                            note_text=row.get("note_text"),
+                            ai_prompt=row.get("ai_prompt"),
+                            ai_response=row.get("ai_response"),
+                            created_at=row["created_at"].isoformat() if row.get("created_at") else None,
+                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else None
+                        ))
+                    return annotations
         except Exception as e:
             print(f"[PostgreSQL Notice] get_annotations error: {e}")
         finally:
             if conn:
                 conn.close()
-        return annotations
+
+        # Fallback to memory cache
+        filtered = [
+            a for a in self._annotations_memory_cache
+            if a.get("videoId") == video_id or a.get("video_id") == video_id
+        ]
+        if clean_email:
+            filtered = [
+                a for a in filtered
+                if (a.get("userEmail") or a.get("user_email") or "").lower() == clean_email
+            ]
+        return filtered
 
     def delete_annotation(self, annotation_id: str, user_email: Optional[str] = None) -> bool:
         """Delete an annotation by ID."""
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
         conn = None
+        db_deleted = False
         try:
             conn = self._get_connection()
             with conn:
@@ -3680,13 +3770,20 @@ class RelationalDBManager:
                             WHERE id = %s;
                         """, (annotation_id,))
                     conn.commit()
-                    return cursor.rowcount > 0
+                    db_deleted = cursor.rowcount > 0
         except Exception as e:
             print(f"[PostgreSQL Notice] delete_annotation error: {e}")
-            return False
         finally:
             if conn:
                 conn.close()
+
+        mem_before = len(self._annotations_memory_cache)
+        self._annotations_memory_cache = [
+            a for a in self._annotations_memory_cache
+            if str(a.get("id")) != str(annotation_id)
+        ]
+        mem_deleted = len(self._annotations_memory_cache) < mem_before
+        return db_deleted or mem_deleted
 
     def create_review_job(self, video_id: str, review_mode: str = "audio_grounded") -> str:
         """Create a new transcript review job and return its UUID."""

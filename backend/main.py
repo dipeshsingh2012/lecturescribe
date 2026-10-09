@@ -18,7 +18,7 @@ import requests
 import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, AliasChoices, ConfigDict
 
 from dotenv import load_dotenv
 
@@ -227,29 +227,43 @@ class UpdateCueRequest(BaseModel):
 
 
 class CreateAnnotationRequest(BaseModel):
-    user_email: Optional[str] = "anonymous"
-    selected_text: str
-    annotation_type: str = "highlight"  # highlight, note, ai_explanation
-    cue_id: Optional[int] = None
-    start_seconds: Optional[float] = 0.0
-    end_seconds: Optional[float] = 0.0
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_email: Optional[str] = Field(default="anonymous", validation_alias=AliasChoices("user_email", "userEmail"))
+    selected_text: str = Field(validation_alias=AliasChoices("selected_text", "selectedText"))
+    annotation_type: str = Field(default="highlight", validation_alias=AliasChoices("annotation_type", "annotationType"))
+    cue_id: Optional[Union[int, str]] = Field(default=None, validation_alias=AliasChoices("cue_id", "cueId"))
+    start_seconds: Optional[float] = Field(default=0.0, validation_alias=AliasChoices("start_seconds", "startSeconds"))
+    end_seconds: Optional[float] = Field(default=0.0, validation_alias=AliasChoices("end_seconds", "endSeconds"))
     color: Optional[str] = "yellow"
-    note_text: Optional[str] = None
-    ai_prompt: Optional[str] = None
-    ai_response: Optional[str] = None
+    note_text: Optional[str] = Field(default=None, validation_alias=AliasChoices("note_text", "noteText"))
+    ai_prompt: Optional[str] = Field(default=None, validation_alias=AliasChoices("ai_prompt", "aiPrompt"))
+    ai_response: Optional[str] = Field(default=None, validation_alias=AliasChoices("ai_response", "aiResponse"))
 
 
 class ExplainSelectionRequest(BaseModel):
-    selected_text: str
-    prompt_type: Optional[str] = "explain"
-    custom_prompt: Optional[str] = None
-    cue_timestamp: Optional[str] = None
-    start_seconds: Optional[float] = None
-    end_seconds: Optional[float] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    selected_text: str = Field(validation_alias=AliasChoices("selected_text", "selectedText"))
+    prompt_type: Optional[str] = Field(default="explain", validation_alias=AliasChoices("prompt_type", "promptType"))
+    custom_prompt: Optional[str] = Field(default=None, validation_alias=AliasChoices("custom_prompt", "customPrompt"))
+    cue_timestamp: Optional[str] = Field(default=None, validation_alias=AliasChoices("cue_timestamp", "cueTimestamp"))
+    start_seconds: Optional[float] = Field(default=None, validation_alias=AliasChoices("start_seconds", "startSeconds"))
+    end_seconds: Optional[float] = Field(default=None, validation_alias=AliasChoices("end_seconds", "endSeconds"))
 
 
 class ReviewTranscriptRequest(BaseModel):
     review_mode: Optional[str] = "audio_grounded"
+
+
+class ExtensionImportRequest(BaseModel):
+    video_id: str
+    player_config: Optional[Dict[str, Any]] = None
+    video_details: Optional[Dict[str, Any]] = None
+    lms_page_url: Optional[str] = None
+    course_name: Optional[str] = None
+    email: Optional[str] = None
+
 
 
 @app.get("/health")
@@ -802,6 +816,161 @@ def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
         )
 
 
+def process_lecture_import(
+    video_id: str,
+    email: Optional[str] = None,
+    course_name: Optional[str] = None,
+    player_config: Optional[Dict[str, Any]] = None,
+    video_details: Optional[Dict[str, Any]] = None,
+    lms_page_url: Optional[str] = None
+) -> Dict[str, Any]:
+    clean_vid = extract_video_id(video_id)
+
+    # 1. Check relational DB first for cached video
+    saved = db_manager.get_saved_video(clean_vid)
+    if saved:
+        print(f"[DB Cache Hit] Video '{clean_vid}' found in database. Skipping transcript and summary re-generation.")
+        saved["cached"] = True
+        saved_cues = saved.get("cues") or []
+        saved["transcript_available"] = bool(saved_cues)
+        saved["transcript_message"] = (
+            None if saved_cues else
+            "This video was imported, but no transcript or captions are available."
+        )
+        course_title = saved.get("course_name") or (course_name and course_name.strip()) or extract_course_name(saved.get("title", ""))
+        saved["course_name"] = course_title
+        saved["course_slug"] = to_course_slug(course_title)
+        # Only transcript-backed services can be populated when cues exist.
+        if saved_cues:
+            algolia_service.ingest_cues(clean_vid, saved["title"], saved_cues)
+            pinecone_rag_engine.ingest_transcript(clean_vid, saved["title"], saved_cues)
+        clean_email = email.strip() if isinstance(email, str) else None
+        drive_url = db_manager.get_drive_folder_url(clean_vid, clean_email)
+        if drive_url:
+            saved["drive_folder_url"] = drive_url
+            saved["driveFolderUrl"] = drive_url
+        # Check if self-hosted video is stored in GCS
+        gcs_video = gcs_storage_service.find_lecture_video(video_id=clean_vid, course_name=course_title)
+        if gcs_video:
+            saved["gcs_video_url"] = gcs_video["view_url"]
+            saved["gcsVideoUrl"] = gcs_video["view_url"]
+            saved["video_url"] = gcs_video["view_url"]
+            saved["gcs_blob_name"] = gcs_video["blob_name"]
+            saved["video_source"] = "gcs"
+        else:
+            saved["video_source"] = "vimeo"
+
+        if clean_email:
+            db_manager.record_user_lecture(
+                user_email=clean_email,
+                video_id=clean_vid,
+                title=saved["title"],
+                duration=saved.get("duration", "Unknown"),
+                source_url=saved.get("sourceUrl", f"https://vimeo.com/{clean_vid}"),
+                course_name=course_title,
+                drive_folder_url=drive_url
+            )
+            if redis_cache:
+                redis_cache.invalidate_user(clean_email)
+        return saved
+
+    # 2. Extract video config: use provided player_config or fetch fresh from Vimeo
+    if player_config and isinstance(player_config, dict):
+        config = player_config
+    else:
+        config = fetch_player_config(clean_vid)
+
+    details = video_details or {}
+    title = details.get("title") or config.get("video", {}).get("title", f"Vimeo Video {clean_vid}")
+    raw_dur = details.get("duration") or config.get("video", {}).get("duration", 6060)
+    if isinstance(raw_dur, int):
+        mins = raw_dur // 60
+        hrs = mins // 60
+        duration = f"{hrs}h {mins % 60}m" if hrs > 0 else f"{mins}m"
+    else:
+        duration = str(raw_dur)
+
+    tracks = get_text_tracks(config)
+    track = next((t for t in tracks if t.get("default")), tracks[0]) if tracks else None
+    cues = []
+    transcript_message = "This video was imported, but Vimeo has no caption or subtitle tracks available."
+    if track:
+        vtt_url = track.get("url") or track.get("src")
+        if vtt_url:
+            try:
+                vtt_content = fetch_vtt(vtt_url)
+                raw_segments = parse_vtt(vtt_content)
+                cues = [
+                    {"time": format_timestamp(s["start"]), "text": s["text"]}
+                    for s in raw_segments
+                ]
+                if not cues:
+                    transcript_message = "This video was imported, but its caption track contains no transcript text."
+            except Exception as exc:
+                print(f"⚠️ [Vimeo Caption Notice] Could not retrieve captions for video '{clean_vid}': {exc}")
+                transcript_message = "This video was imported, but its caption track could not be downloaded."
+        else:
+            transcript_message = "This video was imported, but Vimeo did not provide a downloadable caption track."
+
+    transcript_available = bool(cues)
+    if transcript_available:
+        transcript_message = None
+    summary_sections = generate_summary_sections(cues, title) if transcript_available else []
+    source_url = f"https://vimeo.com/{clean_vid}"
+    caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
+    raw_course = course_name if isinstance(course_name, str) else None
+    candidate_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
+    derived_course = db_manager.resolve_course_canonical_name(candidate_course) if candidate_course else "General Lectures"
+
+    # 3. Save to Relational DB (PostgreSQL)
+    db_manager.save_video_transcript(clean_vid, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
+
+    # 4-5. Ingest transcript-backed search indexes only when captions exist.
+    pinecone_chunks = []
+    if transcript_available:
+        algolia_service.ingest_cues(clean_vid, title, cues)
+        pinecone_chunks = pinecone_rag_engine.ingest_transcript(clean_vid, title, cues)
+
+    # 6. Record into user LMS library if authenticated
+    if email and email.strip():
+        db_manager.record_user_lecture(
+            user_email=email,
+            video_id=clean_vid,
+            title=title,
+            duration=duration,
+            source_url=source_url,
+            course_name=derived_course
+        )
+        if redis_cache:
+            redis_cache.invalidate_user(email.strip())
+
+    drive_url = db_manager.get_drive_folder_url(clean_vid, email)
+    gcs_video = gcs_storage_service.find_lecture_video(video_id=clean_vid, course_name=derived_course)
+    gcs_url = gcs_video["view_url"] if gcs_video else None
+
+    return {
+        "videoId": clean_vid,
+        "title": title,
+        "duration": duration,
+        "sourceUrl": source_url,
+        "captionLabel": caption_label,
+        "cues": cues,
+        "summarySections": summary_sections,
+        "transcript_available": transcript_available,
+        "transcript_message": transcript_message,
+        "course_name": derived_course,
+        "course_slug": to_course_slug(derived_course),
+        "pineconeIndexedChunks": pinecone_chunks,
+        "drive_folder_url": drive_url,
+        "driveFolderUrl": drive_url,
+        "gcs_video_url": gcs_url,
+        "gcsVideoUrl": gcs_url,
+        "gcs_blob_name": gcs_video["blob_name"] if gcs_video else None,
+        "video_source": "gcs" if gcs_video else "vimeo",
+        "cached": False
+    }
+
+
 @app.get("/api/transcript")
 def get_transcript(
     url: str = Query(..., description="Vimeo URL or Video ID"),
@@ -810,150 +979,32 @@ def get_transcript(
 ):
     try:
         video_id = extract_video_id(url)
-        
-        # 1. Check relational DB first for cached video
-        saved = db_manager.get_saved_video(video_id)
-        if saved:
-            print(f"[DB Cache Hit] Video '{video_id}' found in database. Skipping transcript and summary re-generation.")
-            saved["cached"] = True
-            saved_cues = saved.get("cues") or []
-            saved["transcript_available"] = bool(saved_cues)
-            saved["transcript_message"] = (
-                None if saved_cues else
-                "This video was imported, but no transcript or captions are available."
-            )
-            course_title = saved.get("course_name") or extract_course_name(saved.get("title", ""))
-            saved["course_name"] = course_title
-            saved["course_slug"] = to_course_slug(course_title)
-            # Only transcript-backed services can be populated when cues exist.
-            if saved_cues:
-                algolia_service.ingest_cues(video_id, saved["title"], saved_cues)
-                pinecone_rag_engine.ingest_transcript(video_id, saved["title"], saved_cues)
-            clean_email = email.strip() if isinstance(email, str) else None
-            drive_url = db_manager.get_drive_folder_url(video_id, clean_email)
-            if drive_url:
-                saved["drive_folder_url"] = drive_url
-                saved["driveFolderUrl"] = drive_url
-            # Check if self-hosted video is stored in GCS
-            gcs_video = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=course_title)
-            if gcs_video:
-                saved["gcs_video_url"] = gcs_video["view_url"]
-                saved["gcsVideoUrl"] = gcs_video["view_url"]
-                saved["video_url"] = gcs_video["view_url"]
-                saved["gcs_blob_name"] = gcs_video["blob_name"]
-                saved["video_source"] = "gcs"
-            else:
-                saved["video_source"] = "vimeo"
-
-            if clean_email:
-                db_manager.record_user_lecture(
-                    user_email=clean_email,
-                    video_id=video_id,
-                    title=saved["title"],
-                    duration=saved.get("duration", "Unknown"),
-                    source_url=saved.get("sourceUrl", f"https://vimeo.com/{video_id}"),
-                    course_name=course_title,
-                    drive_folder_url=drive_url
-                )
-                if redis_cache:
-                    redis_cache.invalidate_user(clean_email)
-            return saved
-
-        # 2. Extract fresh video config from Vimeo
-        config = fetch_player_config(video_id)
-        title = config.get("video", {}).get("title", f"Vimeo Video {video_id}")
-        raw_dur = config.get("video", {}).get("duration", 6060)
-        if isinstance(raw_dur, int):
-            mins = raw_dur // 60
-            hrs = mins // 60
-            duration = f"{hrs}h {mins % 60}m" if hrs > 0 else f"{mins}m"
-        else:
-            duration = str(raw_dur)
-
-        tracks = get_text_tracks(config)
-        track = next((t for t in tracks if t.get("default")), tracks[0]) if tracks else None
-        cues = []
-        transcript_message = "This video was imported, but Vimeo has no caption or subtitle tracks available."
-        if track:
-            vtt_url = track.get("url") or track.get("src")
-            if vtt_url:
-                try:
-                    vtt_content = fetch_vtt(vtt_url)
-                    raw_segments = parse_vtt(vtt_content)
-                    cues = [
-                        {"time": format_timestamp(s["start"]), "text": s["text"]}
-                        for s in raw_segments
-                    ]
-                    if not cues:
-                        transcript_message = "This video was imported, but its caption track contains no transcript text."
-                except Exception as exc:
-                    print(f"⚠️ [Vimeo Caption Notice] Could not retrieve captions for video '{video_id}': {exc}")
-                    transcript_message = "This video was imported, but its caption track could not be downloaded."
-            else:
-                transcript_message = "This video was imported, but Vimeo did not provide a downloadable caption track."
-
-        transcript_available = bool(cues)
-        if transcript_available:
-            transcript_message = None
-        summary_sections = generate_summary_sections(cues, title) if transcript_available else []
-        source_url = f"https://vimeo.com/{video_id}"
-        caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
-        raw_course = course_name if isinstance(course_name, str) else None
-        candidate_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
-        derived_course = db_manager.resolve_course_canonical_name(candidate_course) if candidate_course else "General Lectures"
-
-        # 3. Save to Relational DB (PostgreSQL)
-        db_manager.save_video_transcript(video_id, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
-
-        # 4-5. Ingest transcript-backed search indexes only when captions exist.
-        pinecone_chunks = []
-        if transcript_available:
-            algolia_service.ingest_cues(video_id, title, cues)
-            pinecone_chunks = pinecone_rag_engine.ingest_transcript(video_id, title, cues)
-
-        # 6. Record into user LMS library if authenticated
-        if email and email.strip():
-            db_manager.record_user_lecture(
-                user_email=email,
-                video_id=video_id,
-                title=title,
-                duration=duration,
-                source_url=source_url,
-                course_name=derived_course
-            )
-            if redis_cache:
-                redis_cache.invalidate_user(email.strip())
-
-        drive_url = db_manager.get_drive_folder_url(video_id, email)
-        gcs_video = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=derived_course)
-        gcs_url = gcs_video["view_url"] if gcs_video else None
-
-        return {
-            "videoId": video_id,
-            "title": title,
-            "duration": duration,
-            "sourceUrl": source_url,
-            "captionLabel": caption_label,
-            "cues": cues,
-            "summarySections": summary_sections,
-            "transcript_available": transcript_available,
-            "transcript_message": transcript_message,
-            "course_name": derived_course,
-            "course_slug": to_course_slug(derived_course),
-            "pineconeIndexedChunks": pinecone_chunks,
-            "drive_folder_url": drive_url,
-            "driveFolderUrl": drive_url,
-            "gcs_video_url": gcs_url,
-            "gcsVideoUrl": gcs_url,
-            "gcs_blob_name": gcs_video["blob_name"] if gcs_video else None,
-            "video_source": "gcs" if gcs_video else "vimeo",
-            "cached": False
-        }
-
+        return process_lecture_import(video_id=video_id, email=email, course_name=course_name)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/extension/import")
+def extension_import(req: ExtensionImportRequest):
+    try:
+        if not req.video_id or not str(req.video_id).strip():
+            raise HTTPException(status_code=400, detail="Missing video_id in import request")
+
+        video_id = extract_video_id(str(req.video_id).strip())
+        return process_lecture_import(
+            video_id=video_id,
+            email=req.email,
+            course_name=req.course_name,
+            player_config=req.player_config,
+            video_details=req.video_details,
+            lms_page_url=req.lms_page_url
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to import lecture: {str(e)}")
 
 
 # ==============================================================================

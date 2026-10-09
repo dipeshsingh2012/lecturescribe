@@ -345,57 +345,35 @@ body {
   color: #ffffff;
 }
 
-.ls-gcs-row {
-  margin-top: 2px;
-}
-
-.ls-btn-gcs {
+.ls-btn-secondary {
   width: 100%;
-  background: rgba(37, 99, 235, 0.15);
-  color: #93c5fd;
-  border: 1px solid rgba(59, 130, 246, 0.35);
-  padding: 6px 10px;
-  font-size: 11px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #c7d2fe;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  padding: 7px 12px;
 }
 
-.ls-btn-gcs:hover {
-  background: rgba(37, 99, 235, 0.28);
+.ls-btn-secondary:hover {
+  background: rgba(99, 102, 241, 0.28);
   color: #ffffff;
-  border-color: #60a5fa;
+  border-color: #818cf8;
 }
 
-.ls-btn-gcs.ls-btn-success {
+.ls-btn-secondary.ls-btn-success {
   background: rgba(16, 185, 129, 0.2);
   color: #34d399;
   border-color: rgba(16, 185, 129, 0.5);
 }
 
-.ls-gcs-result {
+.ls-import-result {
   font-size: 11px;
   min-height: 0;
   transition: all 0.2s ease;
 }
 
-.ls-gcs-success-box {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  color: #cbd5e1;
-}
-
-.ls-gcs-success-box code {
-  color: #6ee7b7;
-  font-size: 10px;
-}
-
-.ls-gcs-link {
-  color: #60a5fa;
-  text-decoration: underline;
-  font-size: 10px;
+.ls-success-text {
+  color: #34d399;
+  font-weight: 500;
 }
 
 .ls-loading-text {
@@ -406,6 +384,7 @@ body {
 .ls-error-text {
   color: #f87171;
 }
+
 
 /* Manual Form */
 .ls-manual-form {

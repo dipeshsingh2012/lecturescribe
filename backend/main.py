@@ -9,6 +9,7 @@ Triad Architecture:
 import os
 import re
 import sys
+import json
 import time
 import threading
 import traceback
@@ -2913,6 +2914,54 @@ def get_videos_sync_status():
             "total_size_mb": 0.0
         },
         "videos": {}
+    }
+
+
+@app.get("/api/videos/{video_id}/status")
+def get_single_video_status(video_id: str):
+    """Fast, lightweight endpoint to query database and GCS sync status for a single video."""
+    vid = str(video_id).strip()
+    saved = db_manager.get_saved_video(vid)
+    effective_course = saved.get("course_name") if saved else None
+
+    # Check GCS storage
+    gcs_video = gcs_storage_service.find_lecture_video(video_id=vid, course_name=effective_course)
+
+    # Check tracking manifest if exists
+    tracking_info = {}
+    tracking_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "sync_tracking.json"))
+    if os.path.exists(tracking_path):
+        try:
+            with open(tracking_path, "r", encoding="utf-8") as f:
+                tracking_data = json.load(f)
+                tracking_info = tracking_data.get("videos", {}).get(vid, {})
+        except Exception as e:
+            print(f"⚠️ [Sync Status Tracking Read Notice]: {e}")
+
+    is_gcs_synced = bool(gcs_video or tracking_info.get("status") in ("SUCCESS", "ALREADY_CACHED"))
+    size_mb = None
+    if gcs_video and gcs_video.get("size_bytes"):
+        size_mb = round(gcs_video["size_bytes"] / (1024 * 1024), 2)
+    elif tracking_info.get("size_mb"):
+        size_mb = tracking_info["size_mb"]
+
+    blob_name = gcs_video.get("blob_name") if gcs_video else tracking_info.get("blob_name")
+    gcs_uri = gcs_video.get("gcs_uri") if gcs_video else tracking_info.get("gcs_uri")
+    title = (saved.get("title") if saved else None) or tracking_info.get("title")
+    course_name = effective_course or tracking_info.get("course_name")
+
+    return {
+        "videoId": vid,
+        "cached_in_db": bool(saved),
+        "synced_to_gcs": is_gcs_synced,
+        "video_source": "gcs" if is_gcs_synced else "vimeo",
+        "blob_name": blob_name,
+        "gcs_uri": gcs_uri,
+        "view_url": gcs_video.get("view_url") if gcs_video else None,
+        "size_mb": size_mb,
+        "title": title,
+        "course_name": course_name,
+        "tracking_status": tracking_info.get("status") or ("ALREADY_CACHED" if gcs_video else "UNKNOWN")
     }
 
 

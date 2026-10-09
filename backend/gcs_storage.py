@@ -457,6 +457,10 @@ class GCSStorageService:
             "outtmpl": temp_mp4,
             "quiet": True,
             "no_warnings": True,
+            "concurrent_fragment_downloads": 8,
+            "fragment_retries": 10,
+            "retries": 10,
+            "buffersize": 1024 * 64,
             "progress_hooks": [progress_hook],
         }
         if ffmpeg_bin:

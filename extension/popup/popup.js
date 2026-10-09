@@ -270,6 +270,9 @@ function renderVideosList(videos) {
 
 async function checkVideoCacheStatus(videoId) {
   const statusEl = document.getElementById(`status-tag-${videoId}`);
+  const card = document.querySelector(`.ls-video-card[data-video-id="${videoId}"]`);
+  const gcsBtn = card?.querySelector(".btn-gcs-upload");
+  const gcsResult = card?.querySelector(`#gcs-result-${videoId}`);
   if (!statusEl) return;
 
   try {
@@ -278,14 +281,37 @@ async function checkVideoCacheStatus(videoId) {
       videoId: videoId
     });
 
-    if (res && res.success && res.cached) {
-      statusEl.className = "ls-card-tag cached";
-      statusEl.textContent = "✓ Cached in DB";
-      statusEl.title = "Transcript and summary are already cached with 0ms ingest time";
+    if (res && res.success) {
+      if (res.synced_to_gcs) {
+        statusEl.className = "ls-card-tag gcs-synced";
+        const sizeStr = res.size_mb ? ` (${res.size_mb} MB)` : "";
+        statusEl.textContent = `☁️ GCS Synced${sizeStr}`;
+        statusEl.title = "High-speed video archived in Google Cloud Storage. Plays natively in LectureScribe!";
+
+        if (gcsBtn) {
+          gcsBtn.innerHTML = "✓ Synced in GCS";
+          gcsBtn.classList.add("ls-btn-success");
+        }
+        if (gcsResult) {
+          gcsResult.innerHTML = `
+            <div class="ls-gcs-success-box">
+              <div style="color: #38bdf8; font-weight: 600;">🎬 Video archived in Google Cloud Storage ${sizeStr}</div>
+              <span>Bucket: <code>${res.gcs_uri || res.blob_name || 'gs://lecturescribe-resources'}</code></span>
+            </div>
+          `;
+        }
+      } else if (res.cached) {
+        statusEl.className = "ls-card-tag cached";
+        statusEl.textContent = "✓ In DB (Vimeo)";
+        statusEl.title = "Transcript and summary are cached in DB, but video streams from Vimeo";
+      } else {
+        statusEl.className = "ls-card-tag";
+        statusEl.textContent = "Ready to Ingest";
+        statusEl.title = "Video will be transcribed upon opening in LectureScribe";
+      }
     } else {
       statusEl.className = "ls-card-tag";
-      statusEl.textContent = "Ready to Ingest";
-      statusEl.title = "Video will be transcribed upon opening in LectureScribe";
+      statusEl.textContent = "Ready";
     }
   } catch (e) {
     statusEl.textContent = "Ready";

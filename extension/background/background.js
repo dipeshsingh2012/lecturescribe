@@ -175,30 +175,75 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const apiBase = settings.apiUrl.replace(/\/+$/, "");
 
       try {
-        const resp = await fetch(`${apiBase}/api/lecture/${videoId}`);
-        if (!resp.ok) {
+        // 1. Try lightweight status endpoint first
+        const resp = await fetch(`${apiBase}/api/videos/${videoId}/status`);
+        if (resp.ok) {
+          const data = await resp.json();
           sendResponse({
-            success: false,
-            cached: false,
-            status: resp.status,
-            detail: `HTTP ${resp.status}`
+            success: true,
+            videoId: data.videoId,
+            cached: Boolean(data.cached_in_db),
+            synced_to_gcs: Boolean(data.synced_to_gcs),
+            video_source: data.video_source || "vimeo",
+            blob_name: data.blob_name || null,
+            gcs_uri: data.gcs_uri || null,
+            size_mb: data.size_mb || null,
+            title: data.title || null,
+            course_name: data.course_name || null,
+            tracking_status: data.tracking_status || null
           });
           return;
         }
-        const data = await resp.json();
+
+        // 2. Fallback to standard lecture endpoint
+        const legResp = await fetch(`${apiBase}/api/lecture/${videoId}`);
+        if (legResp.ok) {
+          const data = await legResp.json();
+          sendResponse({
+            success: true,
+            cached: Boolean(data.cached),
+            synced_to_gcs: Boolean(data.gcs_video_url || data.video_source === "gcs"),
+            video_source: data.video_source || (data.gcs_video_url ? "gcs" : "vimeo"),
+            title: data.title || null,
+            duration: data.duration || null,
+            transcript_available: Boolean(data.transcript_available),
+            has_summary: Boolean(data.summary_sections && data.summary_sections.length > 0)
+          });
+          return;
+        }
+
         sendResponse({
-          success: true,
-          cached: Boolean(data.cached),
-          title: data.title || null,
-          duration: data.duration || null,
-          transcript_available: Boolean(data.transcript_available),
-          has_summary: Boolean(data.summary_sections && data.summary_sections.length > 0)
+          success: false,
+          cached: false,
+          synced_to_gcs: false,
+          detail: `HTTP ${resp.status}`
         });
       } catch (err) {
         sendResponse({
           success: false,
+          cached: false,
+          synced_to_gcs: false,
           error: err.message || "Failed to connect to LectureScribe API"
         });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === "GET_SYNC_STATUS") {
+    (async () => {
+      const settings = await getSettings();
+      const apiBase = settings.apiUrl.replace(/\/+$/, "");
+      try {
+        const resp = await fetch(`${apiBase}/api/videos/sync-status`);
+        if (resp.ok) {
+          const data = await resp.json();
+          sendResponse({ success: true, ...data });
+          return;
+        }
+        sendResponse({ success: false, error: `HTTP ${resp.status}` });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
       }
     })();
     return true;

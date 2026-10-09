@@ -243,6 +243,12 @@
     gcsBtn.innerHTML = '<span class="ls-action-btn-icon">☁️</span> Upload to GCS';
     gcsBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (gcsBtn.classList.contains("ls-gcs-ready")) {
+        showToast(`Lecture #${videoId} is already archived in GCS! Opening high-speed player...`);
+        openInLectureScribe(videoId, "transcript");
+        container.classList.remove("ls-open");
+        return;
+      }
       showToast(`Uploading lecture #${videoId} to Google Cloud Storage...`);
       container.classList.remove("ls-open");
       try {
@@ -257,6 +263,11 @@
         });
         if (res && res.success) {
           showToast(`✓ Uploaded to ${res.gcs_uri || 'GCS'}`);
+          gcsBtn.classList.add("ls-gcs-ready");
+          pill.classList.add("ls-pill-gcs-synced");
+          openWorkspaceBtn.innerHTML = '<span class="ls-action-btn-icon">⚡</span> Open GCS Stream';
+          const sizeStr = res.video_details?.size_mb ? ` (${res.video_details.size_mb} MB)` : "";
+          gcsBtn.innerHTML = `<span class="ls-action-btn-icon">✓</span> Synced in GCS${sizeStr}`;
         } else {
           showToast(`✕ Upload failed: ${res?.error || 'Check API'}`);
         }
@@ -270,6 +281,27 @@
     menu.appendChild(tutorBtn);
     menu.appendChild(gcsBtn);
     menu.appendChild(copyBtn);
+
+    // Asynchronously check GCS sync status for this video
+    ext.runtime.sendMessage({
+      type: "CHECK_LECTURE_STATUS",
+      videoId: videoId
+    }).then((status) => {
+      if (status && status.success && status.synced_to_gcs) {
+        pill.classList.add("ls-pill-gcs-synced");
+        pill.title = "High-speed video archived in Google Cloud Storage! Click to open.";
+        
+        const gcsBadge = document.createElement("span");
+        gcsBadge.className = "ls-pill-gcs-badge";
+        gcsBadge.textContent = "☁️ GCS Ready";
+        pill.insertBefore(gcsBadge, closeBtn);
+
+        openWorkspaceBtn.innerHTML = '<span class="ls-action-btn-icon">⚡</span> Open GCS Stream';
+        const sizeStr = status.size_mb ? ` (${status.size_mb} MB)` : "";
+        gcsBtn.innerHTML = `<span class="ls-action-btn-icon">✓</span> Synced in GCS${sizeStr}`;
+        gcsBtn.classList.add("ls-gcs-ready");
+      }
+    }).catch(() => {});
 
     // Toggle dropdown menu on pill click
     pill.addEventListener("click", (e) => {

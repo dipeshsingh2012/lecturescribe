@@ -40,7 +40,6 @@ if REPO_ROOT not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
-from backend.database import db_manager
 from backend.gcs_storage import gcs_storage_service
 from backend.vimeo_client import (
     fetch_player_config,
@@ -96,7 +95,7 @@ def save_tracking_state(state: Dict[str, Any], state_file: str = DEFAULT_STATE_F
     success_count = sum(1 for v in videos.values() if v.get("status") == "SUCCESS")
     cached_count = sum(1 for v in videos.values() if v.get("status") == "ALREADY_CACHED")
     failed_count = sum(1 for v in videos.values() if v.get("status") == "FAILED")
-    pending_count = sum(1 for v in videos.values() if v.get("status") in ("PENDING", "IN_PROGRESS"))
+    pending_count = sum(1 for v in videos.values() if v.get("status") in ("PENDING", "IN_PROGRESS", "DRY_RUN_READY"))
     total_mb = sum(float(v.get("size_mb") or 0.0) for v in videos.values() if v.get("status") in ("SUCCESS", "ALREADY_CACHED"))
 
     state["summary"] = {
@@ -176,6 +175,7 @@ def get_all_videos_from_db(
         params.append(f"%{filter_course.lower()}%")
     query += " ORDER BY video_id ASC;"
 
+    from backend.database import db_manager
     with db_manager._get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, tuple(params) if params else None)

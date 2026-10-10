@@ -2922,7 +2922,7 @@ def get_or_resolve_reading_reader(
     cover_url = reading.get("cover_url") or ""
     is_lending = reading.get("is_lending", False)
 
-    if embed_url and not refresh:
+    if embed_url and not refresh and "arxiv-" not in embed_url:
         return {
             "status": "success",
             "reading_id": reading_id,
@@ -2935,8 +2935,8 @@ def get_or_resolve_reading_reader(
             "is_lending": is_lending
         }
 
-    # Resolve on the fly if embed_url was not previously populated or refresh requested
-    meta = resolve_digital_book_reader(reading.get("title", ""), reading.get("author", ""))
+    # Resolve on the fly if embed_url was not previously populated, contained an invalid preprint, or refresh requested
+    meta = resolve_digital_book_reader(reading.get("title") or "", reading.get("author") or "")
     if meta and meta.get("embed_url"):
         embed_url = meta["embed_url"]
         reader_type = meta.get("reader_type", "embed")

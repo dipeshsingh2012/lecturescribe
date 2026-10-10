@@ -78,3 +78,12 @@ class TestReadingEndpoints(unittest.TestCase):
         data = res.json()
         self.assertEqual(data["status"], "success")
         self.assertIn("results", data)
+
+    def test_get_reading_reader(self):
+        reading_id = self.saved_item["id"]
+        res = self.client.get(f"/api/course/reading/{reading_id}/reader")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["reading_id"], reading_id)
+        self.assertIn("embed_url", data)

@@ -43,102 +43,30 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
     lt = title.lower()
     la = author.lower()
 
-    # 1. First Priority: Search Internet Archive for UNRESTRICTED full-access items (no sign-in needed)
+    # 1. First Priority: OpenLibrary API (curated catalog of published books + exact IA book IDs)
     try:
         author_word = clean_author.split()[0] if clean_author else ""
-        unrestricted_queries = []
-        if author_word and len(author_word) >= 3:
-            unrestricted_queries.append(f'("{clean_title}") AND ({author_word}) AND mediatype:(texts) AND NOT access-restricted-item:true')
-            unrestricted_queries.append(f'title:({clean_title}) AND creator:({author_word}) AND mediatype:(texts) AND NOT access-restricted-item:true')
-        unrestricted_queries.append(f'("{clean_title}") AND mediatype:(texts) AND NOT access-restricted-item:true')
-        unrestricted_queries.append(f'title:({clean_title}) AND mediatype:(texts) AND NOT access-restricted-item:true')
-
-        for q in unrestricted_queries:
-            logger.debug(f"[ReadingExtractor] [IA Unrestricted] Querying Archive.org: {q}")
-            ia_res = requests.get(
-                ARCHIVE_ORG_SEARCH_API,
-                params={'q': q, 'fl[]': 'identifier,title,creator,year', 'rows': 3, 'output': 'json'},
-                timeout=3.5
-            )
-            if ia_res.status_code == 200:
-                docs = ia_res.json().get('response', {}).get('docs', [])
-                if docs:
-                    d = docs[0]
-                    ident = d.get('identifier')
-                    if ident:
-                        logger.info(f"[ReadingExtractor] [IA Unrestricted] Match found: '{d.get('title')}' (id: {ident})")
-                        return {
-                            "matched_title": d.get('title') or title,
-                            "matched_authors": d.get('creator') or author,
-                            "cover_url": f"https://archive.org/services/img/{ident}",
-                            "preview_url": f"https://archive.org/details/{ident}",
-                            "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
-                            "reader_type": "archive_org",
-                            "is_lending": False,
-                            "source_provider": "Internet Archive (Full Access)"
-                        }
-            else:
-                logger.debug(f"[ReadingExtractor] [IA Unrestricted] API responded with status {ia_res.status_code}")
-    except Exception as e:
-        logger.debug(f"[ReadingExtractor] [IA Unrestricted] Exception during search: {e}")
-
-    # 2. Second Priority: Standard Internet Archive / OpenLibrary Controlled Digital Lending
-    try:
-        author_word = clean_author.split()[0] if clean_author else ""
-        q_parts = [f'title:({clean_title})', 'mediatype:(texts)']
-        if author_word and len(author_word) >= 3:
-            q_parts.append(f'creator:({author_word})')
-        q = ' AND '.join(q_parts)
-        logger.debug(f"[ReadingExtractor] [IA Lending] Querying Archive.org: {q}")
-        ia_res = requests.get(
-            ARCHIVE_ORG_SEARCH_API,
-            params={'q': q, 'fl[]': 'identifier,title,creator,year', 'rows': 2, 'output': 'json'},
-            timeout=3.5
-        )
-        if ia_res.status_code == 200:
-            docs = ia_res.json().get('response', {}).get('docs', [])
-            if docs:
-                d = docs[0]
-                ident = d.get('identifier')
-                if ident:
-                    logger.info(f"[ReadingExtractor] [IA Lending] Match found: '{d.get('title')}' (id: {ident})")
-                    return {
-                        "matched_title": d.get('title') or title,
-                        "matched_authors": d.get('creator') or author,
-                        "cover_url": f"https://archive.org/services/img/{ident}",
-                        "preview_url": f"https://archive.org/details/{ident}",
-                        "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
-                        "reader_type": "archive_org",
-                        "is_lending": True,
-                        "source_provider": "Internet Archive (Lending Library)"
-                    }
-        else:
-            logger.debug(f"[ReadingExtractor] [IA Lending] API returned status {ia_res.status_code}")
-    except Exception as e:
-        logger.debug(f"[ReadingExtractor] [IA Lending] Exception during search: {e}")
-
-    # 3. OpenLibrary API (Covers + IA links)
-    try:
-        q = f"{clean_title} {clean_author}".strip()
-        logger.debug(f"[ReadingExtractor] [OpenLibrary] Querying OpenLibrary: {q}")
+        ol_query = f"{clean_title} {author_word}".strip()
+        logger.debug(f"[ReadingExtractor] [OpenLibrary] Querying OpenLibrary: '{ol_query}'")
         ol_res = requests.get(
             OPEN_LIBRARY_API,
-            params={'q': q, 'limit': 2},
+            params={'q': ol_query, 'limit': 3},
             timeout=3.5
         )
         if ol_res.status_code == 200:
             docs = ol_res.json().get('docs', [])
-            if docs:
-                d = docs[0]
+            for d in docs:
                 ia_list = d.get('ia') or []
                 cover_i = d.get('cover_i')
                 cover_url = f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg" if cover_i else ""
                 matched_t = d.get('title') or title
                 matched_a = ', '.join(d.get('author_name', [])) or author
                 ol_isbn = d.get('isbn', [''])[0] if d.get('isbn') else ''
-                if ia_list:
-                    ident = ia_list[0]
-                    logger.info(f"[ReadingExtractor] [OpenLibrary] Match found with IA id '{ident}': '{matched_t}'")
+                # Filter out paper preprints from IA list if book has a published ID
+                valid_ia = [i for i in ia_list if not i.startswith('arxiv-') and not i.startswith('arxiv_')]
+                if valid_ia:
+                    ident = valid_ia[0]
+                    logger.info(f"[ReadingExtractor] [OpenLibrary] Match found with IA book ID '{ident}': '{matched_t}'")
                     return {
                         "matched_title": matched_t,
                         "matched_authors": matched_a,
@@ -148,11 +76,9 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         "reader_type": "archive_org",
                         "isbn": ol_isbn,
                         "is_lending": True,
-                        "source_provider": "Internet Archive / OpenLibrary (Lending Library)"
+                        "source_provider": "Internet Archive / OpenLibrary"
                     }
                 elif cover_url:
-                    # Found book and cover; will try Google Books below for reader embed
-                    logger.debug(f"[ReadingExtractor] [OpenLibrary] Found cover for '{matched_t}', resolving Google Books embed...")
                     gb_res = fetch_google_books_metadata(title, author)
                     embed_url = ""
                     reader_type = "web"
@@ -161,7 +87,6 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         if m:
                             embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
                             reader_type = "google_embed"
-
                     return {
                         "matched_title": matched_t,
                         "matched_authors": matched_a,
@@ -173,10 +98,45 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         "is_lending": False,
                         "source_provider": "OpenLibrary / Google Books"
                     }
-        else:
-            logger.debug(f"[ReadingExtractor] [OpenLibrary] API returned status {ol_res.status_code}")
     except Exception as e:
         logger.debug(f"[ReadingExtractor] [OpenLibrary] Exception during search: {e}")
+
+    # 2. Second Priority: Internet Archive Search (filtering out arxiv research paper uploads)
+    try:
+        author_word = clean_author.split()[0] if clean_author else ""
+        ia_queries = []
+        if author_word and len(author_word) >= 3:
+            ia_queries.append(f'title:("{clean_title}") AND creator:({author_word}) AND mediatype:(texts) AND NOT identifier:(arxiv*)')
+            ia_queries.append(f'("{clean_title}") AND ({author_word}) AND mediatype:(texts) AND NOT identifier:(arxiv*)')
+        ia_queries.append(f'title:("{clean_title}") AND mediatype:(texts) AND NOT identifier:(arxiv*)')
+        ia_queries.append(f'("{clean_title}") AND mediatype:(texts) AND NOT identifier:(arxiv*)')
+
+        for q in ia_queries:
+            logger.debug(f"[ReadingExtractor] [IA Search] Querying Archive.org: {q}")
+            ia_res = requests.get(
+                ARCHIVE_ORG_SEARCH_API,
+                params={'q': q, 'fl[]': 'identifier,title,creator,year', 'rows': 3, 'output': 'json'},
+                timeout=3.5
+            )
+            if ia_res.status_code == 200:
+                docs = ia_res.json().get('response', {}).get('docs', [])
+                if docs:
+                    d = docs[0]
+                    ident = d.get('identifier')
+                    if ident:
+                        logger.info(f"[ReadingExtractor] [IA Search] Match found: '{d.get('title')}' (id: {ident})")
+                        return {
+                            "matched_title": d.get('title') or title,
+                            "matched_authors": d.get('creator') or author,
+                            "cover_url": f"https://archive.org/services/img/{ident}",
+                            "preview_url": f"https://archive.org/details/{ident}",
+                            "embed_url": f"https://archive.org/embed/{ident}?ui=embed",
+                            "reader_type": "archive_org",
+                            "is_lending": True,
+                            "source_provider": "Internet Archive"
+                        }
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [IA Search] Exception during search: {e}")
 
     # 4. Google Books Fallback
     logger.debug(f"[ReadingExtractor] Trying Google Books fallback for title='{title}', author='{author}'")

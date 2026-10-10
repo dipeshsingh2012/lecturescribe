@@ -34,8 +34,8 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
     setHasError(false);
     setIsLending(Boolean(book.is_lending));
 
-    // 1. If book already has an embed_url, use it directly
-    if (book.embed_url) {
+    // 1. If book already has a valid embed_url (not an un-embeddable preprint), use it directly
+    if (book.embed_url && !book.embed_url.includes('arxiv-')) {
       setResolvedEmbedUrl(book.embed_url);
       setResolvedReaderType(book.reader_type || 'embed');
       setIsLoading(false);
@@ -347,20 +347,38 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
                 <strong>1-Hour Lending Edition:</strong> To read beyond preview pages, use the <strong>"Borrow"</strong> button inside the reader controls or log in to Internet Archive.
               </span>
             </div>
-            <a
-              href={iaLoginUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                color: '#fbbf24',
-                fontWeight: 700,
-                textDecoration: 'underline',
-                whiteSpace: 'nowrap',
-                fontSize: '0.78rem'
-              }}
-            >
-              Sign In to Archive.org &rarr;
-            </a>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
+              {directOpenUrl && (
+                <a
+                  href={directOpenUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: '#fbbf24',
+                    fontWeight: 600,
+                    textDecoration: 'underline',
+                    whiteSpace: 'nowrap',
+                    fontSize: '0.78rem'
+                  }}
+                >
+                  Open in New Tab &rarr;
+                </a>
+              )}
+              <a
+                href={iaLoginUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  color: '#fbbf24',
+                  fontWeight: 700,
+                  textDecoration: 'underline',
+                  whiteSpace: 'nowrap',
+                  fontSize: '0.78rem'
+                }}
+              >
+                Sign In to Archive.org &rarr;
+              </a>
+            </div>
           </div>
         )}
 
@@ -447,7 +465,8 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
                 height: '100%',
                 background: '#ffffff'
               }}
-              allow="fullscreen; autoplay; clipboard-write; encrypted-media"
+              allow="fullscreen"
+              onError={() => setHasError(true)}
             />
           )}
         </div>

@@ -136,4 +136,70 @@ describe('useResources hook functionality', () => {
     expect(ids).toContain('res-course-1');
     expect(ids).not.toContain('res-lec-2');
   });
+
+  it('handleUploadResource uploads multiple files sequentially using pre-signed URLs', async () => {
+    const user = { email: 'student@example.com' };
+    const { result } = renderHook(() => useResources(null, 'CS101', user));
+
+    act(() => {
+      result.current.openUploadModal({ courseName: 'CS101', videoId: null });
+      result.current.setUploadFiles([
+        new File(['content-1'], 'week1_notes.pdf', { type: 'application/pdf' }),
+        new File(['content-2'], 'week2_slides.pptx', { type: 'application/vnd.ms-powerpoint' })
+      ]);
+    });
+
+    const presignCalls = [];
+    const gcsPuts = [];
+    const confirmCalls = [];
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/api/resources/presign-upload')) {
+        const body = JSON.parse(opts.body);
+        presignCalls.push(body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            signed_url: `https://storage.googleapis.com/test-bucket/${body.filename}?sig=xyz`,
+            blob_name: `courses/cs101/general/${body.filename}`
+          })
+        });
+      }
+      if (opts?.method === 'PUT') {
+        gcsPuts.push(url);
+        return Promise.resolve({ ok: true });
+      }
+      if (url.includes('/api/resources/confirm-upload')) {
+        const body = JSON.parse(opts.body);
+        confirmCalls.push(body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            resource: {
+              id: `id-${body.filename}`,
+              title: body.title,
+              filename: body.filename,
+              blob_name: body.blob_name,
+              course_name: body.course_name
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ resources: [], readings: [] }) });
+    });
+
+    await act(async () => {
+      await result.current.handleUploadResource();
+    });
+
+    expect(presignCalls.length).toBe(2);
+    expect(presignCalls[0].filename).toBe('week1_notes.pdf');
+    expect(presignCalls[1].filename).toBe('week2_slides.pptx');
+
+    expect(gcsPuts.length).toBe(2);
+    expect(confirmCalls.length).toBe(2);
+
+    expect(result.current.uploadModalOpen).toBe(false);
+    expect(result.current.courseResources.length).toBe(2);
+  });
 });

@@ -64,10 +64,20 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const [uploadTarget, setUploadTarget] = useState({ courseName: 'General Lectures', videoId: null });
   const [uploadMode, setUploadMode] = useState('file'); // 'file' | 'link'
   const [uploadFile, setUploadFile] = useState(null);
+  const [uploadFiles, setUploadFiles] = useState([]);
+  const [uploadProgress, setUploadProgress] = useState('');
   const [uploadTitle, setUploadTitle] = useState('');
   const [uploadLinkUrl, setUploadLinkUrl] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+
+  const removeUploadFile = (index) => {
+    setUploadFiles(prev => {
+      const updated = prev.filter((_, i) => i !== index);
+      setUploadFile(updated[0] || null);
+      return updated;
+    });
+  };
 
   const fetchLectureResources = async (videoId, courseName) => {
     if (!videoId) {
@@ -261,6 +271,8 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const openUploadModal = (target = { courseName: selectedCourse || 'General Lectures', videoId: activeVideoId || null }) => {
     setUploadTarget(target);
     setUploadFile(null);
+    setUploadFiles([]);
+    setUploadProgress('');
     setUploadTitle('');
     setUploadLinkUrl('');
     setUploadError('');
@@ -277,67 +289,90 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
 
     setIsUploading(true);
     setUploadError('');
+    setUploadProgress('');
 
     try {
       if (uploadMode === 'file') {
-        if (!uploadFile) {
-          throw new Error("Please select a file to upload.");
+        const filesToUpload = (uploadFiles && uploadFiles.length > 0)
+          ? uploadFiles
+          : (uploadFile ? [uploadFile] : []);
+
+        if (filesToUpload.length === 0) {
+          throw new Error("Please select at least one file to upload.");
         }
 
-        const presignRes = await fetch(`${API_BASE}/api/resources/presign-upload`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            course_name: uploadTarget.courseName || selectedCourse || 'General Lectures',
-            video_id: uploadTarget.videoId || null,
-            filename: uploadFile.name,
-            content_type: uploadFile.type || 'application/octet-stream',
-            user_email: googleUser.email
-          })
-        });
+        const uploadedResources = [];
+        const totalCount = filesToUpload.length;
 
-        if (!presignRes.ok) {
-          const errData = await presignRes.json().catch(() => ({}));
-          throw new Error(errData.detail || "Failed to get secure upload authorization.");
+        for (let i = 0; i < totalCount; i++) {
+          const file = filesToUpload[i];
+          if (totalCount > 1) {
+            setUploadProgress(`Uploading ${i + 1} of ${totalCount}: ${file.name}...`);
+          }
+
+          const presignRes = await fetch(`${API_BASE}/api/resources/presign-upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              course_name: uploadTarget.courseName || selectedCourse || 'General Lectures',
+              video_id: uploadTarget.videoId || null,
+              filename: file.name,
+              content_type: file.type || 'application/octet-stream',
+              user_email: googleUser.email
+            })
+          });
+
+          if (!presignRes.ok) {
+            const errData = await presignRes.json().catch(() => ({}));
+            throw new Error(errData.detail || `Failed to get secure upload authorization for ${file.name}.`);
+          }
+
+          const presignData = await presignRes.json();
+
+          const gcsRes = await fetch(presignData.signed_url, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': file.type || 'application/octet-stream'
+            },
+            body: file
+          });
+
+          if (!gcsRes.ok) {
+            throw new Error(`Cloud storage upload failed for ${file.name} (HTTP ${gcsRes.status}).`);
+          }
+
+          const resourceTitle = (totalCount === 1 && uploadTitle.trim())
+            ? uploadTitle.trim()
+            : file.name.replace(/\.[^/.]+$/, '');
+
+          const confirmRes = await fetch(`${API_BASE}/api/resources/confirm-upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              course_name: uploadTarget.courseName || selectedCourse || 'General Lectures',
+              video_id: uploadTarget.videoId || null,
+              title: resourceTitle,
+              filename: file.name,
+              blob_name: presignData.blob_name,
+              file_type: file.name.split('.').pop()?.toLowerCase() || 'file',
+              file_size_bytes: file.size,
+              user_email: googleUser.email
+            })
+          });
+
+          if (!confirmRes.ok) {
+            const errData = await confirmRes.json().catch(() => ({}));
+            throw new Error(errData.detail || `Failed to record uploaded resource ${file.name}.`);
+          }
+
+          const confirmed = await confirmRes.json();
+          if (confirmed.resource) {
+            uploadedResources.push(confirmed.resource);
+          }
         }
 
-        const presignData = await presignRes.json();
-
-        const gcsRes = await fetch(presignData.signed_url, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': uploadFile.type || 'application/octet-stream'
-          },
-          body: uploadFile
-        });
-
-        if (!gcsRes.ok) {
-          throw new Error(`Cloud storage upload failed (HTTP ${gcsRes.status}).`);
-        }
-
-        const confirmRes = await fetch(`${API_BASE}/api/resources/confirm-upload`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            course_name: uploadTarget.courseName || selectedCourse,
-            video_id: uploadTarget.videoId || null,
-            title: uploadTitle.trim() || uploadFile.name.replace(/\.[^/.]+$/, ''),
-            filename: uploadFile.name,
-            blob_name: presignData.blob_name,
-            file_type: uploadFile.name.split('.').pop()?.toLowerCase() || 'file',
-            file_size_bytes: uploadFile.size,
-            user_email: googleUser.email
-          })
-        });
-
-        if (!confirmRes.ok) {
-          const errData = await confirmRes.json().catch(() => ({}));
-          throw new Error(errData.detail || "Failed to record uploaded resource.");
-        }
-
-        const confirmed = await confirmRes.json();
-        setRawLectureResources(prev => [confirmed.resource, ...prev]);
-        setCourseResources(prev => [confirmed.resource, ...prev]);
+        setRawLectureResources(prev => [...uploadedResources, ...prev]);
+        setCourseResources(prev => [...uploadedResources, ...prev]);
         setUploadModalOpen(false);
 
       } else {
@@ -444,6 +479,11 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     setUploadMode,
     uploadFile,
     setUploadFile,
+    uploadFiles,
+    setUploadFiles,
+    uploadProgress,
+    setUploadProgress,
+    removeUploadFile,
     uploadTitle,
     setUploadTitle,
     uploadLinkUrl,

@@ -73,4 +73,47 @@ describe('UploadResourceModal', () => {
     fireEvent.click(saveBtn);
     expect(handleUploadResource).toHaveBeenCalledTimes(1);
   });
+
+  it('displays multiple files and allows removing an item in file mode', () => {
+    const removeUploadFile = vi.fn();
+    const handleUploadResource = vi.fn();
+    const mockFiles = [
+      { name: 'Lecture1_Slides.pptx', size: 1048576 },
+      { name: 'Lecture2_Slides.pptx', size: 2097152 }
+    ];
+
+    render(
+      <UploadResourceModal
+        open={true}
+        onClose={vi.fn()}
+        uploadTarget={{ videoId: null, courseName: 'Computer Vision' }}
+        uploadMode="file"
+        setUploadMode={vi.fn()}
+        uploadFiles={mockFiles}
+        setUploadFiles={vi.fn()}
+        removeUploadFile={removeUploadFile}
+        uploadTitle=""
+        setUploadTitle={vi.fn()}
+        uploadLinkUrl=""
+        setUploadLinkUrl={vi.fn()}
+        isUploading={false}
+        uploadError={null}
+        setUploadError={vi.fn()}
+        handleUploadResource={handleUploadResource}
+      />
+    );
+
+    expect(screen.getByText(/2 files selected/i)).toBeInTheDocument();
+    expect(screen.getByText('Lecture1_Slides.pptx')).toBeInTheDocument();
+    expect(screen.getByText('Lecture2_Slides.pptx')).toBeInTheDocument();
+
+    const uploadBtn = screen.getByRole('button', { name: /Upload 2 Resources/i });
+    expect(uploadBtn).not.toBeDisabled();
+    fireEvent.click(uploadBtn);
+    expect(handleUploadResource).toHaveBeenCalledTimes(1);
+
+    const removeBtn = screen.getByLabelText(/Remove Lecture1_Slides.pptx/i);
+    fireEvent.click(removeBtn);
+    expect(removeUploadFile).toHaveBeenCalledWith(0);
+  });
 });

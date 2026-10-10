@@ -75,7 +75,7 @@ export default function TranscriptSearch({
   const justDismissedToolbarRef = useRef(false);
   const mouseDownPosRef = useRef({ x: 0, y: 0 });
 
-  const videoId = activeData?.videoId;
+  const videoId = activeData?.videoId || activeData?.video_id || (typeof window !== 'undefined' ? window.location.pathname.match(/\/lecture\/([^/?#]+)/)?.[1] : null);
 
   // Cleanup polling and scroll timers on unmount
   useEffect(() => {
@@ -476,41 +476,53 @@ export default function TranscriptSearch({
         return curr?.closest?.('[data-cue-idx]');
       };
 
-      const startRow = getCueRow(startNode);
-      const endRow = getCueRow(endNode);
+      let startRow = getCueRow(startNode);
+      let endRow = getCueRow(endNode);
 
+      if (!startRow && endRow) startRow = endRow;
+      if (startRow && !endRow) endRow = startRow;
       // Must be within transcript cue rows
       if (!startRow || !endRow) return;
 
       const startCueIdx = parseInt(startRow.getAttribute('data-cue-idx'), 10);
-      const endCueIdx = parseInt(endRow.getAttribute('data-cue-idx'), 10);
+      let endCueIdx = parseInt(endRow.getAttribute('data-cue-idx'), 10);
 
-      // If selection spans multiple cues, do not create a corrupt single-cue annotation
-      if (isNaN(startCueIdx) || isNaN(endCueIdx) || startCueIdx !== endCueIdx) {
+      if (isNaN(startCueIdx) || isNaN(endCueIdx)) {
         return;
       }
 
-      const targetCue = displayCues[startCueIdx];
+      // Handle common boundary edge case: selection end lands at start of next cue (offset 0)
+      if (range.endOffset === 0 && endCueIdx > startCueIdx) {
+        endCueIdx = endCueIdx - 1;
+      }
+
+      const firstIdx = Math.min(startCueIdx, endCueIdx);
+      const lastIdx = Math.max(startCueIdx, endCueIdx);
+
+      const targetCue = displayCues[firstIdx];
+      const endCue = displayCues[lastIdx] || targetCue;
       if (!targetCue) return;
 
-      // Selection must be within the cue text container (.transcript-cue)
+      // Selection must touch the cue text container (.transcript-cue)
       const getCueText = (node) => {
         let curr = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
         return curr?.closest?.('.transcript-cue');
       };
-      if (!getCueText(startNode) && !getCueText(endNode)) return;
+      if (!getCueText(startNode) && !getCueText(endNode) && !startRow.querySelector?.('.transcript-cue')) return;
 
-      const rect = range.getBoundingClientRect ? range.getBoundingClientRect() : null;
+      const rect = (range.getBoundingClientRect && range.getBoundingClientRect().width > 0)
+        ? range.getBoundingClientRect()
+        : (range.getClientRects && range.getClientRects()[0] ? range.getClientRects()[0] : null);
       const posX = rect ? (rect.left + rect.width / 2) : 200;
       const posY = rect ? rect.top : 200;
 
       const startSec = targetCue.seconds !== undefined
         ? Number(targetCue.seconds)
         : parseTimeToSeconds(targetCue.time);
-      const nextCue = displayCues[startCueIdx + 1];
+      const nextCue = displayCues[lastIdx + 1];
       const nextSec = nextCue?.seconds !== undefined
         ? Number(nextCue.seconds)
-        : (nextCue?.time ? parseTimeToSeconds(nextCue.time) : startSec + 5);
+        : (nextCue?.time ? parseTimeToSeconds(nextCue.time) : (endCue.seconds !== undefined ? Number(endCue.seconds) + 5 : startSec + 5));
       const endSec = Math.max(startSec + 2, nextSec);
 
       setSelectionToolbar({
@@ -519,7 +531,7 @@ export default function TranscriptSearch({
           y: posY
         },
         selectedText: text,
-        cueId: targetCue.id ?? startCueIdx,
+        cueId: targetCue.id ?? firstIdx,
         startSeconds: startSec,
         endSeconds: endSec
       });
@@ -539,7 +551,14 @@ export default function TranscriptSearch({
       }
     };
     const handleDocMouseUp = (e) => {
-      if (scrollContainerRef.current?.contains(e.target)) {
+      if (e.target.closest?.('.text-selection-toolbar')) return;
+      const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+      if (!sel || sel.isCollapsed) return;
+      if (
+        scrollContainerRef.current?.contains(e.target) ||
+        (sel.anchorNode && scrollContainerRef.current?.contains(sel.anchorNode)) ||
+        (sel.focusNode && scrollContainerRef.current?.contains(sel.focusNode))
+      ) {
         handleTextSelection();
       }
     };
@@ -595,6 +614,64 @@ export default function TranscriptSearch({
     return parts;
   };
 
+  // Helper to find matching spans of an annotation string within cue text
+  const findAnnotationOccurrences = (cueText, searchStr) => {
+    if (!cueText || !searchStr) return [];
+    const cleanCue = cueText.replace(/\u00a0/g, ' ');
+    const cleanSearch = searchStr.replace(/\u00a0/g, ' ').trim();
+    const lowerCue = cleanCue.toLowerCase();
+    const lowerSearch = cleanSearch.toLowerCase();
+
+    // 1. Exact substring match
+    const results = [];
+    let startPos = 0;
+    while ((startPos = lowerCue.indexOf(lowerSearch, startPos)) !== -1) {
+      results.push({ start: startPos, end: startPos + cleanSearch.length });
+      startPos += cleanSearch.length;
+    }
+    if (results.length > 0) return results;
+
+    // 2. Whitespace-collapsed exact match
+    const collapsedCue = lowerCue.replace(/\s+/g, ' ');
+    const collapsedSearch = lowerSearch.replace(/\s+/g, ' ');
+    if (collapsedCue.includes(collapsedSearch)) {
+      const matchPrefix = collapsedSearch.slice(0, Math.min(10, collapsedSearch.length));
+      const startChar = lowerCue.indexOf(matchPrefix);
+      if (startChar !== -1) {
+        const endChar = Math.min(cleanCue.length, startChar + cleanSearch.length);
+        return [{ start: startChar, end: endChar }];
+      }
+    }
+
+    // 3. Cross-cue: Whole cue text contained within multi-cue selection
+    if (collapsedSearch.includes(collapsedCue) && collapsedCue.length >= 2) {
+      return [{ start: 0, end: cueText.length }];
+    }
+
+    // 4. Cross-cue: Suffix of cue matches prefix of search (start cue in multi-cue selection)
+    const cueWords = cleanCue.trim().split(/\s+/);
+    for (let w = 1; w < cueWords.length; w++) {
+      const candidateSuffix = cueWords.slice(w).join(' ').toLowerCase();
+      if (candidateSuffix.length >= 3 && lowerSearch.startsWith(candidateSuffix)) {
+        const startIdx = lowerCue.lastIndexOf(candidateSuffix);
+        if (startIdx !== -1) {
+          return [{ start: startIdx, end: cueText.length }];
+        }
+      }
+    }
+
+    // 5. Cross-cue: Prefix of cue matches suffix of search (end cue in multi-cue selection)
+    for (let w = cueWords.length; w >= 1; w--) {
+      const candidatePrefix = cueWords.slice(0, w).join(' ').toLowerCase();
+      if (candidatePrefix.length >= 3 && lowerSearch.endsWith(candidatePrefix)) {
+        const endIdx = lowerCue.indexOf(candidatePrefix) + candidatePrefix.length;
+        return [{ start: 0, end: endIdx }];
+      }
+    }
+
+    return [];
+  };
+
   // Helper to render annotated text (highlights, comments/notes, and AI explanations)
   const renderAnnotatedCue = (cueText, cueAnnotations, isActive) => {
     if (!cueText || typeof cueText !== 'string') return cueText;
@@ -608,19 +685,15 @@ export default function TranscriptSearch({
       const searchStr = (ann.selectedText || ann.selected_text || '').trim();
       if (!searchStr) return;
 
-      const lowerText = cueText.toLowerCase();
-      const lowerSearch = searchStr.toLowerCase();
-      let startPos = 0;
-
-      while ((startPos = lowerText.indexOf(lowerSearch, startPos)) !== -1) {
+      const occurrences = findAnnotationOccurrences(cueText, searchStr);
+      occurrences.forEach((occ, oIdx) => {
         matches.push({
-          start: startPos,
-          end: startPos + searchStr.length,
+          start: occ.start,
+          end: occ.end,
           annotation: ann,
-          id: ann.id || `ann-${aIdx}`
+          id: ann.id || `ann-${aIdx}-${oIdx}`
         });
-        startPos += searchStr.length;
-      }
+      });
     });
 
     if (matches.length === 0) {
@@ -730,11 +803,26 @@ export default function TranscriptSearch({
 
   // Render cue content (highlights or math or text)
   const renderCueContent = (cue, idx, isActive) => {
+    const cueSec = cue.seconds !== undefined ? Number(cue.seconds) : parseTimeToSeconds(cue.time);
+    const nextCue = displayCues[idx + 1];
+    const nextCueSec = nextCue?.seconds !== undefined
+      ? Number(nextCue.seconds)
+      : (nextCue?.time ? parseTimeToSeconds(nextCue.time) : cueSec + 6);
+
     const cueAnnotations = (annotations || []).filter(a => {
       const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
       const aText = (a.selectedText || a.selected_text || '').trim();
-      if (aCueId !== undefined && (aCueId === cue.id || aCueId === idx)) return true;
-      if (aText && cue.text && cue.text.toLowerCase().includes(aText.toLowerCase())) return true;
+      const aStartSec = Number(a.startSeconds ?? a.start_seconds ?? 0);
+      const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
+
+      if (aCueId !== undefined && aCueId !== null && (aCueId === cue.id || aCueId === idx)) return true;
+      if (aText && cue.text) {
+        if (cue.text.toLowerCase().includes(aText.toLowerCase())) return true;
+        if (aText.toLowerCase().includes(cue.text.trim().toLowerCase())) return true;
+      }
+      if (aEndSec > 0 && cueSec <= aEndSec && nextCueSec >= aStartSec) {
+        return true;
+      }
       return false;
     });
 
@@ -1113,6 +1201,11 @@ export default function TranscriptSearch({
                 ref={(el) => { cueRefs.current[idx] = el; }}
                 onClick={(e) => {
                   if (isEditing) return;
+                  if (justDismissedToolbarRef.current) return;
+                  const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+                  if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
+                    return;
+                  }
                   const dist = Math.hypot(
                     e.clientX - (mouseDownPosRef.current.x || 0),
                     e.clientY - (mouseDownPosRef.current.y || 0)
@@ -1270,10 +1363,17 @@ export default function TranscriptSearch({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                       {/* Note / Comment indicator badge if present on this cue */}
                       {annotations.some(a => {
+                        const aType = a.annotationType || a.annotation_type;
+                        if (aType !== 'note') return false;
                         const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
                         const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
-                        const aType = a.annotationType || a.annotation_type;
-                        return (aCueId === cue.id || aCueId === idx || (aText && cue.text?.toLowerCase().includes(aText))) && aType === 'note';
+                        const aStartSec = Number(a.startSeconds ?? a.start_seconds ?? 0);
+                        const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
+                        const cueSec = cue.seconds !== undefined ? Number(cue.seconds) : parseTimeToSeconds(cue.time);
+                        const nextCueSec = displayCues[idx + 1]?.seconds !== undefined
+                          ? Number(displayCues[idx + 1].seconds)
+                          : (displayCues[idx + 1]?.time ? parseTimeToSeconds(displayCues[idx + 1].time) : cueSec + 6);
+                        return (aCueId === cue.id || aCueId === idx || (aText && (cue.text?.toLowerCase().includes(aText) || aText.includes(cue.text?.trim().toLowerCase()))) || (aEndSec > 0 && cueSec <= aEndSec && nextCueSec >= aStartSec));
                       }) && (
                         <button
                           onClick={(e) => {
@@ -1303,10 +1403,17 @@ export default function TranscriptSearch({
 
                       {/* AI Explanation badge if present on this cue */}
                       {annotations.some(a => {
+                        const aType = a.annotationType || a.annotation_type;
+                        if (aType !== 'ai_explanation') return false;
                         const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
                         const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
-                        const aType = a.annotationType || a.annotation_type;
-                        return (aCueId === cue.id || aCueId === idx || (aText && cue.text?.toLowerCase().includes(aText))) && aType === 'ai_explanation';
+                        const aStartSec = Number(a.startSeconds ?? a.start_seconds ?? 0);
+                        const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
+                        const cueSec = cue.seconds !== undefined ? Number(cue.seconds) : parseTimeToSeconds(cue.time);
+                        const nextCueSec = displayCues[idx + 1]?.seconds !== undefined
+                          ? Number(displayCues[idx + 1].seconds)
+                          : (displayCues[idx + 1]?.time ? parseTimeToSeconds(displayCues[idx + 1].time) : cueSec + 6);
+                        return (aCueId === cue.id || aCueId === idx || (aText && (cue.text?.toLowerCase().includes(aText) || aText.includes(cue.text?.trim().toLowerCase()))) || (aEndSec > 0 && cueSec <= aEndSec && nextCueSec >= aStartSec));
                       }) && (
                         <button
                           onClick={(e) => {

@@ -131,6 +131,119 @@
     return document.title ? document.title.replace(/\s*[-|•]\s*Vimeo.*$/i, '').trim() : null;
   }
 
+  const KNOWN_LMS_CODE_MAPPINGS = {
+    "AMDSAIC04": "1.1 Applied Mathematics for Data Science and AI",
+    "MLPC04": "1.2 Machine Learning Paradigms",
+    "ISNLPC04": "1.3 Introduction to Speech and Natural Language Processing",
+    "ICVC04": "1.4 Introduction to Computer Vision",
+    "IGAIC04": "1.5 Introduction to Generative AI",
+    "IFAC04": "1.6 Introduction to Financial Analytics",
+    "IAIHC04": "1.7 Introduction to AI in Healthcare",
+    "IRC04": "1.8 Introduction to Research",
+    "DSLC04": "1.9 Data Science Lab",
+  };
+
+  function isCourseCode(value) {
+    return /^[A-Za-z]{2,}[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*$/.test((value || "").trim());
+  }
+
+  function cleanCourseName(name) {
+    if (!name || typeof name !== 'string') return null;
+    let s = name.trim();
+    s = s.replace(/^Course\s*[:\-–]\s*/i, '');
+    s = s.replace(/^[A-Za-z]{2,}[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\s*[:\-–]\s*/i, '');
+    s = s.replace(/\s*\([A-Za-z]{2,}[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\)\s*$/i, '');
+    s = s.replace(/\s*[\(\[\{]\s*\d{1,2}[\s/.\-]+\d{1,2}[\s/.\-]+\d{2,4}\s*[\)\]\}]/g, '');
+    s = s.replace(/\s*[-:|•]\s*(?:Live\s+Session|Session|Lecture|Module|Class|Week|Part|Episode|Topic|Recording)\b.*$/i, '');
+    s = s.replace(/[\s\-_:\|\/]+$/, '').trim();
+    return s.length >= 3 ? s : null;
+  }
+
+  function getMoodleCourseFullName(breadcrumb, codeText = null) {
+    let rawCode = (codeText || breadcrumb?.textContent || "").trim().toUpperCase();
+    rawCode = rawCode.replace(/CO4$/, 'C04');
+    if (rawCode && KNOWN_LMS_CODE_MAPPINGS[rawCode]) {
+      return KNOWN_LMS_CODE_MAPPINGS[rawCode];
+    }
+    const codeNoDigits = rawCode.replace(/\d+$/, '');
+    if (codeNoDigits && KNOWN_LMS_CODE_MAPPINGS[codeNoDigits]) {
+      return KNOWN_LMS_CODE_MAPPINGS[codeNoDigits];
+    }
+
+    // 1. Breadcrumb link title or aria-label
+    const breadcrumbLink = breadcrumb?.querySelector("a") || breadcrumb;
+    const linkTitle = breadcrumbLink?.getAttribute("title") || breadcrumbLink?.getAttribute("aria-label");
+    if (linkTitle) {
+      const cleaned = cleanCourseName(linkTitle);
+      if (cleaned && !isCourseCode(cleaned)) return cleaned;
+    }
+
+    // 2. Direct Moodle course links on page (links to /course/view.php)
+    const courseLinks = document.querySelectorAll('a[href*="/course/view.php"]');
+    for (const link of courseLinks) {
+      const titleAttr = link.getAttribute("title") || link.getAttribute("aria-label");
+      if (titleAttr) {
+        const cleaned = cleanCourseName(titleAttr);
+        if (cleaned && !isCourseCode(cleaned)) return cleaned;
+      }
+      const linkText = link.textContent?.trim();
+      if (linkText && !['home', 'dashboard', 'my courses', 'courses'].includes(linkText.toLowerCase())) {
+        const cleaned = cleanCourseName(linkText);
+        if (cleaned && !isCourseCode(cleaned)) return cleaned;
+      }
+    }
+
+    // 3. Moodle DOM headers & context containers
+    const selectors = [
+      "[data-course-fullname]",
+      "[data-coursefullname]",
+      ".course-header .coursename",
+      ".course-header .course-title",
+      ".page-context-header h1",
+      ".page-context-header .page-header-headings h1",
+      ".page-header-headings h1",
+      "#page-header h1",
+      ".coursebox .coursename",
+      ".header-title h1",
+      "[data-region='course-header']",
+      "[data-region='course-name']",
+      ".coursename",
+      ".course-title"
+    ];
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      const raw = element?.getAttribute("data-course-fullname") ||
+                  element?.getAttribute("data-coursefullname") ||
+                  element?.textContent?.trim();
+      if (raw) {
+        const cleaned = cleanCourseName(raw);
+        if (cleaned && !isCourseCode(cleaned)) return cleaned;
+      }
+    }
+
+    // 4. Moodle document.title
+    const docTitle = document.title || "";
+    const courseMatch = docTitle.match(/Course:\s*([^|•\-\n:]+)/i);
+    if (courseMatch && courseMatch[1]) {
+      const cleaned = cleanCourseName(courseMatch[1]);
+      if (cleaned && !isCourseCode(cleaned)) return cleaned;
+    }
+    const codeMatch = docTitle.match(/[A-Za-z]{2,}[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\s*[:\-–]\s*([^|•\-\n:]+)/i);
+    if (codeMatch && codeMatch[1]) {
+      const cleaned = cleanCourseName(codeMatch[1]);
+      if (cleaned && !isCourseCode(cleaned)) return cleaned;
+    }
+    const parts = docTitle.split(/[:|•\-–]/);
+    for (const part of parts) {
+      const cleaned = cleanCourseName(part);
+      if (cleaned && !isCourseCode(cleaned) && !['vimeo', 'moodle', 'home', 'lms', 'player'].includes(cleaned.toLowerCase())) {
+        return cleaned;
+      }
+    }
+
+    return KNOWN_LMS_CODE_MAPPINGS[rawCode] || null;
+  }
+
   // Extract LMS course breadcrumbs or header title
   function extractLmsCourseContext() {
     try {
@@ -140,7 +253,7 @@
         for (let i = 1; i < canvasCrumbs.length; i++) {
           const text = canvasCrumbs[i]?.textContent?.trim();
           if (text && !['home', 'dashboard', 'courses', 'modules', 'pages', 'assignments', 'announcements'].includes(text.toLowerCase())) {
-            return text;
+            return cleanCourseName(text) || text;
           }
         }
       }
@@ -148,7 +261,7 @@
       // 2. Canvas Course Header elements
       const canvasHeader = document.querySelector('#section-tabs-header, .course-title, #course_header, .course-header');
       if (canvasHeader && canvasHeader.textContent && canvasHeader.textContent.trim()) {
-        return canvasHeader.textContent.trim();
+        return cleanCourseName(canvasHeader.textContent.trim()) || canvasHeader.textContent.trim();
       }
 
       // 3. Moodle LMS Breadcrumbs
@@ -157,7 +270,10 @@
         for (let i = 1; i < moodleCrumbs.length; i++) {
           const text = moodleCrumbs[i]?.textContent?.trim();
           if (text && !['home', 'dashboard', 'my courses', 'courses'].includes(text.toLowerCase())) {
-            return text;
+            if (isCourseCode(text)) {
+              return getMoodleCourseFullName(moodleCrumbs[i], text) || text;
+            }
+            return cleanCourseName(text) || text;
           }
         }
       }
@@ -165,7 +281,7 @@
       // 4. Blackboard / D2L / Brightspace
       const bbHeader = document.querySelector('.course-name, #courseMenu_link, #crumb_1, .d2l-navigation-s-header-title');
       if (bbHeader && bbHeader.textContent && bbHeader.textContent.trim()) {
-        return bbHeader.textContent.trim();
+        return cleanCourseName(bbHeader.textContent.trim()) || bbHeader.textContent.trim();
       }
 
       // 5. Generic nav breadcrumb links
@@ -173,7 +289,7 @@
       for (const a of genericCrumbs) {
         const text = a.textContent?.trim();
         if (text && text.length > 3 && !['home', 'dashboard', 'my courses', 'courses'].includes(text.toLowerCase())) {
-          return text;
+          return cleanCourseName(text) || text;
         }
       }
     } catch (_) {}

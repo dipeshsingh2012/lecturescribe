@@ -866,7 +866,7 @@ describe('TranscriptSearch', () => {
     vi.unstubAllGlobals();
   });
 
-  it('does NOT open toolbar when selection spans multiple cues', () => {
+  it('opens toolbar and captures correct span when selection spans multiple cues', async () => {
     const cues = [
       { id: 1, time: '01:00', text: 'First line of speech.' },
       { id: 2, time: '01:10', text: 'Second line of speech.' }
@@ -904,7 +904,8 @@ describe('TranscriptSearch', () => {
     const scrollContainer = cueRows[0].closest('[tabindex="0"]');
     fireEvent.mouseUp(scrollContainer);
 
-    expect(screen.queryByRole('button', { name: /Close selection menu/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Close selection menu/i })).toBeInTheDocument();
+    expect(screen.getByTitle(/Highlight in yellow/i)).toBeInTheDocument();
   });
 
   it('does not seek video when selecting text or dragging mouse inside cue', () => {
@@ -1095,5 +1096,64 @@ describe('TranscriptSearch', () => {
     expect(preview).toBeInTheDocument();
     expect(preview).toHaveTextContent(/Preview:/i);
     expect(preview.querySelector('.cue-math-expression')).toBeInTheDocument();
+  });
+
+  it('renders highlights spanning across multiple cues and persists in drawer', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'Important concepts in linear algebra.' },
+      { id: 2, time: '01:10', text: 'We apply these to vectors and matrices.' }
+    ];
+    const activeData = { video_id: 'vid_multicue', cues };
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_multi_1',
+                cueId: 1,
+                selectedText: 'linear algebra. We apply these to vectors',
+                annotationType: 'highlight',
+                color: 'blue',
+                startSeconds: 60.0,
+                endSeconds: 75.0
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    // Both cues should have matching highlighted mark tags
+    await waitFor(() => {
+      const marks = document.querySelectorAll('mark');
+      expect(marks.length).toBeGreaterThanOrEqual(2);
+      expect(marks[0]).toHaveTextContent('linear algebra.');
+      expect(marks[1]).toHaveTextContent('We apply these to vectors');
+    });
+
+    // Open Notes drawer and check that multi-cue annotation appears
+    const notesBtn = screen.getByRole('button', { name: /Notes and Highlights/i });
+    fireEvent.click(notesBtn);
+
+    expect(await screen.findByText(/Reader Notes & Highlights/i)).toBeInTheDocument();
+    expect(screen.getByText(/linear algebra\. We apply these to vectors/i)).toBeInTheDocument();
+
+    global.fetch = originalFetch;
   });
 });

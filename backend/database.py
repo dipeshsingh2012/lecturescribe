@@ -3626,6 +3626,29 @@ class RelationalDBManager:
             conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
+                    # Ensure video exists in lecturescribe_videos to satisfy foreign key
+                    cursor.execute("SELECT video_id FROM lecturescribe_videos WHERE video_id = %s;", (video_id,))
+                    if not cursor.fetchone():
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label)
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT (video_id) DO NOTHING;
+                        """, (video_id, f"Lecture {video_id}", "", f"https://vimeo.com/{video_id}", "Caption track"))
+
+                    # Ensure cue_id exists in lecturescribe_transcript_cues to satisfy foreign key
+                    if clean_cue_id is not None:
+                        cursor.execute("SELECT id FROM lecturescribe_transcript_cues WHERE id = %s;", (clean_cue_id,))
+                        if not cursor.fetchone():
+                            if clean_cue_id >= 0:
+                                cursor.execute("SELECT id FROM lecturescribe_transcript_cues WHERE video_id = %s ORDER BY id ASC OFFSET %s LIMIT 1;", (video_id, clean_cue_id))
+                                row = cursor.fetchone()
+                                if row:
+                                    clean_cue_id = row["id"]
+                                else:
+                                    clean_cue_id = None
+                            else:
+                                clean_cue_id = None
+
                     cursor.execute("""
                         INSERT INTO lecturescribe_transcript_annotations (
                             video_id, user_email, cue_id, start_seconds, end_seconds,

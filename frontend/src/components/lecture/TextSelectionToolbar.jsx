@@ -192,7 +192,9 @@ export default function TextSelectionToolbar({
   const toolbarLeft = typeof window !== 'undefined'
     ? Math.max(10, Math.min(window.innerWidth - 320, posX - 140))
     : posX;
-  const toolbarTop = posY > 70 ? posY - 52 : posY + 28;
+  const toolbarTop = typeof window !== 'undefined'
+    ? Math.max(10, Math.min(window.innerHeight - 80, posY > 70 ? posY - 52 : posY + 28))
+    : Math.max(10, posY > 70 ? posY - 52 : posY + 28);
 
   return (
     <div
@@ -201,7 +203,7 @@ export default function TextSelectionToolbar({
         position: 'fixed',
         left: toolbarLeft,
         top: toolbarTop,
-        zIndex: 100,
+        zIndex: 1000,
         background: 'var(--card-bg)',
         border: '1px solid var(--border-color)',
         borderRadius: '8px',

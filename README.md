@@ -31,6 +31,13 @@
   - Asynchronous background export creating a dedicated Google Drive folder: `LectureScribe - <Title> (<VideoId>)`.
   - Packages the **Full Bundle:** `summary.md`, `transcript.md`, `captions.vtt`, `metadata.json`, and `download_guide.txt`.
   - Real-time progress tracking bar and direct clickable Google Drive web link upon completion.
+- 📚 **Automated Course Reading & Textbook Extraction (`extract-readings`):**
+  - Synthesizes all video lecture transcripts and uploaded slide decks (`.pptx`, `.pdf`) across a course.
+  - Employs an LLM extraction cascade (Groq → Gemini → OpenAI/Ollama) to extract textbooks, reference books, ebooks, and journal papers mentioned by the professor.
+  - Automatically enriches each reading with covers, ISBNs, and interactive flip-book digital readers via **Internet Archive**, **OpenLibrary**, and **Google Books**.
+- 📁 **Course Resources Multi-File Direct Upload:**
+  - Direct browser-to-bucket uploading of slides, PDFs, notes, and datasets to Google Cloud Storage via secure V4 signed URLs.
+  - Supports multi-file selection, batch drag-and-drop, and real-time upload progress tracking.
 
 ---
 
@@ -114,6 +121,86 @@
 6. **Multi-Provider Cloud LLM Cascade (for both SUMMARY & CHAT paths):**
    - Priority: **Groq (Llama 3.3 70B)** → **Hugging Face (Llama 3.1 8B)** → **Gemini 2.0 Flash** → **OpenAI GPT-4o-mini**.
    - Server startup and `/health` proactively probe every configured provider and print reachability + latency, so you never see a 502 at query-time without a warning at boot.
+
+### 📚 Course Reading & Textbook Extraction Pipeline (`/api/course/{course_name}/extract-readings`)
+
+LectureScribe automatically detects, extracts, verifies, and embeds academic reading materials (textbooks, reference volumes, research papers, and syllabi) cited across an entire course curriculum.
+
+```
+                  ┌──────────────────────────────────────────────┐
+                  │ POST /api/course/{course_name}/extract-readings │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+        ┌────────────────────────────────┴──────────────────────────────┐
+        ▼                                                               ▼
+┌───────────────────────────────┐               ┌───────────────────────────────┐
+│ 1. Transcripts Aggregation    │               │ 2. Professor Slide Decks      │
+│ • First 40 cues (syllabus /   │               │ • Download .pptx / .pdf bytes │
+│   recommended readings intro) │               │ • Extract slide titles, text, │
+│ • Last 20 cues (assignments)  │               │   and bibliography slides     │
+└───────────────┬───────────────┘               └───────────────┬───────────────┘
+                │                                               │
+                └───────────────────────┬───────────────────────┘
+                                        │
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │ 3. LLM Extraction Cascade                           │
+             │ Prompt: Extract structured JSON of textbooks & refs │
+             │ Priority: Groq → Gemini → OpenAI/Ollama             │
+             │ Resilient JSON recovery & sanitization              │
+             └──────────────────────────┬──────────────────────────┘
+                                        │
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │ 4. Multi-Source Digital Book Reader Resolver        │
+             │ ① Internet Archive (unrestricted full-access embed) │
+             │ ② OpenLibrary API (covers, metadata, Lending Lib)   │
+             │ ③ Google Books API (covers, preview & embed viewer) │
+             └──────────────────────────┬──────────────────────────┘
+                                        │
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │ 5. Database Persistence & Frontend Presentation     │
+             │ • Saves to lecturescribe_course_readings            │
+             │ • Deduplicates by normalized title                  │
+             │ • Interactive BookReaderModal with embedded reader  │
+             │ • Web search fallback for open-access papers/PDFs   │
+             └─────────────────────────────────────────────────────┘
+```
+
+#### How the Pipeline Works Step-by-Step:
+
+1. **Multimodal Source Aggregation**:
+   - **Lecture Transcripts**: Retrieves up to 15 lectures associated with the canonical course name or URL slug. Focuses on the introductory cues (first 40 cues, where professors typically outline course syllabus, required textbooks, and author names) plus closing cues (reading assignments).
+   - **Professor Slide Decks**: Gathers uploaded course presentation documents (`.pptx`, `.ppt`, `.pdf`). Uses `python-pptx` and `pypdf` to extract text from slides, specifically targeting course overview, syllabus, reading lists, and bibliography slides.
+
+2. **LLM Extraction with Multi-Model Fallback Cascade**:
+   - The compiled context is passed to the LLM extraction cascade with a specialized academic curriculum extraction prompt.
+   - **Model Cascade**: **Groq** (`gpt-oss-120b`, `gpt-oss-20b`, `qwen3.8-27b`) → **Gemini** (`gemini-3.5-flash-lite`, `gemini-3.5-flash`) → **OpenAI/Ollama**.
+   - **Extracted Fields**:
+     - `title`: Full official textbook or paper title.
+     - `author`: Primary author(s), editor(s), or research group.
+     - `edition`: Edition number, publication year, or volume.
+     - `reading_type`: `'book'`, `'ebook'`, `'journal'`, or `'paper'`.
+     - `category`: `'primary_textbook'`, `'reference'`, or `'supplementary'`.
+     - `source_context`: Timestamp or slide name where the professor mentioned it (e.g. `Lecture 1 [04:15] & Intro.pptx`).
+   - **Resilient Parsing**: `_parse_readings_json()` handles raw JSON, markdown-fenced blocks, and regex recovery of individual objects if responses contain trailing commentary.
+
+3. **Multi-Source Digital Book & Reader Resolution**:
+   - Extracted items are cross-referenced across three public digital library providers:
+     - **Internet Archive (Full Access)**: Searches for unrestricted public-domain and open-access books, producing an embedded in-page reader (`embed_url`) with virtual page flipping.
+     - **Internet Archive (Controlled Digital Lending)**: Identifies 1-hour borrowable library loans with direct reader previews.
+     - **OpenLibrary API**: Retrieves verified ISBNs and high-resolution book covers (`https://covers.openlibrary.org/b/id/...`).
+     - **Google Books API**: Fallback provider for official book cover art, preview links, and embeddable front-cover viewers.
+
+4. **Persistence & Incremental vs. Full Regeneration**:
+   - Verified readings are saved to the `lecturescribe_course_readings` table.
+   - By default (`regenerate=false`), extraction is incremental: newly identified readings are added without duplicating existing entries.
+   - Supplying `?regenerate=true` clears prior course readings and re-extracts the entire reading list from scratch.
+
+5. **In-App Digital Reader & Web Discovery**:
+   - Clicking **Read Book** opens the integrated **BookReaderModal** with full-screen, page-flipper, and print previews.
+   - Clicking **Search Web** triggers DuckDuckGo queries for open-access textbook PDFs and university repository preprints.
 
 ---
 
@@ -326,7 +413,8 @@ lecturescribe/
 │   ├── summary_generator.py      # Per-ingest structured summary + summarySections generator
 │   ├── algolia_service.py        # Algolia sparse index ingest + search (CHAT branch sparse leg, transcript drawer)
 │   ├── redis_service.py          # Hosted Redis query cache client, ping / status, TTL config
-│   ├── gcs_storage.py            # Google Cloud Storage resources bucket upload
+│   ├── reading_extractor.py      # Extract course textbooks/readings from transcripts & slides, digital reader resolver
+│   ├── gcs_storage.py            # Google Cloud Storage resources bucket upload (V4 signed URLs)
 │   ├── google_drive_service.py   # Google Drive 1-click full-bundle background export
 │   ├── vimeo_client.py           # Vimeo player config, manifest, WebVTT caption + stream extractor
 │   ├── web_search.py             # Free DuckDuckGo + Wikipedia grounding (no paid key)
@@ -337,10 +425,10 @@ lecturescribe/
 │   │   │   ├── common/           # MarkdownWithTimestamps (parses inline [MM:SS] → clickable chips), GoogleIcon
 │   │   │   ├── lecture/          # AITutor (chat UI, citations pill-bar, submission mode, web refs), LecturePlayer, TranscriptSearch, LectureResourcesShelf
 │   │   │   ├── views/            # HomeView, LectureWorkspace, LoadingView
-│   │   │   ├── course/           # CourseGrid, CourseLectures, CourseMaterials
+│   │   │   ├── course/           # CourseGrid, CourseLectures, CourseMaterials, CourseLibrary, CourseTutor
 │   │   │   ├── home/             # HeroBanner, QuickAddBar
 │   │   │   ├── layout/           # Header
-│   │   │   └── modals/           # DownloadModal, UploadResourceModal
+│   │   │   └── modals/           # DownloadModal, UploadResourceModal, BookReaderModal, ResourcePreviewModal
 │   │   ├── hooks/
 │   │   │   └── useAITutor.js     # handleSendMessage → POST /api/rag/query, response → botMsg schema
 │   │   ├── store/themeStore.js   # Zustand theme store (light/dark)
@@ -377,6 +465,8 @@ lecturescribe/
 | Run all frontend tests | `npm run test` | `frontend/` |
 | Check server health + LLM probe | `curl -s http://localhost:8000/health \| python3 -m json.tool` | any shell |
 | Pull + serve default SLM router | `ollama pull qwen2.5:3b && ollama serve` | any shell |
+| Trigger course reading extraction | `curl -X POST "http://localhost:8000/api/course/<course_slug>/extract-readings?regenerate=false"` | any shell |
+| Fetch course readings | `curl -s "http://localhost:8000/api/course/<course_slug>/readings" \| python3 -m json.tool` | any shell |
 | Build backend docker image | `docker build -t lecturescribe-backend .` | repo root |
 
 ---

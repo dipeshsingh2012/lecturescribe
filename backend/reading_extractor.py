@@ -10,11 +10,15 @@ from __future__ import annotations
 import os
 import re
 import json
+import logging
+import traceback
 import urllib.parse
 from typing import List, Dict, Any, Optional
 
 import requests
 from backend.web_search import search_web_for_context
+
+logger = logging.getLogger("lecturescribe.reading_extractor")
 
 GOOGLE_BOOKS_API = "https://www.googleapis.com/books/v1/volumes"
 OPEN_LIBRARY_API = "https://openlibrary.org/search.json"
@@ -30,8 +34,10 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
     Returns rich metadata including embed_url and reader_type.
     """
     if not title or len(title.strip()) < 3:
+        logger.debug(f"[ReadingExtractor] Title '{title}' too short or empty for digital book reader resolution.")
         return {}
 
+    logger.info(f"[ReadingExtractor] Resolving digital book reader for title='{title}', author='{author}', isbn='{isbn}'")
     clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', title).strip()
     clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip()
     lt = title.lower()
@@ -48,6 +54,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
         unrestricted_queries.append(f'title:({clean_title}) AND mediatype:(texts) AND NOT access-restricted-item:true')
 
         for q in unrestricted_queries:
+            logger.debug(f"[ReadingExtractor] [IA Unrestricted] Querying Archive.org: {q}")
             ia_res = requests.get(
                 ARCHIVE_ORG_SEARCH_API,
                 params={'q': q, 'fl[]': 'identifier,title,creator,year', 'rows': 3, 'output': 'json'},
@@ -59,6 +66,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                     d = docs[0]
                     ident = d.get('identifier')
                     if ident:
+                        logger.info(f"[ReadingExtractor] [IA Unrestricted] Match found: '{d.get('title')}' (id: {ident})")
                         return {
                             "matched_title": d.get('title') or title,
                             "matched_authors": d.get('creator') or author,
@@ -69,8 +77,10 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                             "is_lending": False,
                             "source_provider": "Internet Archive (Full Access)"
                         }
-    except Exception:
-        pass
+            else:
+                logger.debug(f"[ReadingExtractor] [IA Unrestricted] API responded with status {ia_res.status_code}")
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [IA Unrestricted] Exception during search: {e}")
 
     # 2. Second Priority: Standard Internet Archive / OpenLibrary Controlled Digital Lending
     try:
@@ -79,6 +89,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
         if author_word and len(author_word) >= 3:
             q_parts.append(f'creator:({author_word})')
         q = ' AND '.join(q_parts)
+        logger.debug(f"[ReadingExtractor] [IA Lending] Querying Archive.org: {q}")
         ia_res = requests.get(
             ARCHIVE_ORG_SEARCH_API,
             params={'q': q, 'fl[]': 'identifier,title,creator,year', 'rows': 2, 'output': 'json'},
@@ -90,6 +101,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                 d = docs[0]
                 ident = d.get('identifier')
                 if ident:
+                    logger.info(f"[ReadingExtractor] [IA Lending] Match found: '{d.get('title')}' (id: {ident})")
                     return {
                         "matched_title": d.get('title') or title,
                         "matched_authors": d.get('creator') or author,
@@ -100,12 +112,15 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         "is_lending": True,
                         "source_provider": "Internet Archive (Lending Library)"
                     }
-    except Exception:
-        pass
+        else:
+            logger.debug(f"[ReadingExtractor] [IA Lending] API returned status {ia_res.status_code}")
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [IA Lending] Exception during search: {e}")
 
     # 3. OpenLibrary API (Covers + IA links)
     try:
         q = f"{clean_title} {clean_author}".strip()
+        logger.debug(f"[ReadingExtractor] [OpenLibrary] Querying OpenLibrary: {q}")
         ol_res = requests.get(
             OPEN_LIBRARY_API,
             params={'q': q, 'limit': 2},
@@ -123,6 +138,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                 ol_isbn = d.get('isbn', [''])[0] if d.get('isbn') else ''
                 if ia_list:
                     ident = ia_list[0]
+                    logger.info(f"[ReadingExtractor] [OpenLibrary] Match found with IA id '{ident}': '{matched_t}'")
                     return {
                         "matched_title": matched_t,
                         "matched_authors": matched_a,
@@ -136,6 +152,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                     }
                 elif cover_url:
                     # Found book and cover; will try Google Books below for reader embed
+                    logger.debug(f"[ReadingExtractor] [OpenLibrary] Found cover for '{matched_t}', resolving Google Books embed...")
                     gb_res = fetch_google_books_metadata(title, author)
                     embed_url = ""
                     reader_type = "web"
@@ -156,10 +173,13 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                         "is_lending": False,
                         "source_provider": "OpenLibrary / Google Books"
                     }
-    except Exception:
-        pass
+        else:
+            logger.debug(f"[ReadingExtractor] [OpenLibrary] API returned status {ol_res.status_code}")
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [OpenLibrary] Exception during search: {e}")
 
     # 4. Google Books Fallback
+    logger.debug(f"[ReadingExtractor] Trying Google Books fallback for title='{title}', author='{author}'")
     gb_res = fetch_google_books_metadata(title, author)
     if gb_res:
         embed_url = ""
@@ -170,6 +190,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
                 embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
                 reader_type = "google_embed"
 
+        logger.info(f"[ReadingExtractor] [Google Books] Match found: '{gb_res.get('matched_title')}' (reader_type: {reader_type})")
         return {
             "matched_title": gb_res.get("matched_title", title),
             "matched_authors": gb_res.get("matched_authors", author),
@@ -181,6 +202,7 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
             "source_provider": "Google Books"
         }
 
+    logger.info(f"[ReadingExtractor] No digital reader or metadata found across all sources for '{title}'.")
     return {}
 
 
@@ -190,6 +212,7 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
     preview URL, ISBN, and publication metadata.
     """
     if not title or len(title.strip()) < 3:
+        logger.debug(f"[ReadingExtractor] [Google Books API] Title '{title}' too short; skipping.")
         return {}
 
     query_parts = [f'intitle:"{title.strip()}"']
@@ -198,6 +221,7 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
         query_parts.append(f'inauthor:"{clean_author}"')
 
     query = " ".join(query_parts)
+    logger.debug(f"[ReadingExtractor] [Google Books API] Querying primary: {query}")
     try:
         resp = requests.get(
             GOOGLE_BOOKS_API,
@@ -224,6 +248,7 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
                         isbn = ident.get("identifier", "")
                         break
 
+                logger.info(f"[ReadingExtractor] [Google Books API] Primary search matched: '{vol.get('title')}' by {vol.get('authors', [])}")
                 return {
                     "matched_title": vol.get("title", title),
                     "matched_authors": ", ".join(vol.get("authors", [])) or author,
@@ -233,12 +258,17 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
                     "publisher": vol.get("publisher", ""),
                     "published_date": vol.get("publishedDate", "")
                 }
+            else:
+                logger.debug("[ReadingExtractor] [Google Books API] Primary search returned 0 items.")
+        else:
+            logger.debug(f"[ReadingExtractor] [Google Books API] Primary search responded with status {resp.status_code}")
     except Exception as e:
-        print(f"[Google Books API Notice] Lookup skipped: {e}")
+        logger.debug(f"[ReadingExtractor] [Google Books API] Primary lookup failed: {e}")
 
     # Fallback broader title search without intitle: quotes if first attempt yielded nothing
     try:
         clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', title).strip()
+        logger.debug(f"[ReadingExtractor] [Google Books API] Querying fallback broader: '{clean_title}'")
         resp = requests.get(
             GOOGLE_BOOKS_API,
             params={"q": clean_title, "maxResults": 1, "printType": "books"},
@@ -256,6 +286,7 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
                 preview_url = vol.get("previewLink") or vol.get("infoLink") or ""
                 if preview_url and preview_url.startswith("http://"):
                     preview_url = "https://" + preview_url[7:]
+                logger.info(f"[ReadingExtractor] [Google Books API] Fallback search matched: '{vol.get('title')}'")
                 return {
                     "matched_title": vol.get("title", title),
                     "matched_authors": ", ".join(vol.get("authors", [])) or author,
@@ -265,8 +296,12 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
                     "publisher": vol.get("publisher", ""),
                     "published_date": vol.get("publishedDate", "")
                 }
-    except Exception:
-        pass
+            else:
+                logger.debug("[ReadingExtractor] [Google Books API] Fallback search returned 0 items.")
+        else:
+            logger.debug(f"[ReadingExtractor] [Google Books API] Fallback search responded with status {resp.status_code}")
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Google Books API] Fallback lookup failed: {e}")
 
     return {}
 
@@ -303,36 +338,45 @@ def search_web_reading_links(title: str, author: str = "", course_name: str = ""
 def _parse_readings_json(raw_json_str: str) -> List[Dict[str, Any]]:
     """Resilient JSON parser that handles markdown codeblocks, root wrappers, and truncated JSON arrays."""
     if not raw_json_str or not raw_json_str.strip():
+        logger.debug("[ReadingExtractor] _parse_readings_json received empty string.")
         return []
     clean_str = re.sub(r"^```(?:json)?\s*", "", raw_json_str.strip())
     clean_str = re.sub(r"\s*```$", "", clean_str).strip()
+    logger.debug(f"[ReadingExtractor] Parsing LLM output ({len(clean_str)} chars). Snippet: {clean_str[:200]!r}")
 
     # 1. Direct parse (Array or Dict wrapper)
     try:
         parsed = json.loads(clean_str)
         if isinstance(parsed, list):
+            logger.info(f"[ReadingExtractor] Direct JSON parse succeeded: array with {len(parsed)} items.")
             return parsed
         if isinstance(parsed, dict):
             for k in ("readings", "books", "items", "results"):
                 if isinstance(parsed.get(k), list):
-                    return parsed[k]
-    except Exception:
-        pass
+                    items = parsed[k]
+                    logger.info(f"[ReadingExtractor] Direct JSON parse succeeded: key '{k}' with {len(items)} items.")
+                    return items
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] Direct JSON parse failed: {e}")
 
     # 2. Try completing truncated JSON with standard closures
     for suffix in ["]", "}]", "\"\n}]", "\"}]", "}\n]"]:
         try:
             parsed = json.loads(clean_str + suffix)
             if isinstance(parsed, list):
+                logger.info(f"[ReadingExtractor] Recovered truncated JSON with suffix '{suffix}': {len(parsed)} items.")
                 return parsed
             if isinstance(parsed, dict):
                 for k in ("readings", "books", "items", "results"):
                     if isinstance(parsed.get(k), list):
-                        return parsed[k]
+                        items = parsed[k]
+                        logger.info(f"[ReadingExtractor] Recovered truncated JSON with key '{k}' ({suffix}): {len(items)} items.")
+                        return items
         except Exception:
             continue
 
     # 3. Regex fallback: extract any individually complete object with a title field
+    logger.debug("[ReadingExtractor] Trying regex fallback for individual JSON objects with 'title'...")
     extracted = []
     object_matches = re.finditer(r'\{[^{}]*\"title\"\s*:\s*\"[^\"]+\"[^{}]*\}', clean_str)
     for m in object_matches:
@@ -342,6 +386,11 @@ def _parse_readings_json(raw_json_str: str) -> List[Dict[str, Any]]:
                 extracted.append(obj)
         except Exception:
             continue
+
+    if extracted:
+        logger.info(f"[ReadingExtractor] Regex fallback recovered {len(extracted)} valid reading objects.")
+    else:
+        logger.warning(f"[ReadingExtractor] All JSON parsing strategies failed to find reading objects in raw output: {clean_str[:300]!r}")
     return extracted
 
 
@@ -358,6 +407,12 @@ def extract_readings_with_llm(
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
     openai_base = os.getenv("LLAMA_OPENAI_BASE", os.getenv("LLAMA_API_BASE", ""))
+
+    logger.info(
+        f"[ReadingExtractor] extract_readings_with_llm invoked for course='{course_name}'. "
+        f"Transcripts len={len(transcripts_summary)}, Slides len={len(slides_text)}. "
+        f"Available keys: Groq={bool(groq_key)}, Gemini={bool(gemini_key)}, OpenAI={bool(openai_key)}, OpenAI_Base={bool(openai_base)}"
+    )
 
     system_prompt = (
         f"You are an expert academic curriculum assistant analyzing course materials for '{course_name}'. "
@@ -378,20 +433,26 @@ def extract_readings_with_llm(
 
     user_prompt = (
         f"Course: {course_name}\n\n"
-        f"--- LECTURE TRANSCRIPTS EXCERPTS ---\n{transcripts_summary[:12000]}\n\n"
-        f"--- PROFESSOR SLIDE DECKS TEXT ---\n{slides_text[:12000]}\n\n"
+        f"--- LECTURE TRANSCRIPTS EXCERPTS ---\n{transcripts_summary[:100000]}\n\n"
+        f"--- PROFESSOR SLIDE DECKS TEXT ---\n{slides_text[:25000]}\n\n"
         "Extracted Readings JSON:"
     )
 
     items: List[Dict[str, Any]] = []
 
-    # 1. Try Groq (try fast instruction models first, then OSS models)
+    # 1. Try Groq (verified active models on Groq API)
     if groq_key:
+        logger.info("[ReadingExtractor] Attempting LLM extraction via Groq...")
         from openai import OpenAI
         groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-        groq_candidates = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+        groq_candidates = [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3.8-27b",
+        ]
         for g_model in groq_candidates:
             try:
+                logger.info(f"[ReadingExtractor] Invoking Groq model '{g_model}'...")
                 resp = groq_client.chat.completions.create(
                     model=g_model,
                     messages=[
@@ -402,20 +463,32 @@ def extract_readings_with_llm(
                     temperature=0.1
                 )
                 raw_out = resp.choices[0].message.content or ""
+                logger.info(f"[ReadingExtractor] Groq model '{g_model}' responded with {len(raw_out)} chars.")
                 parsed = _parse_readings_json(raw_out)
                 if parsed:
                     items = parsed
+                    logger.info(f"[ReadingExtractor] Groq model '{g_model}' successfully produced {len(items)} readings.")
                     break
+                else:
+                    logger.info(f"[ReadingExtractor] Groq model '{g_model}' returned 0 parsed readings (empty result).")
             except Exception as e:
-                print(f"[LLM Groq Readings Notice ({g_model})] {e}")
+                logger.warning(f"[ReadingExtractor] Groq candidate '{g_model}' failed: {e}")
 
-    # 2. Try Gemini (cascade flash-lite -> flash -> latest)
+    # 2. Try Gemini (cascade through available Gemini endpoints)
     if not items and gemini_key:
+        logger.info("[ReadingExtractor] Attempting LLM extraction via Google Gemini...")
         from openai import OpenAI
         gemini_client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
-        gemini_candidates = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+        gemini_candidates = [
+            "gemini-flash-lite-latest",
+            "gemini-flash-latest",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+        ]
         for gem_model in gemini_candidates:
             try:
+                logger.info(f"[ReadingExtractor] Invoking Gemini model '{gem_model}'...")
                 resp = gemini_client.chat.completions.create(
                     model=gem_model,
                     messages=[
@@ -426,23 +499,30 @@ def extract_readings_with_llm(
                     temperature=0.1
                 )
                 raw_out = resp.choices[0].message.content or ""
+                logger.info(f"[ReadingExtractor] Gemini model '{gem_model}' responded with {len(raw_out)} chars.")
                 parsed = _parse_readings_json(raw_out)
                 if parsed:
                     items = parsed
+                    logger.info(f"[ReadingExtractor] Gemini model '{gem_model}' successfully produced {len(items)} readings.")
                     break
+                else:
+                    logger.info(f"[ReadingExtractor] Gemini model '{gem_model}' returned 0 parsed readings.")
             except Exception as e:
-                print(f"[LLM Gemini Readings Notice ({gem_model})] {e}")
+                logger.warning(f"[ReadingExtractor] Gemini candidate '{gem_model}' failed: {e}")
 
-    # 3. Try OpenAI / Ollama fallback
-    if not items and (openai_key or openai_base):
+    # 3. Try OpenAI fallback (only if openai_key is provided or custom endpoint that is not a non-chat router)
+    if not items and openai_key:
+        logger.info("[ReadingExtractor] Attempting LLM extraction via OpenAI...")
         try:
             from openai import OpenAI
             client = OpenAI(
                 base_url=openai_base or "https://api.openai.com/v1",
-                api_key=openai_key or "local"
+                api_key=openai_key
             )
+            fallback_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            logger.info(f"[ReadingExtractor] Invoking fallback model '{fallback_model}' at base '{openai_base or 'https://api.openai.com/v1'}'...")
             resp = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                model=fallback_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -451,9 +531,12 @@ def extract_readings_with_llm(
                 temperature=0.1
             )
             raw_out = resp.choices[0].message.content or ""
+            logger.info(f"[ReadingExtractor] Fallback model '{fallback_model}' responded with {len(raw_out)} chars.")
             items = _parse_readings_json(raw_out)
+            if items:
+                logger.info(f"[ReadingExtractor] Fallback model '{fallback_model}' successfully produced {len(items)} readings.")
         except Exception as e:
-            print(f"[LLM OpenAI Readings Notice] {e}")
+            logger.warning(f"[ReadingExtractor] Fallback LLM failed: {e}\n{traceback.format_exc()}")
 
     # Deduplicate items by lowercased alphanumeric title
     deduped: List[Dict[str, Any]] = []
@@ -469,4 +552,5 @@ def extract_readings_with_llm(
             seen_titles.add(norm_t)
             deduped.append(item)
 
+    logger.info(f"[ReadingExtractor] Finished LLM extraction: {len(deduped)} deduplicated reading candidates from raw {len(items)} items.")
     return deduped

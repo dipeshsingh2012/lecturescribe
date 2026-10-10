@@ -11,6 +11,7 @@ import re
 import sys
 import json
 import time
+import logging
 import threading
 import traceback
 import concurrent.futures
@@ -18,6 +19,12 @@ import requests
 import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+)
+logger = logging.getLogger("lecturescribe.api")
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict
 
 from dotenv import load_dotenv
@@ -2683,120 +2690,198 @@ def extract_course_readings(course_name: str, regenerate: bool = Query(False, de
     raw_name = course_name.strip()
     if not raw_name:
         raise HTTPException(status_code=400, detail="course_name is required.")
-    cname = db_manager.resolve_course_canonical_name(raw_name)
-    slug_norm = to_course_slug(raw_name)
 
-    if regenerate:
-        db_manager.clear_course_readings(cname)
-
-    # 1. Gather all transcripts across lectures in this course
-    transcripts_summary_parts: List[str] = []
+    logger.info(f"[ExtractReadings] === Initiating reading extraction for course '{raw_name}' (regenerate={regenerate}) ===")
     try:
-        if db_manager.postgres_url and db_manager._schema_initialized:
-            conn = db_manager._get_connection()
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT v.video_id, v.title
-                    FROM lecturescribe_videos v
-                    WHERE LOWER(v.course_name) = LOWER(%s)
-                       OR LOWER(v.course_name) = LOWER(%s)
-                       OR regexp_replace(LOWER(v.course_name), '[^a-z0-9]+', '-', 'g') = %s
-                    ORDER BY v.created_at ASC LIMIT 15;
-                """, (cname, raw_name, slug_norm))
-                course_vids = cursor.fetchall()
-            conn.close()
-        else:
-            course_vids = []
-    except Exception:
-        course_vids = []
+        cname = db_manager.resolve_course_canonical_name(raw_name)
+        slug_norm = to_course_slug(raw_name)
+        logger.info(f"[ExtractReadings] Course canonical name: '{cname}' | URL slug: '{slug_norm}'")
 
-    for cv in course_vids:
-        vid = cv["video_id"]
-        title = cv["title"]
-        cues = []
+        if regenerate:
+            logger.info(f"[ExtractReadings] Clearing existing course readings for '{cname}' due to regenerate=True...")
+            db_manager.clear_course_readings(cname)
+
+        # 1. Gather all transcripts across lectures in this course
+        transcripts_summary_parts: List[str] = []
+        course_vids = []
         try:
             if db_manager.postgres_url and db_manager._schema_initialized:
+                logger.info(f"[ExtractReadings] Querying database for videos matching course='{cname}', raw='{raw_name}', slug='{slug_norm}'...")
                 conn = db_manager._get_connection()
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        SELECT timestamp as time, text 
-                        FROM lecturescribe_transcript_cues 
-                        WHERE video_id = %s 
-                        ORDER BY id ASC;
-                    """, (vid,))
-                    cues = cursor.fetchall() or []
+                        SELECT v.video_id, v.title
+                        FROM lecturescribe_videos v
+                        WHERE LOWER(v.course_name) = LOWER(%s)
+                           OR LOWER(v.course_name) = LOWER(%s)
+                           OR regexp_replace(LOWER(v.course_name), '[^a-z0-9]+', '-', 'g') = %s
+                        ORDER BY v.created_at ASC LIMIT 15;
+                    """, (cname, raw_name, slug_norm))
+                    course_vids = cursor.fetchall() or []
                 conn.close()
-            elif vid in db_manager._memory_cache:
-                cues = db_manager._memory_cache[vid].get("cues") or []
-        except Exception:
+                logger.info(f"[ExtractReadings] Found {len(course_vids)} video(s) for course '{cname}': {[v['title'] for v in course_vids]}")
+            else:
+                logger.warning(f"[ExtractReadings] Database not initialized; falling back to in-memory video cache.")
+                course_vids = []
+        except Exception as e:
+            logger.error(f"[ExtractReadings] Error querying course videos from database: {e}\n{traceback.format_exc()}")
+            course_vids = []
+
+        total_cues_counted = 0
+        for cv in course_vids:
+            vid = cv["video_id"]
+            title = cv["title"]
             cues = []
+            try:
+                if db_manager.postgres_url and db_manager._schema_initialized:
+                    conn = db_manager._get_connection()
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            SELECT timestamp as time, text 
+                            FROM lecturescribe_transcript_cues 
+                            WHERE video_id = %s 
+                            ORDER BY id ASC;
+                        """, (vid,))
+                        cues = cursor.fetchall() or []
+                    conn.close()
+                elif vid in db_manager._memory_cache:
+                    cues = db_manager._memory_cache[vid].get("cues") or []
+            except Exception as e:
+                logger.warning(f"[ExtractReadings] Error fetching transcript cues for video '{vid}' ('{title}'): {e}")
+                cues = []
 
-        if cues:
-            head_cues = cues[:40]
-            tail_cues = cues[40:][-20:] if len(cues) > 40 else []
-            combined_cues = head_cues + tail_cues
-            cue_text = " ".join([f"[{c.get('start_time') or c.get('time') or ''}] {c.get('text', '')}" for c in combined_cues])
-            transcripts_summary_parts.append(f"Lecture '{title}':\n{cue_text}")
+            total_cues_counted += len(cues)
+            if cues:
+                # Include full transcript cues with timestamps, capped per lecture only if exceptionally long (> 40k chars)
+                lecture_blocks = []
+                current_len = 0
+                max_lecture_chars = 40000
+                for c in cues:
+                    t_str = f"[{c.get('start_time') or c.get('time') or ''}] {c.get('text', '')}"
+                    if current_len + len(t_str) > max_lecture_chars:
+                        lecture_blocks.append("... [transcript truncated at 40k chars]")
+                        break
+                    lecture_blocks.append(t_str)
+                    current_len += len(t_str)
 
-    # 2. Gather uploaded slide documents for this course
-    resources = db_manager.get_course_resources(cname)
-    slides_text_parts: List[str] = []
-    for r in resources:
-        ftype = (r.get("file_type") or "").lower()
-        fname = (r.get("filename") or "").lower()
-        blob_name = r.get("blob_name")
-        if ftype in ("ppt", "pptx", "pdf") or fname.endswith((".pptx", ".ppt", ".pdf")):
-            slide_bytes = None
-            if blob_name:
-                slide_bytes = gcs_storage_service.get_blob_bytes(blob_name)
-            if slide_bytes:
-                parsed_slides = parse_slide_document(slide_bytes, filename=fname)
-                if parsed_slides:
-                    formatted_slides = format_slides_for_llm(parsed_slides, max_chars=12000)
-                    slides_text_parts.append(f"Deck '{r.get('title', fname)}':\n{formatted_slides}")
+                cue_text = " ".join(lecture_blocks)
+                logger.info(f"[ExtractReadings] Video '{title}' (ID: {vid}): {len(cues)} total cues loaded -> ingested {len(lecture_blocks)} cues ({len(cue_text)} chars).")
+                transcripts_summary_parts.append(f"Lecture '{title}':\n{cue_text}")
+            else:
+                logger.info(f"[ExtractReadings] Video '{title}' (ID: {vid}): 0 cues found.")
 
-    transcripts_summary = "\n\n".join(transcripts_summary_parts)
-    slides_text = "\n\n".join(slides_text_parts)
+        transcripts_summary = "\n\n".join(transcripts_summary_parts)
+        logger.info(f"[ExtractReadings] Summary of transcripts: {len(course_vids)} videos checked, {total_cues_counted} total cues across all lectures, combined text length: {len(transcripts_summary)} chars.")
 
-    # 3. Call LLM extractor
-    extracted_items = extract_readings_with_llm(cname, transcripts_summary, slides_text)
+        # 2. Gather uploaded slide documents for this course
+        logger.info(f"[ExtractReadings] Fetching course resources for '{cname}'...")
+        resources = db_manager.get_course_resources(cname)
+        slides_text_parts: List[str] = []
+        logger.info(f"[ExtractReadings] Found {len(resources)} total resource(s) for course '{cname}'.")
 
-    saved_items: List[Dict[str, Any]] = []
-    existing = [] if regenerate else db_manager.get_course_readings(cname)
-    existing_titles = {re.sub(r'[^a-zA-Z0-9]', '', e.get("title", "").lower()) for e in existing}
+        for r in resources:
+            ftype = (r.get("file_type") or "").lower()
+            fname = (r.get("filename") or "").lower()
+            blob_name = r.get("blob_name")
+            title_res = r.get("title", fname)
+            fsize = r.get("file_size_bytes") or 0
+            if ftype in ("ppt", "pptx", "pdf") or fname.endswith((".pptx", ".ppt", ".pdf")):
+                logger.info(f"[ExtractReadings] Processing slide resource: title='{title_res}', filename='{fname}', type='{ftype}', size={fsize} bytes, blob='{blob_name}'")
+                slide_bytes = None
+                if blob_name:
+                    try:
+                        slide_bytes = gcs_storage_service.get_blob_bytes(blob_name)
+                        logger.info(f"[ExtractReadings] Downloaded {len(slide_bytes) if slide_bytes else 0} bytes from GCS for blob '{blob_name}'.")
+                    except Exception as e:
+                        logger.warning(f"[ExtractReadings] Failed to download blob '{blob_name}' from GCS: {e}")
+                if slide_bytes:
+                    try:
+                        parsed_slides = parse_slide_document(slide_bytes, filename=fname)
+                        if parsed_slides:
+                            formatted_slides = format_slides_for_llm(parsed_slides, max_chars=12000)
+                            slides_text_parts.append(f"Deck '{title_res}':\n{formatted_slides}")
+                            logger.info(f"[ExtractReadings] Successfully parsed deck '{title_res}': {len(parsed_slides)} slides/pages extracted, text length: {len(formatted_slides)} chars.")
+                        else:
+                            logger.info(f"[ExtractReadings] Slide document '{fname}' yielded 0 extractable text/slides.")
+                    except Exception as e:
+                        logger.error(f"[ExtractReadings] Failed to parse slide document '{fname}': {e}\n{traceback.format_exc()}")
+                else:
+                    logger.warning(f"[ExtractReadings] No bytes retrieved for slide resource '{fname}'.")
+            else:
+                logger.info(f"[ExtractReadings] Skipping non-slide resource '{fname}' (type: '{ftype}').")
 
-    for item in extracted_items:
-        norm_t = re.sub(r'[^a-zA-Z0-9]', '', (item.get("title") or "").lower())
-        if not norm_t or norm_t in existing_titles:
-            continue
-        # 4. Enrich via multi-source digital book resolver (Archive.org, OpenLibrary, OpenAccess PDF, Google Books)
-        meta = resolve_digital_book_reader(item.get("title", ""), item.get("author", ""))
-        if meta:
-            if meta.get("cover_url"):
-                item["cover_url"] = meta["cover_url"]
-            if meta.get("preview_url"):
-                item["preview_url"] = meta["preview_url"]
-            if meta.get("embed_url"):
-                item["embed_url"] = meta["embed_url"]
-            if meta.get("reader_type"):
-                item["reader_type"] = meta["reader_type"]
-            if meta.get("isbn"):
-                item["isbn"] = meta["isbn"]
-            if "is_lending" in meta:
-                item["is_lending"] = meta["is_lending"]
+        slides_text = "\n\n".join(slides_text_parts)
+        logger.info(
+            f"[ExtractReadings] LLM input prepared: Transcripts excerpt length={len(transcripts_summary)} chars, "
+            f"Slides text length={len(slides_text)} chars. Invoking LLM extraction..."
+        )
 
-        saved = db_manager.save_course_reading(cname, item)
-        saved_items.append(saved)
-        existing_titles.add(norm_t)
+        # 3. Call LLM extractor
+        extracted_items = extract_readings_with_llm(cname, transcripts_summary, slides_text)
+        logger.info(f"[ExtractReadings] LLM extractor returned {len(extracted_items)} raw reading items.")
 
-    all_readings = db_manager.get_course_readings(cname)
-    return {
-        "status": "success",
-        "course_name": cname,
-        "newly_extracted_count": len(saved_items),
-        "readings": all_readings,
-        "count": len(all_readings)
-    }
+        saved_items: List[Dict[str, Any]] = []
+        existing = [] if regenerate else db_manager.get_course_readings(cname)
+        existing_titles = {re.sub(r'[^a-zA-Z0-9]', '', e.get("title", "").lower()) for e in existing}
+        logger.debug(f"[ExtractReadings] Existing readings count for deduplication: {len(existing_titles)}")
+
+        for item in extracted_items:
+            norm_t = re.sub(r'[^a-zA-Z0-9]', '', (item.get("title") or "").lower())
+            if not norm_t:
+                logger.debug(f"[ExtractReadings] Skipping item without normalized title: {item}")
+                continue
+            if norm_t in existing_titles:
+                logger.debug(f"[ExtractReadings] Skipping already existing reading title: '{item.get('title')}'")
+                continue
+
+            # 4. Enrich via multi-source digital book resolver (Archive.org, OpenLibrary, OpenAccess PDF, Google Books)
+            logger.info(f"[ExtractReadings] Enriching digital book metadata for candidate: '{item.get('title')}' by '{item.get('author')}'...")
+            try:
+                meta = resolve_digital_book_reader(item.get("title", ""), item.get("author", ""))
+                if meta:
+                    logger.debug(f"[ExtractReadings] Digital resolver matched '{meta.get('matched_title')}' (reader_type: {meta.get('reader_type')})")
+                    if meta.get("cover_url"):
+                        item["cover_url"] = meta["cover_url"]
+                    if meta.get("preview_url"):
+                        item["preview_url"] = meta["preview_url"]
+                    if meta.get("embed_url"):
+                        item["embed_url"] = meta["embed_url"]
+                    if meta.get("reader_type"):
+                        item["reader_type"] = meta["reader_type"]
+                    if meta.get("isbn"):
+                        item["isbn"] = meta["isbn"]
+                    if "is_lending" in meta:
+                        item["is_lending"] = meta["is_lending"]
+            except Exception as e:
+                logger.warning(f"[ExtractReadings] Digital reader resolution failed for '{item.get('title')}': {e}")
+
+            try:
+                saved = db_manager.save_course_reading(cname, item)
+                saved_items.append(saved)
+                existing_titles.add(norm_t)
+                logger.info(f"[ExtractReadings] Saved new reading: ID={saved.get('id')} '{saved.get('title')}'")
+            except Exception as e:
+                logger.error(f"[ExtractReadings] Database save failed for reading '{item.get('title')}': {e}\n{traceback.format_exc()}")
+
+        all_readings = db_manager.get_course_readings(cname)
+        logger.info(
+            f"[ExtractReadings] Extraction complete for '{cname}'. "
+            f"Newly extracted: {len(saved_items)}, Total in catalog: {len(all_readings)}"
+        )
+        return {
+            "status": "success",
+            "course_name": cname,
+            "newly_extracted_count": len(saved_items),
+            "readings": all_readings,
+            "count": len(all_readings)
+        }
+    except Exception as e:
+        full_err = traceback.format_exc()
+        logger.error(f"[ExtractReadings] CRITICAL: extract_course_readings failed for course '{raw_name}': {e}\n{full_err}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to extract course readings: {str(e)}"
+        )
 
 
 @app.get("/api/course/reading/{reading_id}/reader")

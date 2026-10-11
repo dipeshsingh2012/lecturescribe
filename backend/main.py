@@ -2555,6 +2555,18 @@ class CreateLinkResourceRequest(BaseModel):
     video_id: Optional[str] = None
     user_email: str
 
+class CreateCourseNoteRequest(BaseModel):
+    user_email: str
+    title: Optional[str] = "Untitled Note"
+    content: Optional[str] = ""
+    note_id: Optional[str] = None
+
+class UpdateCourseNoteRequest(BaseModel):
+    user_email: str
+    title: Optional[str] = None
+    content: Optional[str] = None
+    allow_empty: Optional[bool] = False
+
 
 @app.post("/api/resources/presign-upload")
 def presign_resource_upload(req: PresignUploadRequest):
@@ -2689,6 +2701,152 @@ def delete_resource(resource_id: int, user_email: str = Query(..., description="
         if deleted.get("blob_name"):
             gcs_storage_service.delete_blob(deleted["blob_name"])
         return {"status": "success", "resource_id": resource_id}
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+
+
+# ==============================================================================
+# Course Notes & Scratchpad Endpoints (Direct GCS + PostgreSQL)
+# ==============================================================================
+
+@app.post("/api/course/{course_name}/notes")
+def create_course_note(course_name: str, req: CreateCourseNoteRequest):
+    """Create a new course scratchpad note stored in GCS and PostgreSQL."""
+    clean_email = (req.user_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Only signed-in users can create notes."
+        )
+    raw_course = course_name.strip()
+    if not raw_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+
+    clean_course = db_manager.resolve_course_canonical_name(raw_course)
+    course_slug = to_course_slug(clean_course)
+    raw_nid = (req.note_id or "").strip()
+    if raw_nid and re.match(r"^note_[a-zA-Z0-9_\-]+$", raw_nid):
+        note_id = raw_nid
+    else:
+        note_id = f"note_{uuid.uuid4().hex[:12]}"
+
+    existing = db_manager.get_course_note(note_id, clean_email)
+    if existing:
+        existing_content = gcs_storage_service.get_blob_text(existing["blob_name"]) or ""
+        return {"status": "success", "note": {**existing, "content": existing_content}}
+
+    blob_name = gcs_storage_service.get_course_note_blob_path(course_slug, clean_email, note_id)
+
+    initial_content = req.content or ""
+    try:
+        gcs_storage_service.upload_blob_text(blob_name, initial_content, content_type="text/plain; charset=utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to store note in cloud storage: {e}")
+
+    file_size_bytes = len(initial_content.encode("utf-8"))
+    record = db_manager.create_course_note(
+        course_name=clean_course,
+        user_email=clean_email,
+        title=req.title or "Untitled Note",
+        blob_name=blob_name,
+        file_size_bytes=file_size_bytes,
+        note_id=note_id
+    )
+    record["content"] = initial_content
+    return {"status": "success", "note": record}
+
+
+@app.get("/api/course/{course_name}/notes")
+def get_course_notes(course_name: str, user_email: str = Query(..., description="User Google email")):
+    """Retrieve all scratchpad notes for a course and user."""
+    clean_email = (user_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=401, detail="Authentication required: user_email is required.")
+    raw_course = course_name.strip()
+    if not raw_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+
+    clean_course = db_manager.resolve_course_canonical_name(raw_course)
+    items = db_manager.get_course_notes(clean_course, clean_email)
+    return {"status": "success", "course_name": clean_course, "notes": items, "count": len(items)}
+
+
+@app.get("/api/course/{course_name}/notes/{note_id}")
+def get_course_note(course_name: str, note_id: str, user_email: str = Query(..., description="User Google email")):
+    """Fetch note metadata from PG and plain text body from GCS."""
+    clean_email = (user_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=401, detail="Authentication required: user_email is required.")
+    
+    note = db_manager.get_course_note(note_id, clean_email)
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found.")
+
+    content = gcs_storage_service.get_blob_text(note["blob_name"]) or ""
+    return {"status": "success", "note": {**note, "content": content}}
+
+
+@app.put("/api/course/{course_name}/notes/{note_id}")
+def update_course_note(course_name: str, note_id: str, req: UpdateCourseNoteRequest):
+    """Auto-save note: updates text blob in GCS and metadata in PG."""
+    clean_email = (req.user_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=401, detail="Authentication required: user_email is required.")
+
+    note = db_manager.get_course_note(note_id, clean_email)
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found.")
+
+    file_size_bytes = None
+    if req.content is not None:
+        # Anti-data loss safeguard:
+        # If the existing note has substantial content (> 30 bytes) and the new payload is completely blank,
+        # reject the update unless explicit allow_empty=True is set.
+        new_text_stripped = re.sub(r"<[^>]+>", "", req.content).strip().replace("&nbsp;", "").strip()
+        existing_size = note.get("file_size_bytes") or 0
+        if existing_size > 30 and not new_text_stripped and not getattr(req, "allow_empty", False):
+            # Do not overwrite cloud storage with empty content
+            raise HTTPException(
+                status_code=400,
+                detail="Anti-data-loss protection: Cannot overwrite non-empty note with empty content. Provide allow_empty=true if this was intentional."
+            )
+
+        try:
+            gcs_storage_service.upload_blob_text(note["blob_name"], req.content, content_type="text/plain; charset=utf-8")
+            file_size_bytes = len(req.content.encode("utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to update note in cloud storage: {e}")
+
+    try:
+        updated = db_manager.update_course_note(
+            note_id=note_id,
+            user_email=clean_email,
+            title=req.title,
+            file_size_bytes=file_size_bytes
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Note not found.")
+        if req.content is not None:
+            updated["content"] = req.content
+        return {"status": "success", "note": updated}
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+
+
+@app.delete("/api/course/{course_name}/notes/{note_id}")
+def delete_course_note(course_name: str, note_id: str, user_email: str = Query(..., description="User Google email")):
+    """Delete note metadata from PG and blob from GCS."""
+    clean_email = (user_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=401, detail="Authentication required: user_email is required.")
+
+    try:
+        deleted = db_manager.delete_course_note(note_id, clean_email)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Note not found.")
+        if deleted.get("blob_name"):
+            gcs_storage_service.delete_blob(deleted["blob_name"])
+        return {"status": "success", "note_id": note_id}
     except PermissionError as pe:
         raise HTTPException(status_code=403, detail=str(pe))
 

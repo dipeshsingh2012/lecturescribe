@@ -14,10 +14,12 @@ import { useLecturePlayer } from './hooks/useLecturePlayer';
 import { useLectureIngestion } from './hooks/useLectureIngestion';
 import useLectureQuiz from './hooks/useLectureQuiz';
 import useLectureSummary from './hooks/useLectureSummary';
+import { useCourseNotes } from './hooks/useCourseNotes';
 
 import Header from './components/layout/Header';
 import HomeView from './components/views/HomeView';
 import LectureWorkspace from './components/views/LectureWorkspace';
+import CourseNotepadView from './components/views/CourseNotepadView';
 import LoadingView from './components/views/LoadingView';
 import DownloadModal from './components/modals/DownloadModal';
 import UploadResourceModal from './components/modals/UploadResourceModal';
@@ -25,6 +27,12 @@ import ResourcePreviewModal from './components/modals/ResourcePreviewModal';
 
 export default function App() {
   const [activeTab, setActiveTabState] = useState(() => getLectureTabFromPath());
+  const [activeNoteId, setActiveNoteId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return parsePathRoute(window.location.pathname).noteId;
+    }
+    return null;
+  });
 
   const setActiveTab = (tab) => {
     setActiveTabState(tab);
@@ -116,8 +124,9 @@ export default function App() {
     }
   }, [activeData?.title, activeData?.course_name, selectedCourse, course.activeCourseData]);
 
-  const effectiveCourse = selectedCourse || course.activeCourseData?.course_name || activeData?.course_name || null;
+  const effectiveCourse = course.activeCourseData?.course_name || selectedCourse || activeData?.course_name || null;
   const resources = useResources(activeData?.videoId, effectiveCourse, auth.googleUser);
+  const courseNotes = useCourseNotes(effectiveCourse, auth.googleUser, activeNoteId);
   const tutor = useAITutor(activeData, auth.googleUser);
   const player = useLecturePlayer(activeData, auth.googleUser?.email);
   const quiz = useLectureQuiz(activeData);
@@ -125,6 +134,7 @@ export default function App() {
 
   // Hub / Route Navigation
   const handleNavigateHome = () => {
+    setActiveNoteId(null);
     setSelectedCourse(null);
     setDirectCourseData(null);
     setActiveData(null);
@@ -140,29 +150,74 @@ export default function App() {
 
   const handleSelectCourse = (name) => {
     if (!name) return;
+    setActiveNoteId(null);
     setSelectedCourse(name);
     navigateTo(`/course/${normalizeCourseSlug(name)}`);
   };
 
   const handleClearCourse = () => {
+    setActiveNoteId(null);
     setSelectedCourse(null);
     setDirectCourseData(null);
     setActiveData(null);
     navigateTo('/');
   };
 
+  const handleCreateNewNote = async () => {
+    const c = effectiveCourse || 'Master of Technology';
+    const email = auth.googleUser?.email;
+    if (!email) return;
+
+    // Generate client note_id for instant 0ms optimistic navigation
+    const clientNoteId = `note_${Date.now().toString(36)}${Math.random().toString(36).substring(2, 8)}`;
+    const optimisticNote = {
+      note_id: clientNoteId,
+      course_name: c,
+      user_email: email,
+      title: 'Untitled Note',
+      content: '',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      file_size_bytes: 0
+    };
+
+    // Immediately set active note, update notes list, and navigate - 0ms perceived latency
+    courseNotes.setActiveNote(optimisticNote);
+    if (typeof courseNotes.setNotes === 'function') {
+      courseNotes.setNotes((prev) => [optimisticNote, ...prev.filter((n) => n.note_id !== clientNoteId)]);
+    }
+    setActiveNoteId(clientNoteId);
+    navigateTo(`/course/${normalizeCourseSlug(c)}/note/${clientNoteId}`, false, setCurrentPath);
+
+    // Persist note to cloud storage / database in background
+    try {
+      await courseNotes.createNote(c, email, 'Untitled Note', '', clientNoteId);
+    } catch (e) {
+      console.warn('Background note creation error:', e);
+    }
+  };
+
+  const handleOpenNote = (note) => {
+    const c = effectiveCourse || note.course_name || 'Master of Technology';
+    courseNotes.setActiveNote(note);
+    setActiveNoteId(note.note_id);
+    navigateTo(`/course/${normalizeCourseSlug(c)}/note/${note.note_id}`, false, setCurrentPath);
+  };
+
   // Browser Navigation & Initial Route
   useEffect(() => {
     const initial = window.location.pathname || '/';
-    const { courseName: initialCourse, videoId: initialVidId } = parsePathRoute(initial);
+    const { courseName: initialCourse, videoId: initialVidId, noteId: initialNoteId } = parsePathRoute(initial);
     if (initialCourse) setSelectedCourse(initialCourse);
     if (initialVidId) handleTranscribe(`https://vimeo.com/${initialVidId}`, false, initialCourse);
+    if (initialNoteId) setActiveNoteId(initialNoteId);
 
     const onPopState = () => {
       const current = window.location.pathname || '/';
       setCurrentPath(current);
-      const { courseName, videoId } = parsePathRoute(current);
+      const { courseName, videoId, noteId } = parsePathRoute(current);
       setSelectedCourse(courseName);
+      setActiveNoteId(noteId);
 
       if (typeof window !== 'undefined') {
         setActiveTabState(getLectureTabFromPath(`${current}${window.location.search}`));
@@ -237,7 +292,24 @@ export default function App() {
           currentTheme={currentTheme}
         />
 
-        {loading && !activeData ? (
+        {activeNoteId ? (
+          <CourseNotepadView
+            courseName={effectiveCourse || 'Master of Technology'}
+            noteId={activeNoteId}
+            activeNote={courseNotes.activeNote}
+            activeNoteLoading={courseNotes.activeNoteLoading}
+            saveStatus={courseNotes.saveStatus}
+            saveNote={courseNotes.saveNote}
+            deleteNote={courseNotes.deleteNote}
+            onNavigateBack={() => {
+              setActiveNoteId(null);
+              const c = effectiveCourse || 'Master of Technology';
+              navigateTo(`/course/${normalizeCourseSlug(c)}?tab=library`, false, setCurrentPath);
+            }}
+            googleUser={auth.googleUser}
+            currentTheme={currentTheme}
+          />
+        ) : loading && !activeData ? (
           <LoadingView currentTheme={currentTheme} />
         ) : !activeData ? (
           <HomeView
@@ -279,6 +351,11 @@ export default function App() {
             searchReadingWeb={resources.searchReadingWeb}
             courseLoading={course.courseLoading}
             handleDeleteFromLibrary={library.handleDeleteFromLibrary}
+            courseNotes={courseNotes.notes}
+            courseNotesLoading={courseNotes.notesLoading}
+            onCreateNewNote={handleCreateNewNote}
+            onOpenNote={handleOpenNote}
+            onDeleteNote={(nid) => courseNotes.deleteNote(effectiveCourse, nid, auth.googleUser?.email)}
             currentTheme={currentTheme}
           />
         ) : (

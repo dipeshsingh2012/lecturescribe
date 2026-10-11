@@ -151,4 +151,16 @@ describe('HomeView', () => {
 
     expect(screen.getByText(/Lecture successfully added to course!/i)).toBeInTheDocument();
   });
+
+  it('does not render calendar card when googleUser is null', () => {
+    render(<HomeView {...baseProps} googleUser={null} />);
+    expect(screen.queryByText(/Academic Schedule & Alerts/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Syncing Moodle calendar events.../i)).not.toBeInTheDocument();
+  });
+
+  it('renders calendar card when googleUser is signed in', () => {
+    const mockUser = { email: 'student@iiitdwd.ac.in', name: 'Test Student' };
+    render(<HomeView {...baseProps} googleUser={mockUser} />);
+    expect(screen.getByText(/Syncing Moodle calendar events.../i)).toBeInTheDocument();
+  });
 });

@@ -7,7 +7,9 @@ import {
   IconButton,
   Tooltip,
   TextField,
-  InputAdornment
+  InputAdornment,
+  Menu,
+  MenuItem
 } from '@mui/material';
 import {
   ArrowLeft,
@@ -20,7 +22,10 @@ import {
   Upload,
   Award,
   Sparkles,
-  Check
+  Check,
+  Plus,
+  ChevronDown,
+  FileText
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -73,8 +78,15 @@ export default function HomeView({
   handleDeleteResource,
   courseLoading,
   handleDeleteFromLibrary,
+  courseNotes = [],
+  courseNotesLoading = false,
+  onCreateNewNote,
+  onOpenNote,
+  onDeleteNote,
   currentTheme
 }) {
+  const [newMenuAnchor, setNewMenuAnchor] = React.useState(null);
+
   const courseQuiz = useCourseQuiz(
     activeCourseData?.course_name || selectedCourse,
     googleUser?.email
@@ -320,43 +332,98 @@ export default function HomeView({
                   : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
               }}
             >
-              Library ({courseResources.length + (courseReadings?.length || 0)})
+              Library ({courseResources.length + (courseReadings?.length || 0) + (courseNotes?.length || 0)})
             </Button>
           </Box>
 
-          <Tooltip title={!googleUser ? "Sign in with Google to upload course slides" : "Upload course-wide presentation slides, syllabus, or notes"}>
-            <span>
-              <Button
-                variant="outlined"
-                size="small"
-                disabled={!googleUser}
-                startIcon={<Upload size={14} />}
-                onClick={() => openUploadModal({
-                  courseName: activeCourseData?.course_name || selectedCourse,
-                  videoId: null
-                })}
-                sx={{
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.8rem',
-                  borderRadius: 2,
-                  color: currentTheme.palette.primary,
-                  borderColor: currentTheme.palette.cardBorder,
+          {/* "+ NEW" MINI DROPBOX ACTION BUTTON & MENU */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Tooltip title={!googleUser ? "Sign in with Google to create notes or upload files" : "Create a new note or upload files"}>
+              <span>
+                <Button
+                  variant="contained"
+                  size="small"
+                  disabled={!googleUser}
+                  startIcon={<Plus size={15} />}
+                  endIcon={<ChevronDown size={14} />}
+                  onClick={(e) => setNewMenuAnchor(e.currentTarget)}
+                  sx={{
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    borderRadius: 2,
+                    bgcolor: currentTheme.palette.primary,
+                    color: '#fff',
+                    boxShadow: 'none',
+                    '&:hover': { bgcolor: currentTheme.palette.primary, opacity: 0.9 }
+                  }}
+                >
+                  New
+                </Button>
+              </span>
+            </Tooltip>
+
+            <Menu
+              anchorEl={newMenuAnchor}
+              open={Boolean(newMenuAnchor)}
+              onClose={() => setNewMenuAnchor(null)}
+              PaperProps={{
+                sx: {
+                  borderRadius: 2.5,
+                  minWidth: 190,
                   bgcolor: currentTheme.palette.cardBg,
-                  '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary }
+                  border: `1px solid ${currentTheme.palette.cardBorder}`,
+                  boxShadow: currentTheme.palette.cardShadow
+                }
+              }}
+            >
+              <MenuItem
+                onClick={() => {
+                  setNewMenuAnchor(null);
+                  if (onCreateNewNote) onCreateNewNote();
                 }}
+                sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
               >
-                Upload Slides / Materials
-              </Button>
-            </span>
-          </Tooltip>
+                <FileText size={17} color={currentTheme.palette.primary} />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
+                    New Note
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
+                    Plain text scratchpad
+                  </Typography>
+                </Box>
+              </MenuItem>
+
+              <MenuItem
+                onClick={() => {
+                  setNewMenuAnchor(null);
+                  openUploadModal({
+                    courseName: activeCourseData?.course_name || selectedCourse,
+                    videoId: null
+                  });
+                }}
+                sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
+              >
+                <Upload size={17} color={currentTheme.palette.primary} />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
+                    Upload File
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
+                    Slides (.pptx, .pdf), docs
+                  </Typography>
+                </Box>
+              </MenuItem>
+            </Menu>
+          </Box>
         </Box>
       )}
 
       {/* LEVEL 1: COURSE CARDS VIEW & ACADEMIC CALENDAR */}
       {!selectedCourse ? (
         <>
-          <CalendarAlertCard currentTheme={currentTheme} />
+          {googleUser && <CalendarAlertCard currentTheme={currentTheme} googleUser={googleUser} />}
           <CourseGrid
             filteredCourses={filteredCourses}
             handleSelectCourse={handleSelectCourse}
@@ -441,6 +508,11 @@ export default function HomeView({
           openUploadModal={openUploadModal}
           openPreviewModal={openPreviewModal}
           handleDeleteResource={handleDeleteResource}
+          courseNotes={courseNotes}
+          courseNotesLoading={courseNotesLoading}
+          onCreateNewNote={onCreateNewNote}
+          onOpenNote={onOpenNote}
+          onDeleteNote={onDeleteNote}
           currentTheme={currentTheme}
         />
       ) : (

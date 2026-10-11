@@ -3,6 +3,7 @@ import {
   parsePathRoute,
   getLectureTabFromPath,
   getLectureIdFromPath,
+  getNoteIdFromPath,
   getCourseNameFromPath,
   normalizeCourseSlug,
   navigateTo
@@ -38,10 +39,25 @@ describe('routing utility functions', () => {
       expect(res.videoId).toBe('987654');
     });
 
+    it('parses nested course note paths', () => {
+      const res = parsePathRoute('/course/master-of-technology/note/note_12345');
+      expect(res.courseName).toBe('master-of-technology');
+      expect(res.noteId).toBe('note_12345');
+      expect(res.videoId).toBeNull();
+    });
+
     it('returns nulls for root path', () => {
       const res = parsePathRoute('/');
       expect(res.courseName).toBeNull();
       expect(res.videoId).toBeNull();
+      expect(res.noteId).toBeNull();
+    });
+  });
+
+  describe('getNoteIdFromPath', () => {
+    it('extracts note ID correctly', () => {
+      expect(getNoteIdFromPath('/course/master-of-technology/note/note_abc123')).toBe('note_abc123');
+      expect(getNoteIdFromPath('/course/master-of-technology')).toBeNull();
     });
   });
 

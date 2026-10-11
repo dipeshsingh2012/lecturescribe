@@ -89,6 +89,8 @@ const mockAgendaData = {
   ]
 };
 
+const mockUser = { email: 'student@iiitdwd.ac.in', name: 'Test Student' };
+
 describe('CalendarAlertCard Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -103,8 +105,14 @@ describe('CalendarAlertCard Component', () => {
     });
   });
 
+  it('does not render and does not fetch calendar events when user is not signed in', () => {
+    const { container } = render(<CalendarAlertCard currentTheme={mockTheme} googleUser={null} />);
+    expect(container.firstChild).toBeNull();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it('renders Moodle agenda with event counts and today events', async () => {
-    render(<CalendarAlertCard currentTheme={mockTheme} />);
+    render(<CalendarAlertCard currentTheme={mockTheme} googleUser={mockUser} />);
 
     expect(screen.getByText(/Syncing Moodle calendar events.../i)).toBeInTheDocument();
 
@@ -123,7 +131,7 @@ describe('CalendarAlertCard Component', () => {
   });
 
   it('switches between Today and Next 7 Days tabs', async () => {
-    render(<CalendarAlertCard currentTheme={mockTheme} />);
+    render(<CalendarAlertCard currentTheme={mockTheme} googleUser={mockUser} />);
 
     await waitFor(() => {
       expect(screen.getByText(/Machine Learning Quiz 2/i)).toBeInTheDocument();
@@ -139,7 +147,7 @@ describe('CalendarAlertCard Component', () => {
   });
 
   it('does not expose a manual WhatsApp test alert action', async () => {
-    render(<CalendarAlertCard currentTheme={mockTheme} />);
+    render(<CalendarAlertCard currentTheme={mockTheme} googleUser={mockUser} />);
 
     await waitFor(() => {
       expect(screen.getByText(/Academic Schedule & Alerts/i)).toBeInTheDocument();
@@ -150,7 +158,7 @@ describe('CalendarAlertCard Component', () => {
   });
 
   it('renders clickable meeting link buttons with correct URLs and target attributes', async () => {
-    render(<CalendarAlertCard currentTheme={mockTheme} />);
+    render(<CalendarAlertCard currentTheme={mockTheme} googleUser={mockUser} />);
 
     await waitFor(() => {
       expect(screen.getByText(/Machine Learning Quiz 2/i)).toBeInTheDocument();
@@ -179,7 +187,7 @@ describe('CalendarAlertCard Component', () => {
       }
     });
 
-    render(<CalendarAlertCard currentTheme={mockTheme} />);
+    render(<CalendarAlertCard currentTheme={mockTheme} googleUser={mockUser} />);
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: /Copy meeting link/i }).length).toBeGreaterThan(0);
@@ -192,7 +200,7 @@ describe('CalendarAlertCard Component', () => {
   });
 
   it('toggles expansion of long meeting details and passcodes', async () => {
-    render(<CalendarAlertCard currentTheme={mockTheme} />);
+    render(<CalendarAlertCard currentTheme={mockTheme} googleUser={mockUser} />);
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: /Show details \/ credentials/i }).length).toBeGreaterThan(0);

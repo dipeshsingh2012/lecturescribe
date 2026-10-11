@@ -86,6 +86,7 @@ class RelationalDBManager:
         self._readings_memory_cache: List[Dict[str, Any]] = []
         self._progress_memory_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._annotations_memory_cache: List[Dict[str, Any]] = []
+        self._notes_memory_cache: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -512,6 +513,21 @@ class RelationalDBManager:
                             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                         );
                         CREATE INDEX IF NOT EXISTS idx_annotations_user_vid ON lecturescribe_transcript_annotations(user_email, video_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_notes (
+                            id SERIAL PRIMARY KEY,
+                            note_id VARCHAR(128) UNIQUE NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            user_email VARCHAR(255) NOT NULL,
+                            title VARCHAR(255) NOT NULL DEFAULT 'Untitled Note',
+                            blob_name VARCHAR(512) NOT NULL,
+                            file_size_bytes BIGINT DEFAULT 0,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_course_notes_course ON lecturescribe_course_notes(course_name);
+                        CREATE INDEX IF NOT EXISTS idx_course_notes_email ON lecturescribe_course_notes(user_email);
+                        CREATE INDEX IF NOT EXISTS idx_course_notes_id ON lecturescribe_course_notes(note_id);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -3279,6 +3295,275 @@ class RelationalDBManager:
 
         if target:
             self._resources_memory_cache = [r for r in self._resources_memory_cache if r.get("id") != resource_id]
+        return target
+
+    def create_course_note(
+        self,
+        course_name: str,
+        user_email: str,
+        title: str,
+        blob_name: str,
+        file_size_bytes: int = 0,
+        note_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create a new course scratchpad note record in PostgreSQL."""
+        clean_email = (user_email or "").strip().lower()
+        if not clean_email:
+            raise ValueError("user_email is required.")
+        clean_course = (course_name or "General Lectures").strip()
+        nid = note_id or f"note_{uuid.uuid4().hex[:12]}"
+        clean_title = (title or "Untitled Note").strip() or "Untitled Note"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        record = {
+            "id": len(self._notes_memory_cache) + 1,
+            "note_id": nid,
+            "course_name": clean_course,
+            "user_email": clean_email,
+            "title": clean_title,
+            "blob_name": blob_name,
+            "file_size_bytes": file_size_bytes,
+            "created_at": now_iso,
+            "updated_at": now_iso
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_notes
+                        (note_id, course_name, user_email, title, blob_name, file_size_bytes, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        RETURNING id, note_id, course_name, user_email, title, blob_name, file_size_bytes, created_at, updated_at;
+                    """, (nid, clean_course, clean_email, clean_title, blob_name, file_size_bytes))
+                    row = cursor.fetchone()
+                    if row:
+                        record = dict(row)
+                        if hasattr(record.get("created_at"), "isoformat"):
+                            record["created_at"] = record["created_at"].isoformat()
+                        if hasattr(record.get("updated_at"), "isoformat"):
+                            record["updated_at"] = record["updated_at"].isoformat()
+        except Exception as e:
+            print(f"[PostgreSQL Notes Notice] Could not save note to PG ({e}). Stored in cache.")
+        finally:
+            if conn:
+                conn.close()
+
+        self._notes_memory_cache.append(record)
+        return record
+
+    def get_course_notes(self, course_name: str, user_email: str) -> List[Dict[str, Any]]:
+        """Retrieve all notes for a specific course and user."""
+        clean_email = (user_email or "").strip().lower()
+        if not clean_email:
+            return []
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, note_id, course_name, user_email, title, blob_name, file_size_bytes, created_at, updated_at
+                        FROM lecturescribe_course_notes
+                        WHERE user_email = %s AND (
+                            LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
+                            OR regexp_replace(lower(trim(course_name)), '[^a-z0-9]+', '-', 'g') = %s
+                        )
+                        ORDER BY updated_at DESC, id DESC;
+                    """, (clean_email, clean_course, clean_slug))
+                    rows = cursor.fetchall()
+                    result = []
+                    for row in rows:
+                        item = dict(row)
+                        if hasattr(item.get("created_at"), "isoformat"):
+                            item["created_at"] = item["created_at"].isoformat()
+                        if hasattr(item.get("updated_at"), "isoformat"):
+                            item["updated_at"] = item["updated_at"].isoformat()
+                        result.append(item)
+                    return result
+        except Exception as e:
+            print(f"[PostgreSQL Notes Notice] Reading from notes cache ({e}).")
+            return [
+                n for n in self._notes_memory_cache
+                if n.get("user_email") == clean_email and (
+                    n.get("course_name", "").strip().lower() == clean_course.lower()
+                    or to_course_slug(n.get("course_name", "")) == clean_slug
+                )
+            ]
+        finally:
+            if conn:
+                conn.close()
+
+    def get_course_note(self, note_id: str, user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Retrieve a specific course note by note_id."""
+        clean_nid = (note_id or "").strip()
+        if not clean_nid:
+            return None
+        clean_email = (user_email or "").strip().lower()
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            SELECT id, note_id, course_name, user_email, title, blob_name, file_size_bytes, created_at, updated_at
+                            FROM lecturescribe_course_notes
+                            WHERE note_id = %s AND user_email = %s;
+                        """, (clean_nid, clean_email))
+                    else:
+                        cursor.execute("""
+                            SELECT id, note_id, course_name, user_email, title, blob_name, file_size_bytes, created_at, updated_at
+                            FROM lecturescribe_course_notes
+                            WHERE note_id = %s;
+                        """, (clean_nid,))
+                    row = cursor.fetchone()
+                    if not row:
+                        return None
+                    item = dict(row)
+                    if hasattr(item.get("created_at"), "isoformat"):
+                        item["created_at"] = item["created_at"].isoformat()
+                    if hasattr(item.get("updated_at"), "isoformat"):
+                        item["updated_at"] = item["updated_at"].isoformat()
+                    return item
+        except Exception as e:
+            print(f"[PostgreSQL Notes Notice] Reading note from cache ({e}).")
+            for n in self._notes_memory_cache:
+                if n.get("note_id") == clean_nid:
+                    if clean_email and n.get("user_email") != clean_email:
+                        return None
+                    return n
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def update_course_note(
+        self,
+        note_id: str,
+        user_email: str,
+        title: Optional[str] = None,
+        file_size_bytes: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update note metadata (title, size, updated_at) after saving."""
+        clean_nid = (note_id or "").strip()
+        clean_email = (user_email or "").strip().lower()
+        if not clean_nid or not clean_email:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, user_email FROM lecturescribe_course_notes
+                        WHERE note_id = %s;
+                    """, (clean_nid,))
+                    row = cursor.fetchone()
+                    if not row:
+                        return None
+                    if row["user_email"].strip().lower() != clean_email:
+                        raise PermissionError("You can only modify notes you created.")
+
+                    updates = ["updated_at = NOW()"]
+                    params = []
+                    if title is not None:
+                        updates.append("title = %s")
+                        params.append(title.strip() or "Untitled Note")
+                    if file_size_bytes is not None:
+                        updates.append("file_size_bytes = %s")
+                        params.append(file_size_bytes)
+
+                    params.extend([clean_nid, clean_email])
+                    cursor.execute(f"""
+                        UPDATE lecturescribe_course_notes
+                        SET {', '.join(updates)}
+                        WHERE note_id = %s AND user_email = %s
+                        RETURNING id, note_id, course_name, user_email, title, blob_name, file_size_bytes, created_at, updated_at;
+                    """, params)
+                    updated_row = cursor.fetchone()
+                    if not updated_row:
+                        return None
+                    res = dict(updated_row)
+                    if hasattr(res.get("created_at"), "isoformat"):
+                        res["created_at"] = res["created_at"].isoformat()
+                    if hasattr(res.get("updated_at"), "isoformat"):
+                        res["updated_at"] = res["updated_at"].isoformat()
+
+                    for idx, n in enumerate(self._notes_memory_cache):
+                        if n.get("note_id") == clean_nid:
+                            self._notes_memory_cache[idx] = res
+                            break
+                    return res
+        except PermissionError:
+            raise
+        except Exception as e:
+            print(f"[PostgreSQL Notes Notice] Updating note in cache ({e}).")
+            for idx, n in enumerate(self._notes_memory_cache):
+                if n.get("note_id") == clean_nid:
+                    if n.get("user_email") != clean_email:
+                        raise PermissionError("You can only modify notes you created.")
+                    if title is not None:
+                        n["title"] = title.strip() or "Untitled Note"
+                    if file_size_bytes is not None:
+                        n["file_size_bytes"] = file_size_bytes
+                    n["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    return n
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_course_note(self, note_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+        """Delete a course note by note_id if owned by user_email."""
+        clean_nid = (note_id or "").strip()
+        clean_email = (user_email or "").strip().lower()
+        if not clean_nid or not clean_email:
+            return None
+
+        conn = None
+        target = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, note_id, blob_name, user_email FROM lecturescribe_course_notes
+                        WHERE note_id = %s;
+                    """, (clean_nid,))
+                    row = cursor.fetchone()
+                    if not row:
+                        return None
+                    if row["user_email"].strip().lower() != clean_email:
+                        raise PermissionError("You can only delete notes you created.")
+
+                    target = dict(row)
+                    cursor.execute("DELETE FROM lecturescribe_course_notes WHERE note_id = %s;", (clean_nid,))
+                    conn.commit()
+        except PermissionError:
+            raise
+        except Exception as e:
+            print(f"[PostgreSQL Notes Notice] Deleting note from cache ({e}).")
+            for idx, n in enumerate(self._notes_memory_cache):
+                if n.get("note_id") == clean_nid:
+                    if n.get("user_email") != clean_email:
+                        raise PermissionError("You can only delete notes you created.")
+                    target = n
+                    self._notes_memory_cache.pop(idx)
+                    break
+        finally:
+            if conn:
+                conn.close()
+
+        if target:
+            self._notes_memory_cache = [n for n in self._notes_memory_cache if n.get("note_id") != clean_nid]
         return target
 
     def get_course_readings(self, course_name: str) -> List[Dict[str, Any]]:

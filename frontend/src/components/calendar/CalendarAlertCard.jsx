@@ -205,7 +205,7 @@ const CATEGORY_STYLES = {
   }
 };
 
-export default function CalendarAlertCard({ currentTheme }) {
+export default function CalendarAlertCard({ currentTheme, googleUser }) {
   const [agenda, setAgenda] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -237,6 +237,7 @@ export default function CalendarAlertCard({ currentTheme }) {
   };
 
   const fetchAgenda = useCallback(async (refresh = false) => {
+    if (!googleUser) return;
     setLoading(true);
     setError(null);
     try {
@@ -252,11 +253,17 @@ export default function CalendarAlertCard({ currentTheme }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [googleUser]);
 
   useEffect(() => {
-    fetchAgenda(false);
-  }, [fetchAgenda]);
+    if (googleUser) {
+      fetchAgenda(false);
+    }
+  }, [fetchAgenda, googleUser]);
+
+  if (!googleUser) {
+    return null;
+  }
 
   const renderEventItem = (evt) => {
     const style = CATEGORY_STYLES[evt.category] || CATEGORY_STYLES.general;

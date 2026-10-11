@@ -79,11 +79,18 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     });
   };
 
+  const lastLectureFetchKeyRef = useRef('');
+  const inFlightLectureRef = useRef('');
+
   const fetchLectureResources = async (videoId, courseName) => {
     if (!videoId) {
       setRawLectureResources([]);
       return;
     }
+    const courseSlug = normalizeCourseSlug(courseName);
+    const fetchKey = `${videoId}::${courseSlug}`;
+    if (inFlightLectureRef.current === fetchKey) return;
+    inFlightLectureRef.current = fetchKey;
     setLectureResourcesLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -93,7 +100,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
-      if (res.ok) {
+      if (res?.ok) {
         const data = await res.json();
         setRawLectureResources(data.resources || []);
       }
@@ -101,14 +108,22 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       console.warn("Failed to load lecture resources:", err);
     } finally {
       clearTimeout(timeoutId);
+      if (inFlightLectureRef.current === fetchKey) {
+        inFlightLectureRef.current = '';
+      }
       setLectureResourcesLoading(false);
     }
   };
 
   useEffect(() => {
     if (activeVideoId) {
+      const courseSlug = normalizeCourseSlug(selectedCourse);
+      const fetchKey = `${activeVideoId}::${courseSlug}`;
+      if (lastLectureFetchKeyRef.current === fetchKey) return;
+      lastLectureFetchKeyRef.current = fetchKey;
       fetchLectureResources(activeVideoId, selectedCourse);
     } else {
+      lastLectureFetchKeyRef.current = '';
       setRawLectureResources([]);
     }
   }, [activeVideoId, selectedCourse]);
@@ -130,12 +145,17 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     return Array.from(map.values());
   }, [rawLectureResources, courseResources]);
 
+  const inFlightCourseResourcesRef = useRef('');
+  const inFlightCourseReadingsRef = useRef('');
+
   const fetchCourseResources = async (courseName) => {
     if (!courseName) {
       setCourseResources([]);
       return;
     }
     const slug = normalizeCourseSlug(courseName) || courseName;
+    if (inFlightCourseResourcesRef.current === slug) return;
+    inFlightCourseResourcesRef.current = slug;
     setCourseResourcesLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -144,7 +164,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
-      if (res.ok) {
+      if (res?.ok) {
         const data = await res.json();
         setCourseResources(data.resources || []);
       }
@@ -152,6 +172,9 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       console.warn("Failed to load course resources:", err);
     } finally {
       clearTimeout(timeoutId);
+      if (inFlightCourseResourcesRef.current === slug) {
+        inFlightCourseResourcesRef.current = '';
+      }
       setCourseResourcesLoading(false);
     }
   };
@@ -162,6 +185,8 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       return;
     }
     const slug = normalizeCourseSlug(courseName) || courseName;
+    if (inFlightCourseReadingsRef.current === slug) return;
+    inFlightCourseReadingsRef.current = slug;
     setCourseReadingsLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -170,7 +195,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
-      if (res.ok) {
+      if (res?.ok) {
         const data = await res.json();
         setCourseReadings(data.readings || []);
       }
@@ -178,6 +203,9 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       console.warn("Failed to load course readings:", err);
     } finally {
       clearTimeout(timeoutId);
+      if (inFlightCourseReadingsRef.current === slug) {
+        inFlightCourseReadingsRef.current = '';
+      }
       setCourseReadingsLoading(false);
     }
   };
@@ -256,8 +284,8 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
 
   useEffect(() => {
     if (selectedCourse) {
-      const slug = selectedCourse.trim().toLowerCase();
-      if (lastCourseSlugRef.current === slug) return;
+      const slug = normalizeCourseSlug(selectedCourse);
+      if (!slug || lastCourseSlugRef.current === slug) return;
       lastCourseSlugRef.current = slug;
       fetchCourseResources(selectedCourse);
       fetchCourseReadings(selectedCourse);

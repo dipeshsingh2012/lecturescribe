@@ -81,7 +81,10 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
             lastFetchedRef.current = queryTarget;
             setDirectCourseData(data.course);
             if (data.course.course_name && data.course.course_name !== selectedCourse) {
-              setSelectedCourse(data.course.course_name);
+              const isSlug = selectedCourse === normalizeCourseSlug(selectedCourse);
+              if (isSlug || normalizeCourseSlug(selectedCourse) !== normalizeCourseSlug(data.course.course_name)) {
+                setSelectedCourse(data.course.course_name);
+              }
             }
           }
         }
@@ -231,7 +234,8 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
   // Automatically upgrade selectedCourse from a URL slug to its human-readable title
   useEffect(() => {
     if (activeCourseData?.course_name && selectedCourse) {
-      if (selectedCourse !== activeCourseData.course_name && normalizeCourseSlug(selectedCourse) === normalizeCourseSlug(activeCourseData.course_name)) {
+      const isSlug = selectedCourse === normalizeCourseSlug(selectedCourse);
+      if (isSlug && normalizeCourseSlug(selectedCourse) === normalizeCourseSlug(activeCourseData.course_name)) {
         setSelectedCourse(activeCourseData.course_name);
       }
     }

@@ -98,7 +98,8 @@ export default function App() {
   // When activeData loads with canonical course name, upgrade selectedCourse
   useEffect(() => {
     if (activeData?.course_name && activeData.course_name !== selectedCourse) {
-      if (!selectedCourse || normalizeCourseSlug(selectedCourse) === normalizeCourseSlug(activeData.course_name)) {
+      const isSlug = !selectedCourse || selectedCourse === normalizeCourseSlug(selectedCourse);
+      if (isSlug && (!selectedCourse || normalizeCourseSlug(selectedCourse) === normalizeCourseSlug(activeData.course_name))) {
         setSelectedCourse(activeData.course_name);
       }
     }
@@ -147,6 +148,7 @@ export default function App() {
   const handleClearCourse = () => {
     setSelectedCourse(null);
     setDirectCourseData(null);
+    setActiveData(null);
     navigateTo('/');
   };
 

@@ -202,4 +202,53 @@ describe('useResources hook functionality', () => {
     expect(result.current.uploadModalOpen).toBe(false);
     expect(result.current.courseResources.length).toBe(2);
   });
+
+  it('does not re-fetch course resources, readings, or lecture resources when courseName alternates between formatting variants of the same slug', async () => {
+    let courseFetchCount = 0;
+    let readingsFetchCount = 0;
+    let lectureFetchCount = 0;
+
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/resources') && url.includes('/api/course/')) {
+        courseFetchCount++;
+        return Promise.resolve({ ok: true, json: async () => ({ resources: [] }) });
+      }
+      if (url.includes('/readings') && url.includes('/api/course/')) {
+        readingsFetchCount++;
+        return Promise.resolve({ ok: true, json: async () => ({ readings: [] }) });
+      }
+      if (url.includes('/api/lecture/')) {
+        lectureFetchCount++;
+        return Promise.resolve({ ok: true, json: async () => ({ resources: [] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const { rerender } = renderHook(
+      ({ vid, course }) => useResources(vid, course, null),
+      { initialProps: { vid: '1233458901', course: '1.8 Introduction to Research' } }
+    );
+
+    await act(async () => {});
+    expect(courseFetchCount).toBe(1);
+    expect(readingsFetchCount).toBe(1);
+    expect(lectureFetchCount).toBe(1);
+
+    // Re-render with alternative spelling/slug variant
+    rerender({ vid: '1233458901', course: '1 8 Introduction To Research' });
+    await act(async () => {});
+
+    // Re-render again with original spelling
+    rerender({ vid: '1233458901', course: '1.8 Introduction to Research' });
+    await act(async () => {});
+
+    // Re-render with hyphenated slug
+    rerender({ vid: '1233458901', course: '1-8-introduction-to-research' });
+    await act(async () => {});
+
+    // Must not trigger additional fetches
+    expect(courseFetchCount).toBe(1);
+    expect(readingsFetchCount).toBe(1);
+    expect(lectureFetchCount).toBe(1);
+  });
 });

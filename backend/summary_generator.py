@@ -175,7 +175,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
 
     # 2. Groq (High speed, reliable)
     if groq_key:
-        for groq_model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        for groq_model in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
             try:
                 from openai import OpenAI
                 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)

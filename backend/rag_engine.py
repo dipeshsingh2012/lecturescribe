@@ -798,34 +798,22 @@ class Llama3PineconeRAGStore:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.3-70b-versatile",
-                "display": "Groq Llama 3.3 70B"
+                "model_name": "openai/gpt-oss-120b",
+                "display": "Groq GPT-OSS 120B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.1-8b-instant",
-                "display": "Groq Llama 3.1 8B"
+                "model_name": "qwen/qwen3.8-27b",
+                "display": "Groq Qwen 3.8 27B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "mixtral-8x7b-32768",
-                "display": "Groq Mixtral 8x7B"
+                "model_name": "openai/gpt-oss-20b",
+                "display": "Groq GPT-OSS 20B"
             })
         if gemini_key:
-            candidates.append({
-                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-2.5-flash",
-                "display": "Gemini 2.5 Flash (OpenAI API)"
-            })
-            candidates.append({
-                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-2.0-flash",
-                "display": "Gemini 2.0 Flash (OpenAI API)"
-            })
             candidates.append({
                 "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "auth_header": f"Bearer {gemini_key}",
@@ -954,19 +942,20 @@ class Llama3PineconeRAGStore:
 
                 while current_step < max_steps:
                     current_step += 1
+                    is_summary_query = any(k in query.lower() for k in ("summary", "study guide", "comprehensive"))
                     payload = {
                         "model": model_name,
                         "messages": messages,
                         "tools": active_tools,
                         "tool_choice": "auto",
-                        "max_tokens": 1024,
+                        "max_tokens": 4096 if is_summary_query else 1500,
                         "temperature": 0.3
                     }
 
                     resp = None
                     try:
                         for attempt in range(3):
-                            resp = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+                            resp = requests.post(endpoint, headers=headers, json=payload, timeout=60)
                             if resp.status_code in (429, 503):
                                 backoff = (attempt + 1) * 2.0
                                 print(f"⚠️ [{display_model} status {resp.status_code}] Backing off {backoff:.1f}s...")
@@ -1021,15 +1010,16 @@ class Llama3PineconeRAGStore:
                         "role": "user",
                         "content": "Please synthesize a final, clear academic answer to the original question using the information retrieved above."
                     })
+                    is_summary_query = any(k in query.lower() for k in ("summary", "study guide", "comprehensive"))
                     payload = {
                         "model": model_name,
                         "messages": messages,
                         "tools": active_tools,
                         "tool_choice": "none",
-                        "max_tokens": 1024,
+                        "max_tokens": 4096 if is_summary_query else 1500,
                         "temperature": 0.3
                     }
-                    r = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+                    r = requests.post(endpoint, headers=headers, json=payload, timeout=60)
                     if r.status_code == 200:
                         final_answer = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
@@ -1091,33 +1081,27 @@ class Llama3PineconeRAGStore:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.3-70b-versatile",
-                "display": "Groq Llama 3.3 70B"
+                "model_name": "openai/gpt-oss-120b",
+                "display": "Groq GPT-OSS 120B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "llama-3.1-8b-instant",
-                "display": "Groq Llama 3.1 8B"
+                "model_name": "qwen/qwen3.8-27b",
+                "display": "Groq Qwen 3.8 27B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "mixtral-8x7b-32768",
-                "display": "Groq Mixtral 8x7B"
+                "model_name": "openai/gpt-oss-20b",
+                "display": "Groq GPT-OSS 20B"
             })
         if gemini_key:
             candidates.append({
                 "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-2.5-flash",
-                "display": "Gemini 2.5 Flash (OpenAI API)"
-            })
-            candidates.append({
-                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-2.0-flash",
-                "display": "Gemini 2.0 Flash (OpenAI API)"
+                "model_name": "gemini-3.8-flash",
+                "display": "Gemini 3.8 Flash (OpenAI API)"
             })
 
         if not candidates:
@@ -1415,7 +1399,7 @@ class Llama3PineconeRAGStore:
         # 1. Groq Provider Chain (cascade across candidate models)
         if groq_key:
             import requests
-            groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+            groq_models = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
 
@@ -1431,7 +1415,7 @@ class Llama3PineconeRAGStore:
                         "max_tokens": max_tokens_val
                     }
                     print(f"🚀 [Submission Generator] Dispatching to Groq {g_model}...")
-                    r = requests.post(url, headers=headers, json=payload, timeout=45)
+                    r = requests.post(url, headers=headers, json=payload, timeout=60)
                     if r.status_code == 200:
                         raw_output = r.json()["choices"][0]["message"]["content"].strip()
                         final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
@@ -1451,7 +1435,7 @@ class Llama3PineconeRAGStore:
         # 2. Gemini Provider Chain (cascade across candidate models)
         if gemini_key:
             import requests
-            gemini_models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+            gemini_models = ["gemini-3.8-flash"]
 
             for gm_model in gemini_models:
                 try:
@@ -1573,45 +1557,46 @@ class Llama3PineconeRAGStore:
         word_count = len(transcript_str.split())
         print(f"📊 [Summary Engine] Lecture transcript length: ~{word_count} words across {len(transcript_str.splitlines())} cues")
 
-        # 1. Groq (llama-3.3-70b-versatile) - only if transcript fits safely within TPM limits (< 25,000 words)
+        # 1. Groq - only if transcript fits safely within TPM limits (< 25,000 words)
         if groq_key and word_count <= 25000:
-            print("🚀 [Summary Engine] Dispatching to Groq llama-3.3-70b-versatile...")
-            t_groq_start = time.time()
-            try:
-                groq_payload = {
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": 8192
-                }
-                groq_headers = {
-                    "Authorization": f"Bearer {groq_key}",
-                    "Content-Type": "application/json"
-                }
-                r = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers=groq_headers,
-                    json=groq_payload,
-                    timeout=90
-                )
-                if r.status_code == 200:
-                    ans = r.json()["choices"][0]["message"]["content"].strip()
-                    groq_dur = time.time() - t_groq_start
-                    print(f"✅ [Summary Engine] Groq completed in {groq_dur:.2f}s")
-                    return self._build_summary_response(ans, "Groq llama-3.3-70b-versatile", title, target_video_id)
-                else:
-                    print(f"⚠️ [Groq Summary Notice] Groq returned HTTP {r.status_code}: {r.text[:180]}. Falling back to Gemini...")
-            except Exception as ge:
-                print(f"⚠️ [Groq Summary Notice] Error ({ge}). Falling back to Gemini...")
+            for g_model in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+                print(f"🚀 [Summary Engine] Dispatching to Groq {g_model}...")
+                t_groq_start = time.time()
+                try:
+                    groq_payload = {
+                        "model": g_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 8192
+                    }
+                    groq_headers = {
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type": "application/json"
+                    }
+                    r = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers=groq_headers,
+                        json=groq_payload,
+                        timeout=90
+                    )
+                    if r.status_code == 200:
+                        ans = r.json()["choices"][0]["message"]["content"].strip()
+                        groq_dur = time.time() - t_groq_start
+                        print(f"✅ [Summary Engine] Groq {g_model} completed in {groq_dur:.2f}s")
+                        return self._build_summary_response(ans, f"Groq {g_model}", title, target_video_id)
+                    else:
+                        print(f"⚠️ [Groq Summary Notice] Groq {g_model} returned HTTP {r.status_code}: {r.text[:180]}. Cascading...")
+                except Exception as ge:
+                    print(f"⚠️ [Groq Summary Notice] Error with {g_model} ({ge}). Cascading...")
         elif groq_key and word_count > 25000:
             print(f"🚀 [Summary Engine] Lecture context is large (~{word_count} words). Directing straight to Google Gemini 3.8 Flash (1M+ context window)...")
 
         # 2. Google Gemini
         if gemini_key:
-            candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+            candidate_models = ["gemini-3.8-flash"]
             payload = {
                 "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -1964,7 +1949,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -1999,7 +1984,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]:
+            for model_name in ["gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2198,7 +2183,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -2234,7 +2219,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]:
+            for model_name in ["gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2394,7 +2379,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
 
         # Try Groq first
         if groq_key:
-            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -2423,7 +2408,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
 
         # Try Gemini as fallback
         if gemini_key:
-            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]:
+            for model_name in ["gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],

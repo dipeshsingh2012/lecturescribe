@@ -19,7 +19,7 @@ describe('useLectureQuiz hook', () => {
     expect(result.current.explanationLoading).toEqual({});
   });
 
-  it('hydrates persisted quiz and user answers from API response', async () => {
+  it('hydrates persisted quiz and user answers from API response via fetchExistingQuiz', async () => {
     const mockQuizWithAttempts = {
       video_id: 'vid123',
       lecture_title: 'Vector Spaces',
@@ -46,16 +46,19 @@ describe('useLectureQuiz hook', () => {
     const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }, 'student@example.com'));
 
     await act(async () => {
-      await result.current.fetchOrGenerateQuiz(false);
+      await result.current.fetchExistingQuiz();
     });
 
     expect(result.current.quizData).toEqual(mockQuizWithAttempts);
     expect(result.current.selectedAnswers).toEqual({ 1: 0 });
     expect(result.current.score).toBe(1);
     expect(result.current.isCompleted).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/vid123/quiz?email=student%40example.com')
+    );
   });
 
-  it('fetchOrGenerateQuiz fetches quiz from API and updates state', async () => {
+  it('generateQuiz requests generation from API and updates state', async () => {
     const mockQuiz = {
       video_id: 'vid123',
       lecture_title: 'Vector Spaces',
@@ -79,7 +82,7 @@ describe('useLectureQuiz hook', () => {
     const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }));
 
     await act(async () => {
-      await result.current.fetchOrGenerateQuiz(false);
+      await result.current.generateQuiz(false);
     });
 
     expect(result.current.quizData).toEqual(mockQuiz);
@@ -94,25 +97,24 @@ describe('useLectureQuiz hook', () => {
     );
   });
 
-  it('does not request quiz generation when transcript is unavailable', async () => {
-    global.fetch = vi.fn();
-    const { result } = renderHook(() => useLectureQuiz({
-      videoId: 'vid-no-captions',
-      cues: [],
-      transcript_available: false
-    }));
-
-    await act(async () => {
-      await result.current.fetchOrGenerateQuiz(false);
+  it('handles empty questions list by clearing quizData', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ video_id: 'vid123', questions: [] })
     });
 
-    expect(global.fetch).not.toHaveBeenCalled();
+    const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }));
+
+    await act(async () => {
+      await result.current.fetchExistingQuiz();
+    });
+
     expect(result.current.quizData).toBeNull();
     expect(result.current.quizError).toBeNull();
     expect(result.current.quizLoading).toBe(false);
   });
 
-  it('handles API error gracefully in fetchOrGenerateQuiz', async () => {
+  it('handles API error gracefully in generateQuiz', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
@@ -122,7 +124,7 @@ describe('useLectureQuiz hook', () => {
     const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }));
 
     await act(async () => {
-      await result.current.fetchOrGenerateQuiz(true);
+      await result.current.generateQuiz(true);
     });
 
     expect(result.current.quizLoading).toBe(false);
@@ -147,7 +149,7 @@ describe('useLectureQuiz hook', () => {
     const { result } = renderHook(() => useLectureQuiz({ videoId: 'vid123' }, 'student@example.com'));
 
     await act(async () => {
-      await result.current.fetchOrGenerateQuiz(false);
+      await result.current.generateQuiz(false);
     });
 
     expect(result.current.isCompleted).toBe(false);

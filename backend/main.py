@@ -75,8 +75,6 @@ from backend.transcription_jobs import (
     verify_cloud_task_identity,
 )
 
-# LLM Intent Router Integration
-from backend.slm_router import slm_classify_intent, INTENT_SUMMARY, INTENT_CHAT
 
 # Slide & Reading Recommendation Services
 from backend.slide_parser import parse_slide_document, format_slides_for_llm
@@ -184,12 +182,6 @@ class SubmissionRequest(BaseModel):
     original_text: str
     video_id: Optional[str] = None
     word_count: Optional[int] = 100
-    user_email: Optional[str] = None
-
-class AutoPopulateRequest(BaseModel):
-    video_id: str
-    video_title: Optional[str] = None
-    cues: Optional[List[Dict[str, str]]] = None
     user_email: Optional[str] = None
 
 class AlgoliaSearchRequest(BaseModel):
@@ -633,22 +625,9 @@ def sanitize_quiz_payload(quiz_data: Optional[Dict[str, Any]]) -> Optional[Dict[
     return quiz_data
 
 
-@app.get("/api/lecture/{video_id}/quiz")
-@app.post("/api/lecture/{video_id}/quiz")
-def get_or_generate_lecture_quiz(
-    video_id: str,
-    regenerate: bool = Query(False, description="Force regenerate without using cache"),
-    num_questions: Optional[int] = Query(None, description="Number of quiz questions to generate (3-15)"),
-    email: Optional[str] = Query(None, description="Signed-in user email"),
-    body: Optional[QuizGenerateRequest] = None
-):
-    """Retrieve or generate interactive practice quiz with LaTeX math formulas."""
-    clean_vid = str(video_id).strip()
-    is_regenerate = regenerate or (body.regenerate if body else False)
-    req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
-
-    # 1. Check Redis Cache
-    if not is_regenerate and redis_cache:
+def _lookup_saved_or_cached_quiz(clean_vid: str, email: Optional[str] = None) -> Optional[dict]:
+    """Helper to check Redis cache and PostgreSQL for an existing quiz."""
+    if redis_cache:
         cached_quiz = redis_cache.get_quiz(clean_vid)
         if cached_quiz:
             cached_quiz = sanitize_quiz_payload(cached_quiz)
@@ -664,26 +643,69 @@ def get_or_generate_lecture_quiz(
                         cached_quiz["is_completed"] = attempt.get("completed", False)
                 return cached_quiz
 
-    # 2. Check Relational Database Persistence
-    if not is_regenerate:
-        db_quiz = db_manager.get_saved_quiz(clean_vid)
-        if db_quiz and db_quiz.get("questions"):
-            db_quiz = sanitize_quiz_payload(db_quiz)
-            if db_quiz and len(db_quiz.get("questions") or []) > 0:
-                print(f"💾 [PostgreSQL Hit] Returning persisted quiz for video '{clean_vid}'.")
-                if redis_cache:
-                    redis_cache.set_quiz(clean_vid, db_quiz, ttl_seconds=86400)
-                if email:
-                    attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
-                    if attempt:
-                        db_quiz = dict(db_quiz)
-                        db_quiz["user_answers"] = attempt.get("answers", {})
-                        db_quiz["user_score"] = attempt.get("score", 0)
-                        db_quiz["user_completed"] = attempt.get("completed", False)
-                        db_quiz["is_completed"] = attempt.get("completed", False)
-                return db_quiz
+    db_quiz = db_manager.get_saved_quiz(clean_vid)
+    if db_quiz and db_quiz.get("questions"):
+        db_quiz = sanitize_quiz_payload(db_quiz)
+        if db_quiz and len(db_quiz.get("questions") or []) > 0:
+            print(f"💾 [PostgreSQL Hit] Returning persisted quiz for video '{clean_vid}'.")
+            if redis_cache:
+                redis_cache.set_quiz(clean_vid, db_quiz, ttl_seconds=86400)
+            if email:
+                attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
+                if attempt:
+                    db_quiz = dict(db_quiz)
+                    db_quiz["user_answers"] = attempt.get("answers", {})
+                    db_quiz["user_score"] = attempt.get("score", 0)
+                    db_quiz["user_completed"] = attempt.get("completed", False)
+                    db_quiz["is_completed"] = attempt.get("completed", False)
+            return db_quiz
 
-    # 3. Retrieve Saved Video & Cues from DB
+    return None
+
+
+@app.get("/api/lecture/{video_id}/quiz")
+def get_lecture_quiz(
+    video_id: str,
+    email: Optional[str] = Query(None, description="Signed-in user email")
+):
+    """Retrieve existing practice quiz from database/cache without triggering generation."""
+    clean_vid = str(video_id).strip()
+    existing = _lookup_saved_or_cached_quiz(clean_vid, email=email)
+    if existing:
+        return existing
+
+    saved = db_manager.get_saved_video(clean_vid)
+    if not saved:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Lecture '{clean_vid}' transcript not found in database. Ingest lecture first."
+        )
+
+    return {
+        "video_id": clean_vid,
+        "questions": [],
+        "total_questions": 0
+    }
+
+
+@app.post("/api/lecture/{video_id}/quiz")
+def generate_lecture_quiz_endpoint(
+    video_id: str,
+    email: Optional[str] = Query(None, description="Signed-in user email"),
+    body: Optional[QuizGenerateRequest] = None
+):
+    """Generate or regenerate interactive practice quiz using LLM."""
+    clean_vid = str(video_id).strip()
+    is_regenerate = body.regenerate if body else False
+    req_count = body.num_questions if body and body.num_questions is not None else None
+
+    # Check existing quiz unless regenerating
+    if not is_regenerate:
+        existing = _lookup_saved_or_cached_quiz(clean_vid, email=email)
+        if existing:
+            return existing
+
+    # Retrieve Saved Video & Cues from DB
     saved = db_manager.get_saved_video(clean_vid)
     if not saved:
         raise HTTPException(
@@ -700,7 +722,6 @@ def get_or_generate_lecture_quiz(
             "questions": [],
             "total_questions": 0,
             "transcript_available": False,
-            "quiz_available": False,
             "message": "This video is imported, but no transcript or captions are available. Quiz generation requires transcript text."
         }
 
@@ -709,7 +730,7 @@ def get_or_generate_lecture_quiz(
     else:
         target_count = determine_lecture_quiz_count(cues, saved.get("duration"))
 
-    # 4. Generate with LLM (No Fallbacks)
+    # Generate with LLM (No Fallbacks)
     try:
         quiz_data = pinecone_rag_engine.generate_lecture_quiz(
             video_id=clean_vid,
@@ -723,10 +744,10 @@ def get_or_generate_lecture_quiz(
             detail=f"Unable to generate quiz via AI model: {str(e)}"
         )
 
-    # 5. Persist to Relational Database
+    # Persist to Relational Database
     db_manager.save_quiz(clean_vid, quiz_data)
 
-    # 6. Save to Redis Cache (24 hours)
+    # Save to Redis Cache (24 hours)
     if redis_cache:
         redis_cache.set_quiz(clean_vid, quiz_data, ttl_seconds=86400)
 
@@ -823,6 +844,183 @@ def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
         )
 
 
+_active_gcs_uploads: Dict[str, Dict[str, Any]] = {}
+_gcs_upload_lock = threading.Lock()
+DEFAULT_LMS_REFERER = os.getenv("LMS_REFERER", "https://learning.iiitdwd.ac.in/")
+
+
+def _trigger_background_gcs_upload(
+    video_id: str,
+    title: str,
+    course_name: str,
+    cues: List[Dict[str, Any]],
+    player_config: Optional[Dict[str, Any]] = None,
+    referer: Optional[str] = None
+) -> bool:
+    """Safely start background video transfer to GCS if not already uploaded or in progress."""
+    if not video_id:
+        return False
+
+    existing_gcs = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=course_name)
+    if existing_gcs:
+        return False
+
+    with _gcs_upload_lock:
+        if video_id in _active_gcs_uploads and _active_gcs_uploads[video_id].get("status") == "UPLOADING":
+            return True
+        _active_gcs_uploads[video_id] = {
+            "video_id": video_id,
+            "title": title,
+            "course_name": course_name,
+            "status": "UPLOADING",
+            "stage": "Initializing Cloud Storage upload...",
+            "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+
+    threading.Thread(
+        target=_async_upload_video_to_gcs_worker,
+        args=(video_id, title, course_name, cues, player_config, referer),
+        daemon=True
+    ).start()
+    return True
+
+
+def _async_upload_video_to_gcs_worker(
+    video_id: str,
+    title: str,
+    course_name: str,
+    cues: List[Dict[str, Any]],
+    player_config: Optional[Dict[str, Any]],
+    referer: Optional[str]
+):
+    eff_referer = referer or DEFAULT_LMS_REFERER
+    try:
+        with _gcs_upload_lock:
+            if video_id in _active_gcs_uploads:
+                _active_gcs_uploads[video_id]["stage"] = "Resolving video stream config..."
+
+        config = player_config
+        if not config:
+            try:
+                config = fetch_player_config(video_id, referer=eff_referer)
+            except Exception as e:
+                logger.warning(f"[GCS Background Upload Notice] Config fetch for {video_id}: {e}")
+
+        streams_info = None
+        if config:
+            try:
+                streams_info = get_video_download_streams(config, video_id)
+            except Exception as e:
+                logger.warning(f"[GCS Background Upload Notice] Streams parse for {video_id}: {e}")
+
+        if not streams_info:
+            logger.warning(f"[GCS Background Upload] No streams available for video {video_id}.")
+            with _gcs_upload_lock:
+                if video_id in _active_gcs_uploads:
+                    _active_gcs_uploads[video_id]["status"] = "FAILED"
+                    _active_gcs_uploads[video_id]["stage"] = "No stream format available"
+            return
+
+        clean_cname = re.sub(r'[^a-zA-Z0-9\- ]', '', course_name.lower())
+        cslug = re.sub(r'\s+', '-', clean_cname.strip()) or "general"
+        effective_prefix = f"courses/{cslug}/lectures"
+
+        with _gcs_upload_lock:
+            if video_id in _active_gcs_uploads:
+                _active_gcs_uploads[video_id]["stage"] = "Transferring video to Google Cloud Storage..."
+
+        logger.info(f"🚀 [GCS Background Upload] Starting video upload for '{video_id}' ({title})...")
+        result = gcs_storage_service.upload_lecture_bundle(
+            video_id=video_id,
+            title=title,
+            vtt_content="",
+            cues=cues or [],
+            summary_content="",
+            streams_info=streams_info,
+            prefix=effective_prefix,
+            upload_video=True,
+            referer=eff_referer
+        )
+        logger.info(f"✅ [GCS Background Upload Complete] Video '{video_id}' status: {result.get('status')}")
+
+        with _gcs_upload_lock:
+            if video_id in _active_gcs_uploads:
+                _active_gcs_uploads[video_id]["status"] = "SUCCESS"
+                _active_gcs_uploads[video_id]["stage"] = "Uploaded successfully"
+    except Exception as exc:
+        logger.error(f"❌ [GCS Background Upload Error] Video '{video_id}': {exc}")
+        with _gcs_upload_lock:
+            if video_id in _active_gcs_uploads:
+                _active_gcs_uploads[video_id]["status"] = "FAILED"
+                _active_gcs_uploads[video_id]["stage"] = f"Error: {exc}"
+    finally:
+        def _cleanup():
+            time.sleep(15)
+            with _gcs_upload_lock:
+                _active_gcs_uploads.pop(video_id, None)
+        threading.Thread(target=_cleanup, daemon=True).start()
+
+
+def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str, str]], user_email: Optional[str] = None):
+    """
+    Background worker for offloading Algolia indexing, Pinecone vector upsert,
+    chapter summary generation, and full lecture study notes synthesis so raw
+    lecture ingestion finishes in <1 second.
+    """
+    if not cues:
+        return
+    try:
+        algolia_service.ingest_cues(clean_vid, title, cues)
+    except Exception as a_err:
+        logger.warning(f"[Background Algolia Notice] {clean_vid}: {a_err}")
+    try:
+        pinecone_rag_engine.ingest_transcript(clean_vid, title, cues)
+    except Exception as p_err:
+        logger.warning(f"[Background Pinecone Notice] {clean_vid}: {p_err}")
+    try:
+        sections = generate_summary_sections(cues, title)
+        if sections:
+            db_manager.update_summary_sections(clean_vid, sections)
+    except Exception as s_err:
+        logger.warning(f"[Background Summary Sections Notice] {clean_vid}: {s_err}")
+    try:
+        # Pre-synthesize comprehensive study summary if not already created
+        existing_summary = db_manager.get_lecture_summary(clean_vid, "comprehensive", user_email=user_email)
+        if not existing_summary or not existing_summary.get("markdownText"):
+            print(f"⚡ [Background Auto-Summary] Synthesizing comprehensive study guide for video '{clean_vid}'...")
+            prompt = "Generate Full Comprehensive Summary without word limits; provide an exhaustive, in-depth academic study guide and full synthesis grounded strictly in the transcript."
+            res = process_chat_message(
+                user_prompt=prompt,
+                video_id=clean_vid,
+                video_title=title,
+                cues=cues,
+                user_email=user_email,
+                bypass_cache=False,
+                chat_history=[],
+                save_to_db=False
+            )
+            markdown_text = res.get("reply") or ""
+            raw_sub_text = res.get("submission_text") or markdown_text
+            submission_text = pinecone_rag_engine._clean_for_submission(raw_sub_text, preserve_paragraphs=True)
+            word_count = len([w for w in submission_text.split() if w])
+            citations = res.get("citations") or []
+            model = res.get("model") or ""
+            if markdown_text:
+                db_manager.save_lecture_summary(
+                    video_id=clean_vid,
+                    summary_type="comprehensive",
+                    markdown_text=markdown_text,
+                    submission_text=submission_text,
+                    citations=citations,
+                    word_count=word_count,
+                    model=model,
+                    user_email=user_email
+                )
+                print(f"✅ [Background Auto-Summary] Successfully stored comprehensive summary for video '{clean_vid}'.")
+    except Exception as sum_err:
+        logger.warning(f"[Background Auto-Summary Notice] {clean_vid}: {sum_err}")
+
+
 def process_lecture_import(
     video_id: str,
     email: Optional[str] = None,
@@ -847,10 +1045,6 @@ def process_lecture_import(
         course_title = saved.get("course_name") or (course_name and course_name.strip()) or extract_course_name(saved.get("title", ""))
         saved["course_name"] = course_title
         saved["course_slug"] = to_course_slug(course_title)
-        # Only transcript-backed services can be populated when cues exist.
-        if saved_cues:
-            algolia_service.ingest_cues(clean_vid, saved["title"], saved_cues)
-            pinecone_rag_engine.ingest_transcript(clean_vid, saved["title"], saved_cues)
         clean_email = email.strip() if isinstance(email, str) else None
         drive_url = db_manager.get_drive_folder_url(clean_vid, clean_email)
         if drive_url:
@@ -864,8 +1058,20 @@ def process_lecture_import(
             saved["video_url"] = gcs_video["view_url"]
             saved["gcs_blob_name"] = gcs_video["blob_name"]
             saved["video_source"] = "gcs"
+            saved["is_uploading"] = False
+            saved["upload_status"] = "COMPLETED"
         else:
-            saved["video_source"] = "vimeo"
+            saved["video_source"] = "gcs"
+            is_uploading = _trigger_background_gcs_upload(
+                video_id=clean_vid,
+                title=saved.get("title", f"Lecture {clean_vid}"),
+                course_name=course_title,
+                cues=saved.get("cues", []),
+                player_config=player_config,
+                referer=lms_page_url
+            )
+            saved["is_uploading"] = is_uploading
+            saved["upload_status"] = "UPLOADING" if is_uploading else "IDLE"
 
         if clean_email:
             db_manager.record_user_lecture(
@@ -922,7 +1128,8 @@ def process_lecture_import(
     transcript_available = bool(cues)
     if transcript_available:
         transcript_message = None
-    summary_sections = generate_summary_sections(cues, title) if transcript_available else []
+    # Chapters/summaries are generated in the background worker to prevent blocking HTTP ingestion
+    summary_sections = []
     source_url = f"https://vimeo.com/{clean_vid}"
     caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
     raw_course = course_name if isinstance(course_name, str) else None
@@ -932,11 +1139,14 @@ def process_lecture_import(
     # 3. Save to Relational DB (PostgreSQL)
     db_manager.save_video_transcript(clean_vid, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
 
-    # 4-5. Ingest transcript-backed search indexes only when captions exist.
+    # 4-5. Ingest transcript-backed search indexes in background without delaying HTTP response.
     pinecone_chunks = []
     if transcript_available:
-        algolia_service.ingest_cues(clean_vid, title, cues)
-        pinecone_chunks = pinecone_rag_engine.ingest_transcript(clean_vid, title, cues)
+        threading.Thread(
+            target=_async_post_import_indexing,
+            args=(clean_vid, title, cues, email),
+            daemon=True
+        ).start()
 
     # 6. Record into user LMS library if authenticated
     if email and email.strip():
@@ -954,6 +1164,16 @@ def process_lecture_import(
     drive_url = db_manager.get_drive_folder_url(clean_vid, email)
     gcs_video = gcs_storage_service.find_lecture_video(video_id=clean_vid, course_name=derived_course)
     gcs_url = gcs_video["view_url"] if gcs_video else None
+    is_uploading = False
+    if not gcs_video:
+        is_uploading = _trigger_background_gcs_upload(
+            video_id=clean_vid,
+            title=title,
+            course_name=derived_course,
+            cues=cues,
+            player_config=config,
+            referer=lms_page_url
+        )
 
     return {
         "videoId": clean_vid,
@@ -973,7 +1193,9 @@ def process_lecture_import(
         "gcs_video_url": gcs_url,
         "gcsVideoUrl": gcs_url,
         "gcs_blob_name": gcs_video["blob_name"] if gcs_video else None,
-        "video_source": "gcs" if gcs_video else "vimeo",
+        "video_source": "gcs",
+        "is_uploading": is_uploading,
+        "upload_status": "UPLOADING" if is_uploading else "COMPLETED",
         "cached": False
     }
 
@@ -1037,7 +1259,7 @@ def update_transcript_cue_endpoint(video_id: str, cue_id: int, req: UpdateCueReq
     if saved and saved.get("cues"):
         title = saved.get("title", f"Lecture {vid}")
         try:
-            algolia_service.ingest_cues(vid, title, saved["cues"])
+            algolia_service.ingest_cues(vid, title, saved["cues"], updated_cue_id=cue_id)
         except Exception as a_err:
             print(f"[Algolia Sync Notice] {a_err}")
         try:
@@ -1255,7 +1477,7 @@ def accept_review_suggestion_endpoint(video_id: str, suggestion_id: str):
     if saved and saved.get("cues"):
         title = saved.get("title", f"Lecture {vid}")
         try:
-            algolia_service.ingest_cues(vid, title, saved["cues"])
+            algolia_service.ingest_cues(vid, title, saved["cues"], updated_cue_id=cue_id)
         except Exception:
             pass
         try:
@@ -1304,7 +1526,7 @@ def undo_review_suggestion_endpoint(video_id: str, suggestion_id: str):
     if saved and saved.get("cues"):
         title = saved.get("title", f"Lecture {vid}")
         try:
-            algolia_service.ingest_cues(vid, title, saved["cues"])
+            algolia_service.ingest_cues(vid, title, saved["cues"], updated_cue_id=cue_id)
             pinecone_rag_engine.ingest_transcript(vid, title, saved["cues"])
         except Exception:
             pass
@@ -1317,9 +1539,19 @@ def undo_review_suggestion_endpoint(video_id: str, suggestion_id: str):
 
 @app.post("/api/search")
 def algolia_search(req: AlgoliaSearchRequest):
-    """Sub-10ms instant keyword search with typo tolerance via Algolia."""
-    hits = algolia_service.search(req.query, video_id=req.video_id, limit=req.limit or 20)
-    return {"hits": hits, "results": hits, "count": len(hits)}
+    """Sub-10ms instant keyword search strictly via Algolia Cloud."""
+    try:
+        hits = algolia_service.search(req.query, video_id=req.video_id, limit=req.limit or 20)
+        return {"hits": hits, "results": hits, "count": len(hits), "available": True}
+    except Exception as e:
+        logger.warning(f"[Algolia Search Unavailable] {e}")
+        return {
+            "hits": [],
+            "results": [],
+            "count": 0,
+            "available": False,
+            "error": f"Algolia transcript search is currently unavailable: {str(e)}"
+        }
 
 @app.post("/api/rag/query")
 def rag_query(req: RAGQueryRequest):
@@ -1350,61 +1582,20 @@ def rag_query(req: RAGQueryRequest):
             print("=" * 60 + "\n")
             return cached_result
 
-    # 2. Structured LLM Intent Router: classify SUMMARY vs CHAT
-    intent = slm_classify_intent(
-        query=req.query,
-        chat_history=req.chat_history,
-        video_title=video_title,
-    )
-    print(f"🧭 [Intent Router /api/rag/query] Intent classified as: {intent}")
-
+    # 2. Direct Conversational RAG Query (Router Decoupled)
+    print("🔍 [API /api/rag/query] Executing conversational RAG via Hybrid Search + RRF pipeline")
     try:
-        if intent == INTENT_SUMMARY:
-            print("🚀 ROUTING EXECUTION: SUMMARY INTENT — Streaming uncut chronological context straight to Cloud LLM")
-            if not video_id:
-                raise ValueError("SUMMARY intent requires a valid video_id to fetch the full transcript.")
-            saved = db_manager.get_saved_video(video_id)
-            cues = (saved.get("cues") if saved else None) or req.cues
-            if not cues:
-                raise ValueError(f"No transcript cues found in database or request for video {video_id}. SUMMARY requires the full transcript.")
-            lecture_title = (saved.get("title") if saved else None) or video_title or "Lecture"
-            full_transcript_with_timestamps = "\n".join(
-                f"[{cue['time']}] {cue['text']}"
-                for cue in cues
-                if cue.get("text", "").strip()
-            )
-            result = pinecone_rag_engine.generate_full_transcript_summary(
-                transcript_str=full_transcript_with_timestamps,
-                lecture_title=lecture_title,
-                video_id=video_id,
-                user_original_request=req.query,
-                user_email=req.user_email,
-            )
-        elif intent == INTENT_CHAT:
-            print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
-            result = pinecone_rag_engine.query_rag(
-                req.query,
-                video_id=video_id,
-                video_title=video_title,
-                cues=req.cues,
-                top_k=req.top_k or 10,
-                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
-                user_email=req.user_email,
-                chat_history=req.chat_history,
-                enforce_regenerate=req.enforce_regenerate or False
-            )
-        else:
-            result = pinecone_rag_engine.query_rag(
-                req.query,
-                video_id=video_id,
-                video_title=video_title,
-                cues=req.cues,
-                top_k=req.top_k or 10,
-                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
-                user_email=req.user_email,
-                chat_history=req.chat_history,
-                enforce_regenerate=req.enforce_regenerate or False
-            )
+        result = pinecone_rag_engine.query_rag(
+            req.query,
+            video_id=video_id,
+            video_title=video_title,
+            cues=req.cues,
+            top_k=req.top_k or 10,
+            enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+            user_email=req.user_email,
+            chat_history=req.chat_history,
+            enforce_regenerate=req.enforce_regenerate or False
+        )
     except Exception as e:
         elapsed = time.time() - t_start
         print(f"\n❌ [API /api/rag/query Error] Failed after {elapsed:.2f}s:")
@@ -1466,8 +1657,7 @@ def process_chat_message(
     user_email: Optional[str] = None,
     bypass_cache: bool = False,
     chat_history: Optional[List[Dict[str, Any]]] = None,
-    save_to_db: bool = True,
-    intent_override: Optional[str] = None
+    save_to_db: bool = True
 ) -> Dict[str, Any]:
     """Internal core processor for chat queries, RAG retrieval, and full transcript summaries."""
     user_prompt = (user_prompt or "").strip()
@@ -1504,72 +1694,23 @@ def process_chat_message(
                 "cached": True
             }
 
-    # 2. Intent Determination: explicit override or structured LLM router
-    if intent_override:
-        intent = intent_override.strip().upper()
-        print(f"⚡ [Intent Router] Route directly forced to: {intent} (bypassed router & regex)")
-    else:
-        intent = slm_classify_intent(
-            query=user_prompt,
-            chat_history=chat_history,
-            video_title=title,
-        )
-        print(f"🧭 [Intent Router] Intent classified as: {intent}")
-
-    # 3. Vector indexing safeguard: Only index for CHAT/RAG queries, skip for SUMMARY
-    if intent != INTENT_SUMMARY:
-        if cues is not None and len(cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
-            print("🌲 [Pinecone Engine] Indexing chunks for conversational RAG query...")
-            pinecone_rag_engine.ingest_transcript(vid, title, cues)
-            algolia_service.ingest_cues(vid, title, cues)
-    else:
-        print("⏩ [Pinecone Engine] Skipping vector index upsert — SUMMARY intent operates directly on chronological transcript cues.")
+    # 2. Conversational RAG execution
+    if cues is not None and len(cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
+        pinecone_rag_engine.ingest_transcript(vid, title, cues)
+        algolia_service.ingest_cues(vid, title, cues)
 
     try:
-        if intent == INTENT_SUMMARY:
-            print("🚀 ROUTING EXECUTION: SUMMARY INTENT — Streaming uncut chronological context straight to Cloud LLM")
-            if not vid or vid == "active":
-                raise ValueError("SUMMARY intent requires a valid video_id to fetch the full transcript.")
-            saved = db_manager.get_saved_video(vid)
-            cues_list = (saved.get("cues") if saved else None) or cues
-            if not cues_list:
-                raise ValueError(f"No transcript cues found in database or request for video {vid}. SUMMARY requires the full transcript.")
-            lecture_title = (saved.get("title") if saved else None) or title or "Lecture"
-            full_transcript_with_timestamps = "\n".join(
-                f"[{cue['time']}] {cue['text']}"
-                for cue in cues_list
-                if cue.get("text", "").strip()
-            )
-            rag_res = pinecone_rag_engine.generate_full_transcript_summary(
-                transcript_str=full_transcript_with_timestamps,
-                lecture_title=lecture_title,
-                video_id=vid,
-                user_original_request=user_prompt,
-                user_email=user_email,
-            )
-        elif intent == INTENT_CHAT:
-            print("🔍 ROUTING EXECUTION: CHAT INTENT — Directing to Hybrid Search + RRF pipeline")
-            rag_res = pinecone_rag_engine.query_rag(
-                user_prompt,
-                video_id=vid,
-                video_title=title,
-                cues=cues,
-                top_k=10,
-                enable_web_search=True,
-                user_email=user_email,
-                chat_history=chat_history
-            )
-        else:
-            rag_res = pinecone_rag_engine.query_rag(
-                user_prompt,
-                video_id=vid,
-                video_title=title,
-                cues=cues,
-                top_k=10,
-                enable_web_search=True,
-                user_email=user_email,
-                chat_history=chat_history
-            )
+        print("🔍 [Chat Engine] Executing conversational RAG pipeline")
+        rag_res = pinecone_rag_engine.query_rag(
+            user_prompt,
+            video_id=vid,
+            video_title=title,
+            cues=cues,
+            top_k=10,
+            enable_web_search=True,
+            user_email=user_email,
+            chat_history=chat_history
+        )
     except Exception as e:
         elapsed = time.time() - t_start
         print(f"\n❌ [Chat Engine Error] Failed after {elapsed:.2f}s:")
@@ -1588,16 +1729,8 @@ def process_chat_message(
 
     reply = rag_res.get("answer", "")
     citations = rag_res.get("citations", [])
-
-    # Auto-generate academic submission version
-    sub_res = pinecone_rag_engine.generate_submission_version(
-        original_text=reply,
-        video_id=vid,
-        word_count=120,
-        query=user_prompt
-    )
-    sub_text = sub_res.get("submission_text", "")
-    sub_word_count = sub_res.get("word_count", 0)
+    sub_text = ""
+    sub_word_count = 0
 
     # Save to Chat History DB
     if save_to_db:
@@ -1656,132 +1789,6 @@ def chat_with_transcript(req: ChatRequest):
         chat_history=req.chat_history,
         save_to_db=True
     )
-
-
-AUTOPOPULATE_PROMPTS = [
-    "Create a summary for a 15 min read",
-    "Generate Full Comprehensive Summary"
-]
-
-# Per-video locks: prevent concurrent autopopulate runs from duplicating prompts
-_autopopulate_locks: dict = {}
-_locks_mutex = threading.Lock()
-
-
-@app.post("/api/chat/autopopulate")
-def autopopulate_chat(req: AutoPopulateRequest):
-    """
-    Auto-populates the chat box with resultant responses of the 2 standard summary prompts (15-min and full summary).
-    If chat history already exists for this video in PostgreSQL, returns it immediately (<50ms).
-    Otherwise, executes the prompts concurrently and persists them sequentially in PostgreSQL.
-    """
-    vid = str(req.video_id or "").strip()
-    if not vid or vid == "active":
-        raise HTTPException(status_code=400, detail="A valid video_id is required.")
-
-    lock_key = f"{vid}:{req.user_email or 'all'}"
-    with _locks_mutex:
-        if lock_key not in _autopopulate_locks:
-            _autopopulate_locks[lock_key] = threading.Lock()
-        video_lock = _autopopulate_locks[lock_key]
-
-    with video_lock:
-        # 1. Return immediately if chat logs already exist in PostgreSQL
-        existing = db_manager.get_chat_history(vid, user_email=req.user_email)
-        if existing and len(existing) > 0:
-            return {
-                "status": "success",
-                "video_id": vid,
-                "count": len(existing),
-                "messages": existing
-            }
-
-        # 2. Retrieve video details and cues from DB or request
-        saved_vid = db_manager.get_saved_video(vid)
-        title = (req.video_title or (saved_vid.get("title") if saved_vid else None) or "Lecture").strip()
-        cues = req.cues or (saved_vid.get("cues") if saved_vid else None) or []
-        if not cues:
-            return {
-                "status": "no_cues",
-                "video_id": vid,
-                "count": 0,
-                "messages": []
-            }
-
-        # Ingest cues up front to prime local chunks & Algolia search once
-        if cues and len(pinecone_rag_engine.local_chunks) == 0:
-            pinecone_rag_engine.ingest_transcript(vid, title, cues)
-            algolia_service.ingest_cues(vid, title, cues)
-
-        # 3. Concurrently execute the 4 standard prompts
-        def _execute_prompt(prompt_text: str):
-            try:
-                return process_chat_message(
-                    user_prompt=prompt_text,
-                    video_id=vid,
-                    video_title=title,
-                    cues=cues,
-                    user_email=req.user_email,
-                    bypass_cache=False,
-                    chat_history=[],
-                    save_to_db=False  # Saved sequentially below to guarantee chronological ordering
-                )
-            except Exception as err:
-                print(f"⚠️ [Autopopulate Worker Error for '{prompt_text}']: {err}")
-                return None
-
-        results = [None] * len(AUTOPOPULATE_PROMPTS)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            future_to_idx = {
-                executor.submit(_execute_prompt, prompt): idx 
-                for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS)
-            }
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                results[idx] = future.result()
-
-        # 4. Sequentially persist to PostgreSQL in exact prompt order
-        for idx, prompt in enumerate(AUTOPOPULATE_PROMPTS):
-            res = results[idx]
-            if not res or not res.get("reply"):
-                continue
-            try:
-                db_manager.save_chat_log(
-                    video_id=vid,
-                    user_prompt=prompt,
-                    ai_reply=res["reply"],
-                    citations=res.get("citations", []),
-                    user_email=req.user_email,
-                    submission_text=res.get("submission_text", ""),
-                    model=res.get("model", ""),
-                    web_sources=res.get("web_sources", [])
-                )
-                # Also persist to dedicated lecture summaries table
-                stype = "15_min" if "15" in prompt else "comprehensive"
-                sub_text = res.get("submission_text", "")
-                wc = len([w for w in sub_text.split() if w]) if sub_text else 0
-                db_manager.save_lecture_summary(
-                    video_id=vid,
-                    summary_type=stype,
-                    markdown_text=res["reply"],
-                    submission_text=sub_text,
-                    citations=res.get("citations", []),
-                    word_count=wc,
-                    model=res.get("model", ""),
-                    user_email=req.user_email
-                )
-                time.sleep(0.01)  # 10ms monotonic timestamp spacing
-            except Exception as save_err:
-                print(f"⚠️ [Autopopulate Save Error for prompt {idx}]: {save_err}")
-
-        # 5. Fetch persisted messages from PostgreSQL
-        persisted_messages = db_manager.get_chat_history(vid, user_email=req.user_email)
-        return {
-            "status": "success",
-            "video_id": vid,
-            "count": len(persisted_messages),
-            "messages": persisted_messages
-        }
 
 
 @app.get("/api/chat/history")
@@ -1969,8 +1976,7 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
         user_email=req.user_email,
         bypass_cache=req.bypass_cache or False,
         chat_history=[],
-        save_to_db=False,  # Do not pollute chat logs!
-        intent_override=INTENT_SUMMARY
+        save_to_db=False  # Do not pollute chat logs!
     )
 
     markdown_text = res.get("reply") or ""
@@ -3415,6 +3421,11 @@ def get_single_video_status(video_id: str):
         except Exception as e:
             print(f"⚠️ [Sync Status Tracking Read Notice]: {e}")
 
+    active_upload = None
+    with _gcs_upload_lock:
+        active_upload = _active_gcs_uploads.get(vid)
+
+    is_uploading = bool(active_upload and active_upload.get("status") == "UPLOADING")
     is_gcs_synced = bool(gcs_video or tracking_info.get("status") in ("SUCCESS", "ALREADY_CACHED"))
     size_mb = None
     if gcs_video and gcs_video.get("size_bytes"):
@@ -3431,14 +3442,69 @@ def get_single_video_status(video_id: str):
         "videoId": vid,
         "cached_in_db": bool(saved),
         "synced_to_gcs": is_gcs_synced,
-        "video_source": "gcs" if is_gcs_synced else "vimeo",
+        "is_uploading": is_uploading,
+        "upload_status": active_upload.get("status") if active_upload else ("COMPLETED" if is_gcs_synced else "IDLE"),
+        "upload_stage": active_upload.get("stage") if active_upload else None,
+        "video_source": "gcs",
         "blob_name": blob_name,
         "gcs_uri": gcs_uri,
         "view_url": gcs_video.get("view_url") if gcs_video else None,
         "size_mb": size_mb,
         "title": title,
         "course_name": course_name,
-        "tracking_status": tracking_info.get("status") or ("ALREADY_CACHED" if gcs_video else "UNKNOWN")
+        "tracking_status": (active_upload.get("status") if is_uploading else None) or tracking_info.get("status") or ("ALREADY_CACHED" if gcs_video else "UNKNOWN")
+    }
+
+
+@app.post("/api/videos/{video_id}/sync-gcs")
+def trigger_video_gcs_sync(
+    video_id: str,
+    referer: Optional[str] = Query(None, description="Optional LMS referer for protected player configs")
+):
+    """
+    Manually trigger or retry video streaming transfer to Google Cloud Storage.
+    Returns immediately while upload proceeds asynchronously in the background.
+    """
+    vid = str(video_id).strip()
+    saved = db_manager.get_saved_video(vid)
+    if not saved:
+        raise HTTPException(status_code=404, detail=f"Video '{vid}' not found in database.")
+
+    course_title = saved.get("course_name") or "General Lectures"
+    title = saved.get("title", f"Lecture {vid}")
+    cues = saved.get("cues", [])
+
+    # Check if already synced in GCS
+    existing_gcs = gcs_storage_service.find_lecture_video(video_id=vid, course_name=course_title)
+    if existing_gcs and existing_gcs.get("view_url"):
+        return {
+            "status": "ALREADY_CACHED",
+            "message": "Video is already synced to Google Cloud Storage.",
+            "video_id": vid,
+            "view_url": existing_gcs["view_url"],
+            "synced_to_gcs": True,
+            "is_uploading": False
+        }
+
+    is_started = _trigger_background_gcs_upload(
+        video_id=vid,
+        title=title,
+        course_name=course_title,
+        cues=cues,
+        player_config=None,
+        referer=referer
+    )
+
+    with _gcs_upload_lock:
+        active_upload = _active_gcs_uploads.get(vid, {})
+
+    return {
+        "status": "STARTED" if is_started else "IN_PROGRESS",
+        "message": "Cloud Storage video transfer initiated in background." if is_started else "Transfer is already in progress.",
+        "video_id": vid,
+        "is_uploading": True,
+        "upload_stage": active_upload.get("stage", "Initializing Cloud Storage upload..."),
+        "synced_to_gcs": False
     }
 
 

@@ -11,7 +11,8 @@ import {
   Sparkles,
   BookOpen,
   MessageSquare,
-  LocateFixed
+  LocateFixed,
+  AlertTriangle
 } from 'lucide-react';
 import katex from 'katex';
 import { API_BASE } from '../../utils/constants';
@@ -32,6 +33,8 @@ export default function TranscriptSearch({
   displayCues = [],
   searchQuery,
   setSearchQuery,
+  searchAvailable = true,
+  searchError = null,
   handleCueClick,
   activeCueIdx,
   copied = false,
@@ -1146,6 +1149,28 @@ export default function TranscriptSearch({
               </button>
             )}
           </div>
+          {!searchAvailable && (
+            <div
+              role="alert"
+              data-testid="search-unavailable-alert"
+              style={{
+                marginTop: '8px',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: '#ef4444',
+                fontSize: '0.8rem',
+                lineHeight: 1.4,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+              <span>{searchError || 'Transcript search is currently unavailable.'}</span>
+            </div>
+          )}
         </div>
 
         <div
@@ -1189,6 +1214,43 @@ export default function TranscriptSearch({
               }}
             >
               This video was imported, but no transcript or captions are available. Transcript search requires transcript text.
+            </div>
+          ) : !searchAvailable && Boolean(searchQuery) ? (
+            <div
+              role="status"
+              data-testid="search-unavailable-message"
+              style={{
+                margin: '28px auto',
+                maxWidth: '480px',
+                padding: '18px 20px',
+                borderRadius: '10px',
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                textAlign: 'center',
+                color: 'var(--text-primary)'
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: '0.92rem', marginBottom: 6, color: '#ef4444' }}>
+                Transcript Search Unavailable
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                {searchError || 'Transcript search is currently unavailable. Algolia search index is offline or quota exceeded.'}
+              </div>
+            </div>
+          ) : Boolean(searchQuery) && displayCues.length === 0 ? (
+            <div
+              role="status"
+              data-testid="search-no-results"
+              style={{
+                margin: '28px auto',
+                maxWidth: '440px',
+                padding: '16px',
+                textAlign: 'center',
+                color: 'var(--text-secondary)',
+                fontSize: '0.84rem'
+              }}
+            >
+              No transcript matches found for "{searchQuery}".
             </div>
           ) : displayCues.map((cue, idx) => {
             const isActive = activeCueIdx === idx;

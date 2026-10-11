@@ -63,7 +63,7 @@ describe('useLecturePlayer hook functionality', () => {
     vi.useRealTimers();
   });
 
-  it('maps highlightHtml from backend hits and provides fallback highlighting', async () => {
+  it('maps highlightHtml strictly from Algolia hits without fallback highlighting', async () => {
     vi.useFakeTimers();
     const searchHits = [
       {
@@ -81,7 +81,7 @@ describe('useLecturePlayer hook functionality', () => {
 
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ hits: searchHits, count: 2 })
+      json: async () => ({ hits: searchHits, count: 2, available: true })
     });
 
     const activeData = { videoId: 'v100', cues: [] };
@@ -99,9 +99,34 @@ describe('useLecturePlayer hook functionality', () => {
     // Hit 1 should have backend highlightHtml
     expect(result.current.displayCues[0].highlightHtml).toContain('<mark class="algolia-highlight">eigenvectors</mark>');
     expect(result.current.displayCues[0].time).toBe('03:15');
-    // Hit 2 should have frontend fallback highlightHtml
-    expect(result.current.displayCues[1].highlightHtml).toContain("<mark class='algolia-highlight'>eigenvectors</mark>");
+    // Hit 2 has no Algolia highlight tag and no fallback highlighting is generated
+    expect(result.current.displayCues[1].highlightHtml).toBeNull();
     expect(result.current.displayCues[1].time).toBe('05:40');
+
+    vi.useRealTimers();
+  });
+
+  it('sets searchAvailable to false and clears results when search API returns available: false', async () => {
+    vi.useFakeTimers();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ hits: [], count: 0, available: false, error: 'Algolia quota exceeded' })
+    });
+
+    const activeData = { videoId: 'v100', cues: [{ time: '00:00', text: 'Intro' }] };
+    const { result } = renderHook(() => useLecturePlayer(activeData));
+
+    act(() => {
+      result.current.setSearchQuery('eigenvectors');
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(result.current.searchAvailable).toBe(false);
+    expect(result.current.searchError).toBe('Algolia quota exceeded');
+    expect(result.current.displayCues).toEqual([]);
 
     vi.useRealTimers();
   });

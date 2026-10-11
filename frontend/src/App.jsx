@@ -3,7 +3,6 @@ import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
 import { useThemeStore, LMS_THEMES, applyThemeCssVariables, createAppMuiTheme } from './store/themeStore';
-import { cleanSubmissionFallback } from './utils/formatters';
 import { parsePathRoute, getLectureTabFromPath, normalizeCourseSlug } from './utils/routing';
 
 import { useGoogleAuth } from './hooks/useGoogleAuth';
@@ -198,10 +197,10 @@ export default function App() {
     }
   }, [activeTab, activeData?.videoId]);
 
-  // When user is on or switches to Quiz tab, ensure quiz is loaded or fetched
+  // When user is on or switches to Quiz tab, ensure existing quiz is loaded without auto-generating
   useEffect(() => {
     if (activeTab === 'quiz' && activeData?.videoId && !quiz.quizData && !quiz.quizLoading) {
-      quiz.fetchOrGenerateQuiz(false);
+      quiz.fetchExistingQuiz();
     }
   }, [activeTab, activeData?.videoId]);
 
@@ -311,6 +310,8 @@ export default function App() {
             displayCues={player.displayCues}
             searchQuery={player.searchQuery}
             setSearchQuery={player.setSearchQuery}
+            searchAvailable={player.searchAvailable}
+            searchError={player.searchError}
             handleCueClick={player.handleCueClick}
             activeCueIdx={player.activeCueIdx}
             webSearchEnabled={tutor.webSearchEnabled}
@@ -319,13 +320,8 @@ export default function App() {
             deleteChatMessage={tutor.deleteChatMessage}
             chatMessages={tutor.chatMessages}
             setChatMessages={tutor.setChatMessages}
-            viewMode={tutor.viewMode}
-            submissionSummaries={tutor.submissionSummaries}
-            cleanSubmissionFallback={cleanSubmissionFallback}
             copiedPromptId={tutor.copiedPromptId}
             copyUserPrompt={tutor.copyUserPrompt}
-            copiedSubmissionId={tutor.copiedSubmissionId}
-            copySubmissionText={tutor.copySubmissionText}
             copiedResponseId={tutor.copiedResponseId}
             copyBotResponse={tutor.copyBotResponse}
             regenerateResponse={tutor.regenerateResponse}

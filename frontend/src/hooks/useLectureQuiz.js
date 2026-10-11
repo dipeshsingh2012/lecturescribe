@@ -14,16 +14,37 @@ export default function useLectureQuiz(activeData, userEmail = null) {
 
   const lastVidRef = useRef(videoId);
 
-  const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
+  const fetchExistingQuiz = useCallback(async () => {
     if (!videoId) return;
-    const hasTranscript = Array.isArray(activeData?.cues) &&
-      activeData.cues.some((cue) => String(cue?.text || '').trim().length > 0);
-    if (activeData?.transcript_available === false || (Array.isArray(activeData?.cues) && !hasTranscript)) {
-      setQuizData(null);
-      setQuizError(null);
+
+    setQuizLoading(true);
+    setQuizError(null);
+    try {
+      const emailQuery = email ? `?email=${encodeURIComponent(email)}` : '';
+      const res = await fetch(`${API_BASE}/api/lecture/${videoId}/quiz${emailQuery}`);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Server returned ${res.status}`);
+      }
+      const data = await res.json();
+      if (!data.questions?.length) {
+        setQuizData(null);
+        return;
+      }
+      setQuizData(data);
+      if (data.user_answers && Object.keys(data.user_answers).length > 0) {
+        setSelectedAnswers(data.user_answers);
+      }
+    } catch (err) {
+      console.error('Failed to retrieve lecture quiz from database:', err);
+      setQuizError(err.message || 'Unable to load quiz. Please try again.');
+    } finally {
       setQuizLoading(false);
-      return;
     }
+  }, [videoId, email]);
+
+  const generateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
+    if (!videoId) return;
 
     setQuizLoading(true);
     setQuizError(null);
@@ -32,8 +53,8 @@ export default function useLectureQuiz(activeData, userEmail = null) {
       if (numQuestions) {
         payload.num_questions = numQuestions;
       }
-      const emailParam = email ? `?email=${encodeURIComponent(email)}` : '';
-      const res = await fetch(`${API_BASE}/api/lecture/${videoId}/quiz${emailParam}`, {
+      const emailQuery = email ? `?email=${encodeURIComponent(email)}` : '';
+      const res = await fetch(`${API_BASE}/api/lecture/${videoId}/quiz${emailQuery}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -45,6 +66,11 @@ export default function useLectureQuiz(activeData, userEmail = null) {
       }
 
       const data = await res.json();
+      if (!data.questions?.length) {
+        setQuizData(null);
+        return;
+      }
+
       setQuizData(data);
 
       if (regenerate) {
@@ -54,16 +80,15 @@ export default function useLectureQuiz(activeData, userEmail = null) {
           method: 'DELETE'
         }).catch(() => {});
       } else if (data.user_answers && Object.keys(data.user_answers).length > 0) {
-        // Restore user's persisted answers directly from database
         setSelectedAnswers(data.user_answers);
       }
     } catch (err) {
-      console.error('Failed to retrieve lecture quiz from database:', err);
-      setQuizError(err.message || 'Unable to load quiz. Please try again.');
+      console.error('Failed to generate lecture quiz:', err);
+      setQuizError(err.message || 'Unable to generate quiz. Please try again.');
     } finally {
       setQuizLoading(false);
     }
-  }, [activeData, videoId, email]);
+  }, [videoId, email]);
 
   // Reset/switch quiz state when switching to a different lecture
   useEffect(() => {
@@ -174,7 +199,8 @@ export default function useLectureQuiz(activeData, userEmail = null) {
     score,
     totalQuestions,
     answeredCount,
-    fetchOrGenerateQuiz,
+    fetchExistingQuiz,
+    generateQuiz,
     selectAnswer,
     resetQuiz,
     detailedExplanations,

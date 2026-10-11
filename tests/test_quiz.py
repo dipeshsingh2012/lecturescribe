@@ -132,7 +132,6 @@ class TestLectureQuiz(unittest.TestCase):
         response = self.client.post("/api/lecture/no-captions/quiz", json={})
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["quiz_available"])
         self.assertFalse(response.json()["transcript_available"])
         self.assertEqual(response.json()["questions"], [])
         self.assertIn("no transcript or captions", response.json()["message"].lower())
@@ -260,12 +259,29 @@ class TestLectureQuiz(unittest.TestCase):
             "questions": [{"id": 1, "question": "What is $O(n)$?", "options": ["Linear", "Quadratic", "Log", "Const"], "correct_index": 0}]
         }
 
-        # Calling without regenerate should hit DB and NOT call generator
-        response = self.client.post("/api/lecture/algo_101/quiz", json={"regenerate": False})
+        # GET should hit DB and return persisted quiz without calling generator
+        response = self.client.get("/api/lecture/algo_101/quiz")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["video_id"], "algo_101")
         self.assertEqual(data["questions"][0]["question"], "What is $O(n)$?")
+        mock_gen.assert_not_called()
+
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("backend.database.db_manager.get_saved_quiz")
+    @patch("backend.rag_engine.pinecone_rag_engine.generate_lecture_quiz")
+    def test_quiz_get_returns_empty_when_no_persisted(self, mock_gen, mock_get_quiz, mock_get_saved):
+        mock_get_saved.return_value = {
+            "title": "Algorithms",
+            "cues": [{"time": "01:00", "text": "Asymptotic analysis."}]
+        }
+        mock_get_quiz.return_value = None
+
+        # GET should return empty questions immediately without running LLM
+        response = self.client.get("/api/lecture/algo_101/quiz")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["questions"], [])
         mock_gen.assert_not_called()
 
     def test_determine_lecture_quiz_count(self):

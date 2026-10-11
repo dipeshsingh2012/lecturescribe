@@ -177,12 +177,24 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_transcription_jobs_video_created
                             ON lecturescribe_transcription_jobs (video_id, created_at DESC);
 
-                        CREATE TABLE IF NOT EXISTS lecturescribe_summaries (
+                        CREATE TABLE IF NOT EXISTS lecturescribe_lecture_summaries (
                             id SERIAL PRIMARY KEY,
-                            video_id VARCHAR(128) REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
-                            sections_json JSONB NOT NULL,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            video_id VARCHAR(128) NOT NULL REFERENCES lecturescribe_videos(video_id) ON DELETE CASCADE,
+                            user_email VARCHAR(255),
+                            summary_type VARCHAR(64) NOT NULL,
+                            markdown_text TEXT NOT NULL,
+                            submission_text TEXT DEFAULT '',
+                            citations_json JSONB DEFAULT '[]'::jsonb,
+                            sections_json JSONB DEFAULT '[]'::jsonb,
+                            word_count INT DEFAULT 0,
+                            model VARCHAR(128) DEFAULT '',
+                            is_outdated BOOLEAN NOT NULL DEFAULT FALSE,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                         );
+
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_lecture_summaries_key 
+                            ON lecturescribe_lecture_summaries (video_id, COALESCE(user_email, ''), summary_type);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_chat_logs (
                             id SERIAL PRIMARY KEY,
@@ -244,19 +256,19 @@ class RelationalDBManager:
                                 WHEN duplicate_column THEN RAISE NOTICE 'column course_name already exists in lecturescribe_videos.';
                             END;
                             BEGIN
-                                ALTER TABLE lecturescribe_summaries ADD COLUMN is_outdated BOOLEAN NOT NULL DEFAULT FALSE;
-                            EXCEPTION
-                                WHEN duplicate_column THEN RAISE NOTICE 'column is_outdated already exists in lecturescribe_summaries.';
-                            END;
-                            BEGIN
                                 ALTER TABLE lecturescribe_lecture_summaries ADD COLUMN is_outdated BOOLEAN NOT NULL DEFAULT FALSE;
                             EXCEPTION
                                 WHEN duplicate_column THEN RAISE NOTICE 'column is_outdated already exists in lecturescribe_lecture_summaries.';
                             END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_lecture_summaries ADD COLUMN sections_json JSONB DEFAULT '[]'::jsonb;
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column sections_json already exists in lecturescribe_lecture_summaries.';
+                            END;
                         END $$;
 
                         CREATE INDEX IF NOT EXISTS idx_pg_cues_vid ON lecturescribe_transcript_cues(video_id);
-                        CREATE INDEX IF NOT EXISTS idx_pg_sum_vid ON lecturescribe_summaries(video_id);
+                        CREATE INDEX IF NOT EXISTS idx_pg_lecture_sum_vid ON lecturescribe_lecture_summaries(video_id);
                         CREATE INDEX IF NOT EXISTS idx_pg_chat_vid ON lecturescribe_chat_logs(video_id);
                         CREATE INDEX IF NOT EXISTS idx_pg_user_lib_email ON lecturescribe_user_library(user_email);
                         CREATE INDEX IF NOT EXISTS idx_pg_user_lib_course ON lecturescribe_user_library(user_email, course_name);
@@ -939,11 +951,17 @@ class RelationalDBManager:
                             cue_tuples
                         )
 
-                    cursor.execute("DELETE FROM lecturescribe_summaries WHERE video_id = %s;", (video_id,))
+                    # Upsert chapter sections into unified lecturescribe_lecture_summaries
                     cursor.execute("""
-                        INSERT INTO lecturescribe_summaries (video_id, sections_json)
-                        VALUES (%s, %s::jsonb);
-                    """, (video_id, json.dumps(summary_sections)))
+                        INSERT INTO lecturescribe_lecture_summaries (
+                            video_id, user_email, summary_type, markdown_text, submission_text,
+                            sections_json, is_outdated, created_at, updated_at
+                        )
+                        VALUES (%s, %s, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
+                        ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
+                        SET sections_json = EXCLUDED.sections_json,
+                            updated_at = NOW();
+                    """, (video_id, clean_email, json.dumps(summary_sections)))
                     conn.commit()
             print(f"[PostgreSQL] Saved video '{video_id}' with {len(cues)} cues and summary.")
         finally:
@@ -974,15 +992,20 @@ class RelationalDBManager:
         }
 
     def update_summary_sections(self, video_id: str, summary_sections: List[Dict[str, Any]]):
-        """Update or replace summary sections in PostgreSQL and memory cache."""
+        """Update or replace summary sections in unified PostgreSQL table and memory cache."""
         conn = self._get_connection()
         try:
             with conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("DELETE FROM lecturescribe_summaries WHERE video_id = %s;", (video_id,))
                     cursor.execute("""
-                        INSERT INTO lecturescribe_summaries (video_id, sections_json)
-                        VALUES (%s, %s::jsonb);
+                        INSERT INTO lecturescribe_lecture_summaries (
+                            video_id, user_email, summary_type, markdown_text, submission_text,
+                            sections_json, is_outdated, created_at, updated_at
+                        )
+                        VALUES (%s, NULL, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
+                        ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
+                        SET sections_json = EXCLUDED.sections_json,
+                            updated_at = NOW();
                     """, (video_id, json.dumps(summary_sections)))
                     conn.commit()
             print(f"[PostgreSQL] Updated summary for video '{video_id}'.")
@@ -2029,18 +2052,15 @@ class RelationalDBManager:
 
                     cursor.execute("""
                         SELECT sections_json, COALESCE(is_outdated, FALSE) as is_outdated 
-                        FROM lecturescribe_summaries 
-                        WHERE video_id = %s 
-                        ORDER BY id DESC LIMIT 1;
+                        FROM lecturescribe_lecture_summaries 
+                        WHERE video_id = %s AND sections_json IS NOT NULL AND sections_json != '[]'::jsonb
+                        ORDER BY updated_at DESC, id DESC LIMIT 1;
                     """, (video_id,))
                     s_row = cursor.fetchone()
                     summary_sections = []
-                    legacy_is_outdated = False
-                    if s_row:
-                        legacy_is_outdated = bool(s_row.get("is_outdated", False))
-                        if s_row.get("sections_json"):
-                            raw = s_row["sections_json"]
-                            summary_sections = raw if isinstance(raw, list) else json.loads(raw)
+                    if s_row and s_row.get("sections_json"):
+                        raw = s_row["sections_json"]
+                        summary_sections = raw if isinstance(raw, list) else json.loads(raw)
 
                     cursor.execute("""
                         SELECT COALESCE(BOOL_OR(is_outdated), FALSE) as is_outdated
@@ -2048,7 +2068,7 @@ class RelationalDBManager:
                         WHERE video_id = %s;
                     """, (video_id,))
                     ls_row = cursor.fetchone()
-                    summary_is_outdated = bool(legacy_is_outdated or (ls_row and ls_row.get("is_outdated", False)))
+                    summary_is_outdated = bool(ls_row and ls_row.get("is_outdated", False))
 
                     if not summary_sections and cues:
                         from backend.summary_generator import generate_summary_sections
@@ -3508,12 +3528,6 @@ class RelationalDBManager:
                             "seconds": row["seconds"],
                             "text": row["text"]
                         }
-                        # Mark all summaries for this video as outdated
-                        cursor.execute("""
-                            UPDATE lecturescribe_summaries
-                            SET is_outdated = TRUE
-                            WHERE video_id = %s;
-                        """, (video_id,))
                         cursor.execute("""
                             UPDATE lecturescribe_lecture_summaries
                             SET is_outdated = TRUE
@@ -3539,7 +3553,6 @@ class RelationalDBManager:
             conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("UPDATE lecturescribe_summaries SET is_outdated = TRUE WHERE video_id = %s;", (video_id,))
                     cursor.execute("UPDATE lecturescribe_lecture_summaries SET is_outdated = TRUE WHERE video_id = %s;", (video_id,))
                     conn.commit()
         except Exception as e:

@@ -87,7 +87,6 @@ class AlgoliaSearchService:
         self.api_key = os.getenv("ALGOLIA_API_KEY", "")
         self.index_name = os.getenv("ALGOLIA_INDEX_NAME", "lecturescribe_transcripts_v1")
         self.client = None
-        self.local_records: List[Dict[str, Any]] = []
 
         self._init_algolia(_first_init=True)
 
@@ -145,111 +144,223 @@ class AlgoliaSearchService:
             return int(parts[0]) * 60 + int(parts[1].split(".")[0])
         return 0
 
-    def ingest_cues(self, video_id: str, video_title: str, cues: List[Dict[str, str]]) -> int:
-        """Format transcript cues and push to Algolia index."""
-        if getattr(self, "active_video_id", None) == video_id and len(self.local_records) > 0:
-            return len(self.local_records)
-        self.active_video_id = video_id
-        self.local_records.clear()
-        records = []
+    def build_transcript_chunks(
+        self,
+        video_id: str,
+        video_title: str,
+        cues: List[Dict[str, Any]],
+        window_seconds: int = 30
+    ) -> List[Dict[str, Any]]:
+        """
+        Aggregate fine-grained cues into ~30-second windowed chunks.
+        Dramatically reduces Algolia record footprint (80-90% reduction)
+        while preserving search precision, timestamp jumping, and formulas.
+        """
+        if not cues:
+            return []
+
+        chunks: List[Dict[str, Any]] = []
+        current_cues: List[tuple[int, Dict[str, Any], int]] = []
+        chunk_start_sec = 0
+
+        def flush_chunk():
+            nonlocal current_cues, chunk_start_sec
+            if not current_cues:
+                return
+            combined_texts = []
+            cue_indices = []
+            cue_ids = []
+            for item_idx, item_cue, _ in current_cues:
+                txt = (item_cue.get("text") or "").strip()
+                if txt:
+                    combined_texts.append(txt)
+                cue_indices.append(item_idx)
+                cid = item_cue.get("id")
+                if cid is not None:
+                    cue_ids.append(cid)
+
+            chunk_text = " ".join(combined_texts).strip()
+            if chunk_text:
+                start_c = current_cues[0][1]
+                end_c = current_cues[-1][1]
+                start_ts = start_c.get("time") or start_c.get("timestamp") or "00:00"
+                end_ts = end_c.get("time") or end_c.get("timestamp") or start_ts
+                alt_text = generate_dual_representation(chunk_text)
+
+                chunk_idx = len(chunks)
+                chunks.append({
+                    "objectID": f"vimeo-{video_id}-chunk-{chunk_idx}",
+                    "video_id": video_id,
+                    "video_title": video_title,
+                    "timestamp": start_ts,
+                    "seconds": chunk_start_sec,
+                    "end_timestamp": end_ts,
+                    "end_seconds": current_cues[-1][2],
+                    "text": chunk_text,
+                    "alt_text": alt_text,
+                    "cue_index": current_cues[0][0],
+                    "cue_indices": cue_indices,
+                    "cue_ids": cue_ids
+                })
+            current_cues = []
 
         for idx, c in enumerate(cues):
-            ts = c.get("time", "00:00")
-            text = c.get("text", "")
-            alt_text = generate_dual_representation(text)
-            rec = {
-                "objectID": f"vimeo-{video_id}-{idx}",
-                "video_id": video_id,
-                "video_title": video_title,
-                "timestamp": ts,
-                "seconds": self.parse_timestamp_seconds(ts),
-                "text": text,
-                "alt_text": alt_text,
-                "cue_index": idx
-            }
-            records.append(rec)
-            self.local_records.append(rec)
+            ts = c.get("time") or c.get("timestamp") or "00:00"
+            sec_val = c.get("seconds")
+            if sec_val is None:
+                sec = self.parse_timestamp_seconds(ts)
+            else:
+                try:
+                    sec = int(sec_val)
+                except (ValueError, TypeError):
+                    sec = self.parse_timestamp_seconds(ts)
 
-        if self.client and records:
-            try:
-                self.client.save_objects(
-                    index_name=self.index_name,
-                    objects=records
-                )
-                print(f"[Algolia Service] Pushed {len(records)} cues to Algolia Cloud Index '{self.index_name}'.")
-            except Exception as e:
-                print(f"[Algolia Warning] Failed pushing records to Algolia: {e}")
+            # If window elapsed for accumulated cues, flush chunk before adding current cue
+            if current_cues and (sec - chunk_start_sec >= window_seconds):
+                flush_chunk()
 
-        return len(records)
+            if not current_cues:
+                chunk_start_sec = sec
+
+            current_cues.append((idx, c, sec))
+
+        flush_chunk()
+        return chunks
+
+    def ingest_cues(
+        self,
+        video_id: str,
+        video_title: str,
+        cues: List[Dict[str, Any]],
+        updated_cue_id: Optional[Any] = None,
+        window_seconds: int = 30
+    ) -> int:
+        """
+        Push windowed transcript chunks to Algolia Cloud index.
+        If updated_cue_id is provided, only updates the specific affected chunk (1 write operation)
+        instead of re-indexing the entire transcript.
+        """
+        chunks = self.build_transcript_chunks(video_id, video_title, cues, window_seconds=window_seconds)
+        if not chunks:
+            return 0
+
+        if not self.client:
+            return len(chunks)
+
+        # Single-cue / single-chunk partial update optimization
+        if updated_cue_id is not None:
+            target_chunk = None
+            str_target_id = str(updated_cue_id).strip()
+            for ch in chunks:
+                # Match by explicit database cue ID
+                if any(str(cid).strip() == str_target_id for cid in ch.get("cue_ids", [])):
+                    target_chunk = ch
+                    break
+                # Match by index if target_id corresponds to a cue index
+                if str_target_id.isdigit():
+                    int_target_id = int(str_target_id)
+                    if int_target_id in ch.get("cue_indices", []):
+                        target_chunk = ch
+                        break
+
+            if target_chunk:
+                try:
+                    self.client.save_object(
+                        index_name=self.index_name,
+                        body=target_chunk
+                    )
+                    print(f"[Algolia Service] Updated single chunk '{target_chunk['objectID']}' for cue {updated_cue_id} in '{self.index_name}'.")
+                    return 1
+                except Exception as e:
+                    print(f"[Algolia Warning] Failed updating single chunk in Algolia: {e}")
+                    return 0
+
+        # Full batch upsert of windowed chunks
+        try:
+            self.client.save_objects(
+                index_name=self.index_name,
+                objects=chunks
+            )
+            print(f"[Algolia Service] Pushed {len(chunks)} aggregated chunk records (from {len(cues)} cues) to Algolia Cloud Index '{self.index_name}'.")
+        except Exception as e:
+            print(f"[Algolia Warning] Failed pushing records to Algolia: {e}")
+
+        return len(chunks)
+
+    def update_single_cue(
+        self,
+        video_id: str,
+        video_title: str,
+        cues: List[Dict[str, Any]],
+        cue_id: Any,
+        window_seconds: int = 30
+    ) -> bool:
+        """Update only the single Algolia chunk containing the modified cue."""
+        count = self.ingest_cues(video_id, video_title, cues, updated_cue_id=cue_id, window_seconds=window_seconds)
+        return count > 0
+
+    def delete_video_records(self, video_id: str) -> bool:
+        """Delete all existing Algolia records/chunks for a specific video."""
+        if not self.client:
+            return False
+        try:
+            self.client.delete_by(
+                index_name=self.index_name,
+                delete_by_params={"filters": f"video_id:{video_id}"}
+            )
+            print(f"[Algolia Service] Deleted records for video '{video_id}' from '{self.index_name}'.")
+            return True
+        except Exception as e:
+            print(f"[Algolia Warning] Failed deleting records for video '{video_id}': {e}")
+            return False
+
+    def reindex_video(
+        self,
+        video_id: str,
+        video_title: str,
+        cues: List[Dict[str, Any]],
+        window_seconds: int = 30
+    ) -> int:
+        """
+        Safely replace all legacy fine-grained records for a video with consolidated chunks.
+        First purges old records for this video_id, then ingests windowed chunks.
+        """
+        self.delete_video_records(video_id)
+        return self.ingest_cues(video_id, video_title, cues, window_seconds=window_seconds)
+
 
     def search(self, query: str, video_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
-        """Perform instant typo-tolerant search across transcript cues."""
+        """Perform instant keyword search across transcript cues strictly via Algolia Cloud."""
         if not query.strip():
-            return self.local_records[:limit]
+            return []
 
-        # 1. Search using Algolia Cloud Client
-        if self.client:
-            try:
-                search_params = {
-                    "query": query,
-                    "hitsPerPage": limit,
-                    "attributesToHighlight": ["text"],
-                    "highlightPreTag": "<mark class='algolia-highlight'>",
-                    "highlightPostTag": "</mark>"
-                }
-                if video_id:
-                    search_params["filters"] = f"video_id:{video_id}"
+        if not self.client:
+            raise RuntimeError("Algolia search service is uninitialized or API credentials are not configured.")
 
-                res = self.client.search_single_index(
-                    index_name=self.index_name,
-                    search_params=search_params
-                )
-                
-                if res and hasattr(res, "hits") and res.hits:
-                    hits = []
-                    for h in res.hits:
-                        hit_dict = h.to_dict() if hasattr(h, "to_dict") else dict(h)
-                        hits.append(hit_dict)
-                    return hits
-            except Exception as e:
-                print(f"[Algolia Warning] Algolia search error: {e}")
+        search_params = {
+            "query": query,
+            "hitsPerPage": limit,
+            "attributesToHighlight": ["text"],
+            "highlightPreTag": "<mark class='algolia-highlight'>",
+            "highlightPostTag": "</mark>"
+        }
+        if video_id:
+            search_params["filters"] = f"video_id:{video_id}"
 
-        # 2. Dynamic Typo-Tolerant Prefix Search Engine
-        q_words = re.findall(r"\w+", query.lower())
-        results = []
-
-        for rec in self.local_records:
-            if video_id and rec.get("video_id") != video_id:
-                continue
-
-            text_lower = rec["text"].lower()
-            alt_lower = (rec.get("alt_text") or "").lower()
-            combined_lower = f"{text_lower} {alt_lower}"
-            score = 0
-
-            for q_w in q_words:
-                if q_w in text_lower:
-                    score += 3
-                elif q_w in alt_lower:
-                    score += 2
-                if any(w.startswith(q_w) for w in combined_lower.split()):
-                    score += 2
-
-            if score > 0:
-                highlighted_text = rec["text"]
-                for q_w in q_words:
-                    pattern = re.compile(re.escape(q_w), re.IGNORECASE)
-                    highlighted_text = pattern.sub(f"<mark class='algolia-highlight'>\\g<0></mark>", highlighted_text)
-
-                result_rec = dict(rec)
-                result_rec["_highlightResult"] = {
-                    "text": {"value": highlighted_text}
-                }
-                result_rec["score"] = score
-                results.append(result_rec)
-
-        results.sort(key=lambda x: x.get("score", 0), reverse=True)
-        return results[:limit]
+        try:
+            res = self.client.search_single_index(
+                index_name=self.index_name,
+                search_params=search_params
+            )
+            hits = []
+            if res and hasattr(res, "hits") and res.hits:
+                for h in res.hits:
+                    hit_dict = h.to_dict() if hasattr(h, "to_dict") else dict(h)
+                    hits.append(hit_dict)
+            return hits
+        except Exception as e:
+            print(f"[Algolia Warning] Algolia search error: {e}")
+            raise RuntimeError(f"Algolia search failed: {e}")
 
 
 algolia_service = AlgoliaSearchService()

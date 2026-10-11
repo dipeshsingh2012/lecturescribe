@@ -8,7 +8,7 @@ const mockTheme = LMS_THEMES.academic;
 
 describe('LectureQuiz Component', () => {
   it('renders initial empty state with "Generate Quiz" trigger button', () => {
-    const fetchOrGenerateQuiz = vi.fn();
+    const generateQuiz = vi.fn();
     render(
       <LectureQuiz
         quizData={null}
@@ -19,7 +19,7 @@ describe('LectureQuiz Component', () => {
         score={0}
         totalQuestions={0}
         answeredCount={0}
-        fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+        generateQuiz={generateQuiz}
         selectAnswer={vi.fn()}
         resetQuiz={vi.fn()}
         handleCueClick={vi.fn()}
@@ -31,7 +31,7 @@ describe('LectureQuiz Component', () => {
     const btn = screen.getByRole('button', { name: /Generate Quiz/i });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
-    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(false);
+    expect(generateQuiz).toHaveBeenCalledWith(false);
   });
 
   it('renders loading spinner when quizLoading is true', () => {
@@ -53,7 +53,7 @@ describe('LectureQuiz Component', () => {
         quizData={null}
         quizLoading={false}
         quizError={null}
-        fetchOrGenerateQuiz={vi.fn()}
+        generateQuiz={vi.fn()}
         transcriptAvailable={false}
         currentTheme={mockTheme}
       />
@@ -66,7 +66,7 @@ describe('LectureQuiz Component', () => {
   it('renders questions and allows selecting an answer with instant feedback and timestamp button', () => {
     const selectAnswer = vi.fn();
     const handleCueClick = vi.fn();
-    const fetchOrGenerateQuiz = vi.fn();
+    const generateQuiz = vi.fn();
     const resetQuiz = vi.fn();
 
     const mockQuizData = {
@@ -95,7 +95,7 @@ describe('LectureQuiz Component', () => {
         score={0}
         totalQuestions={1}
         answeredCount={0}
-        fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+        generateQuiz={generateQuiz}
         selectAnswer={selectAnswer}
         resetQuiz={resetQuiz}
         handleCueClick={handleCueClick}
@@ -124,7 +124,7 @@ describe('LectureQuiz Component', () => {
         score={1}
         totalQuestions={1}
         answeredCount={1}
-        fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+        generateQuiz={generateQuiz}
         selectAnswer={selectAnswer}
         resetQuiz={resetQuiz}
         handleCueClick={handleCueClick}

@@ -36,6 +36,8 @@ export default function LectureWorkspace({
   displayCues,
   searchQuery,
   setSearchQuery,
+  searchAvailable = true,
+  searchError = null,
   handleCueClick,
   activeCueIdx,
   webSearchEnabled,
@@ -44,13 +46,8 @@ export default function LectureWorkspace({
   deleteChatMessage,
   chatMessages,
   setChatMessages,
-  viewMode,
-  submissionSummaries,
-  cleanSubmissionFallback,
   copiedPromptId,
   copyUserPrompt,
-  copiedSubmissionId,
-  copySubmissionText,
   copiedResponseId,
   copyBotResponse,
   regenerateResponse,
@@ -73,7 +70,7 @@ export default function LectureWorkspace({
   score = quiz?.score,
   totalQuestions = quiz?.totalQuestions,
   answeredCount = quiz?.answeredCount,
-  fetchOrGenerateQuiz = quiz?.fetchOrGenerateQuiz,
+  generateQuiz = quiz?.generateQuiz,
   selectAnswer = quiz?.selectAnswer,
   resetQuiz = quiz?.resetQuiz,
   detailedExplanations = quiz?.detailedExplanations,
@@ -212,6 +209,7 @@ export default function LectureWorkspace({
         {activeTab === 'summary' ? (
           <LectureSummary
             summaryHook={summaryHook}
+            activeData={activeData}
             handleCueClick={handleCueClick}
             handleCrossLectureClick={handleCrossLectureClick}
           />
@@ -220,6 +218,8 @@ export default function LectureWorkspace({
             displayCues={displayCues}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
+            searchAvailable={searchAvailable}
+            searchError={searchError}
             handleCueClick={handleCueClick}
             activeCueIdx={activeCueIdx}
             copied={copied}
@@ -240,7 +240,7 @@ export default function LectureWorkspace({
             score={score}
             totalQuestions={totalQuestions}
             answeredCount={answeredCount}
-            fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+            generateQuiz={generateQuiz}
             selectAnswer={selectAnswer}
             resetQuiz={resetQuiz}
             handleCueClick={handleCueClick}
@@ -272,15 +272,10 @@ export default function LectureWorkspace({
             deleteChatMessage={deleteChatMessage}
             chatMessages={chatMessages}
             setChatMessages={setChatMessages}
-            viewMode={viewMode}
-            submissionSummaries={submissionSummaries}
-            cleanSubmissionFallback={cleanSubmissionFallback}
             handleCueClick={handleCueClick}
             handleCrossLectureClick={handleCrossLectureClick}
             copiedPromptId={copiedPromptId}
             copyUserPrompt={copyUserPrompt}
-            copiedSubmissionId={copiedSubmissionId}
-            copySubmissionText={copySubmissionText}
             copiedResponseId={copiedResponseId}
             copyBotResponse={copyBotResponse}
             regenerateResponse={regenerateResponse}

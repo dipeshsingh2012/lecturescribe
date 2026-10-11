@@ -12,9 +12,6 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={[]}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         chatLoading={false}
         chatInput=""
@@ -40,9 +37,6 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={[]}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         chatLoading={false}
         chatInput=""
@@ -68,14 +62,9 @@ describe('AITutor', () => {
         clearChatHistory={clearChatHistory}
         chatMessages={[]}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         chatLoading={false}
         chatInput=""
         setChatInput={vi.fn()}
@@ -114,14 +103,9 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={messages}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         chatLoading={false}
         chatInput="Tell me more"
         setChatInput={setChatInput}
@@ -162,14 +146,9 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={messages}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={copyBotResponse}
         chatLoading={false}
@@ -200,14 +179,9 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={[]}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={vi.fn()}
         chatLoading={true}
@@ -220,15 +194,16 @@ describe('AITutor', () => {
     );
 
     expect(screen.getByTestId('chat-autopopulating-state')).toBeInTheDocument();
-    expect(screen.getByText(/Preparing Your AI Lecture Guide.../i)).toBeInTheDocument();
-    expect(screen.getByText(/Auto-populating 15-min and full comprehensive summaries/i)).toBeInTheDocument();
+    expect(screen.getByText(/Consulting AI Tutor.../i)).toBeInTheDocument();
+    expect(screen.getByText(/Retrieving transcript grounded explanations./i)).toBeInTheDocument();
   });
 
   it('renders quick prompts in welcome screen and clicking each triggers handleSendMessage', () => {
     const handleSendMessage = vi.fn();
     const prompts = [
-      "Create a summary for a 15 min read",
-      "Generate Full Comprehensive Summary"
+      "What are the core concepts and definitions?",
+      "Explain the main equations and derivations",
+      "Walk through the examples used in this lecture"
     ];
 
     render(
@@ -238,14 +213,9 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={[]}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={vi.fn()}
         chatLoading={false}
@@ -264,11 +234,12 @@ describe('AITutor', () => {
       fireEvent.click(welcomeBtn);
       expect(handleSendMessage).toHaveBeenCalledWith(pText);
     });
-    expect(handleSendMessage).toHaveBeenCalledTimes(2);
+    expect(handleSendMessage).toHaveBeenCalledTimes(3);
   });
 
-  it('renders 4 quick pills above input and disables clicks while chatLoading is true', () => {
+  it('renders quick pills above input and disables clicks while chatLoading is true', () => {
     const handleSendMessage = vi.fn();
+    const targetPrompt = "What are the core concepts and definitions?";
     const { rerender } = render(
       <AITutor
         webSearchEnabled={false}
@@ -276,14 +247,9 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={[{ id: '1', sender: 'user', text: 'Hi' }]}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={vi.fn()}
         chatLoading={false}
@@ -295,11 +261,11 @@ describe('AITutor', () => {
       />
     );
 
-    const pillBtn = screen.getByTitle('Run prompt: "Create a summary for a 15 min read"');
+    const pillBtn = screen.getByTitle(`Run prompt: "${targetPrompt}"`);
     expect(pillBtn).toBeInTheDocument();
     expect(pillBtn).not.toBeDisabled();
     fireEvent.click(pillBtn);
-    expect(handleSendMessage).toHaveBeenCalledWith('Create a summary for a 15 min read');
+    expect(handleSendMessage).toHaveBeenCalledWith(targetPrompt);
 
     // Now re-render with chatLoading={true}
     rerender(
@@ -309,14 +275,9 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={[{ id: '1', sender: 'user', text: 'Hi' }]}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={vi.fn()}
         chatLoading={true}
@@ -347,14 +308,9 @@ describe('AITutor', () => {
         clearChatHistory={vi.fn()}
         chatMessages={messages}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={vi.fn()}
         regenerateResponse={regenerateResponse}
@@ -389,14 +345,9 @@ describe('AITutor', () => {
         deleteChatMessage={deleteChatMessage}
         chatMessages={messages}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={vi.fn()}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={vi.fn()}
         chatLoading={false}
@@ -446,15 +397,10 @@ describe('AITutor', () => {
         deleteChatMessage={vi.fn()}
         chatMessages={messages}
         setChatMessages={vi.fn()}
-        viewMode="learning"
-        submissionSummaries={{}}
-        cleanSubmissionFallback={vi.fn()}
         handleCueClick={handleCueClick}
         handleCrossLectureClick={handleCrossLectureClick}
         copiedPromptId={null}
         copyUserPrompt={vi.fn()}
-        copiedSubmissionId={null}
-        copySubmissionText={vi.fn()}
         copiedResponseId={null}
         copyBotResponse={vi.fn()}
         chatLoading={false}

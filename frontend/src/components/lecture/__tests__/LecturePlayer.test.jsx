@@ -321,5 +321,31 @@ describe('LecturePlayer', () => {
     expect(screen.getByRole('button', { name: /Disable Subtitles/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Fullscreen/i })).toBeInTheDocument();
   });
+
+  it('renders Cloud Storage uploading overlay and badge when is_uploading is true', () => {
+    const activeData = {
+      videoId: '1234751789',
+      title: 'Distributed Systems Lecture 4',
+      course_name: 'CS651',
+      duration: '45:00',
+      is_uploading: true,
+      upload_stage: 'Transferring video stream to Cloud Storage...'
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={{ course_name: 'CS651' }}
+        selectedCourse="CS651"
+        setSelectedCourse={vi.fn()}
+        currentTheme={mockTheme}
+        iframeRef={{ current: document.createElement('video') }}
+      />
+    );
+
+    expect(screen.getByText(/Uploading Video to Cloud Storage/i)).toBeInTheDocument();
+    expect(screen.getByText(/Transferring video stream to Cloud Storage\.\.\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Uploading to Cloud Storage\.\.\./i)).toBeInTheDocument();
+  });
 });
 

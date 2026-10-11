@@ -27,8 +27,11 @@ import {
   Settings,
   Subtitles,
   PictureInPicture,
-  Check
+  Check,
+  CloudUpload,
+  Loader2
 } from 'lucide-react';
+import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
@@ -73,6 +76,125 @@ export default function LecturePlayer({
   const hasTranscript = Array.isArray(activeData.cues) &&
     activeData.cues.some((cue) => String(cue?.text || '').trim());
   const [videoCollapsed, setVideoCollapsed] = useState(false);
+  const [gcsUploadState, setGcsUploadState] = useState({
+    isUploading: Boolean(activeData.is_uploading),
+    stage: activeData.upload_stage || 'Processing video stream...',
+    syncedToGcs: Boolean(activeData.gcs_video_url || activeData.gcsVideoUrl)
+  });
+
+  // Track & poll Cloud Storage video upload status
+  useEffect(() => {
+    const vid = activeData?.videoId;
+    if (!vid) return;
+
+    if (activeData.gcs_video_url || activeData.gcsVideoUrl) {
+      setGcsUploadState({
+        isUploading: false,
+        stage: 'Complete',
+        syncedToGcs: true
+      });
+      return;
+    }
+
+    let isMounted = true;
+    let pollTimer = null;
+
+    const checkGcsStatus = async () => {
+      try {
+        const base = API_BASE || (typeof window !== 'undefined' && window.location?.origin && !window.location.origin.startsWith('null') ? window.location.origin : 'http://localhost');
+        const res = await fetch(`${base}/api/videos/${encodeURIComponent(vid)}/status`).catch(() => null);
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        if (!isMounted) return;
+
+        if (data.synced_to_gcs && data.view_url) {
+          setGcsUploadState({
+            isUploading: false,
+            stage: 'Complete',
+            syncedToGcs: true
+          });
+          if (typeof setActiveData === 'function') {
+            setActiveData(prev => prev ? {
+              ...prev,
+              gcs_video_url: data.view_url,
+              gcsVideoUrl: data.view_url,
+              video_source: 'gcs'
+            } : prev);
+          }
+        } else if (data.is_uploading) {
+          setGcsUploadState({
+            isUploading: true,
+            stage: data.upload_stage || 'Uploading video to Cloud Storage...',
+            syncedToGcs: false
+          });
+          pollTimer = setTimeout(checkGcsStatus, 3500);
+        } else {
+          setGcsUploadState(prev => ({
+            ...prev,
+            isUploading: false,
+            stage: data.upload_stage || prev.stage,
+            syncedToGcs: false
+          }));
+        }
+      } catch (_) {}
+    };
+
+    checkGcsStatus();
+
+    return () => {
+      isMounted = false;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [activeData?.videoId, activeData?.gcs_video_url, activeData?.gcsVideoUrl, setActiveData]);
+
+  const [triggeringSync, setTriggeringSync] = useState(false);
+
+  const handleTriggerGcsSync = async () => {
+    const vid = activeData?.videoId;
+    if (!vid || triggeringSync) return;
+
+    setTriggeringSync(true);
+    setGcsUploadState(prev => ({
+      ...prev,
+      isUploading: true,
+      stage: 'Contacting server to start Cloud Storage sync...'
+    }));
+
+    try {
+      const base = API_BASE || (typeof window !== 'undefined' && window.location?.origin && !window.location.origin.startsWith('null') ? window.location.origin : 'http://localhost');
+      const res = await fetch(`${base}/api/videos/${encodeURIComponent(vid)}/sync-gcs`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.synced_to_gcs && data.view_url) {
+          setGcsUploadState({
+            isUploading: false,
+            stage: 'Complete',
+            syncedToGcs: true
+          });
+          if (typeof setActiveData === 'function') {
+            setActiveData(prev => prev ? {
+              ...prev,
+              gcs_video_url: data.view_url,
+              gcsVideoUrl: data.view_url,
+              video_source: 'gcs'
+            } : prev);
+          }
+        } else {
+          setGcsUploadState(prev => ({
+            ...prev,
+            isUploading: true,
+            stage: data.upload_stage || 'Cloud Storage upload started in background...'
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn('Could not trigger GCS sync:', err);
+    } finally {
+      setTriggeringSync(false);
+    }
+  };
 
   // Custom Player Controls State (Vimeo-level parity)
   const containerRef = useRef(null);
@@ -434,6 +556,72 @@ export default function LecturePlayer({
         }}
       >
         {(() => {
+          const hasGcsStream = Boolean(activeData.gcs_video_url || activeData.gcsVideoUrl);
+          if (gcsUploadState.isUploading && !hasGcsStream) {
+            return (
+              <Box
+                data-testid="gcs-uploading-overlay"
+                sx={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'radial-gradient(circle at center, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%)',
+                  color: '#fff',
+                  p: 3,
+                  textAlign: 'center',
+                  userSelect: 'none'
+                }}
+              >
+                <Box
+                  sx={{
+                    position: 'relative',
+                    width: 72,
+                    height: 72,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    mb: 2
+                  }}
+                >
+                  <CircularProgress
+                    size={72}
+                    thickness={2.5}
+                    sx={{ color: 'var(--theme-primary, #3b82f6)', position: 'absolute' }}
+                  />
+                  <CloudUpload size={32} color="#60a5fa" />
+                </Box>
+                <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1rem', sm: '1.15rem' }, mb: 1 }}>
+                  Uploading Video to Cloud Storage...
+                </Typography>
+                <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.75)', maxWidth: 460, mb: 2, fontSize: '0.85rem' }}>
+                  {gcsUploadState.stage || 'Synchronizing high-definition lecture stream to Google Cloud Storage. Player will auto-load as soon as transfer finishes.'}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '4px 12px',
+                      borderRadius: '16px',
+                      background: 'rgba(59, 130, 246, 0.15)',
+                      border: '1px solid rgba(59, 130, 246, 0.4)',
+                      color: '#93c5fd',
+                      fontSize: '0.78rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
+                    <span>Sync in Progress</span>
+                  </span>
+                </Box>
+              </Box>
+            );
+          }
+
           const streamUrl = activeData.gcs_video_url || activeData.gcsVideoUrl || `/api/videos/${encodeURIComponent(activeData.videoId)}/stream`;
           const effectiveDuration = duration || (typeof activeData.duration === 'number' ? activeData.duration : 0);
           const bufferedPercent = effectiveDuration > 0 ? Math.min(100, (bufferedEnd / effectiveDuration) * 100) : 0;
@@ -467,8 +655,77 @@ export default function LecturePlayer({
                 Your browser does not support the video tag.
               </video>
 
+              {/* Background Cloud Storage Uploading Overlay */}
+              {gcsUploadState.isUploading && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'radial-gradient(circle at center, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%)',
+                    color: '#fff',
+                    p: 3,
+                    textAlign: 'center',
+                    zIndex: 15
+                  }}
+                >
+                  <Box
+                    sx={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: '50%',
+                      bgcolor: 'rgba(59, 130, 246, 0.15)',
+                      border: '2px solid rgba(59, 130, 246, 0.4)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      mb: 2,
+                      position: 'relative'
+                    }}
+                  >
+                    <CloudUpload size={32} color="#60a5fa" />
+                    <CircularProgress
+                      size={72}
+                      thickness={2.5}
+                      sx={{
+                        color: '#3b82f6',
+                        position: 'absolute',
+                        top: -6,
+                        left: -6
+                      }}
+                    />
+                  </Box>
+                  <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5, fontSize: { xs: '0.95rem', sm: '1.1rem' } }}>
+                    Syncing Video to Cloud Storage
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.7)', maxWidth: 440, mb: 2, fontSize: '0.82rem' }}>
+                    {gcsUploadState.stage || 'Transferring lecture stream to Google Cloud Storage for high-speed playback...'}
+                  </Typography>
+                  <Box
+                    sx={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      px: 1.8,
+                      py: 0.5,
+                      borderRadius: 4,
+                      bgcolor: 'rgba(59, 130, 246, 0.2)',
+                      border: '1px solid rgba(59, 130, 246, 0.35)',
+                      fontSize: '0.76rem',
+                      color: '#93c5fd'
+                    }}
+                  >
+                    <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
+                    <span>Upload in progress • Transcripts & AI Tutor are ready below</span>
+                  </Box>
+                </Box>
+              )}
+
               {/* Big Center Play / Pause Indicator on Video Click */}
-              {!isPlaying && (
+              {!isPlaying && !gcsUploadState.isUploading && (
                 <Box
                   component="button"
                   type="button"
@@ -514,8 +771,8 @@ export default function LecturePlayer({
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 0.5,
-                  opacity: showControls || !isPlaying ? 1 : 0,
-                  pointerEvents: showControls || !isPlaying ? 'auto' : 'none',
+                  opacity: (showControls || !isPlaying) && !gcsUploadState.isUploading ? 1 : 0,
+                  pointerEvents: (showControls || !isPlaying) && !gcsUploadState.isUploading ? 'auto' : 'none',
                   transition: 'opacity 0.25s ease',
                   zIndex: 10
                 }}
@@ -835,7 +1092,54 @@ export default function LecturePlayer({
           >
             {videoCollapsed ? 'Show Video' : 'Minimize Video'}
           </Button>
-          {(activeData.gcs_video_url || activeData.gcsVideoUrl) && (
+          {gcsUploadState.isUploading && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 10px',
+                borderRadius: '16px',
+                background: 'rgba(59, 130, 246, 0.12)',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
+                color: '#3b82f6',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                flexShrink: 0
+              }}
+              title="Lecture video is being uploaded to Google Cloud Storage"
+            >
+              <CircularProgress size={10} thickness={5} sx={{ color: '#3b82f6' }} />
+              <span>Uploading to Cloud Storage...</span>
+            </span>
+          )}
+          {!(activeData.gcs_video_url || activeData.gcsVideoUrl) && !gcsUploadState.isUploading && (
+            <button
+              type="button"
+              onClick={handleTriggerGcsSync}
+              disabled={triggeringSync}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 12px',
+                borderRadius: '16px',
+                background: 'rgba(0, 117, 237, 0.1)',
+                border: '1px solid rgba(0, 117, 237, 0.35)',
+                color: 'var(--theme-primary, #0075ed)',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: triggeringSync ? 'not-allowed' : 'pointer',
+                flexShrink: 0,
+                transition: 'all 0.2s ease'
+              }}
+              title="Click to trigger high-definition video transfer to Google Cloud Storage"
+            >
+              <CloudUpload size={13} />
+              <span>{triggeringSync ? 'Starting Sync…' : 'Sync to Cloud Storage'}</span>
+            </button>
+          )}
+          {(activeData.gcs_video_url || activeData.gcsVideoUrl) && !gcsUploadState.isUploading && (
             <span
               style={{
                 display: 'inline-flex',

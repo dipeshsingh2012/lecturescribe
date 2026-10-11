@@ -12,6 +12,7 @@ import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
 export default function LectureSummary({
   summaryHook,
+  activeData,
   handleCueClick,
   handleCrossLectureClick
 }) {
@@ -318,55 +319,149 @@ export default function LectureSummary({
             </p>
           </div>
         ) : !currentSummary ? (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '60px 20px',
-            textAlign: 'center',
-            color: 'var(--text-secondary)'
-          }}>
+          (Array.isArray(activeData?.summarySections) && activeData.summarySections.length > 0) ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{
+                padding: '14px 18px',
+                borderRadius: '8px',
+                background: 'rgba(0, 117, 237, 0.08)',
+                border: '1px solid rgba(0, 117, 237, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px'
+              }}>
+                <div>
+                  <h4 style={{ margin: '0 0 4px', fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    Executive Lecture Overview
+                  </h4>
+                  <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    Structured chapter breakdown generated during video ingestion. You can also generate an exhaustive academic study guide and assignment prose.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => generateSummary('comprehensive', true)}
+                  disabled={generating}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    background: 'var(--theme-primary)',
+                    color: '#ffffff',
+                    border: 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: generating ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <Sparkles size={14} />
+                  <span>Generate Full Study Notes</span>
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {activeData.summarySections.map((sec, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      background: 'var(--card-bg)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '8px',
+                      padding: '16px 20px'
+                    }}
+                  >
+                    <h5 style={{ margin: '0 0 10px', fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: 700 }}>
+                      {sec.title}
+                    </h5>
+                    <ul style={{ margin: 0, paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: '1.6' }}>
+                      {(sec.points || []).map((pt, pIdx) => {
+                        const timeMatch = pt.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.*)/);
+                        if (timeMatch) {
+                          const [, timeStr, body] = timeMatch;
+                          return (
+                            <li key={pIdx} style={{ marginBottom: '6px' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleCueClick && handleCueClick(timeStr)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--theme-primary)',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  marginRight: '6px',
+                                  textDecoration: 'underline'
+                                }}
+                              >
+                                [{timeStr}]
+                              </button>
+                              <span>{body}</span>
+                            </li>
+                          );
+                        }
+                        return <li key={pIdx} style={{ marginBottom: '6px' }}>{pt}</li>;
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
             <div style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '50%',
-              background: 'var(--highlight-bg)',
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              marginBottom: '14px'
+              padding: '60px 20px',
+              textAlign: 'center',
+              color: 'var(--text-secondary)'
             }}>
-              <FileText size={22} color="var(--theme-primary)" />
-            </div>
-            <h4 style={{ margin: '0 0 8px', color: 'var(--text-primary)', fontSize: '1rem', fontWeight: 700 }}>
-              No Summary Generated Yet
-            </h4>
-            <p style={{ margin: '0 0 18px', maxWidth: '420px', fontSize: '0.84rem', lineHeight: '1.5' }}>
-              Click below to generate a comprehensive academic summary and submission-ready prose from this lecture.
-            </p>
-            <button
-              type="button"
-              onClick={() => generateSummary('comprehensive', true)}
-              style={{
-                display: 'inline-flex',
+              <div style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: '50%',
+                background: 'var(--highlight-bg)',
+                display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
-                padding: '9px 18px',
-                borderRadius: '8px',
-                background: 'var(--theme-primary)',
-                color: '#ffffff',
-                border: 'none',
-                fontWeight: 600,
-                fontSize: '0.86rem',
-                cursor: 'pointer',
-                boxShadow: '0 2px 8px rgba(0, 117, 237, 0.25)'
-              }}
-            >
-              <Sparkles size={16} />
-              <span>Generate Full Summary</span>
-            </button>
-          </div>
+                justifyContent: 'center',
+                marginBottom: '14px'
+              }}>
+                <FileText size={22} color="var(--theme-primary)" />
+              </div>
+              <h4 style={{ margin: '0 0 8px', color: 'var(--text-primary)', fontSize: '1rem', fontWeight: 700 }}>
+                No Summary Generated Yet
+              </h4>
+              <p style={{ margin: '0 0 18px', maxWidth: '420px', fontSize: '0.84rem', lineHeight: '1.5' }}>
+                Click below to generate a comprehensive academic summary and submission-ready prose from this lecture.
+              </p>
+              <button
+                type="button"
+                onClick={() => generateSummary('comprehensive', true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '9px 18px',
+                  borderRadius: '8px',
+                  background: 'var(--theme-primary)',
+                  color: '#ffffff',
+                  border: 'none',
+                  fontWeight: 600,
+                  fontSize: '0.86rem',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(0, 117, 237, 0.25)'
+                }}
+              >
+                <Sparkles size={16} />
+                <span>Generate Full Summary</span>
+              </button>
+            </div>
+          )
         ) : viewMode === 'study' ? (
           <div
             className="summary-markdown-container"

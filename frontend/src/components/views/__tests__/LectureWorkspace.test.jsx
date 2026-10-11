@@ -42,13 +42,8 @@ describe('LectureWorkspace', () => {
     clearChatHistory: vi.fn(),
     chatMessages: [],
     setChatMessages: vi.fn(),
-    viewMode: 'learning',
-    submissionSummaries: {},
-    cleanSubmissionFallback: vi.fn(),
     copiedPromptId: null,
     copyUserPrompt: vi.fn(),
-    copiedSubmissionId: null,
-    copySubmissionText: vi.fn(),
     chatLoading: false,
     chatInput: '',
     setChatInput: vi.fn(),
@@ -91,12 +86,12 @@ describe('LectureWorkspace', () => {
   });
 
   it('renders LectureQuiz on the right when activeTab is quiz', () => {
-    const fetchOrGenerateQuiz = vi.fn();
+    const generateQuiz = vi.fn();
     render(
       <LectureWorkspace
         {...baseProps}
         activeTab="quiz"
-        fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+        generateQuiz={generateQuiz}
       />
     );
 

@@ -1,15 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { API_BASE } from '../utils/constants';
-import { cleanSubmissionFallback } from '../utils/formatters';
 
 export function useAITutor(activeData, googleUser) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
-  const [viewMode, setViewMode] = useState('learning'); // 'learning' or 'submission'
-  const [submissionSummaries, setSubmissionSummaries] = useState({});
-  const [copiedSubmissionId, setCopiedSubmissionId] = useState(null);
   const [copiedPromptId, setCopiedPromptId] = useState(null);
   const [copiedResponseId, setCopiedResponseId] = useState(null);
   const [regeneratingId, setRegeneratingId] = useState(null);
@@ -18,66 +14,18 @@ export function useAITutor(activeData, googleUser) {
   const clearedInSessionRef = useRef(false);
   const currentVideoIdRef = useRef(null);
   const inFlightFetchRef = useRef(null);
-  const isAutopopulatingRef = useRef(false);
 
   const activeDataRef = useRef(activeData);
   useEffect(() => {
     activeDataRef.current = activeData;
   }, [activeData]);
 
-  // Auto scroll chat to bottom only when new messages are appended, without hijacking manual user scroll
-  const prevMessageCountRef = useRef(0);
-  useEffect(() => {
-    if (chatMessages.length > prevMessageCountRef.current) {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-    prevMessageCountRef.current = chatMessages.length;
-  }, [chatMessages.length]);
-
-  const autopopulateChat = async (videoId, userEmail = null) => {
-    if (!videoId || isAutopopulatingRef.current) return;
-    isAutopopulatingRef.current = true;
-    setChatLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/chat/autopopulate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_id: videoId,
-          video_title: activeDataRef.current?.title || activeData?.title || '',
-          cues: activeDataRef.current?.cues || activeData?.cues || [],
-          user_email: userEmail
-        })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.messages && data.messages.length > 0) {
-          setChatMessages(data.messages);
-          const summaries = {};
-          data.messages.forEach(m => {
-            if (m.sender === 'bot' && m.submission_text) {
-              summaries[m.id] = m.submission_text;
-            }
-          });
-          setSubmissionSummaries(summaries);
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn("Auto-population error:", err);
-    } finally {
-      isAutopopulatingRef.current = false;
-      setChatLoading(false);
-    }
-  };
-
-  const fetchChatHistory = async (videoId, userEmail = null, allowAutopopulate = true) => {
+  const fetchChatHistory = async (videoId, userEmail = null) => {
     if (!videoId) {
       setChatMessages([]);
-      setSubmissionSummaries({});
       return;
     }
-    // Prevent duplicate in-flight fetch/autopopulate for the same video
+    // Prevent duplicate in-flight fetch for the same video
     if (inFlightFetchRef.current === videoId) {
       return;
     }
@@ -89,24 +37,8 @@ export function useAITutor(activeData, googleUser) {
         const data = await res.json();
         if (data.messages && data.messages.length > 0) {
           setChatMessages(data.messages);
-          const summaries = {};
-          data.messages.forEach(m => {
-            if (m.sender === 'bot' && m.submission_text) {
-              summaries[m.id] = m.submission_text;
-            }
-          });
-          setSubmissionSummaries(summaries);
           return;
         }
-      }
-
-      // If history is empty and not explicitly cleared in this session, auto-populate the 4 standard prompts
-      const availableCues = activeDataRef.current?.cues || activeData?.cues || [];
-      const hasTranscript = Array.isArray(availableCues) &&
-        availableCues.some((cue) => String(cue?.text || '').trim().length > 0);
-      if (allowAutopopulate && hasTranscript && !clearedInSessionRef.current) {
-        await autopopulateChat(videoId, userEmail);
-        return;
       }
     } catch (e) {
       console.warn("Could not fetch chat history:", e);
@@ -115,11 +47,9 @@ export function useAITutor(activeData, googleUser) {
         inFlightFetchRef.current = null;
       }
     }
-    setChatMessages([]);
-    setSubmissionSummaries({});
   };
 
-  // Sync chat messages and submission summaries whenever the active video changes or cues load
+  // Sync chat messages whenever the active video changes
   useEffect(() => {
     if (activeData?.videoId) {
       if (currentVideoIdRef.current !== activeData.videoId) {
@@ -131,7 +61,6 @@ export function useAITutor(activeData, googleUser) {
       }
     } else {
       setChatMessages([]);
-      setSubmissionSummaries({});
     }
   }, [activeData?.videoId, activeData?.cues?.length, googleUser?.email]);
 
@@ -139,7 +68,6 @@ export function useAITutor(activeData, googleUser) {
     if (!activeData?.videoId) return;
     clearedInSessionRef.current = true;
     inFlightFetchRef.current = null;
-    isAutopopulatingRef.current = false;
     try {
       const emailParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
       await fetch(`${API_BASE}/api/chat/history?video_id=${encodeURIComponent(activeData.videoId)}${emailParam}`, {
@@ -149,7 +77,6 @@ export function useAITutor(activeData, googleUser) {
       console.warn("Could not clear chat history on server:", e);
     }
     setChatMessages([]);
-    setSubmissionSummaries({});
   };
 
   const deleteChatMessage = async (messageId) => {
@@ -173,13 +100,6 @@ export function useAITutor(activeData, googleUser) {
       if (baseId && m.id === `${pairedPrefix}${baseId}`) return false;
       return true;
     }));
-
-    setSubmissionSummaries(prev => {
-      const copy = { ...prev };
-      delete copy[messageId];
-      if (baseId) delete copy[`msg_bot_${baseId}`];
-      return copy;
-    });
 
     try {
       const emailParam = googleUser?.email ? `&email=${encodeURIComponent(googleUser.email)}` : '';
@@ -210,7 +130,6 @@ export function useAITutor(activeData, googleUser) {
       fetchChatHistory(targetVid, googleUser?.email, hasTranscript);
     } else {
       setChatMessages([]);
-      setSubmissionSummaries({});
     }
   };
 
@@ -247,16 +166,9 @@ export function useAITutor(activeData, googleUser) {
           text: data.answer,
           citations: data.citations || [],
           model: data.model || 'Groq GPT-OSS 120B',
-          web_sources: data.web_sources || [],
-          submission_text: data.submission_text || null
+          web_sources: data.web_sources || []
         };
         setChatMessages([...newMessages, botMsg]);
-
-        if (data.submission_text) {
-          setSubmissionSummaries(prev => ({ ...prev, [botMsg.id]: data.submission_text }));
-        } else {
-          generateSubmissionVersion(data.answer, activeData.videoId, botMsg.id);
-        }
       } else {
         const errJson = await res.json().catch(() => ({}));
         setChatMessages([...newMessages, {
@@ -273,40 +185,6 @@ export function useAITutor(activeData, googleUser) {
     } finally {
       setChatLoading(false);
     }
-  };
-
-  const generateSubmissionVersion = async (originalText, videoId, messageId) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/rag/query/submission`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          original_text: originalText,
-          video_id: videoId,
-          word_count: 120
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.submission_text) {
-          setSubmissionSummaries(prev => ({ ...prev, [messageId]: data.submission_text }));
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn("Could not generate condensed submission with LLM, falling back to local extractor:", e);
-    }
-
-    const fallback = cleanSubmissionFallback(originalText, 120);
-    setSubmissionSummaries(prev => ({ ...prev, [messageId]: fallback }));
-  };
-
-  const copySubmissionText = (text, messageId) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedSubmissionId(messageId);
-    setTimeout(() => setCopiedSubmissionId(null), 2000);
   };
 
   const copyUserPrompt = (text, messageId) => {
@@ -372,17 +250,10 @@ export function useAITutor(activeData, googleUser) {
           text: data.answer,
           citations: data.citations || [],
           model: data.model || 'Groq GPT-OSS 120B',
-          web_sources: data.web_sources || [],
-          submission_text: data.submission_text || null
+          web_sources: data.web_sources || []
         };
 
         setChatMessages(prev => prev.map((m, i) => (i === botMsgIdx ? updatedMsg : m)));
-
-        if (data.submission_text) {
-          setSubmissionSummaries(prev => ({ ...prev, [updatedMsg.id]: data.submission_text }));
-        } else {
-          generateSubmissionVersion(data.answer, activeData.videoId, updatedMsg.id);
-        }
       }
     } catch (err) {
       console.error("Regenerate response error:", err);
@@ -399,23 +270,16 @@ export function useAITutor(activeData, googleUser) {
     chatLoading,
     webSearchEnabled,
     setWebSearchEnabled,
-    viewMode,
-    setViewMode,
-    submissionSummaries,
-    copiedSubmissionId,
     copiedPromptId,
     copiedResponseId,
     regeneratingId,
     chatEndRef,
     chatInputRef,
     fetchChatHistory,
-    autopopulateChat,
     clearChatHistory,
     deleteChatMessage,
     initChatMessages,
     handleSendMessage,
-    generateSubmissionVersion,
-    copySubmissionText,
     copyUserPrompt,
     copyBotResponse,
     regenerateResponse

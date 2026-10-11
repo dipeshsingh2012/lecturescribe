@@ -150,30 +150,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
     )
     user_prompt = f"Video Title: {title}\n\nTranscript Excerpt:\n{sample_text}\n\nJSON output:"
 
-    # 1. Groq (High speed, reliable)
-    if groq_key:
-        try:
-            from openai import OpenAI
-            client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-            resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=4000,
-                temperature=0.2
-            )
-            raw = resp.choices[0].message.content.strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-            data = json.loads(raw)
-            if isinstance(data, list) and len(data) >= 2:
-                return data
-        except Exception as e:
-            print(f"[LLM Groq Notice] Skipped: {e}")
-
-    # 2. Google Gemini
+    # 1. Google Gemini (Native/OpenAI-compat with gemini-3.8-flash)
     if gemini_key:
         try:
             from openai import OpenAI
@@ -187,7 +164,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
                 max_tokens=4000,
                 temperature=0.2
             )
-            raw = resp.choices[0].message.content.strip()
+            raw = (resp.choices[0].message.content or "").strip()
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
             data = json.loads(raw)
@@ -195,6 +172,30 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
                 return data
         except Exception as e:
             print(f"[LLM Gemini Notice] Skipped: {e}")
+
+    # 2. Groq (High speed, reliable)
+    if groq_key:
+        for groq_model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+            try:
+                from openai import OpenAI
+                client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+                resp = client.chat.completions.create(
+                    model=groq_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    max_tokens=4000,
+                    temperature=0.2
+                )
+                raw = (resp.choices[0].message.content or "").strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw)
+                data = json.loads(raw)
+                if isinstance(data, list) and len(data) >= 2:
+                    return data
+            except Exception as e:
+                print(f"[LLM Groq Notice] ({groq_model}) Skipped: {e}")
 
     # 3. OpenAI / Ollama compatible endpoint
     if openai_key or openai_base:

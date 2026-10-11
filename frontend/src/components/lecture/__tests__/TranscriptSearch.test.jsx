@@ -1156,4 +1156,42 @@ describe('TranscriptSearch', () => {
 
     global.fetch = originalFetch;
   });
+
+  it('renders search unavailable alert banner and message when searchAvailable is false', () => {
+    const cues = [{ time: '00:10', text: 'Introduction to linear algebra.' }];
+    render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery="eigen"
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        transcriptAvailable={true}
+        searchAvailable={false}
+        searchError="Algolia search index is currently offline (quota exceeded)."
+      />
+    );
+
+    expect(screen.getByTestId('search-unavailable-alert')).toBeInTheDocument();
+    expect(screen.getAllByText(/Algolia search index is currently offline \(quota exceeded\)\./i).length).toBe(2);
+    expect(screen.getByTestId('search-unavailable-message')).toBeInTheDocument();
+    expect(screen.getByText(/Transcript Search Unavailable/i)).toBeInTheDocument();
+  });
+
+  it('renders no results message when searchQuery is non-empty and displayCues has 0 items', () => {
+    render(
+      <TranscriptSearch
+        displayCues={[]}
+        searchQuery="nonexistent-query"
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        transcriptAvailable={true}
+        searchAvailable={true}
+      />
+    );
+
+    expect(screen.getByTestId('search-no-results')).toBeInTheDocument();
+    expect(screen.getByText(/No transcript matches found for "nonexistent-query"\./i)).toBeInTheDocument();
+  });
 });

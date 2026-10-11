@@ -34,7 +34,7 @@ export default function LectureQuiz({
   score = 0,
   totalQuestions = 0,
   answeredCount = 0,
-  fetchOrGenerateQuiz,
+  generateQuiz,
   selectAnswer,
   resetQuiz,
   handleCueClick,
@@ -119,7 +119,7 @@ export default function LectureQuiz({
           <Button
             variant="contained"
             size="large"
-            onClick={() => fetchOrGenerateQuiz(false)}
+            onClick={() => generateQuiz && generateQuiz(false)}
             disabled={!transcriptAvailable}
             startIcon={<Sparkles size={18} />}
             sx={{
@@ -241,7 +241,7 @@ export default function LectureQuiz({
           <Button
             variant="contained"
             size="small"
-            onClick={() => fetchOrGenerateQuiz(true)}
+            onClick={() => generateQuiz && generateQuiz(true)}
             disabled={!transcriptAvailable}
             startIcon={<Sparkles size={14} />}
             sx={{

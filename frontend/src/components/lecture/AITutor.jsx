@@ -21,6 +21,12 @@ import {
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
+export const TUTOR_QUICK_PROMPTS = [
+  "What are the core concepts and definitions?",
+  "Explain the main equations and derivations",
+  "Walk through the examples used in this lecture"
+];
+
 export default function AITutor({
   webSearchEnabled,
   setWebSearchEnabled,
@@ -28,15 +34,10 @@ export default function AITutor({
   deleteChatMessage,
   chatMessages = [],
   setChatMessages,
-  viewMode,
-  submissionSummaries = {},
-  cleanSubmissionFallback,
   handleCueClick,
   handleCrossLectureClick,
   copiedPromptId,
   copyUserPrompt,
-  copiedSubmissionId,
-  copySubmissionText,
   copiedResponseId,
   copyBotResponse,
   regenerateResponse,
@@ -288,10 +289,10 @@ export default function AITutor({
                   <RefreshCw className="loading-pulse" size={20} color="var(--theme-primary)" />
                 </div>
                 <h4 style={{ margin: '0 0 6px', color: 'var(--text-primary)', fontSize: '0.96rem', fontWeight: 700 }}>
-                  Preparing Your AI Lecture Guide...
+                  Consulting AI Tutor...
                 </h4>
                 <p style={{ margin: '0', fontSize: '0.82rem', lineHeight: '1.5' }}>
-                  Auto-populating 15-min and full comprehensive summaries.
+                  Retrieving transcript grounded explanations.
                 </p>
               </div>
             ) : (
@@ -315,10 +316,7 @@ export default function AITutor({
                   Ask questions grounded in the lecture transcript, or click a quick prompt below:
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {[
-                    "Create a summary for a 15 min read",
-                    "Generate Full Comprehensive Summary"
-                  ].map((promptText) => (
+                  {TUTOR_QUICK_PROMPTS.map((promptText) => (
                     <button
                       key={promptText}
                       onClick={() => handleSendMessage(promptText)}
@@ -356,28 +354,6 @@ export default function AITutor({
           </div>
         )}
         {chatMessages.map((msg, idx) => {
-          const currentMsgMode = msg.viewOverride || viewMode;
-          const pairedPrompt = (msg.sender === 'bot' && idx > 0 && chatMessages[idx - 1]?.sender === 'user')
-            ? chatMessages[idx - 1].text
-            : '';
-          const submissionText = submissionSummaries[msg.id] || msg.submission_text || cleanSubmissionFallback(msg.text, 120, pairedPrompt);
-          const submissionWords = submissionText ? submissionText.trim().split(/\s+/).filter(Boolean).length : 0;
-          
-          const promptLower = (pairedPrompt || '').toLowerCase();
-          let targetLabel = '100–150';
-          let minTarget = 85;
-          let maxTarget = 155;
-          if (promptLower.includes('comprehensive') || promptLower.includes('full summary')) {
-            targetLabel = '300–450';
-            minTarget = 260;
-            maxTarget = 480;
-          } else if (promptLower.includes('concept') || promptLower.includes('definition')) {
-            targetLabel = '200–350';
-            minTarget = 180;
-            maxTarget = 380;
-          }
-          const isTargetRange = submissionWords >= minTarget && submissionWords <= maxTarget;
-
           return (
             <div
               key={msg.id || idx}
@@ -406,88 +382,11 @@ export default function AITutor({
               )}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '100%', minWidth: 0 }}>
-                {/* Per-Message View Mode Toggle */}
-                {msg.sender === 'bot' && (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '6px',
-                    marginBottom: '2px',
-                    flexWrap: 'wrap'
-                  }}>
-                    <div style={{
-                      display: 'inline-flex',
-                      background: 'var(--panel-bg)',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '6px',
-                      padding: '1px',
-                      gap: '2px'
-                    }}>
-                      <button
-                        onClick={() => {
-                          setChatMessages(prev => prev.map((m, i) => (i === idx || m.id === msg.id) ? { ...m, viewOverride: 'learning' } : m));
-                        }}
-                        style={{
-                          background: currentMsgMode === 'learning' ? 'var(--theme-primary)' : 'transparent',
-                          color: currentMsgMode === 'learning' ? '#ffffff' : 'var(--text-secondary)',
-                          border: 'none',
-                          padding: '3px 8px',
-                          borderRadius: '5px',
-                          fontSize: '0.72rem',
-                          fontWeight: currentMsgMode === 'learning' ? 700 : 500,
-                          cursor: 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          transition: 'all 0.15s ease'
-                        }}
-                      >
-                        <BookOpen size={11} /> Learning View
-                      </button>
-                      <button
-                        onClick={() => {
-                          setChatMessages(prev => prev.map((m, i) => (i === idx || m.id === msg.id) ? { ...m, viewOverride: 'submission' } : m));
-                        }}
-                        style={{
-                          background: currentMsgMode === 'submission' ? 'var(--theme-primary)' : 'transparent',
-                          color: currentMsgMode === 'submission' ? '#ffffff' : 'var(--text-secondary)',
-                          border: 'none',
-                          padding: '3px 8px',
-                          borderRadius: '5px',
-                          fontSize: '0.72rem',
-                          fontWeight: currentMsgMode === 'submission' ? 700 : 500,
-                          cursor: 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          transition: 'all 0.15s ease'
-                        }}
-                      >
-                        <FileText size={11} /> Submission View
-                      </button>
-                    </div>
-
-                    {currentMsgMode === 'submission' && (
-                      <span style={{
-                        fontSize: '0.7rem',
-                        color: isTargetRange ? '#10b981' : 'var(--text-secondary)',
-                        fontWeight: 600,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '3px'
-                      }}>
-                        {isTargetRange ? '✓' : '•'} {submissionWords} words (Target: {targetLabel})
-                      </span>
-                    )}
-                  </div>
-                )}
-
                 {/* Main Message Bubble */}
                 <div style={{
                   background: msg.sender === 'user' ? 'var(--theme-primary)' : 'var(--card-bg)',
                   color: msg.sender === 'user' ? '#ffffff' : 'var(--text-primary)',
-                  padding: currentMsgMode === 'submission' && msg.sender === 'bot' ? '14px 16px' : '10px 14px',
+                  padding: '10px 14px',
                   borderRadius: '12px',
                   borderTopLeftRadius: msg.sender === 'bot' ? '2px' : '12px',
                   borderTopRightRadius: msg.sender === 'user' ? '2px' : '12px',
@@ -498,53 +397,18 @@ export default function AITutor({
                   minWidth: 0,
                   maxWidth: '100%',
                   overflowX: 'auto',
-                  border: msg.sender === 'bot' ? (currentMsgMode === 'submission' ? '1px solid rgba(0, 117, 237, 0.25)' : '1px solid var(--border-color)') : 'none',
-                  boxShadow: currentMsgMode === 'submission' && msg.sender === 'bot' ? '0 2px 8px rgba(0, 117, 237, 0.08)' : '0 1px 3px rgba(0,0,0,0.06)'
+                  border: msg.sender === 'bot' ? '1px solid var(--border-color)' : 'none',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
                 }}>
                   {msg.sender === 'user' ? (
                     <div style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</div>
-                  ) : currentMsgMode === 'learning' ? (
+                  ) : (
                     <MarkdownWithTimestamps
                       content={msg.text}
                       citations={msg.citations}
                       onCueClick={handleCueClick}
                       onCrossLectureClick={handleCrossLectureClick}
                     />
-                  ) : (
-                    /* Submission Mode View: Clean human academic prose */
-                    <div>
-                      <div style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.04em',
-                        color: 'var(--theme-primary)',
-                        marginBottom: '8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px'
-                      }}>
-                        <FileText size={12} />
-                        <span>Academic Assignment Submission (Graduate Tone)</span>
-                      </div>
-                      <div style={{
-                        fontSize: '0.88rem',
-                        lineHeight: '1.65',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'inherit'
-                      }}>
-                        {submissionText ? (
-                          <MarkdownWithTimestamps
-                            content={submissionText}
-                            citations={msg.citations}
-                            onCueClick={handleCueClick}
-                            onCrossLectureClick={handleCrossLectureClick}
-                          />
-                        ) : (
-                          'Generating condensed submission...'
-                        )}
-                      </div>
-                    </div>
                   )}
                 </div>
 
@@ -645,56 +509,8 @@ export default function AITutor({
                   </div>
                 )}
 
-                {/* Submission Mode Footer Bar: Word Count & 1-Click Copy */}
-                {msg.sender === 'bot' && currentMsgMode === 'submission' && (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '6px 12px',
-                    background: 'var(--panel-bg)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    fontSize: '0.75rem',
-                    gap: '8px',
-                    flexWrap: 'wrap'
-                  }}>
-                    <span style={{
-                      color: isTargetRange ? '#10b981' : 'var(--text-secondary)',
-                      fontWeight: 600,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}>
-                      {isTargetRange ? <CheckCircle2 size={12} color="#10b981" /> : <Clock size={12} />}
-                      {submissionWords} words • Target: 100–150 words
-                    </span>
-
-                    <button
-                      onClick={() => copySubmissionText(submissionText, msg.id)}
-                      style={{
-                        background: copiedSubmissionId === msg.id ? '#10b981' : 'var(--highlight-bg)',
-                        color: copiedSubmissionId === msg.id ? '#ffffff' : 'var(--theme-primary)',
-                        border: '1px solid ' + (copiedSubmissionId === msg.id ? '#10b981' : 'rgba(0, 117, 237, 0.3)'),
-                        padding: '5px 12px',
-                        borderRadius: '6px',
-                        fontSize: '0.74rem',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        transition: 'all 0.15s ease'
-                      }}
-                    >
-                      {copiedSubmissionId === msg.id ? <Check size={13} /> : <Copy size={13} />}
-                      <span>{copiedSubmissionId === msg.id ? 'Copied to Clipboard!' : 'Copy for Submission'}</span>
-                    </button>
-                  </div>
-                )}
-
-                {/* Lecture Transcript Citations Pill Bar (Shown in Learning Mode) */}
-                {msg.sender === 'bot' && currentMsgMode === 'learning' && msg.citations && msg.citations.length > 0 && (
+                {/* Lecture Transcript Citations Pill Bar */}
+                {msg.sender === 'bot' && msg.citations && msg.citations.length > 0 && (
                   <div style={{
                     display: 'flex',
                     flexDirection: 'column',
@@ -745,7 +561,7 @@ export default function AITutor({
                   </div>
                 )}
 
-                {/* AI Response Action Bar: 1-Click Copy (ChatGPT / Gemini style) & Badges */}
+                {/* AI Response Action Bar: 1-Click Copy & Badges */}
                 {msg.sender === 'bot' && (
                   <div style={{
                     display: 'flex',
@@ -758,7 +574,7 @@ export default function AITutor({
                     marginTop: '2px'
                   }}>
                     <button
-                      onClick={() => handleCopyResponse(currentMsgMode === 'submission' ? (submissionText || msg.text) : msg.text, msg.id || idx)}
+                      onClick={() => handleCopyResponse(msg.text, msg.id || idx)}
                       title="Copy response to clipboard"
                       aria-label="Copy AI response"
                       style={{
@@ -866,7 +682,7 @@ export default function AITutor({
                       <span>Delete</span>
                     </button>
 
-                    {currentMsgMode === 'learning' && msg.model && (
+                    {msg.model && (
                       <span style={{
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -880,7 +696,7 @@ export default function AITutor({
                         <Zap size={10} /> {msg.model}
                       </span>
                     )}
-                    {currentMsgMode === 'learning' && msg.web_sources && msg.web_sources.length > 0 && (
+                    {msg.web_sources && msg.web_sources.length > 0 && (
                       <span style={{
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -1044,10 +860,7 @@ export default function AITutor({
           scrollbarWidth: 'none',
           msOverflowStyle: 'none'
         }}>
-          {[
-            "Create a summary for a 15 min read",
-            "Generate Full Comprehensive Summary"
-          ].map((pText) => (
+          {TUTOR_QUICK_PROMPTS.map((pText) => (
             <button
               key={pText}
               onClick={() => !chatLoading && handleSendMessage(pText)}

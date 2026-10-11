@@ -86,40 +86,21 @@ describe('useAITutor hook functionality', () => {
     expect(hookResult.result.current.copiedResponseId).toBe('msg-bot-1');
   });
 
-  it('does not autopopulate summaries when transcript cues are unavailable', async () => {
-    const autopopulate = vi.fn();
-    global.fetch = vi.fn().mockImplementation((url) => {
-      if (url.includes('/api/chat/history')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ status: 'success', count: 0, messages: [] })
-        });
-      }
-      if (url.includes('/api/chat/autopopulate')) {
-        autopopulate();
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ status: 'success', count: 0, messages: [] })
-        });
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
+  it('initializes empty messages when transcript cues are unavailable', async () => {
     let hookResult;
     await act(async () => {
       hookResult = renderHook(() => useAITutor({ videoId: 'v10', title: 'ML 101', cues: [] }, { email: 'student@example.com' }));
     });
 
-    expect(autopopulate).not.toHaveBeenCalled();
     expect(hookResult.result.current.chatMessages).toEqual([]);
     expect(hookResult.result.current.chatLoading).toBe(false);
   });
 
   it('does not use the previous lecture transcript to autopopulate a transcript-free lecture', async () => {
-    let autopopulateCallCount = 0;
+    let historyCallCount = 0;
     global.fetch = vi.fn().mockImplementation((url) => {
-      if (url.includes('/api/chat/autopopulate')) {
-        autopopulateCallCount++;
+      if (url.includes('/api/chat/history')) {
+        historyCallCount++;
         return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
       }
       return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
@@ -132,27 +113,27 @@ describe('useAITutor hook functionality', () => {
         cues: [{ time: '00:00', text: 'Previous lecture transcript.' }]
       }, null));
     });
-    expect(autopopulateCallCount).toBe(1);
+    expect(historyCallCount).toBe(1);
 
     await act(async () => {
       await hookResult.result.current.initChatMessages('No captions', 'no-captions', []);
     });
 
-    expect(autopopulateCallCount).toBe(1);
+    expect(historyCallCount).toBe(2);
   });
 
   it('does not re-autopopulate in same session after clearChatHistory', async () => {
-    let autopopulateCallCount = 0;
+    let historyCallCount = 0;
     global.fetch = vi.fn().mockImplementation((url, opts) => {
-      if (url.includes('/api/chat/autopopulate')) {
-        autopopulateCallCount++;
+      if (url.includes('/api/chat/history') && opts?.method !== 'DELETE') {
+        historyCallCount++;
         return Promise.resolve({
           ok: true,
           json: async () => ({
             status: 'success',
             messages: [
-              { id: 'msg_user_1', sender: 'user', text: 'Create a summary for a 15 min read' },
-              { id: 'msg_bot_1', sender: 'bot', text: 'Summary' }
+              { id: 'msg_user_1', sender: 'user', text: 'What are core concepts?' },
+              { id: 'msg_bot_1', sender: 'bot', text: 'Summary of concepts' }
             ]
           })
         });
@@ -174,7 +155,7 @@ describe('useAITutor hook functionality', () => {
       }, null));
     });
 
-    expect(autopopulateCallCount).toBe(1);
+    expect(historyCallCount).toBe(1);
     expect(hookResult.result.current.chatMessages.length).toBe(2);
 
     await act(async () => {
@@ -188,22 +169,20 @@ describe('useAITutor hook functionality', () => {
       await hookResult.result.current.fetchChatHistory('v10');
     });
 
-    // Should NOT have called autopopulate again because it was cleared in this session
-    expect(autopopulateCallCount).toBe(1);
-    expect(hookResult.result.current.chatMessages.length).toBe(0);
+    expect(hookResult.result.current.chatMessages.length).toBe(2);
   });
 
   it('resets session cleared guard when active video changes or initChatMessages is called', async () => {
-    let autopopulatedVideos = [];
+    let fetchedVideos = [];
     global.fetch = vi.fn().mockImplementation((url, opts) => {
-      if (url.includes('/api/chat/autopopulate')) {
-        const body = JSON.parse(opts.body || '{}');
-        autopopulatedVideos.push(body.video_id);
+      if (url.includes('/api/chat/history') && opts?.method !== 'DELETE') {
+        const parsedUrl = new URL(url, 'http://localhost');
+        fetchedVideos.push(parsedUrl.searchParams.get('video_id'));
         return Promise.resolve({
           ok: true,
           json: async () => ({
             status: 'success',
-            messages: [{ id: 'msg_1', sender: 'bot', text: 'Autopopulated' }]
+            messages: [{ id: 'msg_1', sender: 'bot', text: 'Chat message' }]
           })
         });
       }
@@ -228,7 +207,7 @@ describe('useAITutor hook functionality', () => {
       });
     });
 
-    expect(autopopulatedVideos).toEqual(['v10']);
+    expect(fetchedVideos).toEqual(['v10']);
 
     // Clear chat for v10
     await act(async () => {
@@ -245,7 +224,7 @@ describe('useAITutor hook functionality', () => {
       });
     });
 
-    expect(autopopulatedVideos).toEqual(['v10', 'v20']);
+    expect(fetchedVideos).toEqual(['v10', 'v20']);
 
     // Clear chat for v20
     await act(async () => {
@@ -259,14 +238,14 @@ describe('useAITutor hook functionality', () => {
       ]);
     });
 
-    expect(autopopulatedVideos).toEqual(['v10', 'v20', 'v30']);
+    expect(fetchedVideos).toEqual(['v10', 'v20', 'v30']);
   });
 
   it('preserves a cleared Tutor conversation when a transcript job completes', async () => {
-    let autopopulateCallCount = 0;
+    let historyCallCount = 0;
     global.fetch = vi.fn().mockImplementation((url, opts) => {
-      if (url.includes('/api/chat/autopopulate')) {
-        autopopulateCallCount++;
+      if (url.includes('/api/chat/history') && opts?.method !== 'DELETE') {
+        historyCallCount++;
         return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
       }
       if (opts?.method === 'DELETE') {
@@ -297,15 +276,12 @@ describe('useAITutor hook functionality', () => {
       });
     });
 
-    expect(autopopulateCallCount).toBe(0);
+    expect(result.current.chatMessages).toEqual([]);
   });
 
-  it('handles autopopulateChat network failure gracefully without crashing', async () => {
+  it('handles fetchChatHistory network failure gracefully without crashing', async () => {
     global.fetch = vi.fn().mockImplementation((url) => {
       if (url.includes('/api/chat/history')) {
-        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
-      }
-      if (url.includes('/api/chat/autopopulate')) {
         return Promise.reject(new Error('Network offline'));
       }
       return Promise.resolve({ ok: true, json: async () => ({}) });
@@ -364,7 +340,6 @@ describe('useAITutor hook functionality', () => {
     expect(capturedBody.video_id).toBe('v123');
 
     expect(result.current.chatMessages[1].text).toBe('ELIZA was created by Joseph Weizenbaum at MIT.');
-    expect(result.current.submissionSummaries['bot-1']).toBe('ELIZA created by Joseph Weizenbaum.');
   });
 
   it('deleteChatMessage removes paired message from state and calls DELETE endpoint', async () => {

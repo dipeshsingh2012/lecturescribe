@@ -68,6 +68,8 @@ function createHtml5VideoAdapter(videoEl) {
 export function useLecturePlayer(activeData, userEmail = null) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [searchAvailable, setSearchAvailable] = useState(true);
+  const [searchError, setSearchError] = useState(null);
   const [activeCueIdx, setActiveCueIdx] = useState(0);
   const [copied, setCopied] = useState(false);
 
@@ -79,10 +81,12 @@ export function useLecturePlayer(activeData, userEmail = null) {
   const durationRef = useRef(0);
   const saveDebounceTimerRef = useRef(null);
 
-  // Instant Search Handler
+  // Instant Search Handler strictly via Algolia Cloud
   useEffect(() => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
+      setSearchError(null);
+      setSearchAvailable(true);
       return;
     }
 
@@ -95,10 +99,25 @@ export function useLecturePlayer(activeData, userEmail = null) {
         });
         if (res.ok) {
           const data = await res.json();
-          setSearchResults(data.hits || data.results || []);
+          if (data.available === false) {
+            setSearchAvailable(false);
+            setSearchError(data.error || 'Transcript search is currently unavailable.');
+            setSearchResults([]);
+          } else {
+            setSearchAvailable(true);
+            setSearchError(null);
+            setSearchResults(data.hits || data.results || []);
+          }
+        } else {
+          setSearchAvailable(false);
+          setSearchError('Transcript search is currently unavailable.');
+          setSearchResults([]);
         }
       } catch (err) {
         console.error("Search API Error:", err);
+        setSearchAvailable(false);
+        setSearchError('Transcript search is currently unavailable.');
+        setSearchResults([]);
       }
     }, 250);
 
@@ -350,22 +369,12 @@ export function useLecturePlayer(activeData, userEmail = null) {
     if (searchQuery.trim()) {
       if (searchResults.length > 0) {
         return searchResults.map(h => {
-          let highlightHtml =
+          const highlightHtml =
             h._highlightResult?.text?.value ||
             h._highlight_result?.text?.value ||
             h.highlightResult?.text?.value ||
             h.highlightHtml ||
             null;
-
-          // Fallback: If backend didn't supply highlight tags, highlight search terms in text directly
-          if (!highlightHtml || !/<mark|<em/i.test(highlightHtml)) {
-            const rawText = h.text || '';
-            const words = searchQuery.trim().split(/\s+/).filter(Boolean);
-            if (words.length > 0) {
-              const pattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-              highlightHtml = rawText.replace(new RegExp(`(${pattern})`, 'gi'), "<mark class='algolia-highlight'>$1</mark>");
-            }
-          }
 
           return {
             time: h.timestamp || h.time || '00:00',
@@ -391,6 +400,8 @@ export function useLecturePlayer(activeData, userEmail = null) {
     searchQuery,
     setSearchQuery,
     searchResults,
+    searchAvailable,
+    searchError,
     activeCueIdx: effectiveActiveCueIdx,
     copied,
     iframeRef,

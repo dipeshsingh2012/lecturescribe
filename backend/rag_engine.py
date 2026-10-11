@@ -1538,6 +1538,7 @@ class Llama3PineconeRAGStore:
             "STRICT NON-HALLUCINATION & FACTUAL ACCURACY PROTOCOL:\n"
             "- Strictly ground all explanations, definitions, mathematical models, and examples in the provided lecture transcript.\n"
             "- NEVER invent or hallucinate topics, formulas, external theorems, or statements that the professor did not discuss in this lecture.\n"
+            "- AVOID CANONICAL TEXTBOOK BIAS: Do NOT substitute standard ML textbook conventions (such as assuming validation loss for early stopping, normal equation matrix inversion costs, or coding labs) if the professor did not state them. Faithfully record the professor's exact examples (e.g., predicting review votes from word count), derivations (e.g., canceled constants), student Q&A digressions (e.g., weight initialization, LLM embeddings), and analogies (e.g., car-and-destination).\n"
             "- Ground every major statement, claim, and concept with its exact inline `[MM:SS]` timestamp from the transcript.\n\n"
             "MATHEMATICAL & SCIENTIFIC NOTATION:\n"
             "- Format all mathematical notation, variables, and formulas using standard LaTeX: single dollar signs for inline math (e.g., `$d_{i,j}$`, `$\\mathbb{R}^2$`) and double dollar signs for block equations (`$$...$$`).\n"

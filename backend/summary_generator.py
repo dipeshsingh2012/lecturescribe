@@ -127,16 +127,25 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
     if not sentences:
         return None
 
-    sample_size = min(len(sentences), 50)
-    step = max(1, len(sentences) // sample_size)
-    sampled = sentences[::step][:sample_size]
+    # Support rich chronological coverage: include up to 450 sentences without aggressive decimation
+    max_sentences = 450
+    if len(sentences) <= max_sentences:
+        sampled = sentences
+    else:
+        step = max(1, len(sentences) // max_sentences)
+        sampled = sentences[::step][:max_sentences]
     sample_text = "\n".join([f"[{s['time']}] {s['text']}" for s in sampled])
 
     system_prompt = (
         "You are LectureScribe AI. Summarize the provided video lecture transcript into 4 to 6 structured sections. "
         "Every section must have an informative, topical title (including the approximate timestamp range like [00:00 - 15:30]) "
-        "and 3-5 clear, complete bullet points explaining what was taught. "
-        "Each bullet point MUST start with its exact video timestamp in brackets, e.g., '[12:34] Sentence here.' "
+        "and 3-5 clear, complete bullet points explaining what was taught.\n\n"
+        "STRICT GROUNDING & ANTI-HALLUCINATION RULES:\n"
+        "1. GROUNDING: Rely strictly on what the speaker and students say in the transcript. Do NOT import outside textbook defaults, standard machine learning assumptions, or unmentioned techniques (e.g., do NOT assume validation sets, normal equation matrix inversion costs, or student coding labs unless explicitly stated in the transcript).\n"
+        "2. SPEAKER NOTATION & DERIVATIONS: Faithfully preserve the speaker's exact mathematical simplifications and constants (e.g., if a factor of 2 cancels out in the derivative, reflect that exact form).\n"
+        "3. EXAMPLES & ANALOGIES: Use the speaker's exact toy examples (e.g., predicting review votes from word count) and analogies (e.g., car-and-destination) rather than generic textbook problems.\n"
+        "4. STUDENT Q&A & DIGRESSIONS: Include important student questions, clarifications, and conceptual digressions discussed (e.g., weight initialization across linear models vs deep networks vs LLMs, momentum decay intuition).\n"
+        "5. TIMESTAMPS: Each bullet point MUST start with its exact video timestamp in brackets, e.g., '[12:34] Sentence here.'\n\n"
         "Respond ONLY with a valid JSON array of objects with keys 'title' and 'points'. Do not include markdown codeblocks or extra text."
     )
     user_prompt = f"Video Title: {title}\n\nTranscript Excerpt:\n{sample_text}\n\nJSON output:"

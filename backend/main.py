@@ -1729,8 +1729,22 @@ def process_chat_message(
 
     reply = rag_res.get("answer", "")
     citations = rag_res.get("citations", [])
+
+    # Auto-generate academic submission version
     sub_text = ""
     sub_word_count = 0
+    if reply and reply.strip():
+        try:
+            sub_res = pinecone_rag_engine.generate_submission_version(
+                original_text=reply,
+                video_id=vid,
+                word_count=120,
+                query=user_prompt
+            )
+            sub_text = sub_res.get("submission_text", "")
+            sub_word_count = sub_res.get("word_count", 0)
+        except Exception as e:
+            print(f"⚠️ [Submission Gen Notice]: {e}")
 
     # Save to Chat History DB
     if save_to_db:

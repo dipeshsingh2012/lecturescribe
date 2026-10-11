@@ -2,7 +2,7 @@
 Pinecone + Multi-Provider Tool-Calling RAG Engine for LectureScribe
 -------------------------------------------------------------------
 Strictly loads model & database parameters from environment variables.
-Consolidated on Groq (openai/gpt-oss-120b, openai/gpt-oss-20b) and Gemini (gemini-3.8-flash).
+# Consolidated on Groq (llama-3.3-70b-versatile, llama-3.1-8b-instant) and Gemini (gemini-3.8-flash).
 """
 from __future__ import annotations
 
@@ -798,20 +798,20 @@ class Llama3PineconeRAGStore:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "openai/gpt-oss-120b",
-                "display": "Groq GPT-OSS 120B"
+                "model_name": "llama-3.3-70b-versatile",
+                "display": "Groq Llama 3.3 70B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "openai/gpt-oss-20b",
-                "display": "Groq GPT-OSS 20B"
+                "model_name": "llama-3.1-8b-instant",
+                "display": "Groq Llama 3.1 8B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "qwen/qwen3.8-27b",
-                "display": "Groq Qwen 3.8 27B"
+                "model_name": "mixtral-8x7b-32768",
+                "display": "Groq Mixtral 8x7B"
             })
         if gemini_key:
             candidates.append({
@@ -1091,20 +1091,20 @@ class Llama3PineconeRAGStore:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "openai/gpt-oss-120b",
-                "display": "Groq GPT-OSS 120B"
+                "model_name": "llama-3.3-70b-versatile",
+                "display": "Groq Llama 3.3 70B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "openai/gpt-oss-20b",
-                "display": "Groq GPT-OSS 20B"
+                "model_name": "llama-3.1-8b-instant",
+                "display": "Groq Llama 3.1 8B"
             })
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
                 "auth_header": f"Bearer {groq_key}",
-                "model_name": "qwen/qwen3.8-27b",
-                "display": "Groq Qwen 3.8 27B"
+                "model_name": "mixtral-8x7b-32768",
+                "display": "Groq Mixtral 8x7B"
             })
         if gemini_key:
             candidates.append({
@@ -1322,6 +1322,12 @@ class Llama3PineconeRAGStore:
         # Fix spacing before punctuation caused by removing timestamps or symbols
         cleaned = re.sub(r"\s+([.,!?;:])", r"\1", cleaned)
 
+        # Fallback strip of any stray LaTeX delimiters or unwrap \\text{}
+        cleaned = re.sub(r"\${1,2}(.*?)\${1,2}", r"\1", cleaned)
+        cleaned = re.sub(r"\\(?:text|mathrm|mathbf|mathbb|mathit)\{([^}]+)\}", r"\1", cleaned)
+        cleaned = re.sub(r"\\\((.*?)\\\)", r"\1", cleaned)
+        cleaned = re.sub(r"\\\[(.*?)\\\]", r"\1", cleaned)
+
         if preserve_paragraphs:
             lines = [re.sub(r"[ \t]+", " ", line).strip() for line in cleaned.splitlines()]
             cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
@@ -1362,13 +1368,14 @@ class Llama3PineconeRAGStore:
                 "2. NO AI FLUFF OR DRAMATIC ADJECTIVES: Never use words like 'lively', 'vibrant', 'fascinating', 'delve', 'pivotal', 'crucial', 'cornerstone', 'testament', or 'nuanced'. Use matter-of-fact phrasing ('In the Q&A', 'We discussed', 'A student asked').\n"
                 "3. NO TITLES OR METADATA: Do NOT write 'Study Guide:', 'Submission Report:', 'Assignment:', 'Lecture:', or any document header. Start immediately with the first sentence of the narrative.\n"
                 "4. NO OUTLINES, SECTION HEADERS, OR BULLETS: Strictly continuous paragraphs separated by a single blank line. Absolutely no markdown hashes ('#', '##'), section numbers ('1. Introduction...'), bullet points, or tables.\n"
-                "5. CLEAN ASCII MATH: Express equations as clean code-style plain text (e.g., Y = M*X + C, MSE = (1/N) * sum((Y_i - Yhat_i)^2)). Never spell out formulas phonetically (e.g., avoid 'sum over i of...'), and do NOT use raw LaTeX delimiters ($...$, $$...$$, \\text{...}, or \\frac{...}{...}).\n"
+                "5. INLINE & PSEUDO-MATH ONLY (NO LATEX): You are writing for a standard plain text submission box that does NOT render LaTeX. Absolutely NEVER use LaTeX delimiters ($...$, $$...$$, \\(...\\), \\[...\\]) or LaTeX markup (\\frac, \\sum, \\text, \\mathbf, \\mathbb, \\cdot). Express all equations, derivations, loss functions, and variables using clean, readable inline pseudo-math (e.g., Y = M * X + C, MSE = (1/N) * sum((Y_i - Yhat_i)^2), w_new = w_old - alpha * grad(L)). Convert all formulas into natural inline pseudo-math.\n"
                 "6. NATURAL PACING: Vary sentence lengths. Mix short, direct statements with technical explanations to avoid monotonic, computer-generated rhythm.\n"
                 "7. NO META-CLOSINGS: Do not end with philosophical takeaways (e.g., avoid 'The session left me convinced that...'). End immediately when the technical explanation of the last topic finishes.\n"
                 "8. NO TIMESTAMPS: Never output brackets like [MM:SS] or time references."
             )
             user_content = (
-                f"Synthesize the following lecture study guide into an authentic, flowing student submission writeup in continuous narrative prose (approx {target_words} words):\n\n"
+                f"Synthesize the following lecture study guide into an authentic, flowing student submission writeup in continuous narrative prose (approx {target_words} words). "
+                f"Write all mathematical expressions and formulas as plain text inline pseudo-math (NO LaTeX delimiters or markup):\n\n"
                 f"{clean_base[:35000]}"
             )
             max_tokens_val = 2500
@@ -1376,25 +1383,26 @@ class Llama3PineconeRAGStore:
             target_words = max(word_count, 250)
             min_w, max_w = 200, 350
             system_prompt = (
-                f"You are an enrolled graduate student drafting an academic assignment submission glossary. "
+                f"You are an enrolled graduate student drafting an academic assignment submission glossary for a plain text submission box. "
                 f"Write a structured compilation of the key technical concepts and definitions from the lecture of approximately {target_words} words "
                 f"(between {min_w} and {max_w} words). "
                 "Format each definition clearly with the concept term followed by its definition on separate lines. "
-                "Do not include conversational filler, timestamps, or raw citations."
+                "Do not include conversational filler, timestamps, raw citations, or LaTeX delimiters ($...$, $$...$$). "
+                "Use plain text inline pseudo-math for any formulas."
             )
-            user_content = f"Synthesize these lecture definitions into a structured academic key concepts submission:\n\n{clean_base[:8000]}"
+            user_content = f"Synthesize these lecture definitions into a structured academic key concepts submission using plain text inline pseudo-math:\n\n{clean_base[:8000]}"
             max_tokens_val = 650
         else:
             target_words = word_count or 120
             min_w, max_w = 80, 160
             system_prompt = (
-                f"You are an enrolled graduate student drafting a submission answer for an academic assignment. "
+                f"You are an enrolled graduate student drafting a submission answer for an academic assignment in a standard plain text box. "
                 f"Write a comprehensive, professional submission response in flowing narrative prose of approximately {target_words} words "
                 f"(strictly between {min_w} and {max_w} words) thoroughly explaining the core technical takeaways. "
-                "Do not include document headers, section titles, markdown bullet points, citations, timestamps, or raw LaTeX delimiters ($...$). "
-                "Output clean, authentic student narrative prose only."
+                "Do not include document headers, section titles, markdown bullet points, citations, timestamps, or raw LaTeX delimiters ($...$, $$...$$). "
+                "Output clean, authentic student narrative prose with plain text inline pseudo-math only."
             )
-            user_content = f"Synthesize this lecture insight into an authentic student submission paragraph in continuous prose:\n\n{clean_base[:4000]}"
+            user_content = f"Synthesize this lecture insight into an authentic student submission paragraph in continuous prose using plain text inline pseudo-math:\n\n{clean_base[:4000]}"
             max_tokens_val = 400
 
         groq_key = os.getenv("GROQ_API_KEY", "")
@@ -1403,10 +1411,11 @@ class Llama3PineconeRAGStore:
         if not (groq_key or gemini_key):
             raise RuntimeError("No LLM keys configured for submission generation.")
 
+        t_sub_start = time.time()
         # 1. Groq Provider Chain (cascade across candidate models)
         if groq_key:
             import requests
-            groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+            groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
 
@@ -1421,10 +1430,13 @@ class Llama3PineconeRAGStore:
                         "temperature": 0.25,
                         "max_tokens": max_tokens_val
                     }
+                    print(f"🚀 [Submission Generator] Dispatching to Groq {g_model}...")
                     r = requests.post(url, headers=headers, json=payload, timeout=45)
                     if r.status_code == 200:
                         raw_output = r.json()["choices"][0]["message"]["content"].strip()
                         final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
+                        sub_elapsed = time.time() - t_sub_start
+                        print(f"✅ [Submission Generator] Completed via Groq {g_model} in {sub_elapsed:.2f}s | Words: {len(final_sub.split())}")
                         return {
                             "status": "success",
                             "submission_text": final_sub,
@@ -1439,7 +1451,7 @@ class Llama3PineconeRAGStore:
         # 2. Gemini Provider Chain (cascade across candidate models)
         if gemini_key:
             import requests
-            gemini_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]
+            gemini_models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
 
             for gm_model in gemini_models:
                 try:
@@ -1448,10 +1460,13 @@ class Llama3PineconeRAGStore:
                         "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
                         "generationConfig": {"temperature": 0.25, "maxOutputTokens": max_tokens_val}
                     }
+                    print(f"🚀 [Submission Generator] Dispatching to Google {gm_model}...")
                     r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
                     if r.status_code == 200:
                         raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                         final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
+                        sub_elapsed = time.time() - t_sub_start
+                        print(f"✅ [Submission Generator] Completed via Google {gm_model} in {sub_elapsed:.2f}s | Words: {len(final_sub.split())}")
                         return {
                             "status": "success",
                             "submission_text": final_sub,
@@ -1555,18 +1570,22 @@ class Llama3PineconeRAGStore:
             f"Transcript Content:\n{transcript_str}"
         )
 
-        # 1. Groq GPT-OSS 120B
-        if groq_key:
-            print("🚀 [Summary Engine] Dispatching to Groq GPT-OSS 120B...")
+        word_count = len(transcript_str.split())
+        print(f"📊 [Summary Engine] Lecture transcript length: ~{word_count} words across {len(transcript_str.splitlines())} cues")
+
+        # 1. Groq (llama-3.3-70b-versatile) - only if transcript fits safely within TPM limits (< 25,000 words)
+        if groq_key and word_count <= 25000:
+            print("🚀 [Summary Engine] Dispatching to Groq llama-3.3-70b-versatile...")
+            t_groq_start = time.time()
             try:
                 groq_payload = {
-                    "model": "openai/gpt-oss-120b",
+                    "model": "llama-3.3-70b-versatile",
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
                     "temperature": 0.2,
-                    "max_tokens": 4096
+                    "max_tokens": 8192
                 }
                 groq_headers = {
                     "Authorization": f"Bearer {groq_key}",
@@ -1580,9 +1599,15 @@ class Llama3PineconeRAGStore:
                 )
                 if r.status_code == 200:
                     ans = r.json()["choices"][0]["message"]["content"].strip()
-                    return self._build_summary_response(ans, "Groq GPT-OSS 120B", title, target_video_id)
+                    groq_dur = time.time() - t_groq_start
+                    print(f"✅ [Summary Engine] Groq completed in {groq_dur:.2f}s")
+                    return self._build_summary_response(ans, "Groq llama-3.3-70b-versatile", title, target_video_id)
+                else:
+                    print(f"⚠️ [Groq Summary Notice] Groq returned HTTP {r.status_code}: {r.text[:180]}. Falling back to Gemini...")
             except Exception as ge:
-                print(f"⚠️ [Groq Summary Notice] {ge}")
+                print(f"⚠️ [Groq Summary Notice] Error ({ge}). Falling back to Gemini...")
+        elif groq_key and word_count > 25000:
+            print(f"🚀 [Summary Engine] Lecture context is large (~{word_count} words). Directing straight to Google Gemini 3.8 Flash (1M+ context window)...")
 
         # 2. Google Gemini
         if gemini_key:
@@ -1596,14 +1621,20 @@ class Llama3PineconeRAGStore:
 
             for model_name in candidate_models:
                 api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                t_gem_start = time.time()
+                print(f"🚀 [Summary Engine] Dispatching to Google {model_name}...")
                 try:
                     resp = requests.post(api_url, headers=headers, json=payload, timeout=90)
                     if resp.status_code == 200:
                         res_data = resp.json()
                         final_answer = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        gem_dur = time.time() - t_gem_start
+                        print(f"✅ [Summary Engine] Google {model_name} completed in {gem_dur:.2f}s")
                         return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
+                    else:
+                        print(f"⚠️ [Gemini Summary Notice] Google {model_name} returned HTTP {resp.status_code}: {resp.text[:180]}")
                 except Exception as e:
-                    print(f"⚠️ [Gemini Summary Notice] {e}")
+                    print(f"⚠️ [Gemini Summary Notice] Error ({e})")
         # 3. Fallback: Synthesize from saved summary sections for this specific video
         if target_video_id and target_video_id != "active":
             try:
@@ -1933,7 +1964,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
+            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -2167,7 +2198,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
+            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
                 try:
                     payload = {
                         "model": model_name,
@@ -2363,7 +2394,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
 
         # Try Groq first
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]:
+            for model_name in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
                 try:
                     payload = {
                         "model": model_name,

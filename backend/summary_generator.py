@@ -156,7 +156,7 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
             from openai import OpenAI
             client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
             resp = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}

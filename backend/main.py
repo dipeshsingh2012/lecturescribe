@@ -1466,7 +1466,8 @@ def process_chat_message(
     user_email: Optional[str] = None,
     bypass_cache: bool = False,
     chat_history: Optional[List[Dict[str, Any]]] = None,
-    save_to_db: bool = True
+    save_to_db: bool = True,
+    intent_override: Optional[str] = None
 ) -> Dict[str, Any]:
     """Internal core processor for chat queries, RAG retrieval, and full transcript summaries."""
     user_prompt = (user_prompt or "").strip()
@@ -1503,17 +1504,26 @@ def process_chat_message(
                 "cached": True
             }
 
-    # 2. Structured LLM Intent Router: classify SUMMARY vs CHAT
-    intent = slm_classify_intent(
-        query=user_prompt,
-        chat_history=chat_history,
-        video_title=title,
-    )
-    print(f"🧭 [Intent Router] Intent classified as: {intent}")
+    # 2. Intent Determination: explicit override or structured LLM router
+    if intent_override:
+        intent = intent_override.strip().upper()
+        print(f"⚡ [Intent Router] Route directly forced to: {intent} (bypassed router & regex)")
+    else:
+        intent = slm_classify_intent(
+            query=user_prompt,
+            chat_history=chat_history,
+            video_title=title,
+        )
+        print(f"🧭 [Intent Router] Intent classified as: {intent}")
 
-    if cues is not None and len(cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
-        pinecone_rag_engine.ingest_transcript(vid, title, cues)
-        algolia_service.ingest_cues(vid, title, cues)
+    # 3. Vector indexing safeguard: Only index for CHAT/RAG queries, skip for SUMMARY
+    if intent != INTENT_SUMMARY:
+        if cues is not None and len(cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
+            print("🌲 [Pinecone Engine] Indexing chunks for conversational RAG query...")
+            pinecone_rag_engine.ingest_transcript(vid, title, cues)
+            algolia_service.ingest_cues(vid, title, cues)
+    else:
+        print("⏩ [Pinecone Engine] Skipping vector index upsert — SUMMARY intent operates directly on chronological transcript cues.")
 
     try:
         if intent == INTENT_SUMMARY:
@@ -1942,9 +1952,8 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
     if not cues:
         raise HTTPException(status_code=404, detail=f"No cues found for video {vid} to generate summary.")
 
-    # Prime RAG engine transcript chunks if needed
-    if len(pinecone_rag_engine.local_chunks) == 0:
-        pinecone_rag_engine.ingest_transcript(vid, title, cues)
+    print(f"📥 [Summary API] Received /api/summary/generate for video '{vid}' | Type: {summary_type} | Bypass Cache: {req.bypass_cache}")
+    print("⏩ [Pinecone Engine] Bypassing vector upsert for /api/summary/generate — summary operates directly on chronological transcript cues.")
 
     prompt = (
         "Create a summary for a 15 min read"
@@ -1960,7 +1969,8 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
         user_email=req.user_email,
         bypass_cache=req.bypass_cache or False,
         chat_history=[],
-        save_to_db=False  # Do not pollute chat logs!
+        save_to_db=False,  # Do not pollute chat logs!
+        intent_override=INTENT_SUMMARY
     )
 
     markdown_text = res.get("reply") or ""

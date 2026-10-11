@@ -2,7 +2,7 @@
 # File: backend/slm_router.py
 # -------------------------------------------------------------------
 # Fast Structured LLM Intent Router for LectureScribe
-# Routes queries via Groq (openai/gpt-oss-20b) with Gemini fallback.
+# Routes queries via Groq (llama-3.1-8b-instant) with Gemini fallback.
 # ===================================================================
 
 import os
@@ -81,7 +81,7 @@ def slm_classify_intent(
     user_payload_lines.append(f"User Query to Classify: {query.strip()}")
     user_prompt = "\n\n".join(user_payload_lines)
 
-    # 1. Primary: Groq Fast Classification (openai/gpt-oss-20b)
+    # 1. Primary: Groq Fast Classification (llama-3.1-8b-instant)
     if groq_key:
         try:
             url = "https://api.groq.com/openai/v1/chat/completions"
@@ -90,7 +90,7 @@ def slm_classify_intent(
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "openai/gpt-oss-20b",
+                "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -106,8 +106,10 @@ def slm_classify_intent(
                 parsed = json.loads(content)
                 intent = str(parsed.get("intent", "")).upper()
                 if intent in (INTENT_SUMMARY, INTENT_CHAT):
-                    print(f"🧭 [LLM Router (Groq 20B)] Classified as: {intent}")
+                    print(f"🧭 [LLM Router (Groq Llama 3.1 8B)] Classified as: {intent}")
                     return intent
+            else:
+                print(f"⚠️ [LLM Router Notice] Groq returned HTTP {resp.status_code}: {resp.text[:120]}. Trying Gemini...")
         except Exception as ge:
             print(f"⚠️ [LLM Router Notice] Groq classification failed ({ge}). Trying Gemini...")
 
@@ -127,18 +129,22 @@ def slm_classify_intent(
             resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=6)
             if resp.status_code == 200:
                 data = resp.json()
-                content = data["candidates"][0]["content"]["parts"][0]["text"]
-                parsed = json.loads(content)
-                intent = str(parsed.get("intent", "")).upper()
-                if intent in (INTENT_SUMMARY, INTENT_CHAT):
-                    print(f"🧭 [LLM Router (Gemini 3.8)] Classified as: {intent}")
-                    return intent
+                candidate = (data.get("candidates") or [{}])[0]
+                parts = candidate.get("content", {}).get("parts", [])
+                if parts and "text" in parts[0]:
+                    content = parts[0]["text"]
+                    parsed = json.loads(content)
+                    intent = str(parsed.get("intent", "")).upper()
+                    if intent in (INTENT_SUMMARY, INTENT_CHAT):
+                        print(f"🧭 [LLM Router (Gemini 3.8)] Classified as: {intent}")
+                        return intent
+                else:
+                    finish_reason = candidate.get("finishReason", "UNKNOWN")
+                    print(f"⚠️ [LLM Router Notice] Gemini returned no content parts (finishReason: {finish_reason})")
+            else:
+                print(f"⚠️ [LLM Router Notice] Gemini returned HTTP {resp.status_code}: {resp.text[:120]}")
         except Exception as e:
             print(f"⚠️ [LLM Router Notice] Gemini classification failed ({e})")
 
-    if re.search(r"\b(summary|summarize|summarise|takeaways|study guide|lecture notes|key concepts|definitions)\b", clean_q):
-        print(f"🧭 [Intent Router Fallback] Classified as: {INTENT_SUMMARY} via pattern match.")
-        return INTENT_SUMMARY
-
-    print("⚠️ [LLM Router Warning] Router LLMs unavailable. Defaulting to CHAT.")
+    print("⚠️ [LLM Router Warning] Router LLMs unavailable or inconclusive. Defaulting to CHAT.")
     return INTENT_CHAT

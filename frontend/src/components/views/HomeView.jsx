@@ -71,6 +71,8 @@ export default function HomeView({
   handleRefreshReadingReader,
   handleDeleteCourseReading,
   searchReadingWeb,
+  searchLiterature,
+  addCourseReading,
   openUploadModal,
   openPreviewModal,
   handleSelectCourse,
@@ -501,6 +503,8 @@ export default function HomeView({
           handleRefreshReadingReader={handleRefreshReadingReader}
           handleDeleteCourseReading={handleDeleteCourseReading}
           searchReadingWeb={searchReadingWeb}
+          searchLiterature={searchLiterature}
+          addCourseReading={addCourseReading}
           googleUser={googleUser}
           userLibrary={userLibrary}
           selectedCourse={selectedCourse}

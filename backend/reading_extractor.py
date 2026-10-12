@@ -23,6 +23,9 @@ logger = logging.getLogger("lecturescribe.reading_extractor")
 GOOGLE_BOOKS_API = "https://www.googleapis.com/books/v1/volumes"
 OPEN_LIBRARY_API = "https://openlibrary.org/search.json"
 ARCHIVE_ORG_SEARCH_API = "https://archive.org/advancedsearch.php"
+CROSSREF_API = "https://api.crossref.org/works"
+EUROPE_PMC_API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
 
 def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") -> Dict[str, Any]:
     """
@@ -162,8 +165,41 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
             "source_provider": "Google Books"
         }
 
+    # 5. Fifth Priority: Academic Literature Fallback (Crossref & Europe PMC for research papers & journal articles)
+    logger.debug(f"[ReadingExtractor] Trying Academic Literature fallback for title='{title}', author='{author}'")
+    pmc_res = fetch_europe_pmc_metadata(title, author)
+    if pmc_res:
+        logger.info(f"[ReadingExtractor] [Europe PMC] Match found: '{pmc_res.get('matched_title')}'")
+        return {
+            "matched_title": pmc_res.get("matched_title", title),
+            "matched_authors": pmc_res.get("matched_authors", author),
+            "cover_url": pmc_res.get("cover_url", ""),
+            "preview_url": pmc_res.get("preview_url", ""),
+            "embed_url": pmc_res.get("embed_url", ""),
+            "reader_type": pmc_res.get("reader_type", "web"),
+            "isbn": pmc_res.get("doi", ""),
+            "is_lending": False,
+            "source_provider": pmc_res.get("source_provider", "Europe PMC / PubMed")
+        }
+
+    cr_res = fetch_crossref_metadata(title, author)
+    if cr_res:
+        logger.info(f"[ReadingExtractor] [Crossref] Match found: '{cr_res.get('matched_title')}'")
+        return {
+            "matched_title": cr_res.get("matched_title", title),
+            "matched_authors": cr_res.get("matched_authors", author),
+            "cover_url": cr_res.get("cover_url", ""),
+            "preview_url": cr_res.get("preview_url", ""),
+            "embed_url": cr_res.get("embed_url", ""),
+            "reader_type": cr_res.get("reader_type", "web"),
+            "isbn": cr_res.get("doi", ""),
+            "is_lending": False,
+            "source_provider": cr_res.get("source_provider", "Crossref")
+        }
+
     logger.info(f"[ReadingExtractor] No digital reader or metadata found across all sources for '{title}'.")
     return {}
+
 
 
 def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
@@ -264,6 +300,344 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
         logger.debug(f"[ReadingExtractor] [Google Books API] Fallback lookup failed: {e}")
 
     return {}
+
+
+def fetch_crossref_metadata(title: str, author: str = "") -> Dict[str, Any]:
+    """
+    Query Crossref API (keyless, public) for academic papers, DOIs, journals, and citations.
+    """
+    if not title or len(title.strip()) < 3:
+        return {}
+
+    clean_title = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', title, flags=re.IGNORECASE).strip()
+    clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip()
+
+    query = f"{clean_title} {clean_author}".strip()
+    try:
+        resp = requests.get(
+            CROSSREF_API,
+            params={"query.bibliographic": query, "rows": 1},
+            headers={"User-Agent": "LectureScribe/1.0 (mailto:academic-research@lecturescribe.local)"},
+            timeout=4.0
+        )
+        if resp.status_code == 200:
+            items = resp.json().get("message", {}).get("items", [])
+            if items:
+                it = items[0]
+                matched_t = (it.get("title") or [""])[0] or clean_title
+                authors_list = []
+                for a in it.get("author", []):
+                    given = a.get("given", "")
+                    family = a.get("family", "")
+                    if family:
+                        authors_list.append(f"{given} {family}".strip() if given else family)
+                    elif a.get("name"):
+                        authors_list.append(a.get("name"))
+                matched_a = ", ".join(authors_list) or author
+                containers = it.get("container-title") or []
+                journal = containers[0] if containers else it.get("publisher", "")
+                doi = it.get("DOI", "")
+                url = it.get("URL") or (f"https://doi.org/{doi}" if doi else "")
+
+                # Extract year
+                issued_parts = it.get("issued", {}).get("date-parts", [[None]])[0]
+                year = str(issued_parts[0]) if issued_parts and issued_parts[0] else ""
+
+                return {
+                    "matched_title": matched_t,
+                    "matched_authors": matched_a,
+                    "title": matched_t,
+                    "author": matched_a,
+                    "publisher": journal,
+                    "journal": journal,
+                    "year": year,
+                    "doi": doi,
+                    "preview_url": url,
+                    "embed_url": "",
+                    "reader_type": "web",
+                    "reading_type": "journal" if "journal" in (it.get("type") or "").lower() else "paper",
+                    "source_provider": f"Crossref ({journal})" if journal else "Crossref"
+                }
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Crossref] Lookup failed: {e}")
+    return {}
+
+
+def fetch_europe_pmc_metadata(title: str, author: str = "") -> Dict[str, Any]:
+    """
+    Query Europe PMC / PubMed Central API for biomedical literature, free full-text PMC articles, and PDFs.
+    """
+    if not title or len(title.strip()) < 3:
+        return {}
+
+    clean_title = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', title, flags=re.IGNORECASE).strip()
+    query = f'TITLE:"{clean_title}"'
+    if author:
+        clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip().split()[0]
+        if clean_author:
+            query += f' AUTH:"{clean_author}"'
+
+    try:
+        resp = requests.get(
+            EUROPE_PMC_API,
+            params={"query": query, "format": "json", "pageSize": 1, "resultType": "core"},
+            headers={"User-Agent": "LectureScribe/1.0"},
+            timeout=4.0
+        )
+        if resp.status_code == 200:
+            results = resp.json().get("resultList", {}).get("result", [])
+            if results:
+                r = results[0]
+                matched_t = (r.get("title") or clean_title).rstrip(".")
+                matched_a = r.get("authorString") or author
+                journal = r.get("journalTitle") or ""
+                year = str(r.get("pubYear") or "")
+                doi = r.get("doi") or ""
+                pmcid = r.get("pmcid") or ""
+                is_oa = r.get("isOpenAccess") == "Y"
+                abstract = r.get("abstractText") or ""
+
+                embed_url = ""
+                reader_type = "web"
+                if pmcid:
+                    embed_url = f"https://europepmc.org/articles/{pmcid}"
+                    reader_type = "pmc_reader"
+                elif is_oa and doi:
+                    embed_url = f"https://doi.org/{doi}"
+
+                preview_url = f"https://doi.org/{doi}" if doi else (f"https://europepmc.org/articles/{pmcid}" if pmcid else "")
+
+                return {
+                    "matched_title": matched_t,
+                    "matched_authors": matched_a,
+                    "title": matched_t,
+                    "author": matched_a,
+                    "publisher": journal,
+                    "journal": journal,
+                    "year": year,
+                    "doi": doi,
+                    "pmcid": pmcid,
+                    "abstract": abstract,
+                    "is_open_access": is_oa,
+                    "preview_url": preview_url,
+                    "embed_url": embed_url,
+                    "reader_type": reader_type,
+                    "reading_type": "journal",
+                    "source_provider": "Europe PMC / PubMed"
+                }
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Europe PMC] Lookup failed: {e}")
+    return {}
+
+
+def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    """
+    Search academic literature, research papers, journal articles, and books.
+    Queries Crossref (global DOI & journal registry), Europe PMC (biomedical & full-text open-access),
+    and Google Books / OpenLibrary (textbooks & monographs).
+    """
+    if not query or len(query.strip()) < 2:
+        return []
+
+    clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
+    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit})")
+
+    results: List[Dict[str, Any]] = []
+    seen_titles = set()
+
+    # 1. Search Crossref (Keyless, covers all journals: JAMA, NEJM, Lancet, Nature, IEEE, etc.)
+    try:
+        resp = requests.get(
+            CROSSREF_API,
+            params={"query.bibliographic": clean_q, "rows": min(limit, 5)},
+            headers={"User-Agent": "LectureScribe/1.0 (mailto:academic-research@lecturescribe.local)"},
+            timeout=4.0
+        )
+        if resp.status_code == 200:
+            items = resp.json().get("message", {}).get("items", [])
+            for it in items:
+                title_list = it.get("title") or []
+                if not title_list or not title_list[0]:
+                    continue
+                t = title_list[0].strip()
+                norm_t = re.sub(r'[^a-zA-Z0-9]', '', t.lower())
+                if norm_t in seen_titles:
+                    continue
+                seen_titles.add(norm_t)
+
+                authors_list = []
+                for a in it.get("author", []):
+                    given = a.get("given", "")
+                    family = a.get("family", "")
+                    if family:
+                        authors_list.append(f"{given} {family}".strip() if given else family)
+                    elif a.get("name"):
+                        authors_list.append(a.get("name"))
+                authors_str = ", ".join(authors_list)
+
+                containers = it.get("container-title") or []
+                journal = containers[0] if containers else (it.get("publisher") or "")
+                doi = it.get("DOI", "")
+                url = it.get("URL") or (f"https://doi.org/{doi}" if doi else "")
+
+                issued_parts = it.get("issued", {}).get("date-parts", [[None]])[0]
+                year = str(issued_parts[0]) if issued_parts and issued_parts[0] else ""
+
+                reading_type = "journal" if "journal" in (it.get("type") or "").lower() else "paper"
+                results.append({
+                    "title": t,
+                    "author": authors_str,
+                    "edition": year,
+                    "reading_type": reading_type,
+                    "category": "reference",
+                    "publisher": journal,
+                    "journal": journal,
+                    "doi": doi,
+                    "isbn": "",
+                    "cover_url": "",
+                    "preview_url": url,
+                    "embed_url": "",
+                    "reader_type": "web",
+                    "abstract": "",
+                    "source_provider": f"Crossref ({journal})" if journal else "Crossref",
+                    "is_open_access": False
+                })
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Crossref Search] Exception: {e}")
+
+    # 2. Search Europe PMC (Biomedical papers, PubMed, Open-Access PMC PDFs)
+    try:
+        resp = requests.get(
+            EUROPE_PMC_API,
+            params={"query": clean_q, "format": "json", "pageSize": min(limit, 5), "resultType": "core"},
+            headers={"User-Agent": "LectureScribe/1.0"},
+            timeout=4.0
+        )
+        if resp.status_code == 200:
+            pmc_items = resp.json().get("resultList", {}).get("result", [])
+            for r in pmc_items:
+                t = (r.get("title") or "").rstrip(".").strip()
+                if not t:
+                    continue
+                norm_t = re.sub(r'[^a-zA-Z0-9]', '', t.lower())
+                
+                doi = r.get("doi") or ""
+                pmcid = r.get("pmcid") or ""
+                is_oa = r.get("isOpenAccess") == "Y"
+                journal = r.get("journalTitle") or ""
+                year = str(r.get("pubYear") or "")
+                abstract = r.get("abstractText") or ""
+
+                embed_url = f"https://europepmc.org/articles/{pmcid}" if pmcid else ""
+                preview_url = f"https://doi.org/{doi}" if doi else (embed_url or "")
+
+                # If already matched from Crossref, merge PMC's rich OA / abstract / reader links
+                if norm_t in seen_titles:
+                    for existing in results:
+                        if re.sub(r'[^a-zA-Z0-9]', '', existing["title"].lower()) == norm_t:
+                            if pmcid:
+                                existing["embed_url"] = embed_url
+                                existing["reader_type"] = "pmc_reader"
+                            if abstract and not existing.get("abstract"):
+                                existing["abstract"] = abstract
+                            if is_oa:
+                                existing["is_open_access"] = True
+                            if not existing.get("doi") and doi:
+                                existing["doi"] = doi
+                            if not existing.get("journal") and journal:
+                                existing["journal"] = journal
+                            break
+                    continue
+
+                seen_titles.add(norm_t)
+                results.append({
+                    "title": t,
+                    "author": r.get("authorString") or "",
+                    "edition": year,
+                    "reading_type": "journal",
+                    "category": "reference",
+                    "publisher": journal,
+                    "journal": journal,
+                    "doi": doi,
+                    "pmcid": pmcid,
+                    "isbn": "",
+                    "cover_url": "",
+                    "preview_url": preview_url,
+                    "embed_url": embed_url,
+                    "reader_type": "pmc_reader" if pmcid else "web",
+                    "abstract": abstract,
+                    "source_provider": "Europe PMC / PubMed",
+                    "is_open_access": is_oa
+                })
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Europe PMC Search] Exception: {e}")
+
+    # 3. Search Google Books API (Textbooks, published monographs)
+    try:
+        gb_resp = requests.get(
+            GOOGLE_BOOKS_API,
+            params={"q": clean_q, "maxResults": min(limit, 4), "printType": "books"},
+            timeout=3.5
+        )
+        if gb_resp.status_code == 200:
+            gb_items = gb_resp.json().get("items", [])
+            for it in gb_items:
+                vol = it.get("volumeInfo", {})
+                t = vol.get("title", "").strip()
+                if not t:
+                    continue
+                norm_t = re.sub(r'[^a-zA-Z0-9]', '', t.lower())
+                if norm_t in seen_titles:
+                    continue
+                seen_titles.add(norm_t)
+
+                img_links = vol.get("imageLinks", {})
+                cover_url = img_links.get("thumbnail") or img_links.get("smallThumbnail") or ""
+                if cover_url.startswith("http://"):
+                    cover_url = "https://" + cover_url[7:]
+
+                preview_url = vol.get("previewLink") or vol.get("infoLink") or ""
+                if preview_url.startswith("http://"):
+                    preview_url = "https://" + preview_url[7:]
+
+                embed_url = ""
+                reader_type = "web"
+                if "books.google.com" in preview_url:
+                    m = re.search(r'id=([a-zA-Z0-9_\-]+)', preview_url)
+                    if m:
+                        embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
+                        reader_type = "google_embed"
+
+                isbn = ""
+                for ident in vol.get("industryIdentifiers", []):
+                    if ident.get("type") in ("ISBN_13", "ISBN_10"):
+                        isbn = ident.get("identifier", "")
+                        break
+
+                results.append({
+                    "title": t,
+                    "author": ", ".join(vol.get("authors", [])) or "",
+                    "edition": vol.get("publishedDate", ""),
+                    "reading_type": "book",
+                    "category": "primary_textbook",
+                    "publisher": vol.get("publisher", ""),
+                    "journal": "",
+                    "doi": "",
+                    "isbn": isbn,
+                    "cover_url": cover_url,
+                    "preview_url": preview_url,
+                    "embed_url": embed_url,
+                    "reader_type": reader_type,
+                    "abstract": vol.get("description", ""),
+                    "source_provider": "Google Books",
+                    "is_open_access": False
+                })
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Google Books Search] Exception: {e}")
+
+    logger.info(f"[ReadingExtractor] search_academic_literature found {len(results)} candidate results for query: '{clean_q}'")
+    return results[:limit]
+
 
 
 def search_web_reading_links(title: str, author: str = "", course_name: str = "") -> List[Dict[str, str]]:

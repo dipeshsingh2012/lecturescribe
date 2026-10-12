@@ -36,6 +36,7 @@ import {
 import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/formatters';
 import { normalizeCourseSlug } from '../../utils/routing';
 import BookReaderModal from '../modals/BookReaderModal';
+import ResearchLiteratureModal from '../modals/ResearchLiteratureModal';
 
 export default function CourseLibrary({
   courseResourcesLoading = false,
@@ -52,6 +53,8 @@ export default function CourseLibrary({
   handleRefreshReadingReader,
   handleDeleteCourseReading,
   searchReadingWeb,
+  searchLiterature,
+  addCourseReading,
   googleUser,
   userLibrary = [],
   selectedCourse,
@@ -61,6 +64,7 @@ export default function CourseLibrary({
   openPreviewModal,
   currentTheme
 }) {
+  const [researchModalOpen, setResearchModalOpen] = useState(false);
   const [webSearchOpen, setWebSearchOpen] = useState(false);
   const [activeSearchBook, setActiveSearchBook] = useState(null);
   const [customWebQuery, setCustomWebQuery] = useState('');
@@ -656,10 +660,27 @@ export default function CourseLibrary({
               }}
             />
           </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
             <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: { xs: 'none', md: 'inline' } }}>
               Auto-extracted from transcripts & slides
             </Typography>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<Search size={13} />}
+              onClick={() => setResearchModalOpen(true)}
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                borderRadius: 2,
+                bgcolor: currentTheme.palette.primary,
+                color: '#fff',
+                '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+              }}
+            >
+              Research Literature & Books
+            </Button>
             {courseReadings.length > 0 && (
               <Button
                 variant="outlined"
@@ -729,25 +750,49 @@ export default function CourseLibrary({
               No Recommended Books Extracted Yet
             </Typography>
             <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 440, mx: 'auto', mb: 2 }}>
-              Click the button below to scan all video lecture transcripts and uploaded PowerPoint slides to extract textbooks and syllabus readings.
+              Click below to scan lecture transcripts & slides, or research and add peer-reviewed papers & textbooks directly.
             </Typography>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<Sparkles size={14} />}
-              onClick={() => handleExtractClick(false)}
-              sx={{
-                bgcolor: currentTheme.palette.primary,
-                color: '#fff',
-                fontWeight: 700,
-                textTransform: 'none',
-                borderRadius: 2,
-                px: 2.5,
-                '&:hover': { bgcolor: currentTheme.palette.primaryHover }
-              }}
-            >
-              Scan & Extract Books
-            </Button>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<Sparkles size={14} />}
+                onClick={() => handleExtractClick(false)}
+                sx={{
+                  bgcolor: currentTheme.palette.primary,
+                  color: '#fff',
+                  fontWeight: 700,
+                  textTransform: 'none',
+                  borderRadius: 2,
+                  px: 2.5,
+                  '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                }}
+              >
+                Scan & Extract Books
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<Search size={14} />}
+                onClick={() => setResearchModalOpen(true)}
+                sx={{
+                  borderColor: currentTheme.palette.cardBorder,
+                  color: currentTheme.palette.textPrimary,
+                  fontWeight: 700,
+                  textTransform: 'none',
+                  borderRadius: 2,
+                  px: 2.5,
+                  bgcolor: currentTheme.palette.cardBg,
+                  '&:hover': {
+                    borderColor: currentTheme.palette.primary,
+                    color: currentTheme.palette.primary,
+                    bgcolor: 'var(--highlight-bg, rgba(59, 130, 246, 0.08))'
+                  }
+                }}
+              >
+                Research Literature & Books
+              </Button>
+            </Box>
           </Paper>
         ) : (
           <Box sx={{
@@ -1058,6 +1103,20 @@ export default function CourseLibrary({
         book={activeReaderBook}
         currentTheme={currentTheme}
       />
+
+      {/* ========================================================================= */}
+      {/* RESEARCH ACADEMIC LITERATURE & BOOKS MODAL */}
+      {/* ========================================================================= */}
+      <ResearchLiteratureModal
+        open={researchModalOpen}
+        onClose={() => setResearchModalOpen(false)}
+        courseDisplayName={courseDisplayName}
+        courseReadings={courseReadings}
+        searchLiterature={searchLiterature}
+        addCourseReading={addCourseReading}
+        currentTheme={currentTheme}
+      />
+
 
       {/* ========================================================================= */}
       {/* WEB SCRAPER / SEARCH MODAL */}

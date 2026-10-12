@@ -351,6 +351,8 @@ export default function App() {
             handleRefreshReadingReader={resources.handleRefreshReadingReader}
             handleDeleteCourseReading={resources.handleDeleteCourseReading}
             searchReadingWeb={resources.searchReadingWeb}
+            searchLiterature={resources.searchLiterature}
+            addCourseReading={resources.addCourseReading}
             courseLoading={course.courseLoading}
             handleDeleteFromLibrary={library.handleDeleteFromLibrary}
             courseNotes={courseNotes.notes}

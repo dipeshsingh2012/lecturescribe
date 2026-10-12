@@ -135,4 +135,24 @@ describe('CourseLibrary Component', () => {
 
     expect(handleRefreshReadingReader).toHaveBeenCalledWith(mockBooks[0].id);
   });
+
+  it('opens research literature modal when Research Literature & Books is clicked', async () => {
+    render(
+      <CourseLibrary
+        courseResources={mockSlides}
+        courseReadings={mockBooks}
+        selectedCourse="Machine Learning"
+        currentTheme={mockTheme}
+      />
+    );
+
+    const researchBtn = screen.getByRole('button', { name: /Research Literature & Books/i });
+    fireEvent.click(researchBtn);
+
+    expect(screen.getByText(/Research Academic Literature & Books/i)).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/e\.g\. Singer et al\. \(2016\) Sepsis-3 JAMA/i)
+    ).toBeInTheDocument();
+  });
 });
+

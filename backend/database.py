@@ -3621,7 +3621,11 @@ class RelationalDBManager:
         preview_url = (reading.get("preview_url") or "").strip()
         embed_url = (reading.get("embed_url") or "").strip()
         reader_type = (reading.get("reader_type") or "embed").strip()
-        isbn = (reading.get("isbn") or "").strip()
+        isbn = (reading.get("isbn") or reading.get("doi") or "").strip()
+        doi = (reading.get("doi") or (isbn if isbn.startswith("10.") else "")).strip()
+        journal = (reading.get("journal") or reading.get("publisher") or "").strip()
+        abstract = (reading.get("abstract") or "").strip()
+        is_open_access = bool(reading.get("is_open_access", False))
         source_type = (reading.get("source_type") or "manual").strip()
         source_context = (reading.get("source_context") or "").strip()
         web_links = reading.get("web_links") or []
@@ -3639,6 +3643,10 @@ class RelationalDBManager:
             "embed_url": embed_url,
             "reader_type": reader_type,
             "isbn": isbn,
+            "doi": doi,
+            "journal": journal,
+            "abstract": abstract,
+            "is_open_access": is_open_access,
             "source_type": source_type,
             "source_context": source_context,
             "web_links": web_links,

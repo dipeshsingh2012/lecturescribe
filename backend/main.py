@@ -83,6 +83,7 @@ from backend.reading_extractor import (
     search_web_reading_links,
     resolve_digital_book_reader,
     extract_readings_with_llm,
+    search_academic_literature,
 )
 from backend.transcript_correction import (
     resolve_lecture_audio_file,
@@ -3186,6 +3187,119 @@ def delete_course_reading(reading_id: int):
     """Delete a recommended reading item by ID."""
     success = db_manager.delete_course_reading(reading_id)
     return {"status": "success", "reading_id": reading_id, "deleted": success}
+
+
+class SearchLiteratureRequest(BaseModel):
+    query: str
+    limit: Optional[int] = 6
+
+
+class AddCourseReadingRequest(BaseModel):
+    title: str
+    author: Optional[str] = ""
+    edition: Optional[str] = ""
+    reading_type: Optional[str] = "journal"
+    category: Optional[str] = "reference"
+    publisher: Optional[str] = ""
+    journal: Optional[str] = ""
+    doi: Optional[str] = ""
+    isbn: Optional[str] = ""
+    cover_url: Optional[str] = ""
+    preview_url: Optional[str] = ""
+    embed_url: Optional[str] = ""
+    reader_type: Optional[str] = "web"
+    abstract: Optional[str] = ""
+    source_type: Optional[str] = "manual_search"
+    source_context: Optional[str] = ""
+    is_lending: Optional[bool] = False
+    is_open_access: Optional[bool] = False
+
+
+@app.post("/api/course/{course_name}/search-literature")
+def search_course_literature(course_name: str, payload: SearchLiteratureRequest):
+    """
+    Search academic literature, research papers, journal articles, and textbooks
+    across Crossref, Europe PMC, and Google Books / OpenLibrary.
+    """
+    raw_name = course_name.strip()
+    if not raw_name:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    query = (payload.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Search query is required.")
+    cname = db_manager.resolve_course_canonical_name(raw_name)
+    results = search_academic_literature(query, limit=payload.limit or 6)
+    return {
+        "status": "success",
+        "course_name": cname,
+        "query": query,
+        "results": results,
+        "count": len(results)
+    }
+
+
+@app.get("/api/course/{course_name}/search-literature")
+def search_course_literature_get(
+    course_name: str,
+    query: str = Query(..., description="Academic paper or book query"),
+    limit: int = Query(6, description="Max results")
+):
+    """GET variant for academic literature search."""
+    raw_name = course_name.strip()
+    if not raw_name:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    cname = db_manager.resolve_course_canonical_name(raw_name)
+    results = search_academic_literature(query, limit=limit)
+    return {
+        "status": "success",
+        "course_name": cname,
+        "query": query,
+        "results": results,
+        "count": len(results)
+    }
+
+
+@app.post("/api/course/{course_name}/add-reading")
+def add_course_reading(course_name: str, payload: AddCourseReadingRequest):
+    """
+    Add an academic paper, journal article, or book directly to the course library.
+    Enriches with digital reader URL if missing.
+    """
+    raw_name = course_name.strip()
+    if not raw_name:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Reading title is required.")
+    cname = db_manager.resolve_course_canonical_name(raw_name)
+
+    reading_dict = payload.model_dump()
+    # If embed_url is missing, attempt digital book or literature resolution
+    if not reading_dict.get("embed_url"):
+        try:
+            meta = resolve_digital_book_reader(title, reading_dict.get("author", ""))
+            if meta:
+                if meta.get("embed_url") and not reading_dict.get("embed_url"):
+                    reading_dict["embed_url"] = meta["embed_url"]
+                if meta.get("reader_type") and (not reading_dict.get("reader_type") or reading_dict["reader_type"] == "web"):
+                    reading_dict["reader_type"] = meta["reader_type"]
+                if meta.get("cover_url") and not reading_dict.get("cover_url"):
+                    reading_dict["cover_url"] = meta["cover_url"]
+                if meta.get("preview_url") and not reading_dict.get("preview_url"):
+                    reading_dict["preview_url"] = meta["preview_url"]
+        except Exception as e:
+            logger.debug(f"[AddReading] Meta resolution failed: {e}")
+
+    saved = db_manager.save_course_reading(cname, reading_dict)
+    all_readings = db_manager.get_course_readings(cname)
+    return {
+        "status": "success",
+        "course_name": cname,
+        "reading": saved,
+        "readings": all_readings,
+        "count": len(all_readings)
+    }
+
 
 
 # ==============================================================================

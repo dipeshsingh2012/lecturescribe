@@ -280,6 +280,52 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     return [];
   };
 
+  const searchLiterature = async (query, courseName = '', limit = 6) => {
+    if (!query || !query.trim()) return [];
+    try {
+      const cname = courseName || selectedCourse || 'General Lectures';
+      const slug = normalizeCourseSlug(cname) || cname;
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/search-literature`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query.trim(), limit })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.results || [];
+      }
+    } catch (err) {
+      console.error("Failed to search academic literature:", err);
+    }
+    return [];
+  };
+
+  const addCourseReading = async (courseName, readingItem) => {
+    if (!readingItem || !readingItem.title) return null;
+    try {
+      const cname = courseName || selectedCourse || 'General Lectures';
+      const slug = normalizeCourseSlug(cname) || cname;
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/add-reading`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(readingItem)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.readings) {
+          setCourseReadings(data.readings);
+        } else if (data.reading) {
+          setCourseReadings(prev => [data.reading, ...prev]);
+        }
+        return data.reading || data;
+      }
+    } catch (err) {
+      console.error("Failed to add course reading:", err);
+    }
+    return null;
+  };
+
+
   const lastCourseSlugRef = useRef('');
 
   useEffect(() => {
@@ -498,6 +544,8 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     handleRefreshReadingReader,
     handleDeleteCourseReading,
     searchReadingWeb,
+    searchLiterature,
+    addCourseReading,
     courseViewTab,
     setCourseViewTab,
     uploadModalOpen,

@@ -87,3 +87,52 @@ class TestReadingEndpoints(unittest.TestCase):
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["reading_id"], reading_id)
         self.assertIn("embed_url", data)
+
+    def test_search_course_literature_post(self):
+        res = self.client.post(
+            f"/api/course/{self.test_course}/search-literature",
+            json={"query": "Singer et al. (2016) Sepsis-3 JAMA", "limit": 4}
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("results", data)
+        self.assertEqual(data["query"], "Singer et al. (2016) Sepsis-3 JAMA")
+
+    def test_search_course_literature_get(self):
+        res = self.client.get(
+            f"/api/course/{self.test_course}/search-literature",
+            params={"query": "Cormen Introduction to Algorithms", "limit": 2}
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("results", data)
+
+    def test_add_course_reading(self):
+        paper_payload = {
+            "title": "The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3)",
+            "author": "Singer M, Deutschman CS, Seymour CW",
+            "edition": "2016",
+            "reading_type": "journal",
+            "category": "reference",
+            "journal": "JAMA",
+            "doi": "10.1001/jama.2016.0287",
+            "preview_url": "https://doi.org/10.1001/jama.2016.0287",
+            "is_open_access": True
+        }
+        res = self.client.post(
+            f"/api/course/{self.test_course}/add-reading",
+            json=paper_payload
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("reading", data)
+        self.assertEqual(data["reading"]["title"], paper_payload["title"])
+        self.assertEqual(data["reading"]["doi"], "10.1001/jama.2016.0287")
+
+        # Verify it now appears in course readings
+        res_list = self.client.get(f"/api/course/{self.test_course}/readings")
+        self.assertTrue(any("Sepsis-3" in r["title"] for r in res_list.json()["readings"]))
+

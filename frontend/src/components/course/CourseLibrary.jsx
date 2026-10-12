@@ -661,26 +661,6 @@ export default function CourseLibrary({
             />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: { xs: 'none', md: 'inline' } }}>
-              Auto-extracted from transcripts & slides
-            </Typography>
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<Search size={13} />}
-              onClick={() => setResearchModalOpen(true)}
-              sx={{
-                textTransform: 'none',
-                fontWeight: 700,
-                fontSize: '0.75rem',
-                borderRadius: 2,
-                bgcolor: currentTheme.palette.primary,
-                color: '#fff',
-                '&:hover': { bgcolor: currentTheme.palette.primaryHover }
-              }}
-            >
-              Research Literature & Books
-            </Button>
             {courseReadings.length > 0 && (
               <Button
                 variant="outlined"

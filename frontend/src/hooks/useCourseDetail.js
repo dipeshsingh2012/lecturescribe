@@ -64,7 +64,11 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     }
 
     const queryTarget = slug || selectedCourse;
-    if (inFlightRef.current === queryTarget || lastFetchedRef.current === queryTarget) {
+    if (lastFetchedRef.current === queryTarget) {
+      setCourseLoading(false);
+      return;
+    }
+    if (inFlightRef.current === queryTarget) {
       return;
     }
 
@@ -93,8 +97,8 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
       } finally {
         if (inFlightRef.current === queryTarget) {
           inFlightRef.current = '';
-          setCourseLoading(false);
         }
+        setCourseLoading(false);
       }
     };
     fetchDirectCourse();

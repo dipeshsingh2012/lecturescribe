@@ -163,33 +163,7 @@ export default function CourseLibrary({
               }}
             />
           </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: { xs: 'none', sm: 'block' } }}>
-              Plain text scratchpads auto-saved directly to cloud storage
-            </Typography>
-            {googleUser && onCreateNewNote && (
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<Plus size={14} />}
-                onClick={onCreateNewNote}
-                sx={{
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.78rem',
-                  borderRadius: 2,
-                  color: currentTheme.palette.primary,
-                  borderColor: currentTheme.palette.cardBorder,
-                  bgcolor: currentTheme.palette.cardBg,
-                  '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary }
-                }}
-              >
-                New Note
-              </Button>
-            )}
-          </Box>
         </Box>
-
         {courseNotesLoading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 3 }}>
             <CircularProgress size={24} sx={{ color: currentTheme.palette.primary, mr: 1.5 }} />

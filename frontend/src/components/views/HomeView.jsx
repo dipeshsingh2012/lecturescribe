@@ -115,7 +115,7 @@ export default function HomeView({
         />
       )}
 
-      {!selectedCourse && (
+      {!googleUser && !selectedCourse && (
         <QuickAddBar
           urlInput={urlInput}
           setUrlInput={setUrlInput}
@@ -244,7 +244,7 @@ export default function HomeView({
       </Box>
 
       {/* Course-level Quick Add Bar */}
-      {selectedCourse && (
+      {!googleUser && selectedCourse && (
         <QuickAddBar
           urlInput={urlInput}
           setUrlInput={setUrlInput}

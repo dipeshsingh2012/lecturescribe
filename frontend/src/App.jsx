@@ -208,7 +208,9 @@ export default function App() {
   useEffect(() => {
     const initial = window.location.pathname || '/';
     const { courseName: initialCourse, videoId: initialVidId, noteId: initialNoteId } = parsePathRoute(initial);
-    if (initialCourse) setSelectedCourse(initialCourse);
+    if (initialCourse) {
+      setSelectedCourse(prev => (prev && normalizeCourseSlug(prev) === normalizeCourseSlug(initialCourse) ? prev : initialCourse));
+    }
     if (initialVidId) handleTranscribe(`https://vimeo.com/${initialVidId}`, false, initialCourse);
     if (initialNoteId) setActiveNoteId(initialNoteId);
 

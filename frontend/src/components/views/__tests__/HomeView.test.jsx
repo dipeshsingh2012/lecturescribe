@@ -163,4 +163,24 @@ describe('HomeView', () => {
     render(<HomeView {...baseProps} googleUser={mockUser} />);
     expect(screen.getByText(/Syncing Moodle calendar events.../i)).toBeInTheDocument();
   });
+
+  it('does not render main hub QuickAddBar when googleUser is logged in', () => {
+    const mockUser = { email: 'student@iiitdwd.ac.in', name: 'Test Student' };
+    render(<HomeView {...baseProps} googleUser={mockUser} selectedCourse={null} />);
+    expect(screen.queryByPlaceholderText(/Paste any lecture video URL or ID/i)).not.toBeInTheDocument();
+  });
+
+  it('does not render course-level QuickAddBar when googleUser is logged in and selectedCourse is active', () => {
+    const mockUser = { email: 'student@iiitdwd.ac.in', name: 'Test Student' };
+    render(
+      <HomeView
+        {...baseProps}
+        googleUser={mockUser}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+      />
+    );
+    expect(screen.queryByPlaceholderText(/Add video URL or ID to this course/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add to Course/i })).not.toBeInTheDocument();
+  });
 });

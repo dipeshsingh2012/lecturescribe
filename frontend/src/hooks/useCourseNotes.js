@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
+import { normalizeCourseSlug } from '../utils/routing';
 
 export function useCourseNotes(selectedCourse, googleUser, activeNoteId = null) {
   const [notes, setNotes] = useState([]);
@@ -10,6 +11,7 @@ export function useCourseNotes(selectedCourse, googleUser, activeNoteId = null) 
 
   const userEmail = googleUser?.email || '';
   const saveTimeoutRef = useRef(null);
+  const lastFetchedNotesCourseRef = useRef('');
 
   // Fetch all notes for course
   const fetchCourseNotes = useCallback(async (courseName, email) => {
@@ -19,12 +21,14 @@ export function useCourseNotes(selectedCourse, googleUser, activeNoteId = null) 
       setNotes([]);
       return;
     }
+    const slug = normalizeCourseSlug(c) || c;
     setNotesLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(c)}/notes?user_email=${encodeURIComponent(e)}`);
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/notes?user_email=${encodeURIComponent(e)}`);
       if (res.ok) {
         const data = await res.json();
         setNotes(data.notes || []);
+        lastFetchedNotesCourseRef.current = `${slug}::${e}`;
       }
     } catch (err) {
       console.error('[useCourseNotes] Error fetching notes:', err);
@@ -161,8 +165,13 @@ export function useCourseNotes(selectedCourse, googleUser, activeNoteId = null) 
   // Initial load when selectedCourse and userEmail are present
   useEffect(() => {
     if (selectedCourse && userEmail) {
+      const slug = normalizeCourseSlug(selectedCourse) || selectedCourse;
+      if (lastFetchedNotesCourseRef.current === `${slug}::${userEmail}`) {
+        return;
+      }
       fetchCourseNotes(selectedCourse, userEmail);
     } else {
+      lastFetchedNotesCourseRef.current = '';
       setNotes([]);
       setActiveNote(null);
     }

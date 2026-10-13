@@ -84,6 +84,7 @@ from backend.reading_extractor import (
     resolve_digital_book_reader,
     extract_readings_with_llm,
     search_academic_literature,
+    search_academic_literature_async,
 )
 from backend.transcript_correction import (
     resolve_lecture_audio_file,
@@ -3219,7 +3220,7 @@ class AddCourseReadingRequest(BaseModel):
 
 
 @app.post("/api/course/{course_name}/search-literature")
-def search_course_literature(course_name: str, payload: SearchLiteratureRequest):
+async def search_course_literature(course_name: str, payload: SearchLiteratureRequest):
     """
     Search academic literature, research papers, journal articles, and textbooks
     across Crossref, Europe PMC, and Google Books / OpenLibrary.
@@ -3231,28 +3232,7 @@ def search_course_literature(course_name: str, payload: SearchLiteratureRequest)
     if not query:
         raise HTTPException(status_code=400, detail="Search query is required.")
     cname = db_manager.resolve_course_canonical_name(raw_name)
-    results = search_academic_literature(query, limit=payload.limit or 6)
-    return {
-        "status": "success",
-        "course_name": cname,
-        "query": query,
-        "results": results,
-        "count": len(results)
-    }
-
-
-@app.get("/api/course/{course_name}/search-literature")
-def search_course_literature_get(
-    course_name: str,
-    query: str = Query(..., description="Academic paper or book query"),
-    limit: int = Query(6, description="Max results")
-):
-    """GET variant for academic literature search."""
-    raw_name = course_name.strip()
-    if not raw_name:
-        raise HTTPException(status_code=400, detail="course_name is required.")
-    cname = db_manager.resolve_course_canonical_name(raw_name)
-    results = search_academic_literature(query, limit=limit)
+    results = await search_academic_literature_async(query, limit=payload.limit or 6)
     return {
         "status": "success",
         "course_name": cname,

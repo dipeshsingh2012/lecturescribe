@@ -252,3 +252,348 @@ def test_search_academic_literature_graceful_failure(mock_get):
     titles = [r["title"] for r in results]
     assert "A PMC Paper" in titles
     assert "A Great Book" in titles
+
+
+def test_are_records_equivalent_generic_title_guard():
+    from backend.reading_extractor import _are_records_equivalent
+    # Two generic papers titled "Introduction" by different authors -> should NOT merge
+    paper_a = {"title": "Introduction", "author": "John Doe", "publication_year": "2020", "doi": ""}
+    paper_b = {"title": "Introduction", "author": "Alice Smith", "publication_year": "2020", "doi": ""}
+    assert not _are_records_equivalent(paper_a, paper_b)
+
+    # Same generic title by same author surname -> should merge
+    paper_c = {"title": "Introduction", "author": "J. Doe", "publication_year": "2020", "doi": ""}
+    assert _are_records_equivalent(paper_a, paper_c)
+
+
+def test_are_records_equivalent_subtitle_jaccard():
+    from backend.reading_extractor import _are_records_equivalent
+    # Crossref vs Europe PMC subtitle variation
+    item_crossref = {
+        "title": "Attention Is All You Need",
+        "author": "Ashish Vaswani, Noam Shazeer",
+        "publication_year": "2017",
+        "doi": ""
+    }
+    item_pmc = {
+        "title": "Attention Is All You Need: A Deep Learning Architecture",
+        "author": "Vaswani A, Shazeer N",
+        "publication_year": "2017",
+        "doi": ""
+    }
+    assert _are_records_equivalent(item_crossref, item_pmc)
+
+
+def test_intent_adaptive_interleaving():
+    from backend.reading_extractor import _adaptive_interleave, _classify_query_intent
+    papers = [{"title": f"Paper {i}", "reading_type": "paper"} for i in range(5)]
+    books = [{"title": f"Book {i}", "reading_type": "book"} for i in range(5)]
+
+    # Monograph query -> textbook slots prioritized
+    assert _classify_query_intent("Cormen Introduction to Algorithms textbook 4th edition") == "monograph"
+    res_mono = _adaptive_interleave(papers, books, limit=6, query="Cormen Introduction to Algorithms textbook 4th edition")
+    book_count = sum(1 for r in res_mono if r["reading_type"] == "book")
+    assert book_count >= 3
+
+    # Citation query -> paper slots prioritized
+    assert _classify_query_intent("Singer et al. Sepsis-3 JAMA 2016") == "paper"
+    res_paper = _adaptive_interleave(papers, books, limit=6, query="Singer et al. Sepsis-3 JAMA 2016")
+    book_count_paper = sum(1 for r in res_paper if r["reading_type"] == "book")
+    assert book_count_paper <= 1
+
+
+@pytest.mark.anyio
+async def test_search_academic_literature_async():
+    from backend.reading_extractor import search_academic_literature_async
+    with patch("backend.reading_extractor._fetch_crossref_candidates_async") as mock_cr, \
+         patch("backend.reading_extractor._fetch_europe_pmc_candidates_async") as mock_pmc, \
+         patch("backend.reading_extractor._fetch_google_books_candidates_async") as mock_gb:
+        
+        mock_cr.return_value = [
+            {"title": "Async Attention Paper", "author": "Vaswani", "publication_year": "2017", "reading_type": "paper", "category": "reference", "publisher": "", "journal": "", "doi": "10.123/async.1", "pmcid": "", "isbn": "", "cover_url": "", "preview_url": "", "embed_url": "", "reader_type": "web", "abstract": "Test", "source_provider": "Crossref", "is_open_access": False}
+        ]
+        mock_pmc.return_value = []
+        mock_gb.return_value = [
+            {"title": "Async Deep Learning Book", "author": "Goodfellow", "publication_year": "2016", "reading_type": "book", "category": "primary_textbook", "publisher": "MIT Press", "journal": "", "doi": "", "pmcid": "", "isbn": "123", "cover_url": "", "preview_url": "", "embed_url": "", "reader_type": "web", "abstract": "Book", "source_provider": "Google Books", "is_open_access": False}
+        ]
+
+        res = await search_academic_literature_async("deep learning", limit=4)
+        assert len(res) == 2
+        titles = [r["title"] for r in res]
+        assert "Async Attention Paper" in titles
+        assert "Async Deep Learning Book" in titles
+
+
+def test_empty_and_boundary_queries():
+    # Sync entrypoint boundary checks
+    assert search_academic_literature("") == []
+    assert search_academic_literature("   ") == []
+    assert search_academic_literature("x") == []
+
+    # Query prefix stripping (paper:, book:, reading:, journal:)
+    with patch("backend.reading_extractor._fetch_crossref_candidates") as mock_cr, \
+         patch("backend.reading_extractor._fetch_europe_pmc_candidates") as mock_pmc, \
+         patch("backend.reading_extractor._fetch_google_books_candidates") as mock_gb:
+        mock_cr.return_value = []
+        mock_pmc.return_value = []
+        mock_gb.return_value = []
+
+        search_academic_literature("paper: Deep Residual Learning")
+        mock_cr.assert_called_once_with("Deep Residual Learning", 6)
+
+        mock_gb.reset_mock()
+        search_academic_literature("book: Operating Systems", limit=3)
+        mock_gb.assert_called_once_with("Operating Systems", 3)
+
+
+@pytest.mark.anyio
+async def test_empty_and_boundary_queries_async():
+    from backend.reading_extractor import search_academic_literature_async
+    # Async entrypoint boundary checks
+    assert await search_academic_literature_async("") == []
+    assert await search_academic_literature_async("   ") == []
+    assert await search_academic_literature_async("q") == []
+
+
+def test_extract_author_surnames_and_formats():
+    from backend.reading_extractor import _extract_author_surnames
+    # Western order (First Last)
+    surnames_western = _extract_author_surnames("Ashish Vaswani, Noam Shazeer")
+    assert "vaswani" in surnames_western
+    assert "shazeer" in surnames_western
+
+    # PubMed indexed format (Last FirstInitial)
+    surnames_pubmed = _extract_author_surnames("Vaswani A, Shazeer N")
+    assert "vaswani" in surnames_pubmed
+    assert "shazeer" in surnames_pubmed
+
+    # Multiple authors with middle initials
+    surnames_med = _extract_author_surnames("Singer M, Deutschman CS, Seymour CW")
+    assert "singer" in surnames_med
+    assert "deutschman" in surnames_med
+    assert "seymour" in surnames_med
+
+    # Single author
+    assert "cormen" in _extract_author_surnames("Thomas H. Cormen")
+    assert "cormen" in _extract_author_surnames("Cormen")
+
+    # Empty / none
+    assert _extract_author_surnames("") == set()
+    assert _extract_author_surnames(None) == set()
+
+
+def test_primary_title_extraction_and_jaccard():
+    from backend.reading_extractor import _extract_primary_title, _token_jaccard_similarity
+    # Subtitle colon/dash splitting (returns lowercased normalized base title)
+    assert _extract_primary_title("Deep Learning: An MIT Press Book") == "deep learning"
+    assert _extract_primary_title("Artificial Intelligence - A Modern Approach") == "artificial intelligence"
+    assert _extract_primary_title("Attention Is All You Need: A Neural Framework") == "attention is all you need"
+    assert _extract_primary_title("Clean Code") == "clean code"
+
+    # Token Jaccard similarity
+    sim_high = _token_jaccard_similarity("Machine Learning for Healthcare", "Machine Learning in Healthcare")
+    assert sim_high >= 0.75
+
+    sim_diff = _token_jaccard_similarity("Quantum Computing Algorithms", "Classical Electrodynamics")
+    assert sim_diff < 0.2
+
+
+def test_year_tolerance_in_record_equivalence():
+    from backend.reading_extractor import _are_records_equivalent
+    # Preprint (2017) vs Journal release (2018): 1-year tolerance should match
+    paper_preprint = {
+        "title": "Attention Is All You Need",
+        "author": "Vaswani Ashish",
+        "publication_year": "2017",
+        "doi": ""
+    }
+    paper_journal = {
+        "title": "Attention Is All You Need",
+        "author": "Vaswani A",
+        "publication_year": "2018",
+        "doi": ""
+    }
+    assert _are_records_equivalent(paper_preprint, paper_journal) is True
+
+    # Multi-year gap (>1 year) indicating different editions or distinct works
+    edition_1 = {
+        "title": "Introduction to Algorithms",
+        "author": "Cormen",
+        "publication_year": "2009",
+        "doi": ""
+    }
+    edition_4 = {
+        "title": "Introduction to Algorithms",
+        "author": "Cormen",
+        "publication_year": "2022",
+        "doi": ""
+    }
+    assert _are_records_equivalent(edition_1, edition_4) is False
+
+
+def test_consolidate_and_merge_metadata_enrichment():
+    from backend.reading_extractor import _consolidate_and_merge_records
+    cr_item = {
+        "title": "Consensus Definitions for Sepsis",
+        "author": "Singer M",
+        "publication_year": "2016",
+        "reading_type": "paper",
+        "category": "reference",
+        "publisher": "AMA",
+        "journal": "JAMA",
+        "doi": "10.1001/jama.2016.0287",
+        "pmcid": "",
+        "isbn": "",
+        "cover_url": "",
+        "preview_url": "https://doi.org/10.1001/jama.2016.0287",
+        "embed_url": "",
+        "reader_type": "web",
+        "abstract": "Short abstract",
+        "source_provider": "Crossref",
+        "is_open_access": False
+    }
+
+    pmc_item = {
+        "title": "The Third International Consensus Definitions for Sepsis (Sepsis-3)",
+        "author": "Singer M, Deutschman CS",
+        "publication_year": "2016",
+        "reading_type": "paper",
+        "category": "reference",
+        "publisher": "",
+        "journal": "",
+        "doi": "10.1001/jama.2016.0287",
+        "pmcid": "PMC4968574",
+        "isbn": "",
+        "cover_url": "",
+        "preview_url": "https://europepmc.org/article/MED/26903338",
+        "embed_url": "https://europepmc.org/articles/PMC4968574",
+        "reader_type": "pmc_reader",
+        "abstract": "A comprehensive multi-sentence abstract explaining sepsis-3 clinical criteria and organ failure scoring in intensive care units.",
+        "source_provider": "Europe PMC",
+        "is_open_access": True
+    }
+
+    merged = _consolidate_and_merge_records([cr_item], [pmc_item], [])
+    assert len(merged) == 1
+    record = merged[0]
+
+    # Retains Crossref citation data
+    assert record["journal"] == "JAMA"
+    assert record["publisher"] == "AMA"
+    assert record["doi"] == "10.1001/jama.2016.0287"
+
+    # Enriched with Europe PMC metadata
+    assert record["pmcid"] == "PMC4968574"
+    assert record["reader_type"] == "pmc_reader"
+    assert record["embed_url"] == "https://europepmc.org/articles/PMC4968574"
+    assert record["is_open_access"] is True
+    assert "comprehensive multi-sentence abstract" in record["abstract"]
+
+
+@pytest.mark.anyio
+async def test_search_academic_literature_async_provider_errors():
+    import httpx
+    from backend.reading_extractor import search_academic_literature_async
+
+    with patch("backend.reading_extractor._fetch_crossref_candidates_async") as mock_cr, \
+         patch("backend.reading_extractor._fetch_europe_pmc_candidates_async") as mock_pmc, \
+         patch("backend.reading_extractor._fetch_google_books_candidates_async") as mock_gb:
+
+        # Crossref raises Timeout, Europe PMC raises HTTP Error
+        mock_cr.side_effect = httpx.ConnectTimeout("Crossref gateway timeout")
+        mock_pmc.side_effect = httpx.HTTPStatusError("500 Internal Server Error", request=MagicMock(), response=MagicMock())
+        # Google Books succeeds
+        mock_gb.return_value = [
+            {
+                "title": "Artificial Intelligence: A Modern Approach",
+                "author": "Stuart Russell, Peter Norvig",
+                "publication_year": "2020",
+                "reading_type": "book",
+                "category": "primary_textbook",
+                "publisher": "Pearson",
+                "journal": "",
+                "doi": "",
+                "pmcid": "",
+                "isbn": "9780134610993",
+                "cover_url": "https://books.google.com/cover.jpg",
+                "preview_url": "https://books.google.com/preview",
+                "embed_url": "https://books.google.com/embed",
+                "reader_type": "google_embed",
+                "abstract": "The leading textbook in Artificial Intelligence.",
+                "source_provider": "Google Books",
+                "is_open_access": False
+            }
+        ]
+
+        # Pipeline should isolate exceptions and return Google Books results without failing
+        results = await search_academic_literature_async("artificial intelligence", limit=4)
+        assert len(results) == 1
+        book = results[0]
+        assert book["title"] == "Artificial Intelligence: A Modern Approach"
+        assert book["source_provider"] == "Google Books"
+        for k in REQUIRED_KEYS:
+            assert k in book
+
+
+def test_fastapi_search_endpoint_e2e():
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    client = TestClient(app)
+
+    # 1. Successful academic search through FastAPI endpoint
+    with patch("backend.main.search_academic_literature_async") as mock_search:
+        mock_search.return_value = [
+            {
+                "title": "Attention Is All You Need",
+                "author": "Vaswani et al.",
+                "publication_year": "2017",
+                "reading_type": "paper",
+                "category": "reference",
+                "publisher": "NeurIPS",
+                "journal": "NeurIPS 2017",
+                "doi": "10.5555/3295222.3295349",
+                "pmcid": "",
+                "isbn": "",
+                "cover_url": "",
+                "preview_url": "https://arxiv.org/abs/1706.03762",
+                "embed_url": "",
+                "reader_type": "web",
+                "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+                "source_provider": "Crossref",
+                "is_open_access": True
+            }
+        ]
+
+        res = client.post(
+            "/api/course/CS224N/search-literature",
+            json={"query": "transformers attention", "limit": 3}
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["query"] == "transformers attention"
+        assert data["count"] == 1
+        assert len(data["results"]) == 1
+        result_item = data["results"][0]
+        assert result_item["title"] == "Attention Is All You Need"
+        for k in REQUIRED_KEYS:
+            assert k in result_item
+
+    # 2. Validation error: empty query
+    res_empty_query = client.post(
+        "/api/course/CS224N/search-literature",
+        json={"query": "   ", "limit": 4}
+    )
+    assert res_empty_query.status_code == 400
+    assert "Search query is required." in res_empty_query.json()["detail"]
+
+    # 3. Validation error: whitespace course name
+    res_blank_course = client.post(
+        "/api/course/%20%20/search-literature",
+        json={"query": "algorithms", "limit": 4}
+    )
+    assert res_blank_course.status_code == 400
+    assert "course_name is required." in res_blank_course.json()["detail"]
+
+

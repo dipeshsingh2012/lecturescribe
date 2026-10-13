@@ -15,9 +15,11 @@ import traceback
 import urllib.parse
 import html
 import concurrent.futures
-from typing import List, Dict, Any, Optional
+import asyncio
+from typing import List, Dict, Any, Optional, Set
 
 import requests
+import httpx
 from backend.web_search import search_web_for_context
 
 logger = logging.getLogger("lecturescribe.reading_extractor")
@@ -472,12 +474,308 @@ def _normalize_title(title: str) -> str:
     return re.sub(r'[^a-zA-Z0-9]', '', (title or '').lower())
 
 
-def _fetch_crossref_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+GENERIC_TITLES: Set[str] = {
+    "introduction", "editorial", "review", "erratum", "preface",
+    "foreword", "conclusion", "authorindex", "subjectindex"
+}
+
+
+def _extract_primary_title(title: str) -> str:
+    """Isolates main title prior to subtitles (delimited by ':', ' - ', ' — ')."""
+    clean = re.split(r'[:\-–—]', title or "", maxsplit=1)[0]
+    return re.sub(r'[^a-zA-Z0-9\s]', '', clean.lower()).strip()
+
+
+def _extract_author_surnames(author_str: str) -> Set[str]:
+    """Extracts lowercase author family names for secondary validation."""
+    if not author_str:
+        return set()
+    surnames = set()
+    for part in re.split(r'[,;]', author_str):
+        tokens = [re.sub(r'[^a-z]', '', t.lower()) for t in part.split() if len(t) > 1]
+        if tokens:
+            surnames.add(tokens[-1])
+            surnames.add(tokens[0])
+    return {s for s in surnames if len(s) >= 3}
+
+
+def _token_jaccard_similarity(str_a: str, str_b: str) -> float:
+    """Computes Jaccard similarity across word tokens."""
+    tokens_a = set(re.findall(r'\b[a-z0-9]{3,}\b', str_a.lower()))
+    tokens_b = set(re.findall(r'\b[a-z0-9]{3,}\b', str_b.lower()))
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+def _are_records_equivalent(rec_a: Dict[str, Any], rec_b: Dict[str, Any]) -> bool:
     """
-    Query Crossref API with upstream filtering to exclude non-article artifacts
-    (figures, tables, component DOIs, peer reviews).
+    Multi-factor equivalence test:
+    1. Canonical DOI matching
+    2. Exact normalized title matching (with short/generic title guard requiring author/year match)
+    3. Subtitle delimiter splitting + token Jaccard (>= 0.85) with author/year validation
     """
+    doi_a = _normalize_doi(rec_a.get("doi", ""))
+    doi_b = _normalize_doi(rec_b.get("doi", ""))
+    if doi_a and doi_b:
+        return doi_a == doi_b
+
+    title_a = rec_a.get("title", "").strip()
+    title_b = rec_b.get("title", "").strip()
+    norm_a = _normalize_title(title_a)
+    norm_b = _normalize_title(title_b)
+
+    if not norm_a or not norm_b:
+        return False
+
+    authors_a = _extract_author_surnames(rec_a.get("author", ""))
+    authors_b = _extract_author_surnames(rec_b.get("author", ""))
+    author_overlap = bool(authors_a & authors_b) if (authors_a and authors_b) else False
+
+    year_a_str = rec_a.get("publication_year", "")
+    year_b_str = rec_b.get("publication_year", "")
+    year_a = int(year_a_str) if year_a_str.isdigit() else None
+    year_b = int(year_b_str) if year_b_str.isdigit() else None
+    years_compatible = True
+    if year_a and year_b:
+        years_compatible = abs(year_a - year_b) <= 1
+
+    # Exact normalized title match
+    if norm_a == norm_b:
+        if not years_compatible:
+            return False
+        # Guard against generic short title collisions
+        if norm_a in GENERIC_TITLES or len(norm_a) < 15:
+            return author_overlap
+        return True
+
+    # Subtitle splitting & token overlap (e.g. cataloger subtitle additions/truncations)
+    prim_a = _extract_primary_title(title_a)
+    prim_b = _extract_primary_title(title_b)
+    jaccard = _token_jaccard_similarity(prim_a, prim_b)
+
+    if jaccard >= 0.85 and years_compatible and (author_overlap or norm_a.startswith(norm_b) or norm_b.startswith(norm_a)):
+        return True
+
+    return False
+
+
+# HTTP Client Singleton for High-Throughput Async Execution
+_ASYNC_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+def get_async_http_client() -> httpx.AsyncClient:
+    global _ASYNC_HTTP_CLIENT
+    if _ASYNC_HTTP_CLIENT is None or _ASYNC_HTTP_CLIENT.is_closed:
+        limits = httpx.Limits(max_keepalive_connections=50, max_connections=200, keepalive_expiry=30.0)
+        timeout = httpx.Timeout(timeout=3.5, connect=1.5)
+        _ASYNC_HTTP_CLIENT = httpx.AsyncClient(
+            limits=limits,
+            timeout=timeout,
+            http2=True,
+            follow_redirects=True
+        )
+    return _ASYNC_HTTP_CLIENT
+
+
+async def close_async_http_client() -> None:
+    global _ASYNC_HTTP_CLIENT
+    if _ASYNC_HTTP_CLIENT is not None and not _ASYNC_HTTP_CLIENT.is_closed:
+        await _ASYNC_HTTP_CLIENT.aclose()
+        _ASYNC_HTTP_CLIENT = None
+
+
+def _parse_crossref_items(items: list) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
+    for it in items:
+        title_list = it.get("title") or []
+        raw_title = title_list[0] if (title_list and title_list[0]) else ""
+        t = _clean_html_text(raw_title).rstrip(".")
+        if not t:
+            continue
+
+        authors_list = []
+        for a in it.get("author", []):
+            given = _clean_html_text(a.get("given", ""))
+            family = _clean_html_text(a.get("family", ""))
+            if given and family:
+                authors_list.append(f"{given} {family}")
+            elif family:
+                authors_list.append(family)
+            elif given:
+                authors_list.append(given)
+            elif a.get("name"):
+                name = _clean_html_text(a.get("name", ""))
+                if name:
+                    authors_list.append(name)
+        authors_str = ", ".join(authors_list)
+
+        containers = it.get("container-title") or []
+        journal = _clean_html_text(containers[0]) if (containers and containers[0]) else ""
+        publisher = _clean_html_text(it.get("publisher", ""))
+
+        issued_parts = it.get("issued", {}).get("date-parts", [[None]])[0]
+        raw_year = issued_parts[0] if issued_parts and issued_parts[0] else ""
+        if not raw_year:
+            raw_year = it.get("published-print", {}).get("date-parts", [[None]])[0]
+            raw_year = raw_year[0] if raw_year and raw_year[0] else ""
+        if not raw_year:
+            raw_year = it.get("published-online", {}).get("date-parts", [[None]])[0]
+            raw_year = raw_year[0] if raw_year and raw_year[0] else ""
+        year = _extract_year(raw_year)
+
+        doi = _normalize_doi(it.get("DOI", ""))
+        url = it.get("URL") or (f"https://doi.org/{doi}" if doi else "")
+
+        isbn_list = it.get("ISBN") or it.get("isbn-type") or []
+        isbn = ""
+        if isinstance(isbn_list, list) and isbn_list:
+            isbn = str(isbn_list[0]).strip()
+
+        type_str = (it.get("type") or "").lower()
+        if "book" in type_str:
+            reading_type = "book"
+            category = "primary_textbook"
+        elif "journal" in type_str:
+            reading_type = "journal"
+            category = "reference"
+        else:
+            reading_type = "paper"
+            category = "reference"
+
+        abstract = _clean_html_text(it.get("abstract", ""))
+
+        results.append({
+            "title": t,
+            "author": authors_str,
+            "publication_year": year,
+            "reading_type": reading_type,
+            "category": category,
+            "publisher": publisher,
+            "journal": journal,
+            "doi": doi,
+            "pmcid": "",
+            "isbn": isbn,
+            "cover_url": "",
+            "preview_url": url,
+            "embed_url": "",
+            "reader_type": "web",
+            "abstract": abstract,
+            "source_provider": f"Crossref ({journal})" if journal else "Crossref",
+            "is_open_access": False
+        })
+    return results
+
+
+def _parse_europe_pmc_items(pmc_items: list) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for r in pmc_items:
+        t = _clean_html_text(r.get("title") or "").rstrip(".")
+        if not t:
+            continue
+
+        doi = _normalize_doi(r.get("doi", ""))
+        pmcid = (r.get("pmcid") or "").strip()
+        is_oa = r.get("isOpenAccess") == "Y"
+        journal = _clean_html_text(r.get("journalTitle") or "")
+
+        pub_info = r.get("journalInfo", {}).get("journal", {}).get("publisher") or r.get("publisher") or ""
+        publisher = _clean_html_text(pub_info)
+
+        year = _extract_year(r.get("pubYear") or r.get("firstPublicationDate") or "")
+        abstract = _clean_html_text(r.get("abstractText") or "")
+        author_str = _clean_html_text(r.get("authorString") or "").rstrip(".")
+
+        embed_url = f"https://europepmc.org/articles/{pmcid}" if pmcid else ""
+        preview_url = f"https://doi.org/{doi}" if doi else (embed_url or "")
+        reader_type = "pmc_reader" if pmcid else "web"
+
+        results.append({
+            "title": t,
+            "author": author_str,
+            "publication_year": year,
+            "reading_type": "journal",
+            "category": "reference",
+            "publisher": publisher,
+            "journal": journal,
+            "doi": doi,
+            "pmcid": pmcid,
+            "isbn": "",
+            "cover_url": "",
+            "preview_url": preview_url,
+            "embed_url": embed_url,
+            "reader_type": reader_type,
+            "abstract": abstract,
+            "source_provider": "Europe PMC / PubMed",
+            "is_open_access": is_oa
+        })
+    return results
+
+
+def _parse_google_books_items(gb_items: list) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for it in gb_items:
+        vol = it.get("volumeInfo", {})
+        t = _clean_html_text(vol.get("title", "")).strip()
+        if not t:
+            continue
+
+        img_links = vol.get("imageLinks", {})
+        cover_url = img_links.get("thumbnail") or img_links.get("smallThumbnail") or ""
+        if cover_url.startswith("http://"):
+            cover_url = "https://" + cover_url[7:]
+
+        preview_url = vol.get("previewLink") or vol.get("infoLink") or ""
+        if preview_url.startswith("http://"):
+            preview_url = "https://" + preview_url[7:]
+
+        embed_url = ""
+        reader_type = "web"
+        if "books.google.com" in preview_url:
+            m = re.search(r'id=([a-zA-Z0-9_\-]+)', preview_url)
+            if m:
+                embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
+                reader_type = "google_embed"
+
+        isbn = ""
+        for ident in vol.get("industryIdentifiers", []):
+            if ident.get("type") in ("ISBN_13", "ISBN_10"):
+                isbn = ident.get("identifier", "").strip()
+                break
+
+        raw_authors = vol.get("authors", [])
+        if isinstance(raw_authors, list):
+            author_str = ", ".join(_clean_html_text(a) for a in raw_authors if a)
+        else:
+            author_str = _clean_html_text(raw_authors)
+
+        year = _extract_year(vol.get("publishedDate", ""))
+        abstract = _clean_html_text(vol.get("description", ""))
+        publisher = _clean_html_text(vol.get("publisher", ""))
+
+        results.append({
+            "title": t,
+            "author": author_str,
+            "publication_year": year,
+            "reading_type": "book",
+            "category": "primary_textbook",
+            "publisher": publisher,
+            "journal": "",
+            "doi": "",
+            "pmcid": "",
+            "isbn": isbn,
+            "cover_url": cover_url,
+            "preview_url": preview_url,
+            "embed_url": embed_url,
+            "reader_type": reader_type,
+            "abstract": abstract,
+            "source_provider": "Google Books",
+            "is_open_access": False
+        })
+    return results
+
+
+# Synchronous Candidate Fetchers (with requests)
+def _fetch_crossref_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
     try:
         resp = requests.get(
             CROSSREF_API,
@@ -490,98 +788,13 @@ def _fetch_crossref_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
             timeout=3.5
         )
         if resp.status_code == 200:
-            items = resp.json().get("message", {}).get("items", [])
-            for it in items:
-                title_list = it.get("title") or []
-                raw_title = title_list[0] if (title_list and title_list[0]) else ""
-                t = _clean_html_text(raw_title).rstrip(".")
-                if not t:
-                    continue
-
-                # Standardize authors into clean, comma-separated full names
-                authors_list = []
-                for a in it.get("author", []):
-                    given = _clean_html_text(a.get("given", ""))
-                    family = _clean_html_text(a.get("family", ""))
-                    if given and family:
-                        authors_list.append(f"{given} {family}")
-                    elif family:
-                        authors_list.append(family)
-                    elif given:
-                        authors_list.append(given)
-                    elif a.get("name"):
-                        name = _clean_html_text(a.get("name", ""))
-                        if name:
-                            authors_list.append(name)
-                authors_str = ", ".join(authors_list)
-
-                # Separate journal and publisher cleanly
-                containers = it.get("container-title") or []
-                journal = _clean_html_text(containers[0]) if (containers and containers[0]) else ""
-                publisher = _clean_html_text(it.get("publisher", ""))
-
-                # Extract publication year
-                issued_parts = it.get("issued", {}).get("date-parts", [[None]])[0]
-                raw_year = issued_parts[0] if issued_parts and issued_parts[0] else ""
-                if not raw_year:
-                    raw_year = it.get("published-print", {}).get("date-parts", [[None]])[0]
-                    raw_year = raw_year[0] if raw_year and raw_year[0] else ""
-                if not raw_year:
-                    raw_year = it.get("published-online", {}).get("date-parts", [[None]])[0]
-                    raw_year = raw_year[0] if raw_year and raw_year[0] else ""
-                year = _extract_year(raw_year)
-
-                doi = _normalize_doi(it.get("DOI", ""))
-                url = it.get("URL") or (f"https://doi.org/{doi}" if doi else "")
-
-                # ISBN
-                isbn_list = it.get("ISBN") or it.get("isbn-type") or []
-                isbn = ""
-                if isinstance(isbn_list, list) and isbn_list:
-                    isbn = str(isbn_list[0]).strip()
-
-                type_str = (it.get("type") or "").lower()
-                if "book" in type_str:
-                    reading_type = "book"
-                    category = "primary_textbook"
-                elif "journal" in type_str:
-                    reading_type = "journal"
-                    category = "reference"
-                else:
-                    reading_type = "paper"
-                    category = "reference"
-
-                abstract = _clean_html_text(it.get("abstract", ""))
-
-                results.append({
-                    "title": t,
-                    "author": authors_str,
-                    "publication_year": year,
-                    "reading_type": reading_type,
-                    "category": category,
-                    "publisher": publisher,
-                    "journal": journal,
-                    "doi": doi,
-                    "pmcid": "",
-                    "isbn": isbn,
-                    "cover_url": "",
-                    "preview_url": url,
-                    "embed_url": "",
-                    "reader_type": "web",
-                    "abstract": abstract,
-                    "source_provider": f"Crossref ({journal})" if journal else "Crossref",
-                    "is_open_access": False
-                })
+            return _parse_crossref_items(resp.json().get("message", {}).get("items", []))
     except Exception as e:
         logger.debug(f"[ReadingExtractor] [Crossref Search] Exception: {e}")
-    return results
+    return []
 
 
 def _fetch_europe_pmc_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
-    """
-    Query Europe PMC for biomedical open-access papers, PubMed entries, and full texts.
-    """
-    results: List[Dict[str, Any]] = []
     try:
         resp = requests.get(
             EUROPE_PMC_API,
@@ -590,137 +803,164 @@ def _fetch_europe_pmc_candidates(query: str, limit: int) -> List[Dict[str, Any]]
             timeout=3.5
         )
         if resp.status_code == 200:
-            pmc_items = resp.json().get("resultList", {}).get("result", [])
-            for r in pmc_items:
-                t = _clean_html_text(r.get("title") or "").rstrip(".")
-                if not t:
-                    continue
-
-                doi = _normalize_doi(r.get("doi", ""))
-                pmcid = (r.get("pmcid") or "").strip()
-                is_oa = r.get("isOpenAccess") == "Y"
-                journal = _clean_html_text(r.get("journalTitle") or "")
-
-                pub_info = r.get("journalInfo", {}).get("journal", {}).get("publisher") or r.get("publisher") or ""
-                publisher = _clean_html_text(pub_info)
-
-                year = _extract_year(r.get("pubYear") or r.get("firstPublicationDate") or "")
-                abstract = _clean_html_text(r.get("abstractText") or "")
-                author_str = _clean_html_text(r.get("authorString") or "").rstrip(".")
-
-                embed_url = f"https://europepmc.org/articles/{pmcid}" if pmcid else ""
-                preview_url = f"https://doi.org/{doi}" if doi else (embed_url or "")
-                reader_type = "pmc_reader" if pmcid else "web"
-
-                results.append({
-                    "title": t,
-                    "author": author_str,
-                    "publication_year": year,
-                    "reading_type": "journal",
-                    "category": "reference",
-                    "publisher": publisher,
-                    "journal": journal,
-                    "doi": doi,
-                    "pmcid": pmcid,
-                    "isbn": "",
-                    "cover_url": "",
-                    "preview_url": preview_url,
-                    "embed_url": embed_url,
-                    "reader_type": reader_type,
-                    "abstract": abstract,
-                    "source_provider": "Europe PMC / PubMed",
-                    "is_open_access": is_oa
-                })
+            return _parse_europe_pmc_items(resp.json().get("resultList", {}).get("result", []))
     except Exception as e:
         logger.debug(f"[ReadingExtractor] [Europe PMC Search] Exception: {e}")
-    return results
+    return []
 
 
 def _fetch_google_books_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
-    """
-    Query Google Books API for textbooks and published monographs.
-    """
-    results: List[Dict[str, Any]] = []
     try:
-        gb_resp = requests.get(
+        resp = requests.get(
             GOOGLE_BOOKS_API,
             params={"q": query, "maxResults": min(max(limit, 4), 10), "printType": "books"},
             timeout=3.5
         )
-        if gb_resp.status_code == 200:
-            gb_items = gb_resp.json().get("items", [])
-            for it in gb_items:
-                vol = it.get("volumeInfo", {})
-                t = _clean_html_text(vol.get("title", "")).strip()
-                if not t:
-                    continue
-
-                img_links = vol.get("imageLinks", {})
-                cover_url = img_links.get("thumbnail") or img_links.get("smallThumbnail") or ""
-                if cover_url.startswith("http://"):
-                    cover_url = "https://" + cover_url[7:]
-
-                preview_url = vol.get("previewLink") or vol.get("infoLink") or ""
-                if preview_url.startswith("http://"):
-                    preview_url = "https://" + preview_url[7:]
-
-                embed_url = ""
-                reader_type = "web"
-                if "books.google.com" in preview_url:
-                    m = re.search(r'id=([a-zA-Z0-9_\-]+)', preview_url)
-                    if m:
-                        embed_url = f"https://books.google.com/books?id={m.group(1)}&printsec=frontcover&output=embed"
-                        reader_type = "google_embed"
-
-                isbn = ""
-                for ident in vol.get("industryIdentifiers", []):
-                    if ident.get("type") in ("ISBN_13", "ISBN_10"):
-                        isbn = ident.get("identifier", "").strip()
-                        break
-
-                raw_authors = vol.get("authors", [])
-                if isinstance(raw_authors, list):
-                    author_str = ", ".join(_clean_html_text(a) for a in raw_authors if a)
-                else:
-                    author_str = _clean_html_text(raw_authors)
-
-                year = _extract_year(vol.get("publishedDate", ""))
-                abstract = _clean_html_text(vol.get("description", ""))
-                publisher = _clean_html_text(vol.get("publisher", ""))
-
-                results.append({
-                    "title": t,
-                    "author": author_str,
-                    "publication_year": year,
-                    "reading_type": "book",
-                    "category": "primary_textbook",
-                    "publisher": publisher,
-                    "journal": "",
-                    "doi": "",
-                    "pmcid": "",
-                    "isbn": isbn,
-                    "cover_url": cover_url,
-                    "preview_url": preview_url,
-                    "embed_url": embed_url,
-                    "reader_type": reader_type,
-                    "abstract": abstract,
-                    "source_provider": "Google Books",
-                    "is_open_access": False
-                })
+        if resp.status_code == 200:
+            return _parse_google_books_items(resp.json().get("items", []))
     except Exception as e:
         logger.debug(f"[ReadingExtractor] [Google Books Search] Exception: {e}")
-    return results
+    return []
 
 
-def _interleave_results(
-    papers: List[Dict[str, Any]],
-    books: List[Dict[str, Any]],
-    limit: int
+# Asynchronous Candidate Fetchers (with httpx)
+async def _fetch_crossref_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    try:
+        resp = await client.get(
+            CROSSREF_API,
+            params={
+                "query.bibliographic": query,
+                "rows": max(limit, 5),
+                "filter": "type:journal-article,type:proceedings-article,type:book,type:book-chapter"
+            },
+            headers={"User-Agent": "LectureScribe/1.0 (mailto:academic-research@lecturescribe.local)"}
+        )
+        if resp.status_code == 200:
+            return _parse_crossref_items(resp.json().get("message", {}).get("items", []))
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Async Crossref Search] Exception: {e}")
+    return []
+
+
+async def _fetch_europe_pmc_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    try:
+        resp = await client.get(
+            EUROPE_PMC_API,
+            params={"query": query, "format": "json", "pageSize": max(limit, 5), "resultType": "core"},
+            headers={"User-Agent": "LectureScribe/1.0"}
+        )
+        if resp.status_code == 200:
+            return _parse_europe_pmc_items(resp.json().get("resultList", {}).get("result", []))
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Async Europe PMC Search] Exception: {e}")
+    return []
+
+
+async def _fetch_google_books_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    try:
+        resp = await client.get(
+            GOOGLE_BOOKS_API,
+            params={"q": query, "maxResults": min(max(limit, 4), 10), "printType": "books"}
+        )
+        if resp.status_code == 200:
+            return _parse_google_books_items(resp.json().get("items", []))
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Async Google Books Search] Exception: {e}")
+    return []
+
+
+def _consolidate_and_merge_records(
+    crossref_items: List[Dict[str, Any]],
+    pmc_items: List[Dict[str, Any]],
+    books_items: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
     """
-    Interleave papers and textbooks to guarantee book visibility.
-    When books are available, reserves at least 1-2 slots for books (at least 1 when limit >= 3).
-    Fills remaining slots with papers, respecting user-specified limit.
+    Multi-factor deduplication and Crossref + Europe PMC enrichment.
+    """
+    records: List[Dict[str, Any]] = []
+
+    def _find_duplicate_index(candidate: Dict[str, Any]) -> Optional[int]:
+        for i, existing in enumerate(records):
+            if _are_records_equivalent(existing, candidate):
+                return i
+        return None
+
+    # Step 1: Ingest Crossref results
+    for cr_item in crossref_items:
+        if _find_duplicate_index(cr_item) is None:
+            records.append(cr_item)
+
+    # Step 2: Ingest Europe PMC results with enrichment
+    for pmc_item in pmc_items:
+        match_idx = _find_duplicate_index(pmc_item)
+        if match_idx is not None:
+            target = records[match_idx]
+            if pmc_item.get("pmcid"):
+                target["pmcid"] = pmc_item["pmcid"]
+                target["embed_url"] = pmc_item.get("embed_url") or target.get("embed_url") or ""
+                target["reader_type"] = "pmc_reader"
+            elif not target.get("embed_url") and pmc_item.get("embed_url"):
+                target["embed_url"] = pmc_item["embed_url"]
+                if pmc_item.get("reader_type"):
+                    target["reader_type"] = pmc_item["reader_type"]
+
+            if pmc_item.get("is_open_access"):
+                target["is_open_access"] = True
+
+            if pmc_item.get("abstract") and (not target.get("abstract") or len(pmc_item["abstract"]) > len(target.get("abstract", ""))):
+                target["abstract"] = pmc_item["abstract"]
+
+            if not target.get("doi") and pmc_item.get("doi"):
+                target["doi"] = pmc_item["doi"]
+
+            if not target.get("journal") and pmc_item.get("journal"):
+                target["journal"] = pmc_item["journal"]
+            if not target.get("publisher") and pmc_item.get("publisher"):
+                target["publisher"] = pmc_item["publisher"]
+            if not target.get("publication_year") and pmc_item.get("publication_year"):
+                target["publication_year"] = pmc_item["publication_year"]
+            if not target.get("preview_url") and pmc_item.get("preview_url"):
+                target["preview_url"] = pmc_item["preview_url"]
+        else:
+            records.append(pmc_item)
+
+    # Step 3: Ingest Google Books results
+    for b_item in books_items:
+        match_idx = _find_duplicate_index(b_item)
+        if match_idx is not None:
+            target = records[match_idx]
+            if not target.get("isbn") and b_item.get("isbn"):
+                target["isbn"] = b_item["isbn"]
+            if not target.get("cover_url") and b_item.get("cover_url"):
+                target["cover_url"] = b_item["cover_url"]
+            if not target.get("embed_url") and b_item.get("embed_url"):
+                target["embed_url"] = b_item["embed_url"]
+                target["reader_type"] = b_item.get("reader_type", "google_embed")
+        else:
+            records.append(b_item)
+
+    return records
+
+
+def _classify_query_intent(query: str) -> str:
+    """Classifies user query intent into 'monograph', 'paper', or 'general'."""
+    q_lower = query.lower()
+    if re.search(r'\b(textbook|handbook|monograph|guide|introduction to|principles of|volume|edition)\b', q_lower):
+        return "monograph"
+    if re.search(r'\b(et al|jama|nejm|nature|ieee|arxiv|doi|proceedings|trial|paper|journal)\b', q_lower):
+        return "paper"
+    return "general"
+
+
+def _adaptive_interleave(
+    papers: List[Dict[str, Any]],
+    books: List[Dict[str, Any]],
+    limit: int,
+    query: str = ""
+) -> List[Dict[str, Any]]:
+    """
+    Dynamically balances result slots based on detected query intent.
+    Guarantees monograph visibility while preventing paper citation pollution.
     """
     if limit <= 0:
         return []
@@ -729,42 +969,100 @@ def _interleave_results(
     if not papers:
         return books[:limit]
 
-    # Reserve slots for books: 1-2 slots if limit allows
-    if limit >= 4:
-        target_books = min(len(books), 2)
-    elif limit >= 2:
-        target_books = min(len(books), 1)
-    else:  # limit == 1
-        target_books = min(len(books), 0 if papers else 1)
+    intent = _classify_query_intent(query)
+    if intent == "monograph":
+        target_books = min(len(books), max(1, int(limit * 0.6)))
+        target_papers = limit - target_books
+    elif intent == "paper":
+        target_books = min(len(books), 1) if limit >= 5 else 0
+        target_papers = limit - target_books
+    else:
+        target_books = min(len(books), 2) if limit >= 4 else (min(len(books), 1) if limit >= 2 else 0)
+        target_papers = limit - target_books
 
-    max_papers = max(0, limit - target_books)
-    sel_papers = papers[:max_papers]
+    selected_books = books[:target_books]
+    selected_papers = papers[:target_papers]
 
-    # Use remaining slots for books up to limit
-    remaining_for_books = limit - len(sel_papers)
-    sel_books = books[:remaining_for_books]
+    rem_slots = limit - (len(selected_books) + len(selected_papers))
+    if rem_slots > 0:
+        if len(papers) > target_papers:
+            selected_papers.extend(papers[target_papers : target_papers + rem_slots])
+        elif len(books) > target_books:
+            selected_books.extend(books[target_books : target_books + rem_slots])
 
-    # Interleave results: 2 papers, 1 book, repeat
     combined: List[Dict[str, Any]] = []
-    p_idx, b_idx = 0, 0
-    while p_idx < len(sel_papers) or b_idx < len(sel_books):
-        for _ in range(2):
-            if p_idx < len(sel_papers):
-                combined.append(sel_papers[p_idx])
+    if intent == "monograph":
+        b_idx, p_idx = 0, 0
+        while b_idx < len(selected_books) or p_idx < len(selected_papers):
+            if b_idx < len(selected_books):
+                combined.append(selected_books[b_idx])
+                b_idx += 1
+            if p_idx < len(selected_papers):
+                combined.append(selected_papers[p_idx])
                 p_idx += 1
-        if b_idx < len(sel_books):
-            combined.append(sel_books[b_idx])
-            b_idx += 1
+    else:
+        p_idx, b_idx = 0, 0
+        while p_idx < len(selected_papers) or b_idx < len(selected_books):
+            for _ in range(2):
+                if p_idx < len(selected_papers):
+                    combined.append(selected_papers[p_idx])
+                    p_idx += 1
+            if b_idx < len(selected_books):
+                combined.append(selected_books[b_idx])
+                b_idx += 1
 
     return combined[:limit]
 
 
+def _interleave_results(
+    papers: List[Dict[str, Any]],
+    books: List[Dict[str, Any]],
+    limit: int
+) -> List[Dict[str, Any]]:
+    """Backward-compatible helper alias for standard balanced interleaving."""
+    return _adaptive_interleave(papers, books, limit, query="")
+
+
+def _format_and_interleave(records: List[Dict[str, Any]], limit: int, query: str = "") -> List[Dict[str, Any]]:
+    books = [r for r in records if r.get("reading_type") == "book"]
+    papers = [r for r in records if r.get("reading_type") != "book"]
+    return _adaptive_interleave(papers, books, limit=limit, query=query)
+
+
+async def search_academic_literature_async(query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    """
+    Asynchronous federated literature discovery across Crossref, Europe PMC, and Google Books.
+    Utilizes HTTP/2 connection pooling with httpx, strict task timeouts,
+    multi-factor deduplication, and intent-adaptive ranking.
+    """
+    if not query or len(query.strip()) < 2:
+        return []
+
+    clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
+    logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_q}' (limit={limit})")
+
+    client = get_async_http_client()
+    crossref_task = asyncio.create_task(_fetch_crossref_candidates_async(client, clean_q, limit))
+    pmc_task = asyncio.create_task(_fetch_europe_pmc_candidates_async(client, clean_q, limit))
+    books_task = asyncio.create_task(_fetch_google_books_candidates_async(client, clean_q, limit))
+
+    raw_results = await asyncio.gather(crossref_task, pmc_task, books_task, return_exceptions=True)
+
+    cr_items: List[Dict[str, Any]] = raw_results[0] if isinstance(raw_results[0], list) else []
+    pmc_items: List[Dict[str, Any]] = raw_results[1] if isinstance(raw_results[1], list) else []
+    gb_items: List[Dict[str, Any]] = raw_results[2] if isinstance(raw_results[2], list) else []
+
+    consolidated = _consolidate_and_merge_records(cr_items, pmc_items, gb_items)
+    final_results = _format_and_interleave(consolidated, limit=limit, query=clean_q)
+    logger.info(f"[ReadingExtractor] search_academic_literature_async returned {len(final_results)} results for query: '{clean_q}'")
+    return final_results
+
+
 def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any]]:
     """
-    Search academic literature, research papers, journal articles, and books concurrently.
-    Queries Crossref (global DOI & journal registry), Europe PMC (biomedical & full-text open-access),
-    and Google Books (textbooks & monographs) in parallel.
-    Applies multi-key deduplication, PMC enrichment, HTML sanitization, and balanced interleaving.
+    Synchronous federated literature discovery entrypoint.
+    Queries Crossref, Europe PMC, and Google Books concurrently with multi-factor deduplication,
+    Europe PMC enrichment, and intent-adaptive interleaving.
     """
     if not query or len(query.strip()) < 2:
         return []
@@ -772,17 +1070,16 @@ def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any
     clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
     logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit})")
 
-    # 1. Parallel execution across all providers with 3.5s timeout
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        future_crossref = executor.submit(_fetch_crossref_candidates, clean_q, limit)
+        future_cr = executor.submit(_fetch_crossref_candidates, clean_q, limit)
         future_pmc = executor.submit(_fetch_europe_pmc_candidates, clean_q, limit)
-        future_books = executor.submit(_fetch_google_books_candidates, clean_q, limit)
+        future_gb = executor.submit(_fetch_google_books_candidates, clean_q, limit)
 
         try:
-            crossref_items = future_crossref.result()
+            cr_items = future_cr.result()
         except Exception as e:
             logger.debug(f"[ReadingExtractor] Crossref query error: {e}")
-            crossref_items = []
+            cr_items = []
 
         try:
             pmc_items = future_pmc.result()
@@ -791,100 +1088,13 @@ def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any
             pmc_items = []
 
         try:
-            books_items = future_books.result()
+            gb_items = future_gb.result()
         except Exception as e:
             logger.debug(f"[ReadingExtractor] Google Books query error: {e}")
-            books_items = []
+            gb_items = []
 
-    # 2. Multi-Key Deduplication & Merging
-    records: List[Dict[str, Any]] = []
-    doi_map: Dict[str, Dict[str, Any]] = {}
-    title_map: Dict[str, Dict[str, Any]] = {}
-
-    def _find_existing(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        # Tier 1: Case-insensitive normalized DOI
-        norm_d = _normalize_doi(item.get("doi", ""))
-        if norm_d and norm_d in doi_map:
-            return doi_map[norm_d]
-        # Tier 2: Normalized alphanumeric title
-        norm_t = _normalize_title(item.get("title", ""))
-        if norm_t and norm_t in title_map:
-            return title_map[norm_t]
-        return None
-
-    def _register(rec: Dict[str, Any]):
-        norm_d = _normalize_doi(rec.get("doi", ""))
-        if norm_d:
-            doi_map[norm_d] = rec
-        norm_t = _normalize_title(rec.get("title", ""))
-        if norm_t:
-            title_map[norm_t] = rec
-
-    # Process Crossref results
-    for cr_item in crossref_items:
-        existing = _find_existing(cr_item)
-        if existing is None:
-            records.append(cr_item)
-            _register(cr_item)
-
-    # Process Europe PMC results (merging & enriching existing Crossref records)
-    for pmc_item in pmc_items:
-        existing = _find_existing(pmc_item)
-        if existing is not None:
-            if pmc_item.get("pmcid"):
-                existing["pmcid"] = pmc_item["pmcid"]
-                existing["embed_url"] = pmc_item.get("embed_url") or existing.get("embed_url") or ""
-                existing["reader_type"] = "pmc_reader"
-            elif not existing.get("embed_url") and pmc_item.get("embed_url"):
-                existing["embed_url"] = pmc_item["embed_url"]
-                if pmc_item.get("reader_type"):
-                    existing["reader_type"] = pmc_item["reader_type"]
-
-            if pmc_item.get("is_open_access"):
-                existing["is_open_access"] = True
-
-            if pmc_item.get("abstract"):
-                if not existing.get("abstract") or len(pmc_item["abstract"]) > len(existing.get("abstract", "")):
-                    existing["abstract"] = pmc_item["abstract"]
-
-            if not existing.get("doi") and pmc_item.get("doi"):
-                existing["doi"] = pmc_item["doi"]
-                norm_d = _normalize_doi(pmc_item["doi"])
-                if norm_d:
-                    doi_map[norm_d] = existing
-
-            if not existing.get("journal") and pmc_item.get("journal"):
-                existing["journal"] = pmc_item["journal"]
-            if not existing.get("publisher") and pmc_item.get("publisher"):
-                existing["publisher"] = pmc_item["publisher"]
-            if not existing.get("publication_year") and pmc_item.get("publication_year"):
-                existing["publication_year"] = pmc_item["publication_year"]
-            if not existing.get("preview_url") and pmc_item.get("preview_url"):
-                existing["preview_url"] = pmc_item["preview_url"]
-        else:
-            records.append(pmc_item)
-            _register(pmc_item)
-
-    # Process Google Books results
-    for b_item in books_items:
-        existing = _find_existing(b_item)
-        if existing is not None:
-            if not existing.get("isbn") and b_item.get("isbn"):
-                existing["isbn"] = b_item["isbn"]
-            if not existing.get("cover_url") and b_item.get("cover_url"):
-                existing["cover_url"] = b_item["cover_url"]
-            if not existing.get("embed_url") and b_item.get("embed_url"):
-                existing["embed_url"] = b_item["embed_url"]
-                existing["reader_type"] = b_item.get("reader_type", "google_embed")
-        else:
-            records.append(b_item)
-            _register(b_item)
-
-    # 3. Interleaving papers and books
-    books = [r for r in records if r.get("reading_type") == "book"]
-    papers = [r for r in records if r.get("reading_type") != "book"]
-    final_results = _interleave_results(papers, books, limit)
-
+    consolidated = _consolidate_and_merge_records(cr_items, pmc_items, gb_items)
+    final_results = _format_and_interleave(consolidated, limit=limit, query=clean_q)
     logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{clean_q}'")
     return final_results
 

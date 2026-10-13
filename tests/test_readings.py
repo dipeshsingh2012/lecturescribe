@@ -99,16 +99,6 @@ class TestReadingEndpoints(unittest.TestCase):
         self.assertIn("results", data)
         self.assertEqual(data["query"], "Singer et al. (2016) Sepsis-3 JAMA")
 
-    def test_search_course_literature_get(self):
-        res = self.client.get(
-            f"/api/course/{self.test_course}/search-literature",
-            params={"query": "Cormen Introduction to Algorithms", "limit": 2}
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertEqual(data["status"], "success")
-        self.assertIn("results", data)
-
     def test_add_course_reading(self):
         paper_payload = {
             "title": "The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3)",

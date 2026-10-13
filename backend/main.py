@@ -3232,7 +3232,7 @@ async def search_course_literature(course_name: str, payload: SearchLiteratureRe
     if not query:
         raise HTTPException(status_code=400, detail="Search query is required.")
     cname = db_manager.resolve_course_canonical_name(raw_name)
-    results = await search_academic_literature_async(query, limit=payload.limit or 6)
+    results = await search_academic_literature_async(query, limit=payload.limit or 6, course_name=raw_name)
     return {
         "status": "success",
         "course_name": cname,

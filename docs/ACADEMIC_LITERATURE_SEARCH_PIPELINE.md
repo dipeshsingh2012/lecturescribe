@@ -4,8 +4,13 @@
 
 The **Academic Literature Search Pipeline** (`search_academic_literature`) is the federated information retrieval (IR) engine in LectureScribe. It enables students and educators across diverse disciplines—Computer Science & Engineering, Medicine & Life Sciences, and Humanities—to discover authoritative, high-impact peer-reviewed literature, conference proceedings, preprints, and foundational monographs.
 
-### Current Evolution (v2.0 Architecture)
-To solve the semantic drift, missing abstracts, lack of citation authority, and provider mismatch experienced on technical Computer Science/AI queries (e.g., *"cross attention transformer models"*), the engine has evolved from a simple 3-provider lexical fan-out to a **domain-routed, citation-aware, hybrid-ranked federated discovery engine**.
+### Current Evolution (v2.2 Architecture Hardening)
+To eliminate regressions identified in production audits:
+1. **Domain Exclusion Rules**: Enforces hard exclusion of `Europe PMC` when searching for `STEM_CS` courses (e.g. `Master of Technology`), routing strictly to OpenAlex, Semantic Scholar, Crossref, and Google Books.
+2. **Two-Pass OpenAlex Candidate Retrieval**: Queries OpenAlex concurrently with relevance sorting (`sort=relevance_score:desc`) and citation authority sorting (`sort=cited_by_count:desc`), guaranteeing foundational seminal papers (e.g. Vaswani et al., 2017) are surfaced alongside recent breakthroughs.
+3. **Strict Lexical & Compound Phrase Scoring**: Penalizes disconnected compound tokens (e.g. "cross-domain" ... "attention") and rewards authentic compound phrases ("cross attention").
+4. **Authentic Direct PDF Resolution**: Rejects publisher and DOI HTML landing pages from being falsely categorized as binary PDF streams.
+5. **Structured Telemetry**: Transparent HTTP status monitoring across Semantic Scholar and federated providers.
 
 ---
 
@@ -327,13 +332,17 @@ Every item returned by `search_academic_literature` strictly conforms to the fol
 The pipeline is verified through automated test suites in both backend and frontend environments:
 
 ### Backend Test Suites (`pytest`)
-* **Test File**: [`backend/tests/test_literature_search.py`](file:///home/dipes/projects/lecturescribe/backend/tests/test_literature_search.py) (25 unit/integration tests)
-* **Test File**: [`tests/test_readings.py`](file:///home/dipes/projects/lecturescribe/tests/test_readings.py) (8 API & slide parser tests)
+* **Test File**: [`backend/tests/test_literature_search.py`](file:///home/dipes/projects/lecturescribe/backend/tests/test_literature_search.py) (28 unit/regression tests)
+* **Test File**: [`tests/test_readings.py`](file:///home/dipes/projects/lecturescribe/tests/test_readings.py) (9 API & slide parser tests)
 
 ```
 ========================================================================================
 Test Name                                                Function Tested                 Status
 ========================================================================================
+test_domain_router_excludes_europe_pmc_for_mtech         Hard Exclusion for STEM_CS      ✅ PASSED
+test_two_pass_fetch_surfaces_foundational_papers         2-Pass OpenAlex Relevance/Cits  ✅ PASSED
+test_lexical_scorer_penalizes_disconnected_cross_tokens  Compound Strictness vs Disconn  ✅ PASSED
+test_direct_pdf_url_rejects_doi_landing_page             DirectPdfResolver Authentication✅ PASSED
 test_hybrid_scoring_mathematical_boundaries              [0.0, 1.0] Score Invariance     ✅ PASSED
 test_reconstruct_inverted_abstract                       OpenAlex Inverted Rebuilding    ✅ PASSED
 test_extract_canonical_arxiv_id                          arXiv Canonical ID Extraction   ✅ PASSED
@@ -355,7 +364,7 @@ test_extract_year                                       4-Digit Year Extraction 
 test_normalize_doi                                      Canonical DOI Formatting        ✅ PASSED
 test_normalize_title                                    Alphanumeric Title Normalization✅ PASSED
 ========================================================================================
-Total Backend Tests Passing: 33 / 33 (100%)
+Total Backend Tests Passing: 37 / 37 (100%)
 ```
 
 ### Frontend Test Suites (`vitest`)

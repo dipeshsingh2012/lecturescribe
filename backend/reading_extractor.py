@@ -545,6 +545,243 @@ def extract_canonical_arxiv_id(text: Optional[str]) -> Optional[str]:
     return None
 
 
+class DirectPdfResolver:
+    """
+    Validates and resolves authentic binary direct PDF URLs versus DOI/publisher landing pages.
+    """
+    DISALLOWED_PDF_DOMAINS = (
+        "doi.org",
+        "sciencedirect.com",
+        "iopscience.iop.org",
+        "nature.com",
+        "ieeexplore.ieee.org",
+        "springer.com",
+        "wiley.com",
+        "tandfonline.com",
+        "cell.com",
+        "frontiersin.org",
+        "mdpi.com",
+        "acm.org",
+        "oup.com",
+        "cambridge.org",
+        "plos.org"
+    )
+
+    @classmethod
+    def is_authentic_pdf_url(cls, url: Optional[str]) -> bool:
+        if not url or not isinstance(url, str):
+            return False
+        clean_url = url.strip()
+        if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
+            return False
+
+        parsed = urllib.parse.urlparse(clean_url)
+        netloc = parsed.netloc.lower()
+        path = parsed.path.lower()
+
+        # Reject known landing page publishers unless path explicitly terminates in .pdf
+        for blocked in cls.DISALLOWED_PDF_DOMAINS:
+            if blocked in netloc:
+                if not path.endswith(".pdf"):
+                    return False
+
+        # If it's a DOI path or landing page
+        if "doi.org" in netloc or "/doi/" in path or "/abs/" in path:
+            if not path.endswith(".pdf"):
+                return False
+
+        # Explicit PDF signals
+        if path.endswith(".pdf") or "arxiv.org/pdf/" in clean_url or "/pdfstream/" in path:
+            return True
+
+        return False
+
+    @classmethod
+    def resolve_pdf(cls, candidate_url: Optional[str], arxiv_id: Optional[str] = None) -> tuple[str, str]:
+        """
+        Returns (direct_pdf_url, reader_type).
+        If authentic PDF, returns (clean_url, "pdf_direct").
+        If invalid landing page, falls back to arxiv PDF if arxiv_id exists, else returns ("", "web").
+        """
+        if candidate_url and cls.is_authentic_pdf_url(candidate_url):
+            return candidate_url.strip(), "pdf_direct"
+
+        # ArXiv fallback
+        if arxiv_id:
+            canon_arxiv = extract_canonical_arxiv_id(arxiv_id)
+            if canon_arxiv:
+                return f"https://arxiv.org/pdf/{canon_arxiv}.pdf", "pdf_direct"
+
+        return "", "web"
+
+
+class DomainRouter:
+    """
+    Routes academic literature search requests across providers based on course slug/name and query intent.
+    Enforces strict hard exclusions (e.g. Europe PMC NEVER allowed for STEM_CS).
+    """
+    STEM_CS_SLUGS: Set[str] = {
+        "technology",
+        "master-of-technology",
+        "computer-science",
+        "data-science",
+        "artificial-intelligence",
+        "software-engineering",
+        "electrical",
+        "mtech",
+        "cs",
+        "engineering",
+        "machine-learning",
+        "robotics",
+        "cybersecurity",
+        "information-technology"
+    }
+
+    BIOMEDICAL_SLUGS: Set[str] = {
+        "medicine",
+        "biomedical",
+        "health",
+        "clinical",
+        "nursing",
+        "pharmacy",
+        "biology",
+        "life-sciences",
+        "oncology",
+        "immunology",
+        "neuroscience"
+    }
+
+    @classmethod
+    def classify_domain(cls, course_name: str, query: str = "") -> str:
+        course_clean = (course_name or "").lower().strip()
+        slug = re.sub(r'[^a-z0-9]+', '-', course_clean).strip('-')
+        tokens = set(re.findall(r'[a-z0-9]+', course_clean))
+
+        # 1. Match against STEM/CS course keywords or slugs
+        if slug in cls.STEM_CS_SLUGS or any(t in cls.STEM_CS_SLUGS for t in tokens):
+            return "STEM_CS"
+
+        for s in cls.STEM_CS_SLUGS:
+            if s in slug:
+                return "STEM_CS"
+
+        # 2. Match against Biomedical course keywords or slugs
+        if slug in cls.BIOMEDICAL_SLUGS or any(t in cls.BIOMEDICAL_SLUGS for t in tokens):
+            return "BIOMEDICAL"
+
+        for s in cls.BIOMEDICAL_SLUGS:
+            if s in slug:
+                return "BIOMEDICAL"
+
+        # 3. If query itself strongly implies medicine/clinical and no course provided
+        q_lower = query.lower()
+        if re.search(r'\b(clinical|patient|rct|oncology|disease|therapy|pubmed|pmcid)\b', q_lower):
+            return "BIOMEDICAL"
+
+        if re.search(r'\b(transformer|neural network|algorithm|compiler|deep learning|arxiv|gpu)\b', q_lower):
+            return "STEM_CS"
+
+        return "GENERAL"
+
+    @classmethod
+    def get_providers_for_domain(cls, domain: str, query: str = "") -> tuple[List[str], List[str]]:
+        """
+        Returns (dispatched_providers, excluded_providers).
+        """
+        intent = _classify_query_intent(query)
+        dispatched: List[str] = []
+        excluded: List[str] = []
+
+        if domain == "STEM_CS":
+            # Primary: OpenAlex, Semantic Scholar, Crossref, Google Books (if monograph intent or general)
+            dispatched = ["openalex", "semantic_scholar", "crossref"]
+            if intent in ("monograph", "general"):
+                dispatched.append("google_books")
+            # HARD EXCLUSION: Europe PMC is forbidden
+            excluded = ["europe_pmc"]
+        elif domain == "BIOMEDICAL":
+            dispatched = ["openalex", "europe_pmc", "semantic_scholar", "crossref"]
+            if intent in ("monograph", "general"):
+                dispatched.append("google_books")
+            excluded = []
+        else:
+            # General / Unconstrained
+            dispatched = ["openalex", "semantic_scholar", "crossref", "europe_pmc", "google_books"]
+            excluded = []
+
+        logger.info(f"[DomainRouter] Dispatching to: {dispatched} | Excluded: {excluded} (domain={domain})")
+        return dispatched, excluded
+
+
+class LexicalScorer:
+    """
+    Computes strict lexical relevance, penalizing disconnected tokens and rewarding exact phrases.
+    """
+    COMPOUND_PHRASES: List[str] = [
+        "cross attention",
+        "cross-attention",
+        "self attention",
+        "self-attention",
+        "multi head attention",
+        "multi-head attention",
+        "transformer models",
+        "transformer model",
+        "deep neural networks"
+    ]
+
+    @classmethod
+    def compute_lexical_score(cls, title: str, abstract: str, query: str) -> float:
+        clean_q = (query or "").lower().strip()
+        if not clean_q:
+            return 0.0
+
+        title_l = (title or "").lower().strip()
+        abstract_l = (abstract or "").lower().strip()
+
+        # Check for compound terms in query
+        q_compounds = [cp for cp in cls.COMPOUND_PHRASES if cp.replace("-", " ") in clean_q or cp in clean_q]
+
+        # Exact query match
+        exact_query_match = (clean_q in title_l) or (clean_q in abstract_l)
+
+        # Check compound match
+        compound_matched = False
+        if q_compounds:
+            for cp in q_compounds:
+                cp_alt = cp.replace("-", " ") if "-" in cp else cp.replace(" ", "-")
+                if cp in title_l or cp_alt in title_l or cp in abstract_l or cp_alt in abstract_l:
+                    compound_matched = True
+                    break
+
+        # Token set overlap
+        q_tokens = [t for t in re.findall(r'\b[a-z0-9]{3,}\b', clean_q) if t not in ("the", "for", "and", "models", "model")]
+        if not q_tokens:
+            q_tokens = re.findall(r'\b[a-z0-9]{3,}\b', clean_q)
+
+        t_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', title_l))
+        a_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', abstract_l))
+
+        overlap_title = len(set(q_tokens) & t_tokens) / len(q_tokens) if q_tokens else 0.0
+        overlap_abstract = len(set(q_tokens) & a_tokens) / len(q_tokens) if (q_tokens and a_tokens) else 0.0
+
+        score = 0.5 * overlap_title + 0.3 * overlap_abstract
+        if exact_query_match:
+            score += 0.2
+        elif compound_matched:
+            score += 0.15
+
+        # Penalty for disconnected split tokens:
+        # e.g. "cross attention" in query, but title/abstract only has "cross-domain", "cross-temporal" without "cross-attention"
+        if "cross attention" in clean_q or "cross-attention" in clean_q:
+            has_true_cross_attention = ("cross attention" in title_l or "cross-attention" in title_l or
+                                        "cross attention" in abstract_l or "cross-attention" in abstract_l)
+            if not has_true_cross_attention:
+                # Disconnected tokens detected
+                score *= 0.35
+
+        return min(1.0, max(0.0, score))
+
+
 def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
     """
     Mathematically bounded composite relevance scoring function strictly in [0.0, 1.0].
@@ -556,20 +793,11 @@ def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
     w_rec = 0.15
     w_oa = 0.05
 
-    q_clean = query.lower().strip()
-    q_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', q_clean))
+    title = record.get("title") or ""
+    abstract = record.get("abstract") or ""
 
-    title = (record.get("title") or "").lower()
-    abstract = (record.get("abstract") or "").lower()
-    t_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', title))
-    a_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', abstract))
-
-    # 1. Normalized Lexical score S_lex clamped to [0.0, 1.0]
-    overlap_title = len(q_tokens & t_tokens) / len(q_tokens) if q_tokens else 0.0
-    overlap_abstract = len(q_tokens & a_tokens) / len(q_tokens) if (q_tokens and a_tokens) else 0.0
-    exact_phrase = 1.0 if (q_clean and (q_clean in title or (abstract and q_clean in abstract))) else 0.0
-
-    s_lex = min(1.0, 0.5 * overlap_title + 0.3 * overlap_abstract + 0.2 * exact_phrase)
+    # 1. Normalized Lexical score S_lex clamped to [0.0, 1.0] using LexicalScorer
+    s_lex = LexicalScorer.compute_lexical_score(title, abstract, query)
 
     # 2. Log-normalized citation authority S_cit in [0.0, 1.0]
     citations = max(0, int(record.get("citation_count") or 0))
@@ -980,9 +1208,9 @@ def _parse_openalex_items(items: list) -> List[Dict[str, Any]]:
         # Open Access & Direct PDF
         oa_obj = it.get("open_access") or {}
         is_oa = bool(oa_obj.get("is_oa", False))
-        direct_pdf = oa_obj.get("oa_url") or ""
-        if arxiv_id and not direct_pdf:
-            direct_pdf = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+        candidate_pdf = oa_obj.get("oa_url") or ""
+        direct_pdf, reader_type = DirectPdfResolver.resolve_pdf(candidate_pdf, arxiv_id)
+        if direct_pdf:
             is_oa = True
 
         primary_loc = it.get("primary_location") or {}
@@ -994,7 +1222,6 @@ def _parse_openalex_items(items: list) -> List[Dict[str, Any]]:
 
         preview_url = it.get("doi") or direct_pdf or raw_ids.get("openalex") or ""
         embed_url = direct_pdf if direct_pdf else ""
-        reader_type = "pdf_direct" if direct_pdf else "web"
 
         type_str = (it.get("type") or "").lower()
         if "book" in type_str:
@@ -1053,15 +1280,13 @@ def _parse_semantic_scholar_items(items: list) -> List[Dict[str, Any]]:
         inf_citations = it.get("influentialCitationCount") or 0
 
         oa_obj = it.get("openAccessPdf") or {}
-        direct_pdf = oa_obj.get("url") or ""
-        if arxiv_id and not direct_pdf:
-            direct_pdf = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-
+        candidate_pdf = oa_obj.get("url") or ""
+        direct_pdf, reader_type = DirectPdfResolver.resolve_pdf(candidate_pdf, arxiv_id)
         is_oa = bool(direct_pdf)
+
         paper_id = it.get("paperId") or ""
         preview_url = f"https://www.semanticscholar.org/paper/{paper_id}" if paper_id else (doi or "")
         embed_url = direct_pdf if direct_pdf else ""
-        reader_type = "pdf_direct" if direct_pdf else "web"
 
         results.append({
             "title": t,
@@ -1204,30 +1429,80 @@ async def _fetch_google_books_candidates_async(client: httpx.AsyncClient, query:
 
 
 async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    """
+    Two-pass OpenAlex fetch:
+      Pass 1: Relevance-sorted query for domain alignment.
+      Pass 2: Citation-sorted query to guarantee seminal foundational papers are surfaced.
+    Merges both passes deduplicated by work ID/DOI.
+    """
+    headers = {"User-Agent": "LectureScribe/2.2 (mailto:academic-research@lecturescribe.local)"}
+
+    # Pass 1: Relevance-based candidates
+    task_p1 = client.get(
+        OPENALEX_API,
+        params={
+            "search": query,
+            "per-page": max(limit, 15),
+            "sort": "relevance_score:desc"
+        },
+        headers=headers,
+        timeout=3.5
+    )
+
+    # Pass 2: Citation-authority candidates
+    task_p2 = client.get(
+        OPENALEX_API,
+        params={
+            "search": query,
+            "per-page": max(limit, 10),
+            "sort": "cited_by_count:desc"
+        },
+        headers=headers,
+        timeout=3.5
+    )
+
     try:
-        resp = await client.get(
-            OPENALEX_API,
-            params={
-                "search": query,
-                "per-page": max(limit, 8),
-                "sort": "relevance_score:desc"
-            },
-            headers={"User-Agent": "LectureScribe/2.1 (mailto:academic-research@lecturescribe.local)"}
-        )
-        if resp.status_code == 200:
-            return _parse_openalex_items(resp.json().get("results", []))
+        resps = await asyncio.gather(task_p1, task_p2, return_exceptions=True)
+        resp1, resp2 = resps[0], resps[1]
+
+        combined_raw: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+
+        if isinstance(resp1, httpx.Response) and resp1.status_code == 200:
+            for item in resp1.json().get("results", []):
+                work_id = str(item.get("id") or item.get("doi") or "")
+                if work_id:
+                    seen_ids.add(work_id)
+                combined_raw.append(item)
+        elif isinstance(resp1, Exception):
+            logger.debug(f"[ReadingExtractor] [Async OpenAlex Pass 1] Exception: {resp1}")
+
+        if isinstance(resp2, httpx.Response) and resp2.status_code == 200:
+            for item in resp2.json().get("results", []):
+                work_id = str(item.get("id") or item.get("doi") or "")
+                if not work_id or work_id not in seen_ids:
+                    if work_id:
+                        seen_ids.add(work_id)
+                    combined_raw.append(item)
+        elif isinstance(resp2, Exception):
+            logger.debug(f"[ReadingExtractor] [Async OpenAlex Pass 2] Exception: {resp2}")
+
+        if combined_raw:
+            return _parse_openalex_items(combined_raw)
     except Exception as e:
-        logger.debug(f"[ReadingExtractor] [Async OpenAlex Search] Exception: {e}")
+        logger.debug(f"[ReadingExtractor] [Async OpenAlex Two-Pass Search] Exception: {e}")
+
     return []
 
 
 async def _fetch_semantic_scholar_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
     allowed = await _S2_RATE_LIMITER.acquire()
     if not allowed:
+        logger.info("[SemanticScholar] [Telemetry] Request rejected by local rate limiter/circuit breaker.")
         return []
     try:
         api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
-        headers = {"User-Agent": "LectureScribe/2.1"}
+        headers = {"User-Agent": "LectureScribe/2.2"}
         if api_key:
             headers["x-api-key"] = api_key
 
@@ -1240,15 +1515,24 @@ async def _fetch_semantic_scholar_candidates_async(client: httpx.AsyncClient, qu
         )
         if resp.status_code == 200:
             _S2_RATE_LIMITER.record_success()
-            return _parse_semantic_scholar_items(resp.json().get("data", []))
+            data = resp.json().get("data", [])
+            logger.info(f"[SemanticScholar] [Telemetry] Success (200 OK) retrieved {len(data)} items.")
+            return _parse_semantic_scholar_items(data)
         elif resp.status_code == 429:
             _S2_RATE_LIMITER.record_429()
+            logger.warning("[SemanticScholar] [Telemetry] HTTP 429 Too Many Requests: circuit breaker tripped.")
+            return []
+        elif resp.status_code in (401, 403):
+            logger.warning(f"[SemanticScholar] [Telemetry] HTTP {resp.status_code} Auth/Forbidden: check SEMANTIC_SCHOLAR_API_KEY.")
             return []
         else:
-            logger.debug(f"[ReadingExtractor] [Async S2 Search] Status {resp.status_code}")
+            logger.warning(f"[SemanticScholar] [Telemetry] HTTP {resp.status_code} unexpected response.")
             return []
+    except httpx.TimeoutException:
+        logger.warning("[SemanticScholar] [Telemetry] Request timed out after 3.0s.")
+        return []
     except Exception as e:
-        logger.debug(f"[ReadingExtractor] [Async S2 Search] Exception: {e}")
+        logger.warning(f"[SemanticScholar] [Telemetry] Network or parsing exception: {e}")
         return []
 
 
@@ -1462,41 +1746,62 @@ def _format_and_interleave(records: List[Dict[str, Any]], limit: int, query: str
     return _adaptive_interleave(papers, books, limit=limit, query=query)
 
 
-async def search_academic_literature_async(query: str, limit: int = 6) -> List[Dict[str, Any]]:
+async def search_academic_literature_async(query: str, limit: int = 6, course_name: str = "") -> List[Dict[str, Any]]:
     """
     Asynchronous federated literature discovery across OpenAlex (Tier 1),
     Crossref, Europe PMC, Google Books, and Semantic Scholar (rate-limited).
+    Uses DomainRouter to strictly exclude non-applicable providers (e.g. Europe PMC for STEM_CS).
     """
     if not query or len(query.strip()) < 2:
         return []
 
     clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
-    logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_q}' (limit={limit})")
+    logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_q}' (limit={limit}, course='{course_name}')")
+
+    # Domain classification and provider routing
+    domain = DomainRouter.classify_domain(course_name, clean_q)
+    dispatched, excluded = DomainRouter.get_providers_for_domain(domain, clean_q)
 
     client = get_async_http_client()
-    openalex_task = asyncio.create_task(_fetch_openalex_candidates_async(client, clean_q, limit))
-    crossref_task = asyncio.create_task(_fetch_crossref_candidates_async(client, clean_q, limit))
-    pmc_task = asyncio.create_task(_fetch_europe_pmc_candidates_async(client, clean_q, limit))
-    books_task = asyncio.create_task(_fetch_google_books_candidates_async(client, clean_q, limit))
-    s2_task = asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, clean_q, limit))
+    task_keys: List[str] = []
+    tasks = []
 
-    raw_results = await asyncio.gather(
-        openalex_task, crossref_task, pmc_task, books_task, s2_task,
-        return_exceptions=True
-    )
+    if "openalex" in dispatched:
+        task_keys.append("openalex")
+        tasks.append(asyncio.create_task(_fetch_openalex_candidates_async(client, clean_q, limit)))
 
-    oa_items: List[Dict[str, Any]] = raw_results[0] if isinstance(raw_results[0], list) else []
-    cr_items: List[Dict[str, Any]] = raw_results[1] if isinstance(raw_results[1], list) else []
-    pmc_items: List[Dict[str, Any]] = raw_results[2] if isinstance(raw_results[2], list) else []
-    gb_items: List[Dict[str, Any]] = raw_results[3] if isinstance(raw_results[3], list) else []
-    s2_items: List[Dict[str, Any]] = raw_results[4] if isinstance(raw_results[4], list) else []
+    if "crossref" in dispatched:
+        task_keys.append("crossref")
+        tasks.append(asyncio.create_task(_fetch_crossref_candidates_async(client, clean_q, limit)))
+
+    if "europe_pmc" in dispatched:
+        task_keys.append("europe_pmc")
+        tasks.append(asyncio.create_task(_fetch_europe_pmc_candidates_async(client, clean_q, limit)))
+
+    if "google_books" in dispatched:
+        task_keys.append("google_books")
+        tasks.append(asyncio.create_task(_fetch_google_books_candidates_async(client, clean_q, limit)))
+
+    if "semantic_scholar" in dispatched:
+        task_keys.append("semantic_scholar")
+        tasks.append(asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, clean_q, limit)))
+
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+
+    results_map: Dict[str, List[Dict[str, Any]]] = {}
+    for key, res in zip(task_keys, raw_results):
+        if isinstance(res, list):
+            results_map[key] = res
+        else:
+            logger.debug(f"[ReadingExtractor] Provider {key} task failed with error: {res}")
+            results_map[key] = []
 
     consolidated = _consolidate_and_merge_records(
-        crossref_items=cr_items,
-        pmc_items=pmc_items,
-        books_items=gb_items,
-        openalex_items=oa_items,
-        s2_items=s2_items,
+        crossref_items=results_map.get("crossref", []),
+        pmc_items=results_map.get("europe_pmc", []),
+        books_items=results_map.get("google_books", []),
+        openalex_items=results_map.get("openalex", []),
+        s2_items=results_map.get("semantic_scholar", []),
         query=clean_q
     )
     final_results = _format_and_interleave(consolidated, limit=limit, query=clean_q)
@@ -1504,46 +1809,60 @@ async def search_academic_literature_async(query: str, limit: int = 6) -> List[D
     return final_results
 
 
-def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any]]:
+def search_academic_literature(query: str, limit: int = 6, course_name: str = "") -> List[Dict[str, Any]]:
     """
     Synchronous federated literature discovery entrypoint.
     Queries OpenAlex, Crossref, Europe PMC, and Google Books concurrently.
+    Uses DomainRouter to strictly exclude non-applicable providers.
     """
     if not query or len(query.strip()) < 2:
         return []
 
     clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
-    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit})")
+    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit}, course='{course_name}')")
+
+    domain = DomainRouter.classify_domain(course_name, clean_q)
+    dispatched, excluded = DomainRouter.get_providers_for_domain(domain, clean_q)
+
+    oa_items: List[Dict[str, Any]] = []
+    cr_items: List[Dict[str, Any]] = []
+    pmc_items: List[Dict[str, Any]] = []
+    gb_items: List[Dict[str, Any]] = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        future_oa = executor.submit(_fetch_openalex_candidates, clean_q, limit)
-        future_cr = executor.submit(_fetch_crossref_candidates, clean_q, limit)
-        future_pmc = executor.submit(_fetch_europe_pmc_candidates, clean_q, limit)
-        future_gb = executor.submit(_fetch_google_books_candidates, clean_q, limit)
+        futures = {}
+        if "openalex" in dispatched:
+            futures["openalex"] = executor.submit(_fetch_openalex_candidates, clean_q, limit)
+        if "crossref" in dispatched:
+            futures["crossref"] = executor.submit(_fetch_crossref_candidates, clean_q, limit)
+        if "europe_pmc" in dispatched:
+            futures["europe_pmc"] = executor.submit(_fetch_europe_pmc_candidates, clean_q, limit)
+        if "google_books" in dispatched:
+            futures["google_books"] = executor.submit(_fetch_google_books_candidates, clean_q, limit)
 
-        try:
-            oa_items = future_oa.result()
-        except Exception as e:
-            logger.debug(f"[ReadingExtractor] OpenAlex query error: {e}")
-            oa_items = []
+        if "openalex" in futures:
+            try:
+                oa_items = futures["openalex"].result()
+            except Exception as e:
+                logger.debug(f"[ReadingExtractor] OpenAlex query error: {e}")
 
-        try:
-            cr_items = future_cr.result()
-        except Exception as e:
-            logger.debug(f"[ReadingExtractor] Crossref query error: {e}")
-            cr_items = []
+        if "crossref" in futures:
+            try:
+                cr_items = futures["crossref"].result()
+            except Exception as e:
+                logger.debug(f"[ReadingExtractor] Crossref query error: {e}")
 
-        try:
-            pmc_items = future_pmc.result()
-        except Exception as e:
-            logger.debug(f"[ReadingExtractor] Europe PMC query error: {e}")
-            pmc_items = []
+        if "europe_pmc" in futures:
+            try:
+                pmc_items = futures["europe_pmc"].result()
+            except Exception as e:
+                logger.debug(f"[ReadingExtractor] Europe PMC query error: {e}")
 
-        try:
-            gb_items = future_gb.result()
-        except Exception as e:
-            logger.debug(f"[ReadingExtractor] Google Books query error: {e}")
-            gb_items = []
+        if "google_books" in futures:
+            try:
+                gb_items = futures["google_books"].result()
+            except Exception as e:
+                logger.debug(f"[ReadingExtractor] Google Books query error: {e}")
 
     consolidated = _consolidate_and_merge_records(
         crossref_items=cr_items,

@@ -764,4 +764,144 @@ async def test_openalex_tier1_primary_and_s2_fallback():
         assert item["reader_type"] == "pdf_direct"
 
 
+@pytest.mark.anyio
+async def test_domain_router_excludes_europe_pmc_for_mtech():
+    from backend.reading_extractor import (
+        DomainRouter,
+        search_academic_literature_async
+    )
+
+    domain = DomainRouter.classify_domain("master-of-technology", "cross attention transformer models")
+    assert domain == "STEM_CS"
+
+    dispatched, excluded = DomainRouter.get_providers_for_domain(domain, "cross attention transformer models")
+    assert "europe_pmc" not in dispatched
+    assert "europe_pmc" in excluded
+    assert "openalex" in dispatched
+    assert "semantic_scholar" in dispatched
+
+    # In search_academic_literature_async with course_name="master-of-technology", europe_pmc candidate fetcher should NEVER be invoked
+    with patch("backend.reading_extractor._fetch_openalex_candidates_async") as mock_oa, \
+         patch("backend.reading_extractor._fetch_semantic_scholar_candidates_async") as mock_s2, \
+         patch("backend.reading_extractor._fetch_crossref_candidates_async") as mock_cr, \
+         patch("backend.reading_extractor._fetch_europe_pmc_candidates_async") as mock_pmc, \
+         patch("backend.reading_extractor._fetch_google_books_candidates_async") as mock_gb:
+
+        mock_oa.return_value = []
+        mock_s2.return_value = []
+        mock_cr.return_value = []
+        mock_pmc.return_value = []
+        mock_gb.return_value = []
+
+        await search_academic_literature_async("cross attention transformer models", limit=5, course_name="master-of-technology")
+        mock_pmc.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_two_pass_fetch_surfaces_foundational_papers():
+    import httpx
+    from backend.reading_extractor import _fetch_openalex_candidates_async
+
+    # Mock client.get to inspect two passes
+    async def mock_get(url, params=None, headers=None, timeout=None):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+
+        sort = params.get("sort")
+        if sort == "relevance_score:desc":
+            # Pass 1: Returns a recent preprint
+            mock_resp.json.return_value = {
+                "results": [
+                    {
+                        "id": "https://openalex.org/W100",
+                        "title": "Cross-Attention Mechanisms in 2026",
+                        "authorships": [{"author": {"display_name": "Alice Smith"}}],
+                        "publication_year": 2026,
+                        "type": "article",
+                        "cited_by_count": 2,
+                        "open_access": {"is_oa": True, "oa_url": "https://arxiv.org/pdf/2601.12345.pdf"}
+                    }
+                ]
+            }
+        elif sort == "cited_by_count:desc":
+            # Pass 2: Returns the foundational Vaswani paper
+            mock_resp.json.return_value = {
+                "results": [
+                    {
+                        "id": "https://openalex.org/W200",
+                        "title": "Attention Is All You Need",
+                        "authorships": [{"author": {"display_name": "Ashish Vaswani"}}],
+                        "publication_year": 2017,
+                        "type": "article",
+                        "cited_by_count": 135000,
+                        "ids": {"arxiv": "https://arxiv.org/abs/1706.03762"},
+                        "open_access": {"is_oa": True, "oa_url": "https://arxiv.org/pdf/1706.03762.pdf"}
+                    }
+                ]
+            }
+        return mock_resp
+
+    client = MagicMock(spec=httpx.AsyncClient)
+    client.get = mock_get
+
+    items = await _fetch_openalex_candidates_async(client, "cross attention transformer models", limit=5)
+    titles = [it["title"] for it in items]
+    assert "Attention Is All You Need" in titles
+    assert "Cross-Attention Mechanisms in 2026" in titles
+    foundational = next(it for it in items if it["title"] == "Attention Is All You Need")
+    assert foundational["citation_count"] == 135000
+
+
+def test_lexical_scorer_penalizes_disconnected_cross_tokens():
+    from backend.reading_extractor import LexicalScorer
+
+    query = "cross attention transformer models"
+
+    # Paper A: Legitimate compound cross-attention model
+    title_a = "Cross-Attention in Transformer Models for Vision"
+    abstract_a = "We utilize cross attention mechanism in deep neural networks."
+    score_a = LexicalScorer.compute_lexical_score(title_a, abstract_a, query)
+
+    # Paper B: Disconnected tokens: cross-domain, cross-temporal, attention
+    title_b = "Cross-Domain and Cross-Temporal Analysis with Attention Models"
+    abstract_b = "We evaluate temporal models across domains using self-attention."
+    score_b = LexicalScorer.compute_lexical_score(title_b, abstract_b, query)
+
+    assert score_a > score_b
+    # Disconnected token penalty should significantly suppress Paper B
+    assert score_b < 0.4
+
+
+def test_direct_pdf_url_rejects_doi_landing_page():
+    from backend.reading_extractor import DirectPdfResolver
+
+    # False landing pages that should be rejected
+    doi_landing_url = "https://doi.org/10.1088/1742-6596/1234/1/012001"
+    iop_landing_url = "https://iopscience.iop.org/article/10.1088/1742-6596/1234/1/012001"
+    sciencedirect_url = "https://www.sciencedirect.com/science/article/pii/S002200002100012X"
+
+    assert DirectPdfResolver.is_authentic_pdf_url(doi_landing_url) is False
+    assert DirectPdfResolver.is_authentic_pdf_url(iop_landing_url) is False
+    assert DirectPdfResolver.is_authentic_pdf_url(sciencedirect_url) is False
+
+    pdf_url, reader_type = DirectPdfResolver.resolve_pdf(doi_landing_url, arxiv_id=None)
+    assert pdf_url == ""
+    assert reader_type == "web"
+
+    # True binary PDF URLs
+    arxiv_pdf_url = "https://arxiv.org/pdf/1706.03762.pdf"
+    clean_pdf_url = "https://www.nature.com/articles/s41586-020-2649-2.pdf"
+    assert DirectPdfResolver.is_authentic_pdf_url(arxiv_pdf_url) is True
+    assert DirectPdfResolver.is_authentic_pdf_url(clean_pdf_url) is True
+
+    resolved_arxiv, arxiv_reader = DirectPdfResolver.resolve_pdf(arxiv_pdf_url)
+    assert resolved_arxiv == arxiv_pdf_url
+    assert arxiv_reader == "pdf_direct"
+
+    # Fallback when candidate url is landing page but arxiv_id is present
+    fallback_pdf, fallback_reader = DirectPdfResolver.resolve_pdf(doi_landing_url, arxiv_id="1706.03762")
+    assert fallback_pdf == "https://arxiv.org/pdf/1706.03762.pdf"
+    assert fallback_reader == "pdf_direct"
+
+
 

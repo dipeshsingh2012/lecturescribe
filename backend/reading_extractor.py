@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import time
 import logging
 import traceback
 import urllib.parse
@@ -1036,35 +1037,27 @@ class SemanticScholarRateLimiter:
         """
         Returns True if request is allowed, False if circuit is currently open.
         """
-        try:
-            loop = asyncio.get_running_loop()
-            now = loop.time()
-        except RuntimeError:
-            return True
-
+        now = time.monotonic()
         if now < self.circuit_open_until:
             logger.debug(f"[ReadingExtractor] S2 circuit open ({self.circuit_open_until - now:.1f}s remaining). Skipping S2 call.")
             return False
 
         lock = self._get_lock()
         async with lock:
-            now = asyncio.get_event_loop().time()
+            now = time.monotonic()
             if now < self.circuit_open_until:
                 return False
             elapsed = now - self.last_request_time
             if elapsed < self.min_interval:
                 await asyncio.sleep(self.min_interval - elapsed)
-            self.last_request_time = asyncio.get_event_loop().time()
+            self.last_request_time = time.monotonic()
             return True
 
     def record_success(self):
         self.backoff_duration = 60.0
 
     def record_429(self):
-        try:
-            now = asyncio.get_event_loop().time()
-        except RuntimeError:
-            now = 0.0
+        now = time.monotonic()
         self.circuit_open_until = now + self.backoff_duration
         logger.warning(
             f"[ReadingExtractor] Semantic Scholar 429 rate limit hit. Tripping circuit breaker for {self.backoff_duration}s."
@@ -1072,11 +1065,7 @@ class SemanticScholarRateLimiter:
         self.backoff_duration = min(300.0, self.backoff_duration * 2.0)
 
     def is_circuit_open(self) -> bool:
-        try:
-            now = asyncio.get_event_loop().time()
-            return now < self.circuit_open_until
-        except RuntimeError:
-            return False
+        return time.monotonic() < self.circuit_open_until
 
     def reset_circuit(self):
         self.circuit_open_until = 0.0

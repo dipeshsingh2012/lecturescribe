@@ -1987,7 +1987,7 @@ class SLMQueryPlanner:
       - OpenAlex & Europe PMC: Max concurrency cap of 3 requests with polite headers.
     """
     @classmethod
-    def plan(cls, query: str, course_name: str = "") -> Dict[str, Any]:
+    def _heuristic_fallback_plan(cls, query: str, course_name: str = "") -> Dict[str, Any]:
         clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
         intent = _classify_query_intent(clean_q)
         domain = DomainRouter.classify_domain(course_name, clean_q)
@@ -2009,12 +2009,129 @@ class SLMQueryPlanner:
                 break
 
         return {
-            "domain": domain,
+            "domain": str(domain).lower(),
             "primary_queries": primary_queries[:3],
             "providers": dispatched_providers,
             "intent": intent,
             "excluded_concepts": []
         }
+
+
+    @classmethod
+    def plan(cls, query: str, course_name: str = "") -> Dict[str, Any]:
+        """Synchronous wrapper for query planning (uses heuristic fallback)."""
+        return cls._heuristic_fallback_plan(query, course_name)
+
+    @classmethod
+    async def plan_async(cls, query: str, course_name: str = "", timeout: float = 0.25) -> Dict[str, Any]:
+        """
+        Stage 1 Neural SLM Query Planner & Intent Router.
+        Invokes fast SLM (Groq llama-3.1-8b-instant or Gemini Flash Lite) to dynamically produce
+        domain classification, primary query expansions, provider dispatch, and negative concepts.
+        Falls back seamlessly to _heuristic_fallback_plan if keys are missing or timeout occurs.
+        """
+        clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
+        fallback = cls._heuristic_fallback_plan(clean_q, course_name)
+
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        openai_key = os.getenv("OPENAI_API_KEY", "")
+
+        if not (groq_key or gemini_key or openai_key):
+            return fallback
+
+        system_prompt = (
+            "You are a strict Stage 1 Academic Query Planner & Intent Router for university research.\n"
+            f"Course context: '{course_name or 'General Academic'}'\n\n"
+            "Given the user query, output ONLY a valid JSON object conforming to:\n"
+            "{\n"
+            '  "domain": "cs_ai" | "biomedical" | "physics_math" | "humanities_social",\n'
+            '  "primary_queries": ["<original query or core canonical terminology>", "<expansion 2>", "<expansion 3>"],\n'
+            '  "providers": ["openalex", "crossref", "semantic_scholar"],\n'
+            '  "intent": "paper" | "monograph" | "general",\n'
+            '  "excluded_concepts": ["<negative concept 1>", "<negative concept 2>"]\n'
+            "}\n"
+            "Rules:\n"
+            "1. 'primary_queries' must have 1 to 3 strings. The first query MUST be the most direct, high-precision search query.\n"
+            "2. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
+            "3. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
+            "4. Return ONLY the raw JSON object. No markdown, no fences, no explanation."
+        )
+
+        user_prompt = f"User Query: {clean_q}"
+
+        try:
+            raw_response = None
+            if groq_key:
+                from openai import AsyncOpenAI
+                g_client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+                resp = await asyncio.wait_for(
+                    g_client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                        max_tokens=250,
+                        temperature=0.0
+                    ),
+                    timeout=timeout
+                )
+                raw_response = resp.choices[0].message.content or ""
+            elif gemini_key:
+                from openai import AsyncOpenAI
+                gem_client = AsyncOpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
+                resp = await asyncio.wait_for(
+                    gem_client.chat.completions.create(
+                        model="gemini-flash-lite-latest",
+                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                        max_tokens=250,
+                        temperature=0.0
+                    ),
+                    timeout=timeout
+                )
+                raw_response = resp.choices[0].message.content or ""
+
+            if raw_response:
+                clean_raw = re.sub(r"^```(?:json)?\s*", "", raw_response.strip())
+                clean_raw = re.sub(r"\s*```$", "", clean_raw).strip()
+                data = json.loads(clean_raw)
+                if isinstance(data, dict):
+                    domain = data.get("domain") or fallback["domain"]
+                    queries = data.get("primary_queries")
+                    if not isinstance(queries, list) or not queries:
+                        queries = fallback["primary_queries"]
+                    queries = [q.strip() for q in queries if isinstance(q, str) and q.strip()][:3]
+                    if not queries:
+                        queries = [clean_q]
+
+                    providers = data.get("providers")
+                    if not isinstance(providers, list) or not providers:
+                        providers = fallback["providers"]
+                    else:
+                        if domain in ("cs_ai", "stem_cs") and "europe_pmc" in providers:
+                            providers = [p for p in providers if p != "europe_pmc"]
+                        valid_providers = {"openalex", "crossref", "europe_pmc", "google_books", "semantic_scholar"}
+                        providers = [p for p in providers if p in valid_providers]
+                        if not providers:
+                            providers = fallback["providers"]
+
+                    intent = data.get("intent")
+                    if intent not in ("paper", "monograph", "general"):
+                        intent = fallback["intent"]
+
+                    excluded = data.get("excluded_concepts") or []
+                    if not isinstance(excluded, list):
+                        excluded = []
+
+                    return {
+                        "domain": domain,
+                        "primary_queries": queries,
+                        "providers": providers,
+                        "intent": intent,
+                        "excluded_concepts": excluded
+                    }
+        except Exception as e:
+            logger.debug(f"[SLMQueryPlanner] SLM query planning timed out or failed ({e}); falling back to heuristic planner.")
+
+        return fallback
 
 
 class SLMReranker:
@@ -2308,8 +2425,8 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
     clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
     logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_q}' (limit={limit}, course='{course_name}')")
 
-    # Stage 1: SLM Query Planner & Budgeted Provider Routing (Issue 3)
-    plan = SLMQueryPlanner.plan(clean_q, course_name)
+    # Stage 1: Neural SLM Query Planner & Budgeted Provider Routing
+    plan = await SLMQueryPlanner.plan_async(clean_q, course_name)
     dispatched = plan.get("providers", [])
     primary_queries = plan.get("primary_queries", [clean_q])
     primary_q = primary_queries[0]

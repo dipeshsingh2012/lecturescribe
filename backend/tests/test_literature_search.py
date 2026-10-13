@@ -1205,5 +1205,58 @@ def test_monograph_relevancy_floor_excludes_low_scoring_books():
     assert any(r["reading_type"] == "book" for r in results_with_book)
 
 
+@pytest.mark.anyio
+async def test_stage_1_slm_query_planner_neural_and_fallback():
+    """
+    Validates Stage 1 SLMQueryPlanner.plan_async:
+    1. Neural SLM generation: Parses structured JSON from model with expanded queries,
+       domain classification, provider budget, and negative concepts.
+    2. Fallback execution: Gracefully falls back to heuristic planner if keys are missing
+       or model times out.
+    """
+    from backend.reading_extractor import SLMQueryPlanner
+
+    # 1. Fallback mode (no API keys)
+    with patch.dict("os.environ", {"GROQ_API_KEY": "", "GEMINI_API_KEY": "", "OPENAI_API_KEY": ""}):
+        plan_fallback = await SLMQueryPlanner.plan_async("cross attention", course_name="master-of-technology")
+        assert plan_fallback["domain"] == "stem_cs"
+        assert len(plan_fallback["primary_queries"]) >= 1
+        assert "openalex" in plan_fallback["providers"]
+
+    # 2. Neural mode with simulated SLM response
+    mock_slm_json = """{
+        "domain": "cs_ai",
+        "primary_queries": [
+            "cross-attention transformer",
+            "encoder-decoder attention transformer",
+            "cross modal attention vision language"
+        ],
+        "providers": ["openalex", "semantic_scholar"],
+        "intent": "paper",
+        "excluded_concepts": ["cognitive psychology", "auditory attention"]
+    }"""
+
+    mock_resp = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = mock_slm_json
+    mock_resp.choices = [mock_choice]
+
+    async def async_create(*args, **kwargs):
+        return mock_resp
+
+    mock_groq_client = MagicMock()
+    mock_groq_client.chat.completions.create = async_create
+
+    with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test_key"}), \
+         patch("openai.AsyncOpenAI", return_value=mock_groq_client):
+        neural_plan = await SLMQueryPlanner.plan_async("cross attention", course_name="Master of Technology")
+        assert neural_plan["domain"] == "cs_ai"
+        assert len(neural_plan["primary_queries"]) == 3
+        assert neural_plan["primary_queries"][0] == "cross-attention transformer"
+        assert neural_plan["providers"] == ["openalex", "semantic_scholar"]
+        assert neural_plan["intent"] == "paper"
+        assert "cognitive psychology" in neural_plan["excluded_concepts"]
+
+
 
 

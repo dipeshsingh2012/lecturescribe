@@ -363,7 +363,7 @@ export default function ResearchLiteratureModal({
                         }}
                       >
                         {item.author && <strong style={{ color: currentTheme?.palette?.textPrimary }}>{item.author}</strong>}
-                        {item.edition && ` (${item.edition})`}
+                        {(item.publication_year || item.edition) && ` (${item.publication_year || item.edition})`}
                         {item.journal && ` — ${item.journal}`}
                         {!item.journal && item.publisher && ` — ${item.publisher}`}
                       </Typography>

@@ -13,6 +13,8 @@ import json
 import logging
 import traceback
 import urllib.parse
+import html
+import concurrent.futures
 from typing import List, Dict, Any, Optional
 
 import requests
@@ -430,133 +432,193 @@ def fetch_europe_pmc_metadata(title: str, author: str = "") -> Dict[str, Any]:
     return {}
 
 
-def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any]]:
-    """
-    Search academic literature, research papers, journal articles, and books.
-    Queries Crossref (global DOI & journal registry), Europe PMC (biomedical & full-text open-access),
-    and Google Books / OpenLibrary (textbooks & monographs).
-    """
-    if not query or len(query.strip()) < 2:
-        return []
+def _clean_html_text(text: Any) -> str:
+    """Strip all HTML/XML tags and unescape entities into clean plain text."""
+    if not text:
+        return ""
+    s = str(text)
+    # Strip HTML / XML tags e.g. <jats:p>, <h4>, <b>, <i>, <br/>, <p>
+    s = re.sub(r'<[^>]+>', ' ', s)
+    # Unescape HTML entities e.g. &amp;, &lt;, &gt;, &quot;, &#39;
+    s = html.unescape(s)
+    # Collapse multiple whitespace characters into a single space
+    return re.sub(r'\s+', ' ', s).strip()
 
-    clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
-    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit})")
 
+def _extract_year(raw_val: Any) -> str:
+    """Extract a 4-digit year as string or empty string."""
+    if not raw_val:
+        return ""
+    s = str(raw_val).strip()
+    m = re.search(r'\b(1[89]\d{2}|20\d{2})\b', s)
+    if m:
+        return m.group(1)
+    m = re.search(r'\b\d{4}\b', s)
+    if m:
+        return m.group(0)
+    return ""
+
+
+def _normalize_doi(doi: str) -> str:
+    """Normalize DOI to lowercase, stripped without URL prefix."""
+    if not doi:
+        return ""
+    d = doi.strip().lower()
+    return re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:)', '', d).strip()
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize title for alphanumeric matching."""
+    return re.sub(r'[^a-zA-Z0-9]', '', (title or '').lower())
+
+
+def _fetch_crossref_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    """
+    Query Crossref API with upstream filtering to exclude non-article artifacts
+    (figures, tables, component DOIs, peer reviews).
+    """
     results: List[Dict[str, Any]] = []
-    seen_titles = set()
-
-    # 1. Search Crossref (Keyless, covers all journals: JAMA, NEJM, Lancet, Nature, IEEE, etc.)
     try:
         resp = requests.get(
             CROSSREF_API,
-            params={"query.bibliographic": clean_q, "rows": min(limit, 5)},
+            params={
+                "query.bibliographic": query,
+                "rows": max(limit, 5),
+                "filter": "type:journal-article,type:proceedings-article,type:book,type:book-chapter"
+            },
             headers={"User-Agent": "LectureScribe/1.0 (mailto:academic-research@lecturescribe.local)"},
-            timeout=4.0
+            timeout=3.5
         )
         if resp.status_code == 200:
             items = resp.json().get("message", {}).get("items", [])
             for it in items:
                 title_list = it.get("title") or []
-                if not title_list or not title_list[0]:
+                raw_title = title_list[0] if (title_list and title_list[0]) else ""
+                t = _clean_html_text(raw_title).rstrip(".")
+                if not t:
                     continue
-                t = title_list[0].strip()
-                norm_t = re.sub(r'[^a-zA-Z0-9]', '', t.lower())
-                if norm_t in seen_titles:
-                    continue
-                seen_titles.add(norm_t)
 
+                # Standardize authors into clean, comma-separated full names
                 authors_list = []
                 for a in it.get("author", []):
-                    given = a.get("given", "")
-                    family = a.get("family", "")
-                    if family:
-                        authors_list.append(f"{given} {family}".strip() if given else family)
+                    given = _clean_html_text(a.get("given", ""))
+                    family = _clean_html_text(a.get("family", ""))
+                    if given and family:
+                        authors_list.append(f"{given} {family}")
+                    elif family:
+                        authors_list.append(family)
+                    elif given:
+                        authors_list.append(given)
                     elif a.get("name"):
-                        authors_list.append(a.get("name"))
+                        name = _clean_html_text(a.get("name", ""))
+                        if name:
+                            authors_list.append(name)
                 authors_str = ", ".join(authors_list)
 
+                # Separate journal and publisher cleanly
                 containers = it.get("container-title") or []
-                journal = containers[0] if containers else (it.get("publisher") or "")
-                doi = it.get("DOI", "")
+                journal = _clean_html_text(containers[0]) if (containers and containers[0]) else ""
+                publisher = _clean_html_text(it.get("publisher", ""))
+
+                # Extract publication year
+                issued_parts = it.get("issued", {}).get("date-parts", [[None]])[0]
+                raw_year = issued_parts[0] if issued_parts and issued_parts[0] else ""
+                if not raw_year:
+                    raw_year = it.get("published-print", {}).get("date-parts", [[None]])[0]
+                    raw_year = raw_year[0] if raw_year and raw_year[0] else ""
+                if not raw_year:
+                    raw_year = it.get("published-online", {}).get("date-parts", [[None]])[0]
+                    raw_year = raw_year[0] if raw_year and raw_year[0] else ""
+                year = _extract_year(raw_year)
+
+                doi = _normalize_doi(it.get("DOI", ""))
                 url = it.get("URL") or (f"https://doi.org/{doi}" if doi else "")
 
-                issued_parts = it.get("issued", {}).get("date-parts", [[None]])[0]
-                year = str(issued_parts[0]) if issued_parts and issued_parts[0] else ""
+                # ISBN
+                isbn_list = it.get("ISBN") or it.get("isbn-type") or []
+                isbn = ""
+                if isinstance(isbn_list, list) and isbn_list:
+                    isbn = str(isbn_list[0]).strip()
 
-                reading_type = "journal" if "journal" in (it.get("type") or "").lower() else "paper"
+                type_str = (it.get("type") or "").lower()
+                if "book" in type_str:
+                    reading_type = "book"
+                    category = "primary_textbook"
+                elif "journal" in type_str:
+                    reading_type = "journal"
+                    category = "reference"
+                else:
+                    reading_type = "paper"
+                    category = "reference"
+
+                abstract = _clean_html_text(it.get("abstract", ""))
+
                 results.append({
                     "title": t,
                     "author": authors_str,
-                    "edition": year,
+                    "publication_year": year,
                     "reading_type": reading_type,
-                    "category": "reference",
-                    "publisher": journal,
+                    "category": category,
+                    "publisher": publisher,
                     "journal": journal,
                     "doi": doi,
-                    "isbn": "",
+                    "pmcid": "",
+                    "isbn": isbn,
                     "cover_url": "",
                     "preview_url": url,
                     "embed_url": "",
                     "reader_type": "web",
-                    "abstract": "",
+                    "abstract": abstract,
                     "source_provider": f"Crossref ({journal})" if journal else "Crossref",
                     "is_open_access": False
                 })
     except Exception as e:
         logger.debug(f"[ReadingExtractor] [Crossref Search] Exception: {e}")
+    return results
 
-    # 2. Search Europe PMC (Biomedical papers, PubMed, Open-Access PMC PDFs)
+
+def _fetch_europe_pmc_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    """
+    Query Europe PMC for biomedical open-access papers, PubMed entries, and full texts.
+    """
+    results: List[Dict[str, Any]] = []
     try:
         resp = requests.get(
             EUROPE_PMC_API,
-            params={"query": clean_q, "format": "json", "pageSize": min(limit, 5), "resultType": "core"},
+            params={"query": query, "format": "json", "pageSize": max(limit, 5), "resultType": "core"},
             headers={"User-Agent": "LectureScribe/1.0"},
-            timeout=4.0
+            timeout=3.5
         )
         if resp.status_code == 200:
             pmc_items = resp.json().get("resultList", {}).get("result", [])
             for r in pmc_items:
-                t = (r.get("title") or "").rstrip(".").strip()
+                t = _clean_html_text(r.get("title") or "").rstrip(".")
                 if not t:
                     continue
-                norm_t = re.sub(r'[^a-zA-Z0-9]', '', t.lower())
-                
-                doi = r.get("doi") or ""
-                pmcid = r.get("pmcid") or ""
+
+                doi = _normalize_doi(r.get("doi", ""))
+                pmcid = (r.get("pmcid") or "").strip()
                 is_oa = r.get("isOpenAccess") == "Y"
-                journal = r.get("journalTitle") or ""
-                year = str(r.get("pubYear") or "")
-                abstract = r.get("abstractText") or ""
+                journal = _clean_html_text(r.get("journalTitle") or "")
+
+                pub_info = r.get("journalInfo", {}).get("journal", {}).get("publisher") or r.get("publisher") or ""
+                publisher = _clean_html_text(pub_info)
+
+                year = _extract_year(r.get("pubYear") or r.get("firstPublicationDate") or "")
+                abstract = _clean_html_text(r.get("abstractText") or "")
+                author_str = _clean_html_text(r.get("authorString") or "").rstrip(".")
 
                 embed_url = f"https://europepmc.org/articles/{pmcid}" if pmcid else ""
                 preview_url = f"https://doi.org/{doi}" if doi else (embed_url or "")
+                reader_type = "pmc_reader" if pmcid else "web"
 
-                # If already matched from Crossref, merge PMC's rich OA / abstract / reader links
-                if norm_t in seen_titles:
-                    for existing in results:
-                        if re.sub(r'[^a-zA-Z0-9]', '', existing["title"].lower()) == norm_t:
-                            if pmcid:
-                                existing["embed_url"] = embed_url
-                                existing["reader_type"] = "pmc_reader"
-                            if abstract and not existing.get("abstract"):
-                                existing["abstract"] = abstract
-                            if is_oa:
-                                existing["is_open_access"] = True
-                            if not existing.get("doi") and doi:
-                                existing["doi"] = doi
-                            if not existing.get("journal") and journal:
-                                existing["journal"] = journal
-                            break
-                    continue
-
-                seen_titles.add(norm_t)
                 results.append({
                     "title": t,
-                    "author": r.get("authorString") or "",
-                    "edition": year,
+                    "author": author_str,
+                    "publication_year": year,
                     "reading_type": "journal",
                     "category": "reference",
-                    "publisher": journal,
+                    "publisher": publisher,
                     "journal": journal,
                     "doi": doi,
                     "pmcid": pmcid,
@@ -564,32 +626,34 @@ def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any
                     "cover_url": "",
                     "preview_url": preview_url,
                     "embed_url": embed_url,
-                    "reader_type": "pmc_reader" if pmcid else "web",
+                    "reader_type": reader_type,
                     "abstract": abstract,
                     "source_provider": "Europe PMC / PubMed",
                     "is_open_access": is_oa
                 })
     except Exception as e:
         logger.debug(f"[ReadingExtractor] [Europe PMC Search] Exception: {e}")
+    return results
 
-    # 3. Search Google Books API (Textbooks, published monographs)
+
+def _fetch_google_books_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    """
+    Query Google Books API for textbooks and published monographs.
+    """
+    results: List[Dict[str, Any]] = []
     try:
         gb_resp = requests.get(
             GOOGLE_BOOKS_API,
-            params={"q": clean_q, "maxResults": min(limit, 4), "printType": "books"},
+            params={"q": query, "maxResults": min(max(limit, 4), 10), "printType": "books"},
             timeout=3.5
         )
         if gb_resp.status_code == 200:
             gb_items = gb_resp.json().get("items", [])
             for it in gb_items:
                 vol = it.get("volumeInfo", {})
-                t = vol.get("title", "").strip()
+                t = _clean_html_text(vol.get("title", "")).strip()
                 if not t:
                     continue
-                norm_t = re.sub(r'[^a-zA-Z0-9]', '', t.lower())
-                if norm_t in seen_titles:
-                    continue
-                seen_titles.add(norm_t)
 
                 img_links = vol.get("imageLinks", {})
                 cover_url = img_links.get("thumbnail") or img_links.get("smallThumbnail") or ""
@@ -611,32 +675,218 @@ def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any
                 isbn = ""
                 for ident in vol.get("industryIdentifiers", []):
                     if ident.get("type") in ("ISBN_13", "ISBN_10"):
-                        isbn = ident.get("identifier", "")
+                        isbn = ident.get("identifier", "").strip()
                         break
+
+                raw_authors = vol.get("authors", [])
+                if isinstance(raw_authors, list):
+                    author_str = ", ".join(_clean_html_text(a) for a in raw_authors if a)
+                else:
+                    author_str = _clean_html_text(raw_authors)
+
+                year = _extract_year(vol.get("publishedDate", ""))
+                abstract = _clean_html_text(vol.get("description", ""))
+                publisher = _clean_html_text(vol.get("publisher", ""))
 
                 results.append({
                     "title": t,
-                    "author": ", ".join(vol.get("authors", [])) or "",
-                    "edition": vol.get("publishedDate", ""),
+                    "author": author_str,
+                    "publication_year": year,
                     "reading_type": "book",
                     "category": "primary_textbook",
-                    "publisher": vol.get("publisher", ""),
+                    "publisher": publisher,
                     "journal": "",
                     "doi": "",
+                    "pmcid": "",
                     "isbn": isbn,
                     "cover_url": cover_url,
                     "preview_url": preview_url,
                     "embed_url": embed_url,
                     "reader_type": reader_type,
-                    "abstract": vol.get("description", ""),
+                    "abstract": abstract,
                     "source_provider": "Google Books",
                     "is_open_access": False
                 })
     except Exception as e:
         logger.debug(f"[ReadingExtractor] [Google Books Search] Exception: {e}")
+    return results
 
-    logger.info(f"[ReadingExtractor] search_academic_literature found {len(results)} candidate results for query: '{clean_q}'")
-    return results[:limit]
+
+def _interleave_results(
+    papers: List[Dict[str, Any]],
+    books: List[Dict[str, Any]],
+    limit: int
+) -> List[Dict[str, Any]]:
+    """
+    Interleave papers and textbooks to guarantee book visibility.
+    When books are available, reserves at least 1-2 slots for books (at least 1 when limit >= 3).
+    Fills remaining slots with papers, respecting user-specified limit.
+    """
+    if limit <= 0:
+        return []
+    if not books:
+        return papers[:limit]
+    if not papers:
+        return books[:limit]
+
+    # Reserve slots for books: 1-2 slots if limit allows
+    if limit >= 4:
+        target_books = min(len(books), 2)
+    elif limit >= 2:
+        target_books = min(len(books), 1)
+    else:  # limit == 1
+        target_books = min(len(books), 0 if papers else 1)
+
+    max_papers = max(0, limit - target_books)
+    sel_papers = papers[:max_papers]
+
+    # Use remaining slots for books up to limit
+    remaining_for_books = limit - len(sel_papers)
+    sel_books = books[:remaining_for_books]
+
+    # Interleave results: 2 papers, 1 book, repeat
+    combined: List[Dict[str, Any]] = []
+    p_idx, b_idx = 0, 0
+    while p_idx < len(sel_papers) or b_idx < len(sel_books):
+        for _ in range(2):
+            if p_idx < len(sel_papers):
+                combined.append(sel_papers[p_idx])
+                p_idx += 1
+        if b_idx < len(sel_books):
+            combined.append(sel_books[b_idx])
+            b_idx += 1
+
+    return combined[:limit]
+
+
+def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    """
+    Search academic literature, research papers, journal articles, and books concurrently.
+    Queries Crossref (global DOI & journal registry), Europe PMC (biomedical & full-text open-access),
+    and Google Books (textbooks & monographs) in parallel.
+    Applies multi-key deduplication, PMC enrichment, HTML sanitization, and balanced interleaving.
+    """
+    if not query or len(query.strip()) < 2:
+        return []
+
+    clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
+    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit})")
+
+    # 1. Parallel execution across all providers with 3.5s timeout
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_crossref = executor.submit(_fetch_crossref_candidates, clean_q, limit)
+        future_pmc = executor.submit(_fetch_europe_pmc_candidates, clean_q, limit)
+        future_books = executor.submit(_fetch_google_books_candidates, clean_q, limit)
+
+        try:
+            crossref_items = future_crossref.result()
+        except Exception as e:
+            logger.debug(f"[ReadingExtractor] Crossref query error: {e}")
+            crossref_items = []
+
+        try:
+            pmc_items = future_pmc.result()
+        except Exception as e:
+            logger.debug(f"[ReadingExtractor] Europe PMC query error: {e}")
+            pmc_items = []
+
+        try:
+            books_items = future_books.result()
+        except Exception as e:
+            logger.debug(f"[ReadingExtractor] Google Books query error: {e}")
+            books_items = []
+
+    # 2. Multi-Key Deduplication & Merging
+    records: List[Dict[str, Any]] = []
+    doi_map: Dict[str, Dict[str, Any]] = {}
+    title_map: Dict[str, Dict[str, Any]] = {}
+
+    def _find_existing(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        # Tier 1: Case-insensitive normalized DOI
+        norm_d = _normalize_doi(item.get("doi", ""))
+        if norm_d and norm_d in doi_map:
+            return doi_map[norm_d]
+        # Tier 2: Normalized alphanumeric title
+        norm_t = _normalize_title(item.get("title", ""))
+        if norm_t and norm_t in title_map:
+            return title_map[norm_t]
+        return None
+
+    def _register(rec: Dict[str, Any]):
+        norm_d = _normalize_doi(rec.get("doi", ""))
+        if norm_d:
+            doi_map[norm_d] = rec
+        norm_t = _normalize_title(rec.get("title", ""))
+        if norm_t:
+            title_map[norm_t] = rec
+
+    # Process Crossref results
+    for cr_item in crossref_items:
+        existing = _find_existing(cr_item)
+        if existing is None:
+            records.append(cr_item)
+            _register(cr_item)
+
+    # Process Europe PMC results (merging & enriching existing Crossref records)
+    for pmc_item in pmc_items:
+        existing = _find_existing(pmc_item)
+        if existing is not None:
+            if pmc_item.get("pmcid"):
+                existing["pmcid"] = pmc_item["pmcid"]
+                existing["embed_url"] = pmc_item.get("embed_url") or existing.get("embed_url") or ""
+                existing["reader_type"] = "pmc_reader"
+            elif not existing.get("embed_url") and pmc_item.get("embed_url"):
+                existing["embed_url"] = pmc_item["embed_url"]
+                if pmc_item.get("reader_type"):
+                    existing["reader_type"] = pmc_item["reader_type"]
+
+            if pmc_item.get("is_open_access"):
+                existing["is_open_access"] = True
+
+            if pmc_item.get("abstract"):
+                if not existing.get("abstract") or len(pmc_item["abstract"]) > len(existing.get("abstract", "")):
+                    existing["abstract"] = pmc_item["abstract"]
+
+            if not existing.get("doi") and pmc_item.get("doi"):
+                existing["doi"] = pmc_item["doi"]
+                norm_d = _normalize_doi(pmc_item["doi"])
+                if norm_d:
+                    doi_map[norm_d] = existing
+
+            if not existing.get("journal") and pmc_item.get("journal"):
+                existing["journal"] = pmc_item["journal"]
+            if not existing.get("publisher") and pmc_item.get("publisher"):
+                existing["publisher"] = pmc_item["publisher"]
+            if not existing.get("publication_year") and pmc_item.get("publication_year"):
+                existing["publication_year"] = pmc_item["publication_year"]
+            if not existing.get("preview_url") and pmc_item.get("preview_url"):
+                existing["preview_url"] = pmc_item["preview_url"]
+        else:
+            records.append(pmc_item)
+            _register(pmc_item)
+
+    # Process Google Books results
+    for b_item in books_items:
+        existing = _find_existing(b_item)
+        if existing is not None:
+            if not existing.get("isbn") and b_item.get("isbn"):
+                existing["isbn"] = b_item["isbn"]
+            if not existing.get("cover_url") and b_item.get("cover_url"):
+                existing["cover_url"] = b_item["cover_url"]
+            if not existing.get("embed_url") and b_item.get("embed_url"):
+                existing["embed_url"] = b_item["embed_url"]
+                existing["reader_type"] = b_item.get("reader_type", "google_embed")
+        else:
+            records.append(b_item)
+            _register(b_item)
+
+    # 3. Interleaving papers and books
+    books = [r for r in records if r.get("reading_type") == "book"]
+    papers = [r for r in records if r.get("reading_type") != "book"]
+    final_results = _interleave_results(papers, books, limit)
+
+    logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{clean_q}'")
+    return final_results
 
 
 

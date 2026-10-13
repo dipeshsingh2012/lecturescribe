@@ -3198,11 +3198,13 @@ class AddCourseReadingRequest(BaseModel):
     title: str
     author: Optional[str] = ""
     edition: Optional[str] = ""
+    publication_year: Optional[str] = ""
     reading_type: Optional[str] = "journal"
     category: Optional[str] = "reference"
     publisher: Optional[str] = ""
     journal: Optional[str] = ""
     doi: Optional[str] = ""
+    pmcid: Optional[str] = ""
     isbn: Optional[str] = ""
     cover_url: Optional[str] = ""
     preview_url: Optional[str] = ""
@@ -3210,6 +3212,7 @@ class AddCourseReadingRequest(BaseModel):
     reader_type: Optional[str] = "web"
     abstract: Optional[str] = ""
     source_type: Optional[str] = "manual_search"
+    source_provider: Optional[str] = ""
     source_context: Optional[str] = ""
     is_lending: Optional[bool] = False
     is_open_access: Optional[bool] = False
@@ -3274,6 +3277,10 @@ def add_course_reading(course_name: str, payload: AddCourseReadingRequest):
     cname = db_manager.resolve_course_canonical_name(raw_name)
 
     reading_dict = payload.model_dump()
+    if not reading_dict.get("edition") and reading_dict.get("publication_year"):
+        reading_dict["edition"] = reading_dict["publication_year"]
+    elif not reading_dict.get("publication_year") and reading_dict.get("edition"):
+        reading_dict["publication_year"] = reading_dict["edition"]
     # If embed_url is missing, attempt digital book or literature resolution
     if not reading_dict.get("embed_url"):
         try:

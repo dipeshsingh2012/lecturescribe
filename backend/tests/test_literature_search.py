@@ -415,20 +415,36 @@ def test_year_tolerance_in_record_equivalence():
     }
     assert _are_records_equivalent(paper_preprint, paper_journal) is True
 
-    # Multi-year gap (>1 year) indicating different editions or distinct works
-    edition_1 = {
+    # Multi-year gap with exact title and matching authors (e.g. arXiv preprint vs later journal, or CCNet 2018/2020)
+    # Step 3: Exact title + author surname overlap bypasses ±1 year guard
+    paper_2018 = {
+        "title": "CCNet: Extracting High Quality Monolingual Datasets from Web Crawl",
+        "author": "Guillaume Wenzek, Marie-Anne Lachaux",
+        "publication_year": "2018",
+        "doi": ""
+    }
+    paper_2020 = {
+        "title": "CCNet: Extracting High Quality Monolingual Datasets from Web Crawl",
+        "author": "Wenzek G, Lachaux MA",
+        "publication_year": "2020",
+        "doi": ""
+    }
+    assert _are_records_equivalent(paper_2018, paper_2020) is True
+
+    # Multi-year gap (>1 year) without author overlap or with generic/short titles indicating distinct works
+    work_a = {
         "title": "Introduction to Algorithms",
-        "author": "Cormen",
+        "author": "Alice Smith",
         "publication_year": "2009",
         "doi": ""
     }
-    edition_4 = {
+    work_b = {
         "title": "Introduction to Algorithms",
-        "author": "Cormen",
+        "author": "Bob Jones",
         "publication_year": "2022",
         "doi": ""
     }
-    assert _are_records_equivalent(edition_1, edition_4) is False
+    assert _are_records_equivalent(work_a, work_b) is False
 
 
 def test_consolidate_and_merge_metadata_enrichment():
@@ -1256,6 +1272,99 @@ async def test_stage_1_slm_query_planner_neural_and_fallback():
         assert neural_plan["providers"] == ["openalex", "semantic_scholar"]
         assert neural_plan["intent"] == "paper"
         assert "cognitive psychology" in neural_plan["excluded_concepts"]
+
+
+@pytest.mark.anyio
+async def test_parallel_openalex_doi_imputation():
+    """
+    Validates Step 2: Parallelized OpenAlex DOI lookup using bounded asyncio.gather and Semaphore(5).
+    Ensures 9 missing DOIs are looked up concurrently without blocking serially.
+    """
+    from backend.reading_extractor import _impute_records_abstracts_async
+    import httpx
+
+    records = [
+        {"title": f"Paper {i}", "doi": f"10.1000/{i}", "abstract": "", "publication_year": "2020"}
+        for i in range(9)
+    ]
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    async def mock_get(url, *args, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        # Return mock inverted index
+        resp.json.return_value = {
+            "abstract_inverted_index": {"Recovered": [0], "abstract": [1], "content": [2], "for": [3], "paper": [4], "validation": [5], "test": [6], "purposes": [7]}
+        }
+        return resp
+
+    mock_client.get = mock_get
+
+    await _impute_records_abstracts_async(records, mock_client)
+
+    for r in records:
+        assert len(r["abstract"]) >= 40
+        assert "Recovered abstract" in r["abstract"]
+
+
+def test_ccnet_multi_year_deduplication_exact_title_match():
+    """
+    Validates Step 3: 3 identical versions of CCNet (2018, 2019, 2020) with matching
+    author surnames are merged into a single record despite >1 year differences.
+    """
+    from backend.reading_extractor import _consolidate_and_merge_records
+
+    ccnet_items = [
+        {
+            "title": "CCNet: Extracting High Quality Monolingual Datasets from Web Crawl",
+            "author": "Guillaume Wenzek, Marie-Anne Lachaux, Alexis Conneau",
+            "publication_year": "2018",
+            "citation_count": 50,
+            "arxiv_id": "1911.00359",
+            "direct_pdf_url": "",
+            "is_open_access": False,
+            "doi": "10.48550/arXiv.1911.00359",
+            "abstract": "Pre-training language models at scale requires vast amounts of text."
+        },
+        {
+            "title": "CCNet: Extracting High Quality Monolingual Datasets from Web Crawl",
+            "author": "Wenzek G, Lachaux MA, Conneau A",
+            "publication_year": "2019",
+            "citation_count": 350,
+            "arxiv_id": "",
+            "direct_pdf_url": "https://arxiv.org/pdf/1911.00359.pdf",
+            "is_open_access": True,
+            "doi": "",
+            "abstract": ""
+        },
+        {
+            "title": "CCNet: Extracting High Quality Monolingual Datasets from Web Crawl",
+            "author": "Guillaume Wenzek, Marie-Anne Lachaux, Alexis Conneau, Armand Joulin",
+            "publication_year": "2020",
+            "citation_count": 820,
+            "arxiv_id": "",
+            "direct_pdf_url": "",
+            "is_open_access": False,
+            "doi": "10.18653/v1/2020.lrec-1.494",
+            "abstract": "Pre-training language models at scale requires vast amounts of text data."
+        }
+    ]
+
+    merged = _consolidate_and_merge_records(
+        openalex_items=[ccnet_items[0]],
+        s2_items=[ccnet_items[1]],
+        crossref_items=[ccnet_items[2]],
+        query="CCNet extracting high quality"
+    )
+
+    ccnet_results = [r for r in merged if "CCNet" in r["title"]]
+    assert len(ccnet_results) == 1, f"Expected 1 CCNet record after deduplication, got {len(ccnet_results)}"
+    rec = ccnet_results[0]
+    assert rec["citation_count"] == 820
+    assert rec["arxiv_id"] == "1911.00359"
+    assert rec["direct_pdf_url"] == "https://arxiv.org/pdf/1911.00359.pdf"
+    assert rec["is_open_access"] is True
+
 
 
 

@@ -1085,13 +1085,13 @@ def _are_records_equivalent(rec_a: Dict[str, Any], rec_b: Dict[str, Any]) -> boo
     """
     doi_a = _normalize_doi(rec_a.get("doi", ""))
     doi_b = _normalize_doi(rec_b.get("doi", ""))
-    if doi_a and doi_b:
-        return doi_a == doi_b
+    if doi_a and doi_b and doi_a == doi_b:
+        return True
 
     arxiv_a = extract_canonical_arxiv_id(rec_a.get("arxiv_id") or rec_a.get("preview_url") or rec_a.get("direct_pdf_url"))
     arxiv_b = extract_canonical_arxiv_id(rec_b.get("arxiv_id") or rec_b.get("preview_url") or rec_b.get("direct_pdf_url"))
-    if arxiv_a and arxiv_b:
-        return arxiv_a == arxiv_b
+    if arxiv_a and arxiv_b and arxiv_a == arxiv_b:
+        return True
 
     title_a = rec_a.get("title", "").strip()
     title_b = rec_b.get("title", "").strip()
@@ -1115,6 +1115,10 @@ def _are_records_equivalent(rec_a: Dict[str, Any], rec_b: Dict[str, Any]) -> boo
 
     # Exact normalized title match
     if norm_a == norm_b:
+        # Bypass the ±1 year guard whenever an exact title match with matching author surnames
+        # is confirmed (accounting for multi-year lag between arXiv preprints and journal versions).
+        if author_overlap:
+            return True
         if not years_compatible:
             return False
         # Guard against generic short title collisions
@@ -1803,7 +1807,7 @@ async def _impute_missing_abstract_openalex_async(client: httpx.AsyncClient, doi
             data = resp.json()
             inv_index = data.get("abstract_inverted_index")
             if inv_index and isinstance(inv_index, dict):
-                return _reconstruct_openalex_abstract(inv_index)
+                return reconstruct_inverted_abstract(inv_index)
     except Exception as e:
         logger.debug(f"[ReadingExtractor] OpenAlex DOI abstract lookup failed for {canon_doi}: {e}")
     return None
@@ -1826,24 +1830,59 @@ def _impute_missing_abstract_openalex_sync(doi: str) -> Optional[str]:
             data = resp.json()
             inv_index = data.get("abstract_inverted_index")
             if inv_index and isinstance(inv_index, dict):
-                return _reconstruct_openalex_abstract(inv_index)
+                return reconstruct_inverted_abstract(inv_index)
     except Exception as e:
         logger.debug(f"[ReadingExtractor] Sync OpenAlex DOI abstract lookup failed for {canon_doi}: {e}")
     return None
+
+
+async def _fetch_openalex_doi_metadata(client: httpx.AsyncClient, doi: str, sem: asyncio.Semaphore) -> Optional[Dict[str, Any]]:
+    canon_doi = _normalize_doi(doi)
+    if not canon_doi:
+        return None
+    async with sem:
+        try:
+            resp = await client.get(
+                f"https://api.openalex.org/works/https://doi.org/{canon_doi}",
+                headers={"User-Agent": "LectureScribe/1.0 (mailto:academic-research@lecturescribe.local)"},
+                timeout=2.5
+            )
+            return resp.json() if resp.status_code == 200 else None
+        except Exception as e:
+            logger.debug(f"[ReadingExtractor] OpenAlex DOI fetch failed for {canon_doi}: {e}")
+            return None
 
 
 async def _impute_records_abstracts_async(records: List[Dict[str, Any]], client: httpx.AsyncClient) -> None:
     """
     Issue 4: Imputes missing/short (<40 chars) abstracts via OpenAlex DOI lookup,
     or generates synthesized query context string if unavailable.
+    Parallelizes OpenAlex DOI lookups with asyncio.gather and bounded concurrency semaphore.
     """
-    for r in records:
+    missing_indices = []
+    missing_dois = []
+    for idx, r in enumerate(records):
         abstract = r.get("abstract") or ""
         if len(abstract.strip()) < 40:
             doi = r.get("doi")
+            missing_indices.append(idx)
+            missing_dois.append(doi or "")
+
+    if missing_indices:
+        sem = asyncio.Semaphore(5)
+        tasks = [
+            _fetch_openalex_doi_metadata(client, doi, sem) if doi else asyncio.sleep(0, result=None)
+            for doi in missing_dois
+        ]
+        enriched_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for rec_idx, enriched in zip(missing_indices, enriched_results):
+            r = records[rec_idx]
             recovered = None
-            if doi:
-                recovered = await _impute_missing_abstract_openalex_async(client, doi)
+            if isinstance(enriched, dict):
+                inv_index = enriched.get("abstract_inverted_index")
+                if inv_index and isinstance(inv_index, dict):
+                    recovered = reconstruct_inverted_abstract(inv_index)
             if recovered and len(recovered.strip()) >= 40:
                 r["abstract"] = recovered
                 r["synthesized_context"] = ""
@@ -2023,7 +2062,7 @@ class SLMQueryPlanner:
         return cls._heuristic_fallback_plan(query, course_name)
 
     @classmethod
-    async def plan_async(cls, query: str, course_name: str = "", timeout: float = 0.25) -> Dict[str, Any]:
+    async def plan_async(cls, query: str, course_name: str = "", timeout: float = 1.5) -> Dict[str, Any]:
         """
         Stage 1 Neural SLM Query Planner & Intent Router.
         Invokes fast SLM (Groq llama-3.1-8b-instant or Gemini Flash Lite) to dynamically produce
@@ -2065,16 +2104,34 @@ class SLMQueryPlanner:
             if groq_key:
                 from openai import AsyncOpenAI
                 g_client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-                resp = await asyncio.wait_for(
-                    g_client.chat.completions.create(
-                        model="llama-3.1-8b-instant",
-                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                        max_tokens=250,
-                        temperature=0.0
-                    ),
-                    timeout=timeout
-                )
-                raw_response = resp.choices[0].message.content or ""
+                groq_models = [
+                    os.getenv("GROQ_SLM_MODEL", "").strip(),
+                    "qwen/qwen3.8-27b",
+                    "llama-3.3-70b-versatile",
+                    "llama-3.1-8b-instant",
+                ]
+                groq_models = [m for m in groq_models if m]
+                for g_model in groq_models:
+                    try:
+                        resp = await asyncio.wait_for(
+                            g_client.chat.completions.create(
+                                model=g_model,
+                                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                                max_tokens=250,
+                                temperature=0.0
+                            ),
+                            timeout=timeout
+                        )
+                        raw_response = resp.choices[0].message.content or ""
+                        if raw_response:
+                            break
+                    except Exception as err:
+                        status = getattr(err, "status_code", None)
+                        body = getattr(err, "response", None)
+                        body_text = getattr(body, "text", "") if body else getattr(err, "message", str(err))
+                        logger.warning(
+                            f"[SLMQueryPlanner] Groq model '{g_model}' failed (status={status}): {body_text}"
+                        )
             elif gemini_key:
                 from openai import AsyncOpenAI
                 gem_client = AsyncOpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
@@ -2210,7 +2267,7 @@ class SLMReranker:
         candidates: List[Dict[str, Any]],
         query: str,
         course_name: str = "",
-        timeout: float = 0.5
+        timeout: float = 1.5
     ) -> List[Dict[str, Any]]:
         """
         Reranks top N candidates using an SLM / LLM judge.
@@ -2244,16 +2301,34 @@ class SLMReranker:
             if groq_key:
                 from openai import AsyncOpenAI
                 g_client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-                resp = await asyncio.wait_for(
-                    g_client.chat.completions.create(
-                        model="llama-3.1-8b-instant",
-                        messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt_text}],
-                        max_tokens=300,
-                        temperature=0.0
-                    ),
-                    timeout=timeout
-                )
-                raw_response = resp.choices[0].message.content or ""
+                groq_models = [
+                    os.getenv("GROQ_SLM_MODEL", "").strip(),
+                    "qwen/qwen3.8-27b",
+                    "llama-3.3-70b-versatile",
+                    "llama-3.1-8b-instant",
+                ]
+                groq_models = [m for m in groq_models if m]
+                for g_model in groq_models:
+                    try:
+                        resp = await asyncio.wait_for(
+                            g_client.chat.completions.create(
+                                model=g_model,
+                                messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt_text}],
+                                max_tokens=300,
+                                temperature=0.0
+                            ),
+                            timeout=timeout
+                        )
+                        raw_response = resp.choices[0].message.content or ""
+                        if raw_response:
+                            break
+                    except Exception as err:
+                        status = getattr(err, "status_code", None)
+                        body = getattr(err, "response", None)
+                        body_text = getattr(body, "text", "") if body else getattr(err, "message", str(err))
+                        logger.warning(
+                            f"[SLMReranker] Groq model '{g_model}' failed (status={status}): {body_text}"
+                        )
             elif gemini_key:
                 from openai import AsyncOpenAI
                 gem_client = AsyncOpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
@@ -2709,10 +2784,12 @@ def extract_readings_with_llm(
         from openai import OpenAI
         groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
         groq_candidates = [
+            os.getenv("GROQ_DEFAULT_MODEL", "").strip(),
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
-            "mixtral-8x7b-32768",
+            "qwen/qwen3.8-27b",
         ]
+        groq_candidates = [m for m in groq_candidates if m]
         for g_model in groq_candidates:
             try:
                 logger.info(f"[ReadingExtractor] Invoking Groq model '{g_model}'...")
@@ -2735,7 +2812,10 @@ def extract_readings_with_llm(
                 else:
                     logger.info(f"[ReadingExtractor] Groq model '{g_model}' returned 0 parsed readings (empty result).")
             except Exception as e:
-                logger.warning(f"[ReadingExtractor] Groq candidate '{g_model}' failed: {e}")
+                status = getattr(e, "status_code", None)
+                body = getattr(e, "response", None)
+                body_text = getattr(body, "text", "") if body else getattr(e, "message", str(e))
+                logger.warning(f"[ReadingExtractor] Groq candidate '{g_model}' failed (status={status}): {body_text}")
 
     # 2. Try Gemini (cascade through available Gemini endpoints)
     if not items and gemini_key:

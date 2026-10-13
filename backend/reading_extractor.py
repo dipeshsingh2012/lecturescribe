@@ -1415,12 +1415,19 @@ async def _fetch_openalex_candidates_async(
     """
     headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
 
+    # Protect exact keyword phrasing: wrap multi-word queries in quotes if not already quoted
+    clean_q = query.strip()
+    if clean_q and " " in clean_q and not (clean_q.startswith('"') and clean_q.endswith('"')):
+        search_q = f'"{clean_q}"'
+    else:
+        search_q = clean_q
+
     # Pass 1 & Pass 2 for primary query
     tasks = [
         client.get(
             OPENALEX_API,
             params={
-                "search": query,
+                "search": search_q,
                 "per-page": max(limit, 15),
                 "sort": "relevance_score:desc"
             },
@@ -1430,7 +1437,7 @@ async def _fetch_openalex_candidates_async(
         client.get(
             OPENALEX_API,
             params={
-                "search": query,
+                "search": search_q,
                 "per-page": max(limit, 10),
                 "sort": "cited_by_count:desc"
             },
@@ -1443,12 +1450,13 @@ async def _fetch_openalex_candidates_async(
     if expanded_queries:
         for eq in expanded_queries:
             clean_eq = eq.strip()
-            if clean_eq and clean_eq.lower() != query.strip().lower() and len(tasks) < 3:
+            if clean_eq and clean_eq.lower() != clean_q.lower() and len(tasks) < 3:
+                eq_search = f'"{clean_eq}"' if (" " in clean_eq and not (clean_eq.startswith('"') and clean_eq.endswith('"'))) else clean_eq
                 tasks.append(
                     client.get(
                         OPENALEX_API,
                         params={
-                            "search": clean_eq,
+                            "search": eq_search,
                             "per-page": max(limit, 10),
                             "sort": "cited_by_count:desc"
                         },
@@ -1859,8 +1867,8 @@ class SLMQueryPlanner:
             '  "intent": "paper" | "monograph" | "general"\n'
             "}\n"
             "Rules:\n"
-            "1. 'primary_query' is the direct, high-precision search query string.\n"
-            "2. 'expanded_queries' must have up to 2 canonical, domain-appropriate synonyms or architectural foundational terms (e.g., historical equivalents, formal nomenclature).\n"
+            "1. 'primary_query' is the direct, high-precision search query string matching the core user concept.\n"
+            "2. 'expanded_queries' must have up to 2 alternative canonical nomenclature or architectural foundational terms (e.g., historical equivalents like 'encoder-decoder attention'). DO NOT append generic filler nouns like 'mechanism', 'approach', or 'method'.\n"
             "3. 'negative_concepts' contains unrelated concepts sharing partial sub-tokens to penalize or exclude.\n"
             "4. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
             "5. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
@@ -2140,10 +2148,17 @@ class SLMReranker:
 
             if raw_response:
                 scores_map = cls._parse_scores(raw_response)
+                # Hard minimum semantic floor: drop any candidate with semantic_score < 0.40
+                MIN_SEMANTIC_SCORE_FLOOR = 0.40
+                scored_candidates: List[Dict[str, Any]] = []
+
                 for idx, c in enumerate(bounded):
                     if idx in scores_map:
                         sem_score = scores_map[idx]
                         c["semantic_score"] = sem_score
+                        # HARD FILTER: Citation count must NEVER compensate for zero or near-zero semantic alignment
+                        if sem_score < MIN_SEMANTIC_SCORE_FLOOR:
+                            continue
                         citations = max(0, int(c.get("citation_count") or 0))
                         s_cit = min(1.0, math.log10(1.0 + citations) / 4.0)
                         current_year = datetime.now().year
@@ -2152,6 +2167,9 @@ class SLMReranker:
                         delta_y = max(0, current_year - pub_year)
                         s_rec = max(0.25, min(1.0, math.exp(-delta_y / 14.0)))
                         c["relevance_score"] = round(min(1.0, max(0.0, 0.50 * sem_score + 0.35 * s_cit + 0.15 * s_rec)), 4)
+                        scored_candidates.append(c)
+
+                return scored_candidates
         except Exception as e:
             logger.debug(f"[SLMReranker] SLM reranking failed or timed out ({e}); preserving BM25/hybrid fallback.")
 
@@ -2276,7 +2294,12 @@ def _format_and_interleave(
             r.get("semantic_score", r.get("relevance_score", 0.0)) >= floor
         )
     ]
-    papers = [r for r in records if r.get("reading_type") != "book"]
+    papers = [
+        r for r in records
+        if r.get("reading_type") != "book" and (
+            "semantic_score" not in r or r["semantic_score"] is None or r["semantic_score"] >= 0.40
+        )
+    ]
     papers.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
     books.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
     return _adaptive_interleave(papers, books, limit=limit, query=query, min_book_relevance=floor)
@@ -2359,9 +2382,17 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
     bounded = SLMReranker.prune_candidates(consolidated, max_n=8)
     reranked = await SLMReranker.rerank_async(bounded, primary_q, course_name=course_name)
 
+    # Stage 5 Hard semantic floor post-filter: drop any candidate with semantic_score < 0.40
+    # Citation count must NEVER compensate for zero or near-zero semantic alignment
+    MIN_SEMANTIC_SCORE_FLOOR = 0.40
+    filtered_reranked = [
+        item for item in reranked
+        if ("semantic_score" not in item or item["semantic_score"] is None or item["semantic_score"] >= MIN_SEMANTIC_SCORE_FLOOR)
+    ]
+
     # Issue 5: Format and interleave enforcing monograph relevancy floor (score >= 0.50)
     floor = 0.50 if course_name else 0.0
-    final_results = _format_and_interleave(reranked, limit=limit, query=primary_q, min_book_relevance=floor, course_name=course_name)
+    final_results = _format_and_interleave(filtered_reranked, limit=limit, query=primary_q, min_book_relevance=floor, course_name=course_name)
     logger.info(f"[ReadingExtractor] search_academic_literature_async returned {len(final_results)} results for query: '{clean_q}'")
     return final_results
 

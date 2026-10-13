@@ -1316,8 +1316,8 @@ async def test_stage_1_expansions_wired_to_stage_2_openalex():
         expanded_queries=["encoder-decoder attention transformer"]
     )
 
-    assert "cross attention" in searched_terms
-    assert "encoder-decoder attention transformer" in searched_terms
+    assert '"cross attention"' in searched_terms
+    assert '"encoder-decoder attention transformer"' in searched_terms
     assert len(searched_terms) == 3  # pass 1 (rel), pass 2 (cit), pass 3 (expanded)
     assert len(items) >= 2
 
@@ -1363,6 +1363,94 @@ def test_reranker_system_prompt_contains_cross_attention_guidance():
     assert "asymmetric cross-attention" in src
     assert "spatial criss-cross attention" in src
     assert "<= 0.50" in src
+
+
+@pytest.mark.anyio
+async def test_hard_semantic_floor_drops_low_scoring_papers():
+    """
+    Validates Task 1: Papers with semantic_score < 0.40 are dropped regardless of massive citation count.
+    Tests specifically that high-citation off-topic papers (e.g., echocardiography guidelines with 18,200 citations)
+    are filtered out.
+    """
+    from backend.reading_extractor import SLMReranker, _format_and_interleave
+
+    # Paper A: Seminal paper with good semantic score
+    paper_a = {
+        "title": "Attention Is All You Need",
+        "reading_type": "paper",
+        "citation_count": 135000,
+        "publication_year": "2017",
+        "relevance_score": 0.95
+    }
+    # Paper B: Echocardiography paper with 18,200 citations but off-topic (semantic_score = 0.0)
+    paper_b = {
+        "title": "Recommendations for Cardiac Chamber Quantification by Echocardiography in Adults",
+        "reading_type": "paper",
+        "citation_count": 18200,
+        "publication_year": "2015",
+        "doi": "10.1016/j.echo.2014.10.003",
+        "relevance_score": 0.85
+    }
+
+    mock_json = '[{"candidate_id": 0, "semantic_score": 0.95}, {"candidate_id": 1, "semantic_score": 0.0}]'
+
+    mock_resp = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = mock_json
+    mock_resp.choices = [mock_choice]
+
+    async def async_create(*args, **kwargs):
+        return mock_resp
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = async_create
+
+    with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test"}), \
+         patch("openai.AsyncOpenAI", return_value=mock_client):
+        reranked = await SLMReranker.rerank_async([paper_a, paper_b], query="cross attention")
+
+    # Paper B must be dropped by the hard semantic floor
+    assert len(reranked) == 1
+    assert reranked[0]["title"] == "Attention Is All You Need"
+    assert not any("Echocardiography" in r["title"] for r in reranked)
+
+    # Also test _format_and_interleave drops papers with semantic_score < 0.40
+    mixed_papers = [
+        {"title": "Paper Good", "reading_type": "paper", "semantic_score": 0.85, "relevance_score": 0.90},
+        {"title": "Paper Bad", "reading_type": "paper", "semantic_score": 0.10, "relevance_score": 0.70}
+    ]
+    formatted = _format_and_interleave(mixed_papers, limit=5, query="cross attention")
+    assert len(formatted) == 1
+    assert formatted[0]["title"] == "Paper Good"
+
+
+@pytest.mark.anyio
+async def test_openalex_preserves_verbatim_quoted_phrase():
+    """
+    Validates Task 2: Multi-word query 'cross attention' is quoted as '"cross attention"'
+    in OpenAlex API requests to prevent unquoted full-text token disjunction.
+    """
+    import httpx
+    from backend.reading_extractor import _fetch_openalex_candidates_async
+
+    searched_queries = []
+
+    async def mock_get(url, params=None, headers=None, timeout=None):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        searched_queries.append(params.get("search", ""))
+        mock_resp.json.return_value = {"results": []}
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+
+    await _fetch_openalex_candidates_async(mock_client, query="cross attention", limit=5)
+
+    assert len(searched_queries) == 2
+    for q in searched_queries:
+        assert q == '"cross attention"'
+
 
 
 

@@ -597,3 +597,171 @@ def test_fastapi_search_endpoint_e2e():
     assert "course_name is required." in res_blank_course.json()["detail"]
 
 
+def test_reconstruct_inverted_abstract():
+    from backend.reading_extractor import reconstruct_inverted_abstract
+
+    # 1. Standard structured dictionary
+    idx_standard = {"Attention": [0], "is": [1], "all": [2], "you": [3], "need": [4]}
+    assert reconstruct_inverted_abstract(idx_standard) == "Attention is all you need"
+
+    # 2. Out of order index dictionary
+    idx_scrambled = {"need": [4], "Attention": [0], "all": [2], "is": [1], "you": [3]}
+    assert reconstruct_inverted_abstract(idx_scrambled) == "Attention is all you need"
+
+    # 3. Repeated tokens
+    idx_repeated = {"the": [0, 3], "transformer": [1], "architecture": [2], "model": [4]}
+    assert reconstruct_inverted_abstract(idx_repeated) == "the transformer architecture the model"
+
+    # 4. Gaps / missing indices (clean spacing without crashes)
+    idx_gaps = {"start": [0], "end": [3]}
+    assert reconstruct_inverted_abstract(idx_gaps) == "start end"
+
+    # 5. Nil and malformed inputs
+    assert reconstruct_inverted_abstract(None) is None
+    assert reconstruct_inverted_abstract({}) is None
+    assert reconstruct_inverted_abstract({"bad": "not a list"}) is None
+    assert reconstruct_inverted_abstract([]) is None
+
+
+def test_extract_canonical_arxiv_id():
+    from backend.reading_extractor import extract_canonical_arxiv_id
+
+    # Strips versions and normalizes
+    assert extract_canonical_arxiv_id("1706.03762v5") == "1706.03762"
+    assert extract_canonical_arxiv_id("arxiv:1706.03762") == "1706.03762"
+    assert extract_canonical_arxiv_id("https://arxiv.org/abs/2103.00020v1") == "2103.00020"
+    assert extract_canonical_arxiv_id("https://arxiv.org/pdf/2103.00020.pdf") == "2103.00020"
+    assert extract_canonical_arxiv_id("doi:10.48550/arXiv.1706.03762") == "1706.03762"
+
+    # Unmatched / null
+    assert extract_canonical_arxiv_id("") is None
+    assert extract_canonical_arxiv_id(None) is None
+    assert extract_canonical_arxiv_id("random text without id") is None
+
+
+def test_hybrid_scoring_mathematical_boundaries():
+    from datetime import datetime
+    from backend.reading_extractor import compute_hybrid_relevance
+
+    curr_year = str(datetime.now().year)
+
+    # 1. Maximum possible inputs: score must NOT breach 1.0
+    record_max = {
+        "title": "Cross Attention Transformer Models",
+        "abstract": "We explore cross attention transformer models in deep neural networks.",
+        "citation_count": 10_000_000,
+        "publication_year": curr_year,
+        "direct_pdf_url": "https://arxiv.org/pdf/1706.03762.pdf",
+        "is_open_access": True
+    }
+    score_max = compute_hybrid_relevance(record_max, "cross attention transformer models")
+    assert 0.0 <= score_max <= 1.0, f"Score {score_max} breached [0.0, 1.0] boundary!"
+    assert score_max >= 0.95
+
+    # 2. Minimal / Zero inputs: score must not be negative and should observe recency floor
+    record_min = {
+        "title": "Irrelevant Antique Document",
+        "abstract": "Unrelated historical text.",
+        "citation_count": 0,
+        "publication_year": "1960",
+        "direct_pdf_url": "",
+        "is_open_access": False
+    }
+    score_min = compute_hybrid_relevance(record_min, "cross attention transformer models")
+    assert 0.0 <= score_min <= 1.0
+    # Minimum score reflects recency floor weight (0.15 * 0.25 = ~0.0375)
+    assert score_min > 0.0 and score_min <= 0.15
+
+    # 3. Empty strings and None fields should not crash and stay bounded
+    record_sparse = {
+        "title": "",
+        "abstract": None,
+        "citation_count": -5,
+        "publication_year": "invalid-year",
+        "direct_pdf_url": None,
+        "is_open_access": False
+    }
+    score_sparse = compute_hybrid_relevance(record_sparse, "test query")
+    assert 0.0 <= score_sparse <= 1.0
+
+
+@pytest.mark.anyio
+async def test_semantic_scholar_rate_limiter_and_circuit():
+    from backend.reading_extractor import SemanticScholarRateLimiter
+
+    limiter = SemanticScholarRateLimiter(min_interval_seconds=0.01)
+    # Circuit starts closed
+    assert not limiter.is_circuit_open()
+    assert await limiter.acquire() is True
+
+    # 429 trips the circuit
+    limiter.record_429()
+    assert limiter.is_circuit_open() is True
+    # Subsequent acquire is rejected immediately
+    assert await limiter.acquire() is False
+
+    # Reset circuit restores availability
+    limiter.reset_circuit()
+    assert not limiter.is_circuit_open()
+    assert await limiter.acquire() is True
+
+
+@pytest.mark.anyio
+async def test_openalex_tier1_primary_and_s2_fallback():
+    from backend.reading_extractor import (
+        search_academic_literature_async,
+        _S2_RATE_LIMITER
+    )
+
+    with patch("backend.reading_extractor._fetch_openalex_candidates_async") as mock_oa, \
+         patch("backend.reading_extractor._fetch_semantic_scholar_candidates_async") as mock_s2, \
+         patch("backend.reading_extractor._fetch_crossref_candidates_async") as mock_cr, \
+         patch("backend.reading_extractor._fetch_europe_pmc_candidates_async") as mock_pmc, \
+         patch("backend.reading_extractor._fetch_google_books_candidates_async") as mock_gb:
+
+        # OpenAlex returns canonical attention paper with arXiv ID and inverted abstract
+        mock_oa.return_value = [
+            {
+                "title": "Attention Is All You Need",
+                "author": "Ashish Vaswani, Noam Shazeer",
+                "publication_year": "2017",
+                "reading_type": "paper",
+                "category": "reference",
+                "publisher": "NeurIPS",
+                "journal": "NeurIPS 2017",
+                "doi": "10.5555/3295222.3295349",
+                "arxiv_id": "1706.03762",
+                "pmcid": "",
+                "isbn": "",
+                "cover_url": "",
+                "preview_url": "https://arxiv.org/abs/1706.03762",
+                "direct_pdf_url": "https://arxiv.org/pdf/1706.03762.pdf",
+                "embed_url": "https://arxiv.org/pdf/1706.03762.pdf",
+                "reader_type": "pdf_direct",
+                "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+                "citation_count": 130000,
+                "influential_citation_count": 0,
+                "source_provider": "OpenAlex",
+                "is_open_access": True,
+                "relevance_score": 0.0
+            }
+        ]
+
+        # S2 is simulated as rate-limited (empty return)
+        mock_s2.return_value = []
+        mock_cr.return_value = []
+        mock_pmc.return_value = []
+        mock_gb.return_value = []
+
+        results = await search_academic_literature_async("attention transformer", limit=2)
+        assert len(results) == 1
+        item = results[0]
+        assert item["title"] == "Attention Is All You Need"
+        assert item["arxiv_id"] == "1706.03762"
+        assert item["direct_pdf_url"] == "https://arxiv.org/pdf/1706.03762.pdf"
+        assert item["citation_count"] == 130000
+        assert 0.0 <= item["relevance_score"] <= 1.0
+        assert item["reader_type"] == "pdf_direct"
+
+
+

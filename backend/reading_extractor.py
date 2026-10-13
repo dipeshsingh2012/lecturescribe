@@ -16,6 +16,8 @@ import urllib.parse
 import html
 import concurrent.futures
 import asyncio
+import math
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Set
 
 import requests
@@ -24,6 +26,8 @@ from backend.web_search import search_web_for_context
 
 logger = logging.getLogger("lecturescribe.reading_extractor")
 
+OPENALEX_API = "https://api.openalex.org/works"
+SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
 GOOGLE_BOOKS_API = "https://www.googleapis.com/books/v1/volumes"
 OPEN_LIBRARY_API = "https://openlibrary.org/search.json"
 ARCHIVE_ORG_SEARCH_API = "https://archive.org/advancedsearch.php"
@@ -508,17 +512,174 @@ def _token_jaccard_similarity(str_a: str, str_b: str) -> float:
     return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
 
 
+def reconstruct_inverted_abstract(inverted_index: dict[str, list[int]] | None) -> str | None:
+    """
+    Reconstructs the full text from OpenAlex's abstract_inverted_index.
+    Guarantees zero crashes on None, empty dict, or irregular positions.
+    """
+    if not inverted_index or not isinstance(inverted_index, dict):
+        return None
+    pos_map: Dict[int, str] = {}
+    for word, positions in inverted_index.items():
+        if isinstance(positions, list):
+            for pos in positions:
+                if isinstance(pos, int) and pos >= 0:
+                    pos_map[pos] = word
+    if not pos_map:
+        return None
+    max_idx = max(pos_map.keys())
+    tokens = [pos_map.get(i, "") for i in range(max_idx + 1)]
+    reconstructed = " ".join(t for t in tokens if t).strip()
+    return reconstructed if reconstructed else None
+
+
+def extract_canonical_arxiv_id(text: Optional[str]) -> Optional[str]:
+    """
+    Extracts and normalizes canonical arXiv ID (e.g. '1706.03762v5' -> '1706.03762').
+    """
+    if not text:
+        return None
+    m = re.search(r'(?:arxiv:\s*|/abs/|/pdf/)?(\d{4}\.\d{4,5})(?:v\d+)?', str(text), flags=re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+    return None
+
+
+def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
+    """
+    Mathematically bounded composite relevance scoring function strictly in [0.0, 1.0].
+    Final Score = w_lex * S_lex + w_cit * S_cit + w_rec * S_rec + w_oa * S_oa
+    where sum(w_i) == 1.0 (w_lex=0.45, w_cit=0.35, w_rec=0.15, w_oa=0.05).
+    """
+    w_lex = 0.45
+    w_cit = 0.35
+    w_rec = 0.15
+    w_oa = 0.05
+
+    q_clean = query.lower().strip()
+    q_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', q_clean))
+
+    title = (record.get("title") or "").lower()
+    abstract = (record.get("abstract") or "").lower()
+    t_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', title))
+    a_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', abstract))
+
+    # 1. Normalized Lexical score S_lex clamped to [0.0, 1.0]
+    overlap_title = len(q_tokens & t_tokens) / len(q_tokens) if q_tokens else 0.0
+    overlap_abstract = len(q_tokens & a_tokens) / len(q_tokens) if (q_tokens and a_tokens) else 0.0
+    exact_phrase = 1.0 if (q_clean and (q_clean in title or (abstract and q_clean in abstract))) else 0.0
+
+    s_lex = min(1.0, 0.5 * overlap_title + 0.3 * overlap_abstract + 0.2 * exact_phrase)
+
+    # 2. Log-normalized citation authority S_cit in [0.0, 1.0]
+    citations = max(0, int(record.get("citation_count") or 0))
+    s_cit = min(1.0, math.log10(1.0 + citations) / 4.0)
+
+    # 3. Smooth recency decay S_rec with minimum floor in [0.25, 1.0]
+    current_year = datetime.now().year
+    pub_year_str = str(record.get("publication_year") or "")
+    pub_year = int(pub_year_str) if pub_year_str.isdigit() else (current_year - 5)
+    delta_y = max(0, current_year - pub_year)
+    s_rec = max(0.25, min(1.0, math.exp(-delta_y / 14.0)))
+
+    # 4. Normalized binary OA indicator S_oa in {0.0, 1.0}
+    has_pdf = bool(record.get("direct_pdf_url"))
+    is_oa = bool(record.get("is_open_access"))
+    s_oa = 1.0 if (has_pdf or is_oa) else 0.0
+
+    # Composite score strictly guaranteed in [0.0, 1.0]
+    final_score = (w_lex * s_lex) + (w_cit * s_cit) + (w_rec * s_rec) + (w_oa * s_oa)
+    return round(min(1.0, max(0.0, final_score)), 4)
+
+
+class SemanticScholarRateLimiter:
+    """
+    Token-bucket / Leaky-bucket rate limiter with circuit breaker for Semantic Scholar API.
+    Enforces maximum 1 QPS and trips on HTTP 429 with exponential backoff.
+    """
+    def __init__(self, min_interval_seconds: float = 1.0):
+        self.min_interval = min_interval_seconds
+        self.last_request_time = 0.0
+        self.circuit_open_until = 0.0
+        self.backoff_duration = 30.0
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    async def acquire(self) -> bool:
+        """
+        Returns True if request is allowed, False if circuit is currently open.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+        except RuntimeError:
+            return True
+
+        if now < self.circuit_open_until:
+            logger.debug(f"[ReadingExtractor] S2 circuit open ({self.circuit_open_until - now:.1f}s remaining). Skipping S2 call.")
+            return False
+
+        lock = self._get_lock()
+        async with lock:
+            now = asyncio.get_event_loop().time()
+            if now < self.circuit_open_until:
+                return False
+            elapsed = now - self.last_request_time
+            if elapsed < self.min_interval:
+                await asyncio.sleep(self.min_interval - elapsed)
+            self.last_request_time = asyncio.get_event_loop().time()
+            return True
+
+    def record_success(self):
+        self.backoff_duration = 30.0
+
+    def record_429(self):
+        try:
+            now = asyncio.get_event_loop().time()
+        except RuntimeError:
+            now = 0.0
+        self.circuit_open_until = now + self.backoff_duration
+        logger.warning(
+            f"[ReadingExtractor] Semantic Scholar 429 rate limit hit. Tripping circuit breaker for {self.backoff_duration}s."
+        )
+        self.backoff_duration = min(300.0, self.backoff_duration * 2.0)
+
+    def is_circuit_open(self) -> bool:
+        try:
+            now = asyncio.get_event_loop().time()
+            return now < self.circuit_open_until
+        except RuntimeError:
+            return False
+
+    def reset_circuit(self):
+        self.circuit_open_until = 0.0
+        self.backoff_duration = 30.0
+
+
+_S2_RATE_LIMITER = SemanticScholarRateLimiter()
+
+
 def _are_records_equivalent(rec_a: Dict[str, Any], rec_b: Dict[str, Any]) -> bool:
     """
     Multi-factor equivalence test:
     1. Canonical DOI matching
-    2. Exact normalized title matching (with short/generic title guard requiring author/year match)
-    3. Subtitle delimiter splitting + token Jaccard (>= 0.85) with author/year validation
+    2. Canonical arXiv ID matching
+    3. Exact normalized title matching (with short/generic title guard requiring author/year match)
+    4. Subtitle delimiter splitting + token Jaccard (>= 0.85) with author/year validation
     """
     doi_a = _normalize_doi(rec_a.get("doi", ""))
     doi_b = _normalize_doi(rec_b.get("doi", ""))
     if doi_a and doi_b:
         return doi_a == doi_b
+
+    arxiv_a = extract_canonical_arxiv_id(rec_a.get("arxiv_id") or rec_a.get("preview_url") or rec_a.get("direct_pdf_url"))
+    arxiv_b = extract_canonical_arxiv_id(rec_b.get("arxiv_id") or rec_b.get("preview_url") or rec_b.get("direct_pdf_url"))
+    if arxiv_a and arxiv_b:
+        return arxiv_a == arxiv_b
 
     title_a = rec_a.get("title", "").strip()
     title_b = rec_b.get("title", "").strip()
@@ -653,13 +814,18 @@ def _parse_crossref_items(items: list) -> List[Dict[str, Any]]:
             "publisher": publisher,
             "journal": journal,
             "doi": doi,
+            "arxiv_id": "",
             "pmcid": "",
             "isbn": isbn,
             "cover_url": "",
             "preview_url": url,
+            "direct_pdf_url": "",
             "embed_url": "",
             "reader_type": "web",
             "abstract": abstract,
+            "citation_count": 0,
+            "influential_citation_count": 0,
+            "relevance_score": 0.0,
             "source_provider": f"Crossref ({journal})" if journal else "Crossref",
             "is_open_access": False
         })
@@ -698,13 +864,18 @@ def _parse_europe_pmc_items(pmc_items: list) -> List[Dict[str, Any]]:
             "publisher": publisher,
             "journal": journal,
             "doi": doi,
+            "arxiv_id": "",
             "pmcid": pmcid,
             "isbn": "",
             "cover_url": "",
             "preview_url": preview_url,
+            "direct_pdf_url": "",
             "embed_url": embed_url,
             "reader_type": reader_type,
             "abstract": abstract,
+            "citation_count": 0,
+            "influential_citation_count": 0,
+            "relevance_score": 0.0,
             "source_provider": "Europe PMC / PubMed",
             "is_open_access": is_oa
         })
@@ -761,20 +932,165 @@ def _parse_google_books_items(gb_items: list) -> List[Dict[str, Any]]:
             "publisher": publisher,
             "journal": "",
             "doi": "",
+            "arxiv_id": "",
             "pmcid": "",
             "isbn": isbn,
             "cover_url": cover_url,
             "preview_url": preview_url,
+            "direct_pdf_url": "",
             "embed_url": embed_url,
             "reader_type": reader_type,
             "abstract": abstract,
+            "citation_count": 0,
+            "influential_citation_count": 0,
+            "relevance_score": 0.0,
             "source_provider": "Google Books",
             "is_open_access": False
         })
     return results
 
 
-# Synchronous Candidate Fetchers (with requests)
+def _parse_openalex_items(items: list) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for it in items:
+        raw_title = it.get("title") or ""
+        t = _clean_html_text(raw_title).rstrip(".")
+        if not t:
+            continue
+
+        authors_list = []
+        for authorship in it.get("authorships", []):
+            name = authorship.get("author", {}).get("display_name")
+            if name:
+                authors_list.append(_clean_html_text(name))
+        author_str = ", ".join(authors_list)
+
+        pub_year = str(it.get("publication_year") or "")
+        doi = _normalize_doi(it.get("doi") or "")
+
+        # Extract canonical arXiv ID
+        raw_ids = it.get("ids", {})
+        arxiv_raw = raw_ids.get("arxiv") or it.get("id") or (it.get("doi") or "")
+        arxiv_id = extract_canonical_arxiv_id(arxiv_raw)
+
+        # Inverted abstract reconstruction
+        abstract = reconstruct_inverted_abstract(it.get("abstract_inverted_index")) or ""
+        abstract = _clean_html_text(abstract)
+
+        # Open Access & Direct PDF
+        oa_obj = it.get("open_access") or {}
+        is_oa = bool(oa_obj.get("is_oa", False))
+        direct_pdf = oa_obj.get("oa_url") or ""
+        if arxiv_id and not direct_pdf:
+            direct_pdf = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            is_oa = True
+
+        primary_loc = it.get("primary_location") or {}
+        source_obj = primary_loc.get("source") or {}
+        journal = _clean_html_text(source_obj.get("display_name") or "")
+        publisher = _clean_html_text(source_obj.get("host_organization_name") or "")
+
+        citations = it.get("cited_by_count") or 0
+
+        preview_url = it.get("doi") or direct_pdf or raw_ids.get("openalex") or ""
+        embed_url = direct_pdf if direct_pdf else ""
+        reader_type = "pdf_direct" if direct_pdf else "web"
+
+        type_str = (it.get("type") or "").lower()
+        if "book" in type_str:
+            reading_type = "book"
+            category = "primary_textbook"
+        else:
+            reading_type = "paper"
+            category = "reference"
+
+        results.append({
+            "title": t,
+            "author": author_str,
+            "publication_year": pub_year,
+            "reading_type": reading_type,
+            "category": category,
+            "publisher": publisher,
+            "journal": journal,
+            "doi": doi or "",
+            "arxiv_id": arxiv_id or "",
+            "pmcid": "",
+            "isbn": "",
+            "cover_url": "",
+            "preview_url": preview_url,
+            "direct_pdf_url": direct_pdf or "",
+            "embed_url": embed_url,
+            "reader_type": reader_type,
+            "abstract": abstract,
+            "citation_count": citations,
+            "influential_citation_count": 0,
+            "source_provider": "OpenAlex",
+            "is_open_access": is_oa,
+            "relevance_score": 0.0,
+        })
+    return results
+
+
+def _parse_semantic_scholar_items(items: list) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for it in items:
+        raw_title = it.get("title") or ""
+        t = _clean_html_text(raw_title).rstrip(".")
+        if not t:
+            continue
+
+        authors_list = [_clean_html_text(a.get("name", "")) for a in it.get("authors", []) if a.get("name")]
+        author_str = ", ".join(authors_list)
+
+        pub_year = str(it.get("year") or "")
+        ext_ids = it.get("externalIds") or {}
+        doi = _normalize_doi(ext_ids.get("DOI") or "")
+        arxiv_raw = ext_ids.get("ArXiv") or ""
+        arxiv_id = extract_canonical_arxiv_id(arxiv_raw)
+
+        abstract = _clean_html_text(it.get("abstract") or "")
+        citations = it.get("citationCount") or 0
+        inf_citations = it.get("influentialCitationCount") or 0
+
+        oa_obj = it.get("openAccessPdf") or {}
+        direct_pdf = oa_obj.get("url") or ""
+        if arxiv_id and not direct_pdf:
+            direct_pdf = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
+        is_oa = bool(direct_pdf)
+        paper_id = it.get("paperId") or ""
+        preview_url = f"https://www.semanticscholar.org/paper/{paper_id}" if paper_id else (doi or "")
+        embed_url = direct_pdf if direct_pdf else ""
+        reader_type = "pdf_direct" if direct_pdf else "web"
+
+        results.append({
+            "title": t,
+            "author": author_str,
+            "publication_year": pub_year,
+            "reading_type": "paper",
+            "category": "reference",
+            "publisher": "",
+            "journal": _clean_html_text(it.get("venue") or ""),
+            "doi": doi or "",
+            "arxiv_id": arxiv_id or "",
+            "pmcid": ext_ids.get("PubMedCentral") or "",
+            "isbn": "",
+            "cover_url": "",
+            "preview_url": preview_url,
+            "direct_pdf_url": direct_pdf or "",
+            "embed_url": embed_url,
+            "reader_type": reader_type,
+            "abstract": abstract,
+            "citation_count": citations,
+            "influential_citation_count": inf_citations,
+            "source_provider": "Semantic Scholar",
+            "is_open_access": is_oa,
+            "relevance_score": 0.0,
+        })
+    return results
+
+
+# Candidate Fetchers
 def _fetch_crossref_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
     try:
         resp = requests.get(
@@ -823,7 +1139,25 @@ def _fetch_google_books_candidates(query: str, limit: int) -> List[Dict[str, Any
     return []
 
 
-# Asynchronous Candidate Fetchers (with httpx)
+def _fetch_openalex_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    try:
+        resp = requests.get(
+            OPENALEX_API,
+            params={
+                "search": query,
+                "per-page": max(limit, 8),
+                "sort": "relevance_score:desc"
+            },
+            headers={"User-Agent": "LectureScribe/2.1 (mailto:academic-research@lecturescribe.local)"},
+            timeout=3.5
+        )
+        if resp.status_code == 200:
+            return _parse_openalex_items(resp.json().get("results", []))
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [OpenAlex Search] Exception: {e}")
+    return []
+
+
 async def _fetch_crossref_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
     try:
         resp = await client.get(
@@ -869,13 +1203,109 @@ async def _fetch_google_books_candidates_async(client: httpx.AsyncClient, query:
     return []
 
 
+async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    try:
+        resp = await client.get(
+            OPENALEX_API,
+            params={
+                "search": query,
+                "per-page": max(limit, 8),
+                "sort": "relevance_score:desc"
+            },
+            headers={"User-Agent": "LectureScribe/2.1 (mailto:academic-research@lecturescribe.local)"}
+        )
+        if resp.status_code == 200:
+            return _parse_openalex_items(resp.json().get("results", []))
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Async OpenAlex Search] Exception: {e}")
+    return []
+
+
+async def _fetch_semantic_scholar_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    allowed = await _S2_RATE_LIMITER.acquire()
+    if not allowed:
+        return []
+    try:
+        api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+        headers = {"User-Agent": "LectureScribe/2.1"}
+        if api_key:
+            headers["x-api-key"] = api_key
+
+        fields = "title,authors,year,citationCount,influentialCitationCount,abstract,openAccessPdf,externalIds,venue"
+        resp = await client.get(
+            SEMANTIC_SCHOLAR_API,
+            params={"query": query, "limit": max(limit, 5), "fields": fields},
+            headers=headers,
+            timeout=3.0
+        )
+        if resp.status_code == 200:
+            _S2_RATE_LIMITER.record_success()
+            return _parse_semantic_scholar_items(resp.json().get("data", []))
+        elif resp.status_code == 429:
+            _S2_RATE_LIMITER.record_429()
+            return []
+        else:
+            logger.debug(f"[ReadingExtractor] [Async S2 Search] Status {resp.status_code}")
+            return []
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] [Async S2 Search] Exception: {e}")
+        return []
+
+
+def _merge_record_metadata(target: Dict[str, Any], incoming: Dict[str, Any]) -> None:
+    """Enriches canonical target record with incoming metadata."""
+    # 1. Citations
+    target["citation_count"] = max(target.get("citation_count") or 0, incoming.get("citation_count") or 0)
+    target["influential_citation_count"] = max(
+        target.get("influential_citation_count") or 0, incoming.get("influential_citation_count") or 0
+    )
+
+    # 2. PMCID & PMC Reader
+    if incoming.get("pmcid"):
+        target["pmcid"] = incoming["pmcid"]
+        if not target.get("direct_pdf_url"):
+            target["embed_url"] = incoming.get("embed_url") or f"https://europepmc.org/articles/{incoming['pmcid']}"
+            target["reader_type"] = "pmc_reader"
+
+    # 3. Direct PDF & arXiv ID
+    if incoming.get("arxiv_id") and not target.get("arxiv_id"):
+        target["arxiv_id"] = incoming["arxiv_id"]
+    if incoming.get("direct_pdf_url") and not target.get("direct_pdf_url"):
+        target["direct_pdf_url"] = incoming["direct_pdf_url"]
+        target["reader_type"] = "pdf_direct"
+        target["embed_url"] = incoming["direct_pdf_url"]
+
+    # 4. Open Access flag
+    if incoming.get("is_open_access"):
+        target["is_open_access"] = True
+
+    # 5. Abstract - take longer non-empty
+    inc_abs = incoming.get("abstract") or ""
+    tar_abs = target.get("abstract") or ""
+    if len(inc_abs) > len(tar_abs):
+        target["abstract"] = inc_abs
+
+    # 6. Identifiers and bibliographic fields
+    for k in ("doi", "journal", "publisher", "publication_year", "preview_url", "isbn", "cover_url"):
+        if not target.get(k) and incoming.get(k):
+            target[k] = incoming[k]
+
+    if not target.get("embed_url") and incoming.get("embed_url"):
+        target["embed_url"] = incoming["embed_url"]
+        if incoming.get("reader_type"):
+            target["reader_type"] = incoming["reader_type"]
+
+
 def _consolidate_and_merge_records(
-    crossref_items: List[Dict[str, Any]],
-    pmc_items: List[Dict[str, Any]],
-    books_items: List[Dict[str, Any]]
+    crossref_items: Optional[List[Dict[str, Any]]] = None,
+    pmc_items: Optional[List[Dict[str, Any]]] = None,
+    books_items: Optional[List[Dict[str, Any]]] = None,
+    openalex_items: Optional[List[Dict[str, Any]]] = None,
+    s2_items: Optional[List[Dict[str, Any]]] = None,
+    query: str = ""
 ) -> List[Dict[str, Any]]:
     """
-    Multi-factor deduplication and Crossref + Europe PMC enrichment.
+    Multi-factor deduplication and multi-provider metadata enrichment.
     """
     records: List[Dict[str, Any]] = []
 
@@ -885,59 +1315,60 @@ def _consolidate_and_merge_records(
                 return i
         return None
 
-    # Step 1: Ingest Crossref results
-    for cr_item in crossref_items:
-        if _find_duplicate_index(cr_item) is None:
-            records.append(cr_item)
+    # Step 1: Ingest OpenAlex (Tier-1 Primary Foundation)
+    for oa_item in (openalex_items or []):
+        if _find_duplicate_index(oa_item) is None:
+            records.append(dict(oa_item))
 
-    # Step 2: Ingest Europe PMC results with enrichment
-    for pmc_item in pmc_items:
+    # Step 2: Ingest Semantic Scholar (enrich with citation metrics & S2 metadata)
+    for s2_item in (s2_items or []):
+        match_idx = _find_duplicate_index(s2_item)
+        if match_idx is not None:
+            _merge_record_metadata(records[match_idx], s2_item)
+        else:
+            records.append(dict(s2_item))
+
+    # Step 3: Ingest Crossref results
+    for cr_item in (crossref_items or []):
+        match_idx = _find_duplicate_index(cr_item)
+        if match_idx is not None:
+            _merge_record_metadata(records[match_idx], cr_item)
+        else:
+            records.append(dict(cr_item))
+
+    # Step 4: Ingest Europe PMC results with enrichment
+    for pmc_item in (pmc_items or []):
         match_idx = _find_duplicate_index(pmc_item)
         if match_idx is not None:
-            target = records[match_idx]
-            if pmc_item.get("pmcid"):
-                target["pmcid"] = pmc_item["pmcid"]
-                target["embed_url"] = pmc_item.get("embed_url") or target.get("embed_url") or ""
-                target["reader_type"] = "pmc_reader"
-            elif not target.get("embed_url") and pmc_item.get("embed_url"):
-                target["embed_url"] = pmc_item["embed_url"]
-                if pmc_item.get("reader_type"):
-                    target["reader_type"] = pmc_item["reader_type"]
-
-            if pmc_item.get("is_open_access"):
-                target["is_open_access"] = True
-
-            if pmc_item.get("abstract") and (not target.get("abstract") or len(pmc_item["abstract"]) > len(target.get("abstract", ""))):
-                target["abstract"] = pmc_item["abstract"]
-
-            if not target.get("doi") and pmc_item.get("doi"):
-                target["doi"] = pmc_item["doi"]
-
-            if not target.get("journal") and pmc_item.get("journal"):
-                target["journal"] = pmc_item["journal"]
-            if not target.get("publisher") and pmc_item.get("publisher"):
-                target["publisher"] = pmc_item["publisher"]
-            if not target.get("publication_year") and pmc_item.get("publication_year"):
-                target["publication_year"] = pmc_item["publication_year"]
-            if not target.get("preview_url") and pmc_item.get("preview_url"):
-                target["preview_url"] = pmc_item["preview_url"]
+            _merge_record_metadata(records[match_idx], pmc_item)
         else:
-            records.append(pmc_item)
+            records.append(dict(pmc_item))
 
-    # Step 3: Ingest Google Books results
-    for b_item in books_items:
+    # Step 5: Ingest Google Books results
+    for b_item in (books_items or []):
         match_idx = _find_duplicate_index(b_item)
         if match_idx is not None:
-            target = records[match_idx]
-            if not target.get("isbn") and b_item.get("isbn"):
-                target["isbn"] = b_item["isbn"]
-            if not target.get("cover_url") and b_item.get("cover_url"):
-                target["cover_url"] = b_item["cover_url"]
-            if not target.get("embed_url") and b_item.get("embed_url"):
-                target["embed_url"] = b_item["embed_url"]
-                target["reader_type"] = b_item.get("reader_type", "google_embed")
+            _merge_record_metadata(records[match_idx], b_item)
         else:
-            records.append(b_item)
+            records.append(dict(b_item))
+
+    # Ensure all canonical fields and compute hybrid relevance scores
+    for r in records:
+        r.setdefault("citation_count", 0)
+        r.setdefault("influential_citation_count", 0)
+        r.setdefault("direct_pdf_url", "")
+        r.setdefault("arxiv_id", "")
+        r.setdefault("pmcid", "")
+        r.setdefault("isbn", "")
+        r.setdefault("cover_url", "")
+        r.setdefault("preview_url", "")
+        r.setdefault("embed_url", "")
+        r.setdefault("reader_type", "web")
+        r.setdefault("publisher", "")
+        r.setdefault("journal", "")
+        r.setdefault("doi", "")
+        r.setdefault("is_open_access", False)
+        r["relevance_score"] = compute_hybrid_relevance(r, query)
 
     return records
 
@@ -1026,14 +1457,15 @@ def _interleave_results(
 def _format_and_interleave(records: List[Dict[str, Any]], limit: int, query: str = "") -> List[Dict[str, Any]]:
     books = [r for r in records if r.get("reading_type") == "book"]
     papers = [r for r in records if r.get("reading_type") != "book"]
+    papers.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+    books.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
     return _adaptive_interleave(papers, books, limit=limit, query=query)
 
 
 async def search_academic_literature_async(query: str, limit: int = 6) -> List[Dict[str, Any]]:
     """
-    Asynchronous federated literature discovery across Crossref, Europe PMC, and Google Books.
-    Utilizes HTTP/2 connection pooling with httpx, strict task timeouts,
-    multi-factor deduplication, and intent-adaptive ranking.
+    Asynchronous federated literature discovery across OpenAlex (Tier 1),
+    Crossref, Europe PMC, Google Books, and Semantic Scholar (rate-limited).
     """
     if not query or len(query.strip()) < 2:
         return []
@@ -1042,17 +1474,31 @@ async def search_academic_literature_async(query: str, limit: int = 6) -> List[D
     logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_q}' (limit={limit})")
 
     client = get_async_http_client()
+    openalex_task = asyncio.create_task(_fetch_openalex_candidates_async(client, clean_q, limit))
     crossref_task = asyncio.create_task(_fetch_crossref_candidates_async(client, clean_q, limit))
     pmc_task = asyncio.create_task(_fetch_europe_pmc_candidates_async(client, clean_q, limit))
     books_task = asyncio.create_task(_fetch_google_books_candidates_async(client, clean_q, limit))
+    s2_task = asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, clean_q, limit))
 
-    raw_results = await asyncio.gather(crossref_task, pmc_task, books_task, return_exceptions=True)
+    raw_results = await asyncio.gather(
+        openalex_task, crossref_task, pmc_task, books_task, s2_task,
+        return_exceptions=True
+    )
 
-    cr_items: List[Dict[str, Any]] = raw_results[0] if isinstance(raw_results[0], list) else []
-    pmc_items: List[Dict[str, Any]] = raw_results[1] if isinstance(raw_results[1], list) else []
-    gb_items: List[Dict[str, Any]] = raw_results[2] if isinstance(raw_results[2], list) else []
+    oa_items: List[Dict[str, Any]] = raw_results[0] if isinstance(raw_results[0], list) else []
+    cr_items: List[Dict[str, Any]] = raw_results[1] if isinstance(raw_results[1], list) else []
+    pmc_items: List[Dict[str, Any]] = raw_results[2] if isinstance(raw_results[2], list) else []
+    gb_items: List[Dict[str, Any]] = raw_results[3] if isinstance(raw_results[3], list) else []
+    s2_items: List[Dict[str, Any]] = raw_results[4] if isinstance(raw_results[4], list) else []
 
-    consolidated = _consolidate_and_merge_records(cr_items, pmc_items, gb_items)
+    consolidated = _consolidate_and_merge_records(
+        crossref_items=cr_items,
+        pmc_items=pmc_items,
+        books_items=gb_items,
+        openalex_items=oa_items,
+        s2_items=s2_items,
+        query=clean_q
+    )
     final_results = _format_and_interleave(consolidated, limit=limit, query=clean_q)
     logger.info(f"[ReadingExtractor] search_academic_literature_async returned {len(final_results)} results for query: '{clean_q}'")
     return final_results
@@ -1061,8 +1507,7 @@ async def search_academic_literature_async(query: str, limit: int = 6) -> List[D
 def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any]]:
     """
     Synchronous federated literature discovery entrypoint.
-    Queries Crossref, Europe PMC, and Google Books concurrently with multi-factor deduplication,
-    Europe PMC enrichment, and intent-adaptive interleaving.
+    Queries OpenAlex, Crossref, Europe PMC, and Google Books concurrently.
     """
     if not query or len(query.strip()) < 2:
         return []
@@ -1070,10 +1515,17 @@ def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any
     clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
     logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit})")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_oa = executor.submit(_fetch_openalex_candidates, clean_q, limit)
         future_cr = executor.submit(_fetch_crossref_candidates, clean_q, limit)
         future_pmc = executor.submit(_fetch_europe_pmc_candidates, clean_q, limit)
         future_gb = executor.submit(_fetch_google_books_candidates, clean_q, limit)
+
+        try:
+            oa_items = future_oa.result()
+        except Exception as e:
+            logger.debug(f"[ReadingExtractor] OpenAlex query error: {e}")
+            oa_items = []
 
         try:
             cr_items = future_cr.result()
@@ -1093,7 +1545,13 @@ def search_academic_literature(query: str, limit: int = 6) -> List[Dict[str, Any
             logger.debug(f"[ReadingExtractor] Google Books query error: {e}")
             gb_items = []
 
-    consolidated = _consolidate_and_merge_records(cr_items, pmc_items, gb_items)
+    consolidated = _consolidate_and_merge_records(
+        crossref_items=cr_items,
+        pmc_items=pmc_items,
+        books_items=gb_items,
+        openalex_items=oa_items,
+        query=clean_q
+    )
     final_results = _format_and_interleave(consolidated, limit=limit, query=clean_q)
     logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{clean_q}'")
     return final_results

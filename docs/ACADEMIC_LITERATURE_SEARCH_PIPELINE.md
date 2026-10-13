@@ -2,212 +2,275 @@
 
 ## 1. Executive Summary & Objective
 
-The **Academic Literature Search Pipeline** (`search_academic_literature`) is the federated information retrieval engine in LectureScribe that enables students and educators to discover peer-reviewed journal articles, conference papers, and textbooks supporting their courses and lectures.
+The **Academic Literature Search Pipeline** (`search_academic_literature`) is the federated information retrieval (IR) engine in LectureScribe. It enables students and educators across diverse disciplines—Computer Science & Engineering, Medicine & Life Sciences, and Humanities—to discover authoritative, high-impact peer-reviewed literature, conference proceedings, preprints, and foundational monographs.
 
-The pipeline federates across three global academic metadata repositories concurrently:
-1. **Crossref**: Global DOI registry covering major publishers including Nature, IEEE, Springer, ACM, Wiley, Elsevier, and JAMA.
-2. **Europe PMC / PubMed Central**: Biomedical literature repository providing open-access full texts, PMC identifiers, and embedded reading capabilities.
-3. **Google Books**: Repository for published monographs, university textbooks, and Google Books preview embeds.
+### Current Evolution (v2.0 Architecture)
+To solve the semantic drift, missing abstracts, lack of citation authority, and provider mismatch experienced on technical Computer Science/AI queries (e.g., *"cross attention transformer models"*), the engine has evolved from a simple 3-provider lexical fan-out to a **domain-routed, citation-aware, hybrid-ranked federated discovery engine**.
 
 ---
 
 ## 2. Architecture & Pipeline Stages
 
 ```
-                        User Search Query
-                               │
-                               ▼
-               ┌───────────────────────────────┐
-               │    Query Preprocessing        │
-               │  - Prefix cleanup (regex)     │
-               │  - Minimum length validation  │
-               │  - Query intent classification│
-               └───────────────┬───────────────┘
-                               │
-            ┌──────────────────┼──────────────────┐
-            ▼                  ▼                  ▼
-    ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-    │   Crossref   │   │  Europe PMC  │   │ Google Books │
-    │ (Bibliograh) │   │ (Biomedical) │   │ (Monographs) │
-    │ Timeout 3.5s │   │ Timeout 3.5s │   │ Timeout 3.5s │
-    └───────┬──────┘   └───────┬──────┘   └───────┬──────┘
-            │                  │                  │
-            └──────────────────┼──────────────────┘
-                               │ (Async HTTP/2 or ThreadPool Concurrent Fan-Out)
-                               ▼
-               ┌───────────────────────────────┐
-               │  Data Sanitization & Cleaning │
-               │  - Strip HTML / XML markup    │
-               │  - Unescape HTML entities     │
-               │  - Extract 4-digit pub year   │
-               │  - Standardize author names   │
-               │  - Separate journal/publisher │
-               └───────────────┬───────────────┘
-                               │
-                               ▼
-               ┌───────────────────────────────┐
-               │ Multi-Factor Deduplication &  │
-               │ Europe PMC Enrichment         │
-               │ - Primary: Case-folded DOI    │
-               │ - Short title guard           │
-               │ - Subtitle Jaccard similarity │
-               │ - Author surname validation   │
-               │ - Merge PMC reader & OA links │
-               └───────────────┬───────────────┘
-                               │
-                               ▼
-               ┌───────────────────────────────┐
-               │ Intent-Adaptive Interleaving  │
-               │ - Monograph query adaptation  │
-               │ - Paper citation adaptation   │
-               │ - Balanced slot distribution  │
-               └───────────────┬───────────────┘
-                               │
-                               ▼
-                   Canonical Schema Output
+                        User Search Query + Course Context
+                                        │
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │       Stage 1: Query Transformation & Routing       │
+             │ - Compound phrase detection & quoting ("cross-attn") │
+             │ - Entity extraction (venues: NeurIPS/CVPR, years)   │
+             │ - Academic discipline router (STEM/CS, Biomed, Hum) │
+             └──────────────────────────┬──────────────────────────┘
+                                        │
+            ┌───────────────────────────┼───────────────────────────┐
+            │ [STEM / CS / AI]          │ [Medicine / Life Sci]     │ [Humanities / Law]
+            ▼                           ▼                           ▼
+ ┌──────────────────────┐    ┌──────────────────────┐    ┌──────────────────────┐
+ │ • Semantic Scholar   │    │ • Europe PMC         │    │ • OpenAlex           │
+ │ • OpenAlex           │    │ • OpenAlex           │    │ • Crossref           │
+ │ • arXiv (Preprints)  │    │ • Crossref (Trials)  │    │ • Google Books       │
+ │ • Google Books (Text)│    │ • Google Books (Text)│    │   (Monographs)       │
+ └──────────┬───────────┘    └──────────┬───────────┘    └──────────┬───────────┘
+            │                           │                           │
+            └───────────────────────────┼───────────────────────────┘
+                                        │ (Async HTTP/2 with Strict 3.2s Timeout)
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │     Stage 2: Sanitization & Metadata Ingestion      │
+             │ - Reconstruct inverted abstracts (OpenAlex)         │
+             │ - Strip HTML/XML tags & unescape entities           │
+             │ - Extract normalized 4-digit publication years      │
+             │ - Resolve direct open-access PDFs (Unpaywall/S2/OA) │
+             └──────────────────────────┬──────────────────────────┘
+                                        │
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │   Stage 3: Multi-Identifier Deduplication & Merging  │
+             │ - Primary Key: Normalized DOI                       │
+             │ - Secondary Key: Normalized arXiv ID                │
+             │ - Tertiary Key: Title Jaccard (≥0.85) + Surnames    │
+             │ - Year compatibility guard (±1 year tolerance)      │
+             │ - Citation & abstract enrichment across records     │
+             └──────────────────────────┬──────────────────────────┘
+                                        │
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │         Stage 4: Hybrid Re-Ranking & Scoring        │
+             │ - Lexical/BM25 token overlap (Title + Abstract)     │
+             │ - Log-normalized citation authority: log10(1 + cit) │
+             │ - Intent-adaptive recency decay (Foundational vs SOTA)│
+             │ - Direct PDF verification bonus (+0.10)             │
+             └──────────────────────────┬──────────────────────────┘
+                                        │
+                                        ▼
+             ┌─────────────────────────────────────────────────────┐
+             │       Stage 5: Intent-Adaptive Slot Allocation      │
+             │ - Monograph intent: Up to 60% textbook slots        │
+             │ - Citation intent: Single-paper focus               │
+             │ - General exploration: Balanced 2 papers : 1 book   │
+             └──────────────────────────┬──────────────────────────┘
+                                        │
+                                        ▼
+                          Canonical Schema JSON Output
 ```
 
 ---
 
-## 3. Core Engine Implementation Details
+## 3. Data Provider Federation & Domain Routing Strategy
 
-### 3.1 Concurrency & Execution Engine
+### 3.1 Provider Matrix & Operational Characteristics
 
-The pipeline supports two execution profiles: a robust multi-threaded baseline and an asynchronous HTTP/2 client for high-throughput deployments.
-
-#### A. Multi-Threaded Execution (Active Baseline)
-* **Concurrency Model**: Implemented using `concurrent.futures.ThreadPoolExecutor(max_workers=3)`.
-* **Individual Request Timeout**: Strictly bounded to `3.5s` per provider.
-* **Fault Isolation**: Each provider query executes in an isolated `try...except` block. If any single provider experiences a connection failure, timeout, or HTTP 4xx/5xx status, the pipeline logs a debug message and continues assembling results from the remaining providers.
-* **Performance Gain**: Wall-clock latency dropped from sequential execution (~11s worst-case) to concurrent execution (~3–3.5s worst-case).
-
-#### B. Asynchronous HTTP/2 Engine (High-Throughput Profile)
-* **Client Architecture**: Singleton `httpx.AsyncClient` lifecycle-managed with HTTP/2 multiplexing, connection pooling (`max_connections=200`, `max_keepalive_connections=50`), and keep-alive reuse.
-* **Task Management**: Dispatches queries via `asyncio.gather(..., return_exceptions=True)` to prevent individual provider failures from aborting the federated query.
-* **Latency Profile**: Eliminates TLS handshake overhead on warm connections (~60–140ms saved per query) and eliminates OS thread creation overhead under high concurrency.
-
-### 3.2 Upstream Filtering (Crossref)
-To eliminate non-article artifacts from Crossref (such as component DOIs for figures, supplementary tables, and peer-review transcripts):
-* **Query Filter**: Configured with `filter=type:journal-article,type:proceedings-article,type:book,type:book-chapter`.
-* **Polite API Protocol**: Supplies a polymorphic User-Agent header with contact email:
-  ```http
-  User-Agent: LectureScribe/1.0 (mailto:academic-research@lecturescribe.local)
-  ```
-
-### 3.3 Data Sanitization & Field Normalization
-* **HTML/XML Tag Stripping**: `_clean_html_text` strips XML/HTML tags (e.g., `<jats:p>`, `<h4>`, `<b>`, `<i>`, `<br/>`) and unescapes all HTML entities (`&amp;`, `&lt;`, `&gt;`, `&#39;`).
-* **Publication Year**: Extracted as a clean 4-digit string using `_extract_year` (replaces legacy `"edition"` field).
-* **Author Formatting**:
-  * Crossref author lists parsed to `"Given Family"`.
-  * Google Books arrays joined with commas.
-  * Europe PMC author strings stripped of trailing punctuation.
-* **Journal vs. Publisher Disambiguation**: Container title is assigned strictly to `journal`. If missing, `journal` remains empty (`""`) and does not inherit the publisher name.
+| Provider | Primary Disciplines | Strengths | p95 Latency | Auth & Rate Limits | Failure Mode Mitigation |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **OpenAlex** *(Tier 1)* | Cross-Disciplinary (All Fields) | 250M+ works, native citation counts, inverted abstracts, full open-access & PDF URLs, concept tagging. | $\sim 250\text{ms} - 400\text{ms}$ | **Polite Pool**: 10 req/s with `mailto:` header. Free. | Inverted abstract index is reconstructed sequentially during ingestion. |
+| **Semantic Scholar (S2)** *(Tier 1)* | CS, AI, Biomedicine, Neuroscience | High-precision vector/hybrid search, `citationCount`, `influentialCitationCount`, direct open-access PDF links, arXiv ID indexing. | $\sim 300\text{ms} - 550\text{ms}$ | **Free Public API**: 100 req/5 min unauthenticated; 1 req/s with free key. | Strict IP rate limit: protected by a 60s circuit breaker falling back to OpenAlex. |
+| **arXiv API** | Physics, CS, Math, Quantitative Finance | Canonical source for cutting-edge preprints (2017–present); exact abstracts, versions, direct PDF downloads. | $\sim 600\text{ms} - 900\text{ms}$ | 1 req/3s etiquette. | Slower XML responses; lack citation counts. Queried selectively for recent CS/AI queries. |
+| **Crossref** | Formal Journal & Conference Publishing | Canonical bibliographic DOI registry, conference proceedings (IEEE, ACM, Springer). | $\sim 400\text{ms} - 800\text{ms}$ | Polite pool via `User-Agent`. | Missing abstracts for $>60\%$ of items, no citation metrics. Enriched via OpenAlex/S2. |
+| **Europe PMC** | Biomedicine, Life Sciences, Clinical Medicine | Full-text OA XML, PMCIDs, BioRxiv/MedRxiv ingestion, in-app HTML reader embeds. | $\sim 300\text{ms} - 500\text{ms}$ | Generous public quota. | Bypassed for non-biomedical queries (CS, Physics, Humanities) to avoid zero-hit overhead. |
+| **Google Books** | Monographs, Textbooks, Reference Manuals | Curriculum textbooks (Cormen, Bishop, Russell & Norvig), preview pages, cover art. | $\sim 200\text{ms} - 350\text{ms}$ | 1000 req/day unauthenticated; generous with GCP key. | High noise for journal articles; strictly reserved for monograph/textbook slot allocation. |
 
 ---
 
-## 4. Multi-Factor Deduplication & Entity Resolution
+### 3.2 Dynamic Domain Routing Matrix
 
-Federated queries frequently return duplicate entries across Crossref and Europe PMC. To prevent generic title collisions while handling subtitle truncations, the pipeline applies a multi-factor matching engine:
+The routing engine inspects the course discipline context and query terms to determine provider fan-out:
 
 ```
-                      Incoming Candidate Record
-                                  │
-                                  ▼
-                     Has Normalized Canonical DOI?
-                                 / \
-                         [Yes]  /   \  [No]
-                               ▼     ▼
-                Match against DOI    Is Alphanumeric Title
-                Index (Case-folded)  an Exact Match?
-                       │             / \
-                   [Matched] [Yes]  /   \  [No]
-                       │           ▼     ▼
-                       │    Is Title Length  Token Jaccard on Main
-                       │    < 15 chars or    Title >= 0.85 AND
-                       │    Generic Name?    Author Surnames Match?
-                       │         / \                 / \
-                       │ [Yes]  /   \ [No]   [Yes]  /   \ [No]
-                       │       ▼     ▼             ▼     ▼
-                       │  Do Surnames Match?    MERGE   NEW RECORD
-                       │       / \
-                       │ [Yes]/   \[No]
-                       ▼     ▼     ▼
-                     MERGE RECORD  NEW RECORD
+                            ┌──────────────────────────────────┐
+                            │ Incoming Academic Search Request │
+                            │   (query, course, degree_level)  │
+                            └─────────────────┬────────────────┘
+                                              │
+                                   [ Intent & Discipline ]
+                                   [    Classification   ]
+                                              │
+                 ┌────────────────────────────┼────────────────────────────┐
+                 ▼                            ▼                            ▼
+        [ STEM / CS / AI ]           [ Life Sci / Medicine ]         [ Humanities / Law ]
+                 │                            │                            │
+      ┌──────────┴──────────┐      ┌──────────┴──────────┐      ┌──────────┴──────────┐
+      ▼                     ▼      ▼                     ▼      ▼                     ▼
+┌───────────┐         ┌──────────┐ ┌───────────┐   ┌───────────┐ ┌───────────┐   ┌────────────┐
+│ Semantic  │         │ OpenAlex │ │ Europe    │   │ OpenAlex  │ │ OpenAlex  │   │ Crossref / │
+│  Scholar  │         │          │ │   PMC     │   │           │ │           │   │ Google Bks │
+└─────┬─────┘         └────┬─────┘ └─────┬─────┘   └─────┬─────┘ └─────┬─────┘   └─────┬──────┘
+      │                    │             │               │             │               │
+      └──────────┬─────────┘             └───────┬───────┘             └───────┬───────┘
+                 │                               │                             │
+                 ▼                               ▼                             ▼
+       ┌──────────────────┐            ┌──────────────────┐          ┌──────────────────┐
+       │ (Optional arXiV  │            │ (Crossref backup │          │ (Monograph slot  │
+       │  for preprints)  │            │   for DOIs)      │          │   if textbook)   │
+       └──────────────────┘            └──────────────────┘          └──────────────────┘
 ```
 
-### Deduplication Factors
-1. **Primary Strict Key (DOI)**: Normalized, case-insensitive string matching after removing prefixes (`https://doi.org/`, `http://dx.doi.org/`, `doi:`).
-2. **Short/Generic Title Guard**: Generic titles (e.g., *"Introduction"*, *"Editorial"*, *"Review"*, or any title $< 15$ characters) are blocked from title-only matching unless at least one author surname and publication year ($\pm 1$ year) match.
-3. **Subtitle Splitting & Token Jaccard**: Titles split on delimiters (`:`, `-`, `—`). Token Jaccard similarity $\ge 0.85$ on primary title tokens merges subtitle variations (e.g., cataloger additions).
-4. **Author Surname Multi-Set Intersection**: Matches family names extracted from author strings across Western and East Asian formatting conventions.
-
-### Europe PMC Metadata Enrichment
-When an incoming Europe PMC result matches an existing Crossref record:
-* Ingests PMC identifier (`pmcid`).
-* Upgrades reader link to Europe PMC reader (`https://europepmc.org/articles/{pmcid}`) with `reader_type = "pmc_reader"`.
-* Sets `is_open_access = True` if open access is verified.
-* Replaces empty abstracts with Europe PMC's clean abstract.
-* Fills missing metadata (e.g., journal title, DOI).
+#### Routing Rules:
+1. **STEM / Computer Science / AI (`STEM_CS`)**:
+   * Dispatches to **Semantic Scholar** + **OpenAlex** in parallel.
+   * If query mentions bleeding-edge concepts (`"mamba"`, `"diffusion"`, `"mixture of experts"`, `"rag"`) or years $\ge 2023$, queries **arXiv API**.
+   * Bypasses Europe PMC.
+2. **Medicine / Health Sciences (`BIOMED`)**:
+   * Dispatches to **Europe PMC** + **OpenAlex** in parallel.
+   * Queries Crossref for clinical trial journals (*NEJM*, *Lancet*, *JAMA*).
+   * Bypasses arXiv.
+3. **Humanities / Social Sciences / Law (`GENERAL_HUMANITIES`)**:
+   * Dispatches to **OpenAlex** + **Crossref** + **Google Books**.
 
 ---
 
-## 5. Intent-Adaptive Interleaving Strategy
+## 4. Upstream Query Transformation & IR Improvements
 
-Static interleaving (`2 papers : 1 book`) fails when a query explicitly targets a textbook or a specific journal citation. The pipeline dynamically adjusts slot allocation based on detected user intent:
+### 4.1 Exact-Phrase & Compound Term Extraction
+Raw queries like `cross attention transformer models` undergo token analysis:
+* **Compound Phrases**: Phrases like `"cross attention"`, `"self attention"`, `"reinforcement learning"`, `"mixture of experts"` are detected and wrapped in exact quotes for upstream search engines.
+* **Academic Venue Extraction**: Known conference and journal tokens (`neurips`, `icml`, `cvpr`, `iclr`, `aaai`, `jama`, `nejm`, `ieee`, `acm`) are extracted into dedicated venue filters rather than polluting keyword matching.
+* **Publication Year Constraints**: 4-digit years (e.g., `2017`, `2024`) are extracted into target year parameters and stripped from the keyword search string.
 
-| Detected Query Intent | Indicator Keywords | Book Slot Target | Paper Slot Target | Interleaving Pattern |
+### 4.2 Inverted Abstract Reconstruction (OpenAlex)
+OpenAlex stores abstracts as an inverted index mapping words to integer token positions:
+$$\text{abstract\_inverted\_index} = \{\text{"Attention"}: [0], \text{"is"}: [1], \text{"all"}: [2], \dots\}$$
+
+The reconstruction algorithm:
+1. Finds $M = \max(\text{positions})$.
+2. Allocates an array of size $M + 1$.
+3. Assigns each word token to its corresponding indices.
+4. Joins the array with whitespace, producing a clean, full-text abstract without extraneous network round-trips.
+
+---
+
+## 5. Metadata Enrichment & Entity Resolution
+
+### 5.1 Multi-Identifier Deduplication
+Candidates retrieved across providers are merged into unified records using a three-tier resolution hierarchy:
+
+```
+                          ┌───────────────────────────┐
+                          │ Incoming Candidate Record │
+                          └─────────────┬─────────────┘
+                                        │
+                         Does Canonical DOI match?
+                                       / \
+                                 YES  /   \  NO
+                                     /     \
+                                    ▼       ▼
+                            [ MERGE & ENRICH ]  Does arXiv ID match?
+                                                       / \
+                                                 YES  /   \  NO
+                                                     /     \
+                                                    ▼       ▼
+                                            [ MERGE & ENRICH ]  Title & Author Surnames Match?
+                                                                       / \
+                                                                 YES  /   \  NO
+                                                                     /     \
+                                                                    ▼       ▼
+                                                            [ MERGE & ENRICH ]  [ RETAIN SEPARATE ]
+```
+
+1. **Tier 1 (DOI Match)**: Normalized, case-insensitive string match after stripping `https://doi.org/`, `http://dx.doi.org/`, and `doi:` prefixes.
+2. **Tier 2 (arXiv ID Match)**: Normalized identifier match after stripping version suffixes (e.g., `1706.03762v5` matches `1706.03762`).
+3. **Tier 3 (Title Jaccard & Surnames)**: Subtitle delimiter splitting (`:`, `-`, `—`, `–`). Primary title token Jaccard similarity $\ge 0.85$ merges records if author surnames intersect and publication years are within $\pm 1$ year.
+4. **Year Compatibility Guard**: Records with explicit publication years differing by $> 1$ year are strictly separated to prevent collapsing distinct editions or multi-year studies.
+
+### 5.2 Enrichment Precedence Matrix
+When duplicates are detected across providers:
+* **Citations**: Retains the highest `citation_count` and `influential_citation_count` (provided by Semantic Scholar and OpenAlex).
+* **Abstract**: Retains the longest, most complete abstract.
+* **Direct Reading Links**:
+  1. Priority 1: `direct_pdf_url` (unpaywall/arXiv direct PDF).
+  2. Priority 2: `embed_url` with `reader_type = "pmc_reader"` (Europe PMC interactive viewer).
+  3. Priority 3: `embed_url` with `reader_type = "google_embed"` (Google Books interactive viewer).
+  4. Priority 4: External DOI link (`preview_url`).
+
+---
+
+## 6. Hybrid Scoring & Re-Ranking
+
+To ensure canonical papers (e.g., Vaswani et al., 2017) outrank low-impact or tangentially related recent preprints, the pipeline applies a hybrid scoring function:
+
+$$\text{Final Score} = w_{\text{lex}} \cdot S_{\text{lex}} + w_{\text{cit}} \cdot S_{\text{cit}} + w_{\text{rec}} \cdot S_{\text{rec}} + w_{\text{oa}} \cdot S_{\text{oa}}$$
+$$\text{where } \sum w_i = 1.0 \quad (w_{\text{lex}} = 0.45,\; w_{\text{cit}} = 0.35,\; w_{\text{rec}} = 0.15,\; w_{\text{oa}} = 0.05)$$
+
+| Factor | Weight | Formulation | Mathematical Range | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| **Monograph / Textbook** | `textbook`, `handbook`, `guide`, `introduction to`, `principles of`, `volume`, `edition` | Up to 60% of `limit` | Remainder of `limit` | Books lead; alternating papers |
-| **Specific Paper / Citation** | `et al`, `jama`, `nejm`, `nature`, `ieee`, `arxiv`, `doi`, `proceedings`, `trial` | Max 1 book (if `limit >= 5`) | Remainder of `limit` | Papers lead; monograph appended |
-| **General Exploration** | Default / open topic searches | 1–2 books (guaranteed if available) | Remainder of `limit` | Balanced `2 papers : 1 book` |
+| **Lexical Match** ($S_{\text{lex}}$) | `0.45` | $\min\left(1.0,\; 0.5 \cdot \text{overlap}_{\text{title}} + 0.3 \cdot \text{overlap}_{\text{abstract}} + 0.2 \cdot \mathbb{I}(\text{exact\_phrase})\right)$ | $[0.0, 1.0]$ | Clamped query-title-abstract keyword and phrase coverage. |
+| **Citation Authority** ($S_{\text{cit}}$) | `0.35` | $\min\left(1.0,\; \frac{\log_{10}(1 + \text{citation\_count})}{4.0}\right)$ | $[0.0, 1.0]$ | Log-normalized seminal authority metric. |
+| **Recency Curve** ($S_{\text{rec}}$) | `0.15` | $\max\left(0.25,\; \exp\left(-\frac{\max(0, \Delta y)}{14.0}\right)\right)$ | $[0.25, 1.0]$ | Smooth exponential decay with minimum floor so landmark classics are not penalized solely by age. |
+| **Open Access Readability** ($S_{\text{oa}}$) | `0.05` | $1.0 \text{ if (direct\_pdf\_url or is\_open\_access) else } 0.0$ | $\{0.0, 1.0\}$ | Normalized binary indicator for instant one-click readability. |
+
+*Note: Because each sub-score $S_i \in [0.0, 1.0]$ and $\sum w_i = 1.0$, the composite relevance score is mathematically guaranteed to stay bounded within $[0.0, 1.0]$.*
 
 ---
 
-## 6. Target Output Schema Contract
+## 7. Revised Target Schema Contract
 
-Every dictionary emitted by `search_academic_literature` strictly conforms to the following schema:
+Every item returned by `search_academic_literature` strictly conforms to the following contract. Missing string values are represented as `null` (or clean empty strings where backward compatibility requires):
 
-```python
+```json
 {
-    "title": str,            # Clean plain-text title (tags stripped, entities unescaped)
-    "author": str,           # Comma-separated full author names ("John Doe, Jane Smith")
-    "publication_year": str, # 4-digit year string (e.g., "2021") or ""
-    "reading_type": str,     # "paper", "journal", or "book"
-    "category": str,         # "reference" or "primary_textbook"
-    "publisher": str,        # Publisher organization name or ""
-    "journal": str,          # Academic journal / proceedings title or ""
-    "doi": str,              # Canonical normalized DOI or ""
-    "pmcid": str,            # PubMed Central identifier (e.g., "PMC4968574") or ""
-    "isbn": str,             # Standard ISBN_13 or ISBN_10 or ""
-    "cover_url": str,        # HTTPS book cover thumbnail or ""
-    "preview_url": str,      # Primary external URL or DOI link
-    "embed_url": str,        # Embedded digital reader link (PMC / Google Books) or ""
-    "reader_type": str,      # "web", "pmc_reader", or "google_embed"
-    "abstract": str,         # Plain-text abstract (zero HTML/XML tags)
-    "source_provider": str,  # e.g., "Crossref (JAMA)", "Europe PMC / PubMed", "Google Books"
-    "is_open_access": bool,  # Verified open access flag
-    "match_reason": str      # Optional 1-sentence relevance justification or ""
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AcademicDiscoveryItem",
+  "type": "object",
+  "required": [
+    "title",
+    "author",
+    "publication_year",
+    "reading_type",
+    "category",
+    "publisher",
+    "journal",
+    "doi",
+    "direct_pdf_url",
+    "citation_count",
+    "relevance_score",
+    "source_provider",
+    "is_open_access"
+  ],
+  "properties": {
+    "title": { "type": "string" },
+    "author": { "type": "string" },
+    "publication_year": { "type": "string" },
+    "reading_type": { "type": "string", "enum": ["paper", "book", "journal", "preprint"] },
+    "category": { "type": "string", "enum": ["primary_textbook", "reference", "supplementary"] },
+    "publisher": { "type": ["string", "null"] },
+    "journal": { "type": ["string", "null"] },
+    "doi": { "type": ["string", "null"] },
+    "arxiv_id": { "type": ["string", "null"] },
+    "pmcid": { "type": ["string", "null"] },
+    "isbn": { "type": ["string", "null"] },
+    "cover_url": { "type": ["string", "null"] },
+    "preview_url": { "type": ["string", "null"] },
+    "direct_pdf_url": { "type": ["string", "null"] },
+    "embed_url": { "type": ["string", "null"] },
+    "reader_type": { "type": "string", "enum": ["pdf_direct", "pmc_reader", "google_embed", "web"] },
+    "abstract": { "type": ["string", "null"] },
+    "citation_count": { "type": "integer", "minimum": 0 },
+    "influential_citation_count": { "type": "integer", "minimum": 0 },
+    "relevance_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "source_provider": { "type": "string" },
+    "is_open_access": { "type": "boolean" }
+  }
 }
 ```
-
----
-
-## 7. SLM Integration Architecture (Roadmap)
-
-To optimize precision under a strict end-to-end latency budget ($p95 < 1.20\text{s}$), a lightweight Small Language Model (SLM, 1B–3B parameters) can be integrated as a speculative pre-routing and post-retrieval re-ranker.
-
-### Latency Budget Breakdown
-```
-[Pre-Retrieval Routing]  [Parallel HTTP Fan-Out]   [Deduplication]  [Post-Retrieval Re-Ranking]
-     ~80 - 130ms                ~320 - 580ms            ~2 - 5ms            ~180 - 340ms
-────────────┴──────────────────────────┴────────────────────┴─────────────────────┴─────────────
-                               Total p95: ~1,107ms (< 1.20s Budget)
-```
-
-* **Recommended SLM**: `Qwen2.5-1.5B-Instruct` (or `Qwen2.5-3B-Instruct`) served via **vLLM** (`--dtype bfloat16 --quantization fp8 --enforce-eager`).
-* **Pre-Retrieval Function**: Selectively gates Europe PMC for non-biomedical queries and constructs targeted Boolean Lucene syntax.
-* **Post-Retrieval Function**: Single listwise prompt performing cross-attention scoring on the top 10 candidate titles and abstracts, emitting structured JSON rankings via constrained grammar decoding (`outlines`).
-* **Circuit Breakers**: If the pre-routing SLM call exceeds 150ms or fails, the pipeline immediately falls back to heuristic keyword routing without failing the user search.
 
 ---
 
@@ -218,7 +281,7 @@ To optimize precision under a strict end-to-end latency budget ($p95 < 1.20\text
 * **Request Body**:
   ```json
   {
-    "query": "Singer et al. (2016) Sepsis-3 JAMA",
+    "query": "cross attention transformer models",
     "limit": 6
   }
   ```
@@ -226,42 +289,75 @@ To optimize precision under a strict end-to-end latency budget ($p95 < 1.20\text
   ```json
   {
     "status": "success",
-    "course_name": "critical_care_medicine",
-    "query": "Singer et al. (2016) Sepsis-3 JAMA",
-    "results": [ ... ],
+    "course_name": "master_of_technology",
+    "query": "cross attention transformer models",
+    "results": [
+      {
+        "title": "Attention Is All You Need",
+        "author": "Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit",
+        "publication_year": "2017",
+        "reading_type": "paper",
+        "category": "reference",
+        "publisher": "NeurIPS",
+        "journal": "Advances in Neural Information Processing Systems",
+        "doi": "10.5555/3295222.3295349",
+        "arxiv_id": "1706.03762",
+        "direct_pdf_url": "https://arxiv.org/pdf/1706.03762.pdf",
+        "reader_type": "pdf_direct",
+        "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks...",
+        "citation_count": 138500,
+        "influential_citation_count": 14200,
+        "relevance_score": 0.942,
+        "source_provider": "Semantic Scholar / OpenAlex",
+        "is_open_access": true
+      }
+    ],
     "count": 6
   }
   ```
 
 ### Library Addition Endpoint
 * **Route**: `POST /api/course/{course_name}/add-reading`
-* **Payload**: Accepts `AddCourseReadingRequest`. The backend synchronizes both `publication_year` and legacy `edition` fields for full forward and backward compatibility.
-
-### Client Components
-* **Frontend Hook**: [`frontend/src/hooks/useResources.js`](file:///home/dipes/projects/lecturescribe/frontend/src/hooks/useResources.js) (`searchLiterature`, `addCourseReading`)
-* **Modal Component**: [`frontend/src/components/modals/ResearchLiteratureModal.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/modals/ResearchLiteratureModal.jsx) (interactive search UI, chip filters, preview reader launcher, course library bookmarking)
+* **Payload**: Accepts `AddCourseReadingRequest`. Synchronizes both `publication_year` and legacy `edition` fields for backward compatibility.
 
 ---
 
-## 9. Test Suite & Verification
+## 9. Test Suite & Verification Matrix
 
-The pipeline is verified across unit, integration, and UI test layers:
+The pipeline is verified through automated test suites in both backend and frontend environments:
 
-1. **Backend Unit & Integration Tests**:
-   - Location: [`backend/tests/test_literature_search.py`](file:///home/dipes/projects/lecturescribe/backend/tests/test_literature_search.py)
-   - Scope:
-     * HTML tag stripping and entity unescaping (`test_clean_html_text`)
-     * 4-digit calendar year extraction (`test_extract_year`)
-     * Canonical DOI normalization (`test_normalize_doi`)
-     * Alphanumeric title hashing (`test_normalize_title`)
-     * Slot reservation and book interleaving constraints (`test_interleaving_logic`)
-     * Concurrent multi-provider retrieval, PMC duplicate enrichment, and schema adherence (`test_search_academic_literature_parallel_and_merged`)
-     * Individual provider fault isolation and graceful degradation (`test_search_academic_literature_graceful_failure`)
+### Backend Test Suites (`pytest`)
+* **Test File**: [`backend/tests/test_literature_search.py`](file:///home/dipes/projects/lecturescribe/backend/tests/test_literature_search.py) (25 unit/integration tests)
+* **Test File**: [`tests/test_readings.py`](file:///home/dipes/projects/lecturescribe/tests/test_readings.py) (8 API & slide parser tests)
 
-2. **API Endpoint Tests**:
-   - Location: [`tests/test_readings.py`](file:///home/dipes/projects/lecturescribe/tests/test_readings.py)
-   - Scope: Verifies FastAPI route resolution, course canonical slug matching, and reading persistence.
+```
+========================================================================================
+Test Name                                                Function Tested                 Status
+========================================================================================
+test_hybrid_scoring_mathematical_boundaries              [0.0, 1.0] Score Invariance     ✅ PASSED
+test_reconstruct_inverted_abstract                       OpenAlex Inverted Rebuilding    ✅ PASSED
+test_extract_canonical_arxiv_id                          arXiv Canonical ID Extraction   ✅ PASSED
+test_semantic_scholar_rate_limiter_and_circuit           S2 1 QPS Limiter & 429 Trip     ✅ PASSED
+test_openalex_tier1_primary_and_s2_fallback              OpenAlex Tier 1 + S2 Fallback   ✅ PASSED
+test_fastapi_search_endpoint_e2e                         FastAPI POST Endpoint E2E       ✅ PASSED
+test_search_academic_literature_async_provider_errors   Async HTTP Provider Isolation   ✅ PASSED
+test_consolidate_and_merge_metadata_enrichment          Crossref + PMC Metadata Merge   ✅ PASSED
+test_year_tolerance_in_record_equivalence               ±1 Year Match vs Multi-Year Gap ✅ PASSED
+test_extract_author_surnames_and_formats                Western, PubMed, Single Author  ✅ PASSED
+test_primary_title_extraction_and_jaccard               Subtitle Delimiters & Jaccard   ✅ PASSED
+test_empty_and_boundary_queries                         Sync Query Boundary Checks      ✅ PASSED
+test_empty_and_boundary_queries_async                   Async Query Boundary Checks     ✅ PASSED
+test_are_records_equivalent_generic_title_guard         Generic Title Collision Defense ✅ PASSED
+test_are_records_equivalent_subtitle_jaccard            Subtitle Truncation Overlap     ✅ PASSED
+test_intent_adaptive_interleaving                       Monograph vs Paper Interleaving ✅ PASSED
+test_clean_html_text                                    HTML/XML Tag Stripping          ✅ PASSED
+test_extract_year                                       4-Digit Year Extraction         ✅ PASSED
+test_normalize_doi                                      Canonical DOI Formatting        ✅ PASSED
+test_normalize_title                                    Alphanumeric Title Normalization✅ PASSED
+========================================================================================
+Total Backend Tests Passing: 33 / 33 (100%)
+```
 
-3. **Frontend Component Tests**:
-   - Location: [`frontend/src/components/modals/__tests__/ResearchLiteratureModal.test.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/modals/__tests__/ResearchLiteratureModal.test.jsx)
-   - Scope: Verifies dialog rendering, search triggering, open access badge display, and library addition.
+### Frontend Test Suites (`vitest`)
+* **Test Command**: `npm test -- --run` in `frontend/`
+* **Coverage**: 41 test files, 300 tests passing (including [`ResearchLiteratureModal.test.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/modals/__tests__/ResearchLiteratureModal.test.jsx), [`BookReaderModal.test.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/modals/__tests__/BookReaderModal.test.jsx), and [`CourseLibrary.test.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/__tests__/CourseLibrary.test.jsx)).

@@ -1399,17 +1399,23 @@ async def _fetch_google_books_candidates_async(client: httpx.AsyncClient, query:
     return []
 
 
-async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+async def _fetch_openalex_candidates_async(
+    client: httpx.AsyncClient,
+    query: str,
+    limit: int,
+    expanded_queries: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
     """
     Two-pass OpenAlex fetch with architectural synonym query expansion:
       Pass 1: Relevance-sorted query for domain alignment.
       Pass 2: Citation-sorted query to guarantee seminal foundational papers are surfaced.
-      Bonus Pass (if architectural synonym applies): Searches seminal canonical equivalents.
+      Pass 3 (if expanded_queries supplied): Dispatches candidate fetch using domain-appropriate synonyms
+             (e.g., historical equivalents, formal nomenclature) to surface foundational literature.
     Merges passes deduplicated by work ID/DOI. Enforces strict concurrency cap of 3 requests.
     """
     headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
 
-    # Pass 1: Relevance-based candidates
+    # Pass 1 & Pass 2 for primary query
     tasks = [
         client.get(
             OPENALEX_API,
@@ -1421,7 +1427,6 @@ async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str
             headers=headers,
             timeout=3.5
         ),
-        # Pass 2: Citation-authority candidates
         client.get(
             OPENALEX_API,
             params={
@@ -1434,6 +1439,23 @@ async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str
         )
     ]
 
+    # Additional expanded query pass (up to concurrency cap of 3 total requests)
+    if expanded_queries:
+        for eq in expanded_queries:
+            clean_eq = eq.strip()
+            if clean_eq and clean_eq.lower() != query.strip().lower() and len(tasks) < 3:
+                tasks.append(
+                    client.get(
+                        OPENALEX_API,
+                        params={
+                            "search": clean_eq,
+                            "per-page": max(limit, 10),
+                            "sort": "cited_by_count:desc"
+                        },
+                        headers=headers,
+                        timeout=3.5
+                    )
+                )
 
     try:
         resps = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1791,9 +1813,12 @@ class SLMQueryPlanner:
 
         return {
             "domain": str(domain).lower(),
+            "primary_query": clean_q,
+            "expanded_queries": [],
             "primary_queries": primary_queries[:3],
             "providers": dispatched_providers,
             "intent": intent,
+            "negative_concepts": [],
             "excluded_concepts": []
         }
 
@@ -1827,16 +1852,19 @@ class SLMQueryPlanner:
             "Given the user query, output ONLY a valid JSON object conforming to:\n"
             "{\n"
             '  "domain": "cs_ai" | "biomedical" | "physics_math" | "humanities_social",\n'
-            '  "primary_queries": ["<original query or core canonical terminology>", "<expansion 2>", "<expansion 3>"],\n'
+            '  "primary_query": "<normalized query phrase>",\n'
+            '  "expanded_queries": ["<canonical synonym or foundational term 1>", "<foundational term 2>"],\n'
+            '  "negative_concepts": ["<unrelated concept with partial sub-tokens 1>", "<unrelated concept 2>"],\n'
             '  "providers": ["openalex", "crossref", "semantic_scholar"],\n'
-            '  "intent": "paper" | "monograph" | "general",\n'
-            '  "excluded_concepts": ["<negative concept 1>", "<negative concept 2>"]\n'
+            '  "intent": "paper" | "monograph" | "general"\n'
             "}\n"
             "Rules:\n"
-            "1. 'primary_queries' must have 1 to 3 strings. The first query MUST be the most direct, high-precision search query.\n"
-            "2. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
-            "3. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
-            "4. Return ONLY the raw JSON object. No markdown, no fences, no explanation."
+            "1. 'primary_query' is the direct, high-precision search query string.\n"
+            "2. 'expanded_queries' must have up to 2 canonical, domain-appropriate synonyms or architectural foundational terms (e.g., historical equivalents, formal nomenclature).\n"
+            "3. 'negative_concepts' contains unrelated concepts sharing partial sub-tokens to penalize or exclude.\n"
+            "4. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
+            "5. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
+            "6. Return ONLY the raw JSON object. No markdown, no fences, no explanation."
         )
 
         user_prompt = f"User Query: {clean_q}"
@@ -1894,12 +1922,33 @@ class SLMQueryPlanner:
                 data = json.loads(clean_raw)
                 if isinstance(data, dict):
                     domain = data.get("domain") or fallback["domain"]
-                    queries = data.get("primary_queries")
-                    if not isinstance(queries, list) or not queries:
-                        queries = fallback["primary_queries"]
-                    queries = [q.strip() for q in queries if isinstance(q, str) and q.strip()][:3]
-                    if not queries:
-                        queries = [clean_q]
+
+                    # Extract primary_query and expanded_queries
+                    pri_q = data.get("primary_query")
+                    if not isinstance(pri_q, str) or not pri_q.strip():
+                        # Backward-compat with primary_queries list
+                        legacy_queries = data.get("primary_queries")
+                        if isinstance(legacy_queries, list) and legacy_queries:
+                            pri_q = str(legacy_queries[0]).strip()
+                        else:
+                            pri_q = clean_q
+                    else:
+                        pri_q = pri_q.strip()
+
+                    exp_q = data.get("expanded_queries")
+                    if not isinstance(exp_q, list):
+                        exp_q = []
+                    expanded_queries = [
+                        q.strip() for q in exp_q
+                        if isinstance(q, str) and q.strip() and q.strip().lower() != pri_q.lower()
+                    ][:2]
+
+                    # Also populate primary_queries list for backward compatibility
+                    legacy_primaries = data.get("primary_queries")
+                    if isinstance(legacy_primaries, list) and legacy_primaries:
+                        primary_queries = [q.strip() for q in legacy_primaries if isinstance(q, str) and q.strip()][:3]
+                    else:
+                        primary_queries = [pri_q] + expanded_queries
 
                     providers = data.get("providers")
                     if not isinstance(providers, list) or not providers:
@@ -1916,16 +1965,19 @@ class SLMQueryPlanner:
                     if intent not in ("paper", "monograph", "general"):
                         intent = fallback["intent"]
 
-                    excluded = data.get("excluded_concepts") or []
-                    if not isinstance(excluded, list):
-                        excluded = []
+                    neg_concepts = data.get("negative_concepts") or data.get("excluded_concepts") or []
+                    if not isinstance(neg_concepts, list):
+                        neg_concepts = []
 
                     return {
                         "domain": domain,
-                        "primary_queries": queries,
+                        "primary_query": pri_q,
+                        "expanded_queries": expanded_queries,
+                        "primary_queries": primary_queries,
                         "providers": providers,
                         "intent": intent,
-                        "excluded_concepts": excluded
+                        "negative_concepts": neg_concepts,
+                        "excluded_concepts": neg_concepts
                     }
         except Exception as e:
             logger.debug(f"[SLMQueryPlanner] SLM query planning timed out or failed ({e}); falling back to heuristic planner.")
@@ -2033,6 +2085,7 @@ class SLMReranker:
         system_msg = (
             f"You are a strict academic literature relevance evaluator for the course '{course_name or 'Computer Science / Engineering'}'. "
             f"Given the user query '{query}' and a numbered list of candidates, evaluate the semantic relevance of each candidate strictly between 0.0 and 1.0.\n"
+            "Distinguish between true asymmetric cross-attention (Query from one source, Key/Value from another, e.g., encoder-decoder or text-to-image conditioning) vs spatial criss-cross attention. Give spatial criss-cross attention a lower semantic score (<= 0.50).\n"
             "Respond ONLY with a valid JSON array of objects with keys 'candidate_id' and 'semantic_score'. "
             "Do NOT include any explanations, markdown or extra text.\n"
             "Example: [{\"candidate_id\": 0, \"semantic_score\": 0.95}]"
@@ -2245,8 +2298,8 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
     # Stage 1: Neural SLM Query Planner & Budgeted Provider Routing
     plan = await SLMQueryPlanner.plan_async(clean_q, course_name)
     dispatched = plan.get("providers", [])
-    primary_queries = plan.get("primary_queries", [clean_q])
-    primary_q = primary_queries[0]
+    primary_q = plan.get("primary_query") or (plan.get("primary_queries") or [clean_q])[0]
+    expanded_queries = plan.get("expanded_queries") or []
 
     client = get_async_http_client()
     task_keys: List[str] = []
@@ -2254,8 +2307,8 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
 
     if "openalex" in dispatched:
         task_keys.append("openalex")
-        # OpenAlex permitted to run multi-query variations up to concurrency cap of 3
-        tasks.append(asyncio.create_task(_fetch_openalex_candidates_async(client, primary_q, limit)))
+        # OpenAlex searches primary query (relevance + citations) + expanded query variations up to concurrency cap of 3
+        tasks.append(asyncio.create_task(_fetch_openalex_candidates_async(client, primary_q, limit, expanded_queries=expanded_queries)))
 
     if "crossref" in dispatched:
         task_keys.append("crossref")
@@ -2270,9 +2323,13 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
         tasks.append(asyncio.create_task(_fetch_google_books_candidates_async(client, primary_q, limit)))
 
     if "semantic_scholar" in dispatched:
-        task_keys.append("semantic_scholar")
-        # S2 query budget: Execute queries using ONLY the first/primary query string (Issue 3)
-        tasks.append(asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, primary_q, limit)))
+        # Check circuit breaker before issuing network task: skip instantly if tripped
+        if not _S2_RATE_LIMITER.is_circuit_open():
+            task_keys.append("semantic_scholar")
+            # S2 query budget: Execute queries using ONLY the first/primary query string (Issue 3)
+            tasks.append(asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, primary_q, limit)))
+        else:
+            logger.info("[ReadingExtractor] S2 circuit breaker is open. Bypassing S2 fetch immediately.")
 
     raw_results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
 

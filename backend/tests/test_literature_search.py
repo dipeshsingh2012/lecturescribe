@@ -1275,6 +1275,97 @@ def test_ccnet_multi_year_deduplication_exact_title_match():
     assert rec["is_open_access"] is True
 
 
+@pytest.mark.anyio
+async def test_stage_1_expansions_wired_to_stage_2_openalex():
+    """
+    Validates Requirement 1: Stage 1 dynamic expanded_queries are passed to OpenAlex,
+    ensuring additional search passes are executed concurrently to retrieve foundational literature.
+    """
+    import httpx
+    from backend.reading_extractor import _fetch_openalex_candidates_async
+
+    searched_terms = []
+
+    async def mock_get(url, params=None, headers=None, timeout=None):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        search_query = params.get("search", "")
+        searched_terms.append(search_query)
+
+        mock_resp.json.return_value = {
+            "results": [
+                {
+                    "id": f"https://openalex.org/{search_query}",
+                    "title": f"Paper for {search_query}",
+                    "authorships": [{"author": {"display_name": "Author"}}],
+                    "publication_year": 2021,
+                    "type": "article",
+                    "cited_by_count": 100
+                }
+            ]
+        }
+        return mock_resp
+
+    mock_client = MagicMock(spec=httpx.AsyncClient)
+    mock_client.get = mock_get
+
+    items = await _fetch_openalex_candidates_async(
+        mock_client,
+        query="cross attention",
+        limit=5,
+        expanded_queries=["encoder-decoder attention transformer"]
+    )
+
+    assert "cross attention" in searched_terms
+    assert "encoder-decoder attention transformer" in searched_terms
+    assert len(searched_terms) == 3  # pass 1 (rel), pass 2 (cit), pass 3 (expanded)
+    assert len(items) >= 2
+
+
+@pytest.mark.anyio
+async def test_s2_circuit_breaker_bypasses_network_call():
+    """
+    Validates Requirement 2: When Semantic Scholar circuit breaker is tripped,
+    search_academic_literature_async bypasses S2 HTTP call instantly without task creation.
+    """
+    from backend.reading_extractor import (
+        search_academic_literature_async,
+        _S2_RATE_LIMITER
+    )
+
+    _S2_RATE_LIMITER.record_429()
+    assert _S2_RATE_LIMITER.is_circuit_open() is True
+
+    with patch("backend.reading_extractor._fetch_semantic_scholar_candidates_async") as mock_s2, \
+         patch("backend.reading_extractor._fetch_openalex_candidates_async", return_value=[]), \
+         patch("backend.reading_extractor._fetch_crossref_candidates_async", return_value=[]), \
+         patch("backend.reading_extractor._fetch_europe_pmc_candidates_async", return_value=[]), \
+         patch("backend.reading_extractor._fetch_google_books_candidates_async", return_value=[]):
+
+        results = await search_academic_literature_async("cross attention", limit=5)
+        # S2 fetch should NOT be called at all
+        mock_s2.assert_not_called()
+
+    # Reset circuit breaker for subsequent tests
+    _S2_RATE_LIMITER.reset_circuit()
+    assert not _S2_RATE_LIMITER.is_circuit_open()
+
+
+def test_reranker_system_prompt_contains_cross_attention_guidance():
+    """
+    Validates Requirement 3: SLMReranker system prompt guides the judge to distinguish
+    true asymmetric cross-attention from spatial criss-cross attention (<= 0.50).
+    """
+    from backend.reading_extractor import SLMReranker
+    import inspect
+
+    src = inspect.getsource(SLMReranker.rerank_async)
+    assert "asymmetric cross-attention" in src
+    assert "spatial criss-cross attention" in src
+    assert "<= 0.50" in src
+
+
+
 
 
 

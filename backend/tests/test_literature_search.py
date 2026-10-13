@@ -1151,14 +1151,12 @@ async def test_stage_1_slm_query_planner_neural_and_fallback():
     # 2. Neural mode with simulated SLM response
     mock_slm_json = """{
         "domain": "cs_ai",
-        "primary_queries": [
-            "cross-attention transformer",
-            "encoder-decoder attention transformer",
-            "cross modal attention vision language"
-        ],
+        "verbatim_query": "\\"cross attention\\"",
+        "foundational_nomenclature": "encoder-decoder attention",
+        "architectural_class": "transformer models",
+        "negative_disambiguation": ["criss-cross", "cross-window", "cardiology", "sensory attention"],
         "providers": ["openalex", "semantic_scholar"],
-        "intent": "paper",
-        "excluded_concepts": ["cognitive psychology", "auditory attention"]
+        "intent": "paper"
     }"""
 
     mock_resp = MagicMock()
@@ -1176,11 +1174,14 @@ async def test_stage_1_slm_query_planner_neural_and_fallback():
          patch("openai.AsyncOpenAI", return_value=mock_groq_client):
         neural_plan = await SLMQueryPlanner.plan_async("cross attention", course_name="Master of Technology")
         assert neural_plan["domain"] == "cs_ai"
-        assert len(neural_plan["primary_queries"]) == 3
-        assert neural_plan["primary_queries"][0] == "cross-attention transformer"
+        assert neural_plan["verbatim_query"] == '"cross attention"'
+        assert neural_plan["foundational_nomenclature"] == "encoder-decoder attention"
+        assert neural_plan["architectural_class"] == "transformer models"
+        assert "cardiology" in neural_plan["negative_disambiguation"]
+        assert len(neural_plan["primary_queries"]) >= 2
+        assert neural_plan["primary_queries"][0] == "cross attention"
         assert neural_plan["providers"] == ["openalex", "semantic_scholar"]
         assert neural_plan["intent"] == "paper"
-        assert "cognitive psychology" in neural_plan["excluded_concepts"]
 
 
 @pytest.mark.anyio
@@ -1351,18 +1352,19 @@ async def test_s2_circuit_breaker_bypasses_network_call():
     assert not _S2_RATE_LIMITER.is_circuit_open()
 
 
-def test_reranker_system_prompt_contains_cross_attention_guidance():
+def test_reranker_system_prompt_contains_generalized_academic_criteria():
     """
-    Validates Requirement 3: SLMReranker system prompt guides the judge to distinguish
-    true asymmetric cross-attention from spatial criss-cross attention (<= 0.50).
+    Validates Requirement 3: SLMReranker system prompt guides the judge to evaluate
+    Foundational Relevance (>= 0.90), Application Relevance (>= 0.75), and Negative Disambiguation (<= 0.40).
     """
     from backend.reading_extractor import SLMReranker
     import inspect
 
     src = inspect.getsource(SLMReranker.rerank_async)
-    assert "asymmetric cross-attention" in src
-    assert "spatial criss-cross attention" in src
-    assert "<= 0.50" in src
+    assert "Foundational Relevance" in src
+    assert "Application Relevance" in src
+    assert "Negative Disambiguation" in src
+    assert "<= 0.40" in src
 
 
 @pytest.mark.anyio
@@ -1450,6 +1452,127 @@ async def test_openalex_preserves_verbatim_quoted_phrase():
     assert len(searched_queries) == 2
     for q in searched_queries:
         assert q == '"cross attention"'
+
+
+@pytest.mark.anyio
+async def test_generalized_multidomain_query_planning_and_dual_pass():
+    """
+    Validates generalized query expansion and dual-track candidate retrieval across
+    four distinct academic domains without any hardcoded synonym dictionaries:
+      1. Deep Learning: "cross attention" -> "encoder-decoder attention"
+      2. NLP: "flash attention" -> "fast attention IO-awareness"
+      3. Distributed Systems: "raft consensus" -> "consensus algorithm"
+      4. Medicine: "mrna vaccines" -> "lipid nanoparticle mRNA"
+    """
+    from backend.reading_extractor import SLMQueryPlanner, _fetch_openalex_candidates_async
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import httpx
+    import json
+
+    domain_cases = [
+        {
+            "query": "cross attention",
+            "mock_plan": {
+                "verbatim_query": '"cross attention"',
+                "foundational_nomenclature": "encoder-decoder attention",
+                "architectural_class": "transformer models",
+                "negative_disambiguation": ["criss-cross", "cardiology"],
+                "domain": "cs_ai",
+                "providers": ["openalex", "semantic_scholar"],
+                "intent": "paper"
+            }
+        },
+        {
+            "query": "flash attention",
+            "mock_plan": {
+                "verbatim_query": '"flash attention"',
+                "foundational_nomenclature": "fast attention IO-awareness",
+                "architectural_class": "exact attention algorithms",
+                "negative_disambiguation": ["flash memory", "photoflash"],
+                "domain": "cs_ai",
+                "providers": ["openalex", "semantic_scholar"],
+                "intent": "paper"
+            }
+        },
+        {
+            "query": "raft consensus",
+            "mock_plan": {
+                "verbatim_query": '"raft consensus"',
+                "foundational_nomenclature": "consensus algorithm",
+                "architectural_class": "distributed state machine replication",
+                "negative_disambiguation": ["rafting sport", "lipid raft"],
+                "domain": "cs_systems",
+                "providers": ["openalex", "semantic_scholar"],
+                "intent": "paper"
+            }
+        },
+        {
+            "query": "mrna vaccines",
+            "mock_plan": {
+                "verbatim_query": '"mrna vaccines"',
+                "foundational_nomenclature": "lipid nanoparticle mRNA",
+                "architectural_class": "nucleic acid therapeutics",
+                "negative_disambiguation": ["dna vaccine", "attenuated virus"],
+                "domain": "biomedical",
+                "providers": ["openalex", "europe_pmc"],
+                "intent": "paper"
+            }
+        }
+    ]
+
+    for case in domain_cases:
+        mock_resp = MagicMock()
+        mock_resp.choices = [
+            MagicMock(message=MagicMock(content=json.dumps(case["mock_plan"])))
+        ]
+        mock_groq_client = MagicMock()
+        mock_groq_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test_key"}), \
+             patch("openai.AsyncOpenAI", return_value=mock_groq_client):
+            plan = await SLMQueryPlanner.plan_async(case["query"])
+            assert plan["verbatim_query"] == case["mock_plan"]["verbatim_query"]
+            assert plan["foundational_nomenclature"] == case["mock_plan"]["foundational_nomenclature"]
+            assert plan["architectural_class"] == case["mock_plan"]["architectural_class"]
+            assert len(plan["negative_disambiguation"]) >= 2
+
+            # Now test dual-track OpenAlex sourcing with these expanded queries
+            searched_terms = []
+
+            async def mock_get(url, params=None, headers=None, timeout=None):
+                mock_r = MagicMock(spec=httpx.Response)
+                mock_r.status_code = 200
+                sq = params.get("search", "")
+                searched_terms.append(sq)
+                mock_r.json.return_value = {
+                    "results": [
+                        {
+                            "id": f"https://openalex.org/{sq}",
+                            "title": f"Paper for {sq}",
+                            "authorships": [{"author": {"display_name": "Author"}}],
+                            "publication_year": 2022,
+                            "type": "article",
+                            "cited_by_count": 50
+                        }
+                    ]
+                }
+                return mock_r
+
+            mock_client = MagicMock(spec=httpx.AsyncClient)
+            mock_client.get = mock_get
+
+            items = await _fetch_openalex_candidates_async(
+                mock_client,
+                query=case["query"],
+                limit=5,
+                expanded_queries=plan["expanded_queries"]
+            )
+
+            # Check that precision pass and authority pass were dispatched
+            assert any(case["query"] in st for st in searched_terms)
+            assert any(case["mock_plan"]["foundational_nomenclature"] in st for st in searched_terms)
+            assert len(items) >= 2
+
 
 
 

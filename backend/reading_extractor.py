@@ -1422,7 +1422,8 @@ async def _fetch_openalex_candidates_async(
     else:
         search_q = clean_q
 
-    # Pass 1 & Pass 2 for primary query
+    # Pass 1: Relevance-sorted query for domain alignment
+    # Pass 2: Citation-sorted query to surface seminal foundational papers
     tasks = [
         client.get(
             OPENALEX_API,
@@ -1446,11 +1447,13 @@ async def _fetch_openalex_candidates_async(
         )
     ]
 
-    # Additional expanded query pass (up to concurrency cap of 3 total requests)
+    # Pass 3 (Authority / Foundational / Expanded Pass):
+    # Query high-capacity providers using foundational_nomenclature or canonical expanded queries
+    # sorted by cited_by_count:desc up to concurrency cap of 3 requests
     if expanded_queries:
         for eq in expanded_queries:
             clean_eq = eq.strip()
-            if clean_eq and clean_eq.lower() != clean_q.lower() and len(tasks) < 3:
+            if clean_eq and clean_eq.lower() not in (clean_q.lower(), search_q.lower()) and len(tasks) < 3:
                 eq_search = f'"{clean_eq}"' if (" " in clean_eq and not (clean_eq.startswith('"') and clean_eq.endswith('"'))) else clean_eq
                 tasks.append(
                     client.get(
@@ -1818,9 +1821,14 @@ class SLMQueryPlanner:
         dispatched_providers, _ = DomainRouter.get_providers_for_domain(domain, clean_q)
 
         primary_queries = [clean_q]
+        quoted_v = f'"{clean_q}"' if (" " in clean_q and not (clean_q.startswith('"') and clean_q.endswith('"'))) else clean_q
 
         return {
             "domain": str(domain).lower(),
+            "verbatim_query": quoted_v,
+            "foundational_nomenclature": clean_q,
+            "architectural_class": "",
+            "negative_disambiguation": [],
             "primary_query": clean_q,
             "expanded_queries": [],
             "primary_queries": primary_queries[:3],
@@ -1857,22 +1865,25 @@ class SLMQueryPlanner:
         system_prompt = (
             "You are a strict Stage 1 Academic Query Planner & Intent Router for university research.\n"
             f"Course context: '{course_name or 'General Academic'}'\n\n"
-            "Given the user query, output ONLY a valid JSON object conforming to:\n"
+            "Given the user query, decompose the technical query into generalized academic search slots. "
+            "Output ONLY a valid JSON object conforming to:\n"
             "{\n"
+            '  "verbatim_query": "<user exact phrase, preserving contiguous tokens in quotes, e.g. \\"cross attention\\">",\n'
+            '  "foundational_nomenclature": "<the historical or formal terminology under which the underlying mechanism/principle was originally published, e.g. encoder-decoder attention>",\n'
+            '  "architectural_class": "<the broader scientific or technical paradigm, e.g. transformer models>",\n'
+            '  "negative_disambiguation": ["<sub-token or partial match 1 in other disciplines causing false collisions>", "<false collision 2>"],\n'
             '  "domain": "cs_ai" | "biomedical" | "physics_math" | "humanities_social",\n'
-            '  "primary_query": "<normalized query phrase>",\n'
-            '  "expanded_queries": ["<canonical synonym or foundational term 1>", "<foundational term 2>"],\n'
-            '  "negative_concepts": ["<unrelated concept with partial sub-tokens 1>", "<unrelated concept 2>"],\n'
             '  "providers": ["openalex", "crossref", "semantic_scholar"],\n'
             '  "intent": "paper" | "monograph" | "general"\n'
             "}\n"
             "Rules:\n"
-            "1. 'primary_query' is the direct, high-precision search query string matching the core user concept.\n"
-            "2. 'expanded_queries' must have up to 2 alternative canonical nomenclature or architectural foundational terms (e.g., historical equivalents like 'encoder-decoder attention'). DO NOT append generic filler nouns like 'mechanism', 'approach', or 'method'.\n"
-            "3. 'negative_concepts' contains unrelated concepts sharing partial sub-tokens to penalize or exclude.\n"
-            "4. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
-            "5. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
-            "6. Return ONLY the raw JSON object. No markdown, no fences, no explanation."
+            "1. 'verbatim_query' must preserve contiguous tokens in double quotes if multi-word.\n"
+            "2. 'foundational_nomenclature' MUST identify the origin/seminal terminology used in the foundational literature (e.g. for 'cross attention' -> 'encoder-decoder attention', for 'flash attention' -> 'exact attention with IO-awareness' or 'fast attention', for 'raft consensus' -> 'consensus algorithm', for 'mrna vaccines' -> 'lipid nanoparticle mRNA'). Do NOT append generic filler nouns like 'mechanism', 'approach', or 'method'.\n"
+            "3. 'architectural_class' is the broader technical family or framework.\n"
+            "4. 'negative_disambiguation' lists terms from other fields or superficial token collisions that must be excluded or penalized.\n"
+            "5. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
+            "6. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
+            "7. Return ONLY the raw JSON object. No markdown, no fences, no explanation."
         )
 
         user_prompt = f"User Query: {clean_q}"
@@ -1931,32 +1942,44 @@ class SLMQueryPlanner:
                 if isinstance(data, dict):
                     domain = data.get("domain") or fallback["domain"]
 
-                    # Extract primary_query and expanded_queries
-                    pri_q = data.get("primary_query")
-                    if not isinstance(pri_q, str) or not pri_q.strip():
-                        # Backward-compat with primary_queries list
-                        legacy_queries = data.get("primary_queries")
-                        if isinstance(legacy_queries, list) and legacy_queries:
-                            pri_q = str(legacy_queries[0]).strip()
-                        else:
-                            pri_q = clean_q
-                    else:
-                        pri_q = pri_q.strip()
+                    # Extract generalized slots
+                    verbatim_q = data.get("verbatim_query")
+                    if not isinstance(verbatim_q, str) or not verbatim_q.strip():
+                        verbatim_q = data.get("primary_query") or clean_q
+                    verbatim_q = str(verbatim_q).strip()
 
-                    exp_q = data.get("expanded_queries")
-                    if not isinstance(exp_q, list):
-                        exp_q = []
-                    expanded_queries = [
-                        q.strip() for q in exp_q
-                        if isinstance(q, str) and q.strip() and q.strip().lower() != pri_q.lower()
-                    ][:2]
+                    foundational_nom = data.get("foundational_nomenclature")
+                    if not isinstance(foundational_nom, str) or not foundational_nom.strip():
+                        # fallback to expanded_queries if present
+                        exps = data.get("expanded_queries")
+                        foundational_nom = str(exps[0]).strip() if (isinstance(exps, list) and exps) else ""
+                    foundational_nom = str(foundational_nom).strip()
 
-                    # Also populate primary_queries list for backward compatibility
-                    legacy_primaries = data.get("primary_queries")
-                    if isinstance(legacy_primaries, list) and legacy_primaries:
-                        primary_queries = [q.strip() for q in legacy_primaries if isinstance(q, str) and q.strip()][:3]
-                    else:
-                        primary_queries = [pri_q] + expanded_queries
+                    arch_class = str(data.get("architectural_class") or "").strip()
+
+                    neg_disambig = data.get("negative_disambiguation")
+                    if not isinstance(neg_disambig, list):
+                        neg_disambig = data.get("negative_concepts") or data.get("excluded_concepts") or []
+                    if not isinstance(neg_disambig, list):
+                        neg_disambig = []
+                    negative_disambiguation = [str(x).strip() for x in neg_disambig if str(x).strip()]
+
+                    # Backward-compatibility mappings
+                    pri_q = verbatim_q.strip('"').strip() or clean_q
+                    expanded_queries: List[str] = []
+                    if foundational_nom and foundational_nom.lower() != pri_q.lower():
+                        expanded_queries.append(foundational_nom)
+                    if arch_class and arch_class.lower() != pri_q.lower() and arch_class not in expanded_queries:
+                        expanded_queries.append(arch_class)
+                    legacy_exps = data.get("expanded_queries")
+                    if isinstance(legacy_exps, list):
+                        for eq in legacy_exps:
+                            s_eq = str(eq).strip()
+                            if s_eq and s_eq.lower() != pri_q.lower() and s_eq not in expanded_queries:
+                                expanded_queries.append(s_eq)
+                    expanded_queries = expanded_queries[:2]
+
+                    primary_queries = [pri_q] + expanded_queries
 
                     providers = data.get("providers")
                     if not isinstance(providers, list) or not providers:
@@ -1973,19 +1996,19 @@ class SLMQueryPlanner:
                     if intent not in ("paper", "monograph", "general"):
                         intent = fallback["intent"]
 
-                    neg_concepts = data.get("negative_concepts") or data.get("excluded_concepts") or []
-                    if not isinstance(neg_concepts, list):
-                        neg_concepts = []
-
                     return {
                         "domain": domain,
+                        "verbatim_query": verbatim_q,
+                        "foundational_nomenclature": foundational_nom,
+                        "architectural_class": arch_class,
+                        "negative_disambiguation": negative_disambiguation,
                         "primary_query": pri_q,
                         "expanded_queries": expanded_queries,
-                        "primary_queries": primary_queries,
+                        "primary_queries": primary_queries[:3],
                         "providers": providers,
                         "intent": intent,
-                        "negative_concepts": neg_concepts,
-                        "excluded_concepts": neg_concepts
+                        "negative_concepts": negative_disambiguation,
+                        "excluded_concepts": negative_disambiguation
                     }
         except Exception as e:
             logger.debug(f"[SLMQueryPlanner] SLM query planning timed out or failed ({e}); falling back to heuristic planner.")
@@ -2069,7 +2092,8 @@ class SLMReranker:
         candidates: List[Dict[str, Any]],
         query: str,
         course_name: str = "",
-        timeout: float = 1.5
+        timeout: float = 1.5,
+        negative_disambiguation: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Reranks top N candidates using an SLM / LLM judge.
@@ -2090,10 +2114,17 @@ class SLMReranker:
         candidate_blocks = [cls.format_candidate_context(c, i) for i, c in enumerate(bounded)]
         prompt_text = "\n\n".join(candidate_blocks)
 
+        disambig_note = ""
+        if negative_disambiguation:
+            disambig_note = f"\nNegative Disambiguation: Candidates that only match due to superficial token overlap with terms in {negative_disambiguation} MUST be penalized with a low semantic score (<= 0.40)."
+
         system_msg = (
-            f"You are a strict academic literature relevance evaluator for the course '{course_name or 'Computer Science / Engineering'}'. "
-            f"Given the user query '{query}' and a numbered list of candidates, evaluate the semantic relevance of each candidate strictly between 0.0 and 1.0.\n"
-            "Distinguish between true asymmetric cross-attention (Query from one source, Key/Value from another, e.g., encoder-decoder or text-to-image conditioning) vs spatial criss-cross attention. Give spatial criss-cross attention a lower semantic score (<= 0.50).\n"
+            f"You are a strict academic literature relevance evaluator for the course '{course_name or 'General Academic'}'.\n"
+            f"User Query: '{query}'\n\n"
+            "Evaluate each numbered candidate against the following generalized academic relevance criteria strictly between 0.0 and 1.0:\n"
+            "1. Foundational Relevance (>= 0.90): If a candidate introduced, pioneered, or formalized the underlying theoretical mechanism, algorithm, or principle (even if published under historical or formal nomenclature rather than modern shorthand), assign a high score (0.90 - 1.0).\n"
+            "2. Application Relevance (>= 0.75): If a candidate directly applies, benchmarks, or extends the core mechanism to solve domain problems with architectural depth, assign a strong score (0.75 - 0.89).\n"
+            f"3. Negative Disambiguation (<= 0.40): If a candidate is off-topic or only matches due to superficial/compound token collision, assign a low score (<= 0.40).{disambig_note}\n\n"
             "Respond ONLY with a valid JSON array of objects with keys 'candidate_id' and 'semantic_score'. "
             "Do NOT include any explanations, markdown or extra text.\n"
             "Example: [{\"candidate_id\": 0, \"semantic_score\": 0.95}]"
@@ -2380,7 +2411,13 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
 
     # Issue 2: Prune candidates to top N (max 8) and invoke SLM reranker
     bounded = SLMReranker.prune_candidates(consolidated, max_n=8)
-    reranked = await SLMReranker.rerank_async(bounded, primary_q, course_name=course_name)
+    neg_disambig = plan.get("negative_disambiguation") or plan.get("negative_concepts") or []
+    reranked = await SLMReranker.rerank_async(
+        bounded,
+        primary_q,
+        course_name=course_name,
+        negative_disambiguation=neg_disambig
+    )
 
     # Stage 5 Hard semantic floor post-filter: drop any candidate with semantic_score < 0.40
     # Citation count must NEVER compensate for zero or near-zero semantic alignment

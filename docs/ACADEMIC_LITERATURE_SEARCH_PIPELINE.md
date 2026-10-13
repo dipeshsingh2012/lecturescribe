@@ -373,3 +373,119 @@ Total Backend Tests Passing: 41 / 41 (100%)
 ### Frontend Test Suites (`vitest`)
 * **Test Command**: `npm test -- --run` in `frontend/`
 * **Coverage**: 41 test files, 300 tests passing (including [`ResearchLiteratureModal.test.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/modals/__tests__/ResearchLiteratureModal.test.jsx), [`BookReaderModal.test.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/modals/__tests__/BookReaderModal.test.jsx), and [`CourseLibrary.test.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/__tests__/CourseLibrary.test.jsx)).
+
+---
+
+## 10. Next-Gen Architecture: Two-Stage SLM-Powered Discovery Pipeline (v3.0 Specification)
+
+### 10.1 Motivation & Rationale for Decommissioning Manual NLP Heuristics
+The v2.3 architecture relies on Python-side n-gram phrase extraction, minimum span proximity penalties, manual slug registries (`STEM_CS_SLUGS`), and static concept dictionaries (`CONCEPT_SYNONYMS`). While functional, manual NLP exhibits fundamental limitations:
+1. **Brittle Edge Cases**: Manual tokenizers suffer from sub-token boundary collisions (e.g., `"cross-window"` vs. `"cross-attention"`).
+2. **Thesaurus Blindness**: Manual synonym mapping fails whenever researchers use alternative terminology (e.g. *"inter-attention"*, *"bilateral feature fusion"*, *"encoder-decoder attention"*).
+3. **Domain Pollution**: Static interleaving forces off-topic monographs (e.g., 1998 cognitive psychology books on human visual attention) into modern Computer Science courses (*Master of Technology*).
+
+### 10.2 Architectural Topology: The "SLM Sandwich"
+
+To completely eliminate hand-crafted heuristics, the search engine transitions to an **SLM-at-the-Front, SLM-at-the-Back** pipeline:
+
+```
+                  [User Input: Query + Course Context]
+      (e.g., Query: "cross attention", Course: "Master of Technology")
+                                    │
+                                    ▼
+    ┌───────────────────────────────────────────────────────────────┐
+    │  STAGE 1: SLM Query Planner & Intent Router (Sub-150ms)       │
+    │  • Dynamically classifies academic discipline without regex   │
+    │  • Expands queries into canonical foundational terminology    │
+    │    - "cross-attention transformer"                            │
+    │    - "encoder-decoder attention transformer" (Vaswani 2017)   │
+    │  • Defines negative / exclusion concepts:                      │
+    │    - Exclude: ["human sensory", "cognitive psychology"]       │
+    │  • Selects optimal data providers (OpenAlex, S2)              │
+    └───────────────────────────────┬───────────────────────────────┘
+                                    │
+                                    ▼
+    ┌───────────────────────────────────────────────────────────────┐
+    │  STAGE 2: Fast Targeted Candidate Retrieval (Sub-350ms)       │
+    │  • Executes parallel HTTP/2 queries with SLM-optimized queries│
+    │  • Fetches top 15-20 candidate works across OpenAlex & S2     │
+    │  • Zero psychology books retrieved in the first place         │
+    └───────────────────────────────┬───────────────────────────────┘
+                                    │
+                                    ▼
+    ┌───────────────────────────────────────────────────────────────┐
+    │  STAGE 3: Deterministic Identifier & PDF Sanitization         │
+    │  • Strict canonical arXiv ID extraction (anchored to domain)  │
+    │  • Direct binary PDF validation vs. DOI landing pages         │
+    └───────────────────────────────┬───────────────────────────────┘
+                                    │
+                                    ▼
+    ┌───────────────────────────────────────────────────────────────┐
+    │  STAGE 4: SLM Semantic Judge & Relevance Reranker (Sub-300ms) │
+    │  • Single batched prompt evaluates candidates concurrently:   │
+    │    "Rate 0.0-1.0 relevance to Master of Technology curriculum"│
+    │  • Drops off-topic candidates (Swin windowing, psychology)    │
+    │  • Scores true cross-attention & encoder-decoder models high  │
+    └───────────────────────────────┬───────────────────────────────┘
+                                    │
+                                    ▼
+    ┌───────────────────────────────────────────────────────────────┐
+    │  STAGE 5: Mathematical Blend & Quality Filtering              │
+    │  • Final Score = 0.50 * SLM_Score + 0.35 * S_cit + 0.15 * S_rec│
+    │  • Eligibility Floor: Discards candidates with SLM_Score < 0.4│
+    │  • Monograph Floor: Only interleave books if SLM_Score >= 0.5 │
+    └───────────────────────────────┬───────────────────────────────┘
+                                    │
+                                    ▼
+                      Canonical Schema JSON Output
+```
+
+### 10.3 Structured SLM Schema Contracts
+
+#### Stage 1: `SLMQueryPlanner` Output Schema
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["domain", "primary_queries", "providers", "intent", "excluded_concepts"],
+  "properties": {
+    "domain": { "type": "string", "enum": ["cs_ai", "biomedical", "physics_math", "humanities_social"] },
+    "primary_queries": { "type": "array", "items": { "type": "string" }, "maxItems": 3 },
+    "providers": { "type": "array", "items": { "type": "string" } },
+    "intent": { "type": "string", "enum": ["paper", "monograph", "general"] },
+    "excluded_concepts": { "type": "array", "items": { "type": "string" } }
+  }
+}
+```
+
+#### Stage 4: `SLMReranker` Output Schema
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["candidate_id", "semantic_score", "course_aligned", "explanation"],
+    "properties": {
+      "candidate_id": { "type": "integer" },
+      "semantic_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+      "course_aligned": { "type": "boolean" },
+      "explanation": { "type": "string" }
+    }
+  }
+}
+```
+
+### 10.4 Modernization Roadmap & Execution Milestones
+1. **Milestone 1: Immediate Bug Hardening (v2.3.1)**:
+   - Fix arXiv ID extraction regex so publisher DOIs (e.g., `10.1109/iccv.2019.00069`) never create false `arxiv_id: "2019.00069"`.
+   - Add monograph relevance floor (`relevance_score >= 0.50`) preventing off-topic 1998 books from forced interleaving.
+2. **Milestone 2: Stage 1 SLM Query Planner Integration (v3.0-alpha)**:
+   - Deploy `SLMQueryPlanner` to synthesize query expansions, domain routing, and provider dispatch via Gemini Flash Lite.
+   - Remove `STEM_CS_SLUGS` and query-level regex routing rules.
+3. **Milestone 3: Stage 4 Batched SLM Semantic Judge (v3.0-beta)**:
+   - Replace Python `LexicalScorer` with single-call batched SLM structured reranking.
+   - Decommission `CONCEPT_SYNONYMS`, n-gram proximity distance calculations, and compound phrase penalties.
+4. **Milestone 4: Offline / Fallback Guarantees (v3.0-GA)**:
+   - Implement standard BM25 fallback if LLM/SLM endpoint times out or experiences network degradation, preserving the strict sub-1.5s p95 latency SLA.
+

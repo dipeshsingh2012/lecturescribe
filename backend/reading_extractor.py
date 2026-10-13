@@ -715,71 +715,234 @@ class DomainRouter:
 
 class LexicalScorer:
     """
-    Computes strict lexical relevance, penalizing disconnected tokens and rewarding exact phrases.
+    Generalized Information Retrieval Lexical Scorer.
+    
+    Principles:
+    1. Dynamic N-Gram Phrase Extraction: Automatically extracts bigrams and trigrams
+       from any query without hardcoded phrase lists.
+    2. Atomic Compound Proximity: Validates that compound query words (e.g., 'cross attention')
+       appear adjacently in candidate texts. Sub-token prefixes (e.g. 'cross-window', 'self-assembly')
+       do NOT fulfill adjacency and are not falsely credited as exact multi-word concept matches.
+    3. Structural Proximity Scoring: Computes minimum token span / proximity distance
+       to reward cohesive conceptual clusters and penalize scattered, disconnected tokens.
+    4. Domain Concept Thesaurus: Pluggable dictionary for canonical academic equivalence
+       (e.g., 'cross attention' <-> 'encoder decoder attention', 'dnn' <-> 'deep neural network').
     """
-    COMPOUND_PHRASES: List[str] = [
-        "cross attention",
-        "cross-attention",
-        "self attention",
-        "self-attention",
-        "multi head attention",
-        "multi-head attention",
-        "transformer models",
-        "transformer model",
-        "deep neural networks"
-    ]
+
+    # Domain-agnostic canonical concept equivalence registry
+    CONCEPT_SYNONYMS: Dict[str, List[str]] = {
+        "cross attention": ["encoder decoder attention", "inter attention", "cross modal attention"],
+        "self attention": ["intra attention"],
+        "deep neural networks": ["deep learning", "dnn"],
+        "large language models": ["llm", "foundation models"],
+        "reinforcement learning from human feedback": ["rlhf"],
+        "generative adversarial networks": ["gan"],
+    }
+
+    STOPWORDS: Set[str] = {
+        "a", "an", "the", "and", "or", "in", "on", "at", "to", "for", "with",
+        "by", "from", "of", "as", "is", "are", "was", "were", "be", "been",
+        "that", "which", "this", "these", "those", "it", "its", "into"
+    }
+
+    @classmethod
+    def normalize_tokens(cls, text: str) -> List[str]:
+        """Tokenizes text preserving word boundaries and stripping punctuation."""
+        if not text:
+            return []
+        return re.findall(r'[a-z0-9]+', text.lower())
+
+    @classmethod
+    def extract_ngrams(cls, tokens: List[str], n: int) -> List[str]:
+        """Extracts n-grams as space-separated token sequences."""
+        if len(tokens) < n:
+            return []
+        return [" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
+
+    @classmethod
+    def get_query_phrases(cls, query: str) -> List[str]:
+        """
+        Dynamically extracts meaningful 2-gram and 3-gram candidate phrases
+        from any user query, filtering out pure stopword combinations.
+        """
+        tokens = cls.normalize_tokens(query)
+        phrases: List[str] = []
+
+        # Bigrams
+        for bg in cls.extract_ngrams(tokens, 2):
+            w1, w2 = bg.split()
+            if w1 not in cls.STOPWORDS or w2 not in cls.STOPWORDS:
+                phrases.append(bg)
+
+        # Trigrams
+        for tg in cls.extract_ngrams(tokens, 3):
+            words = tg.split()
+            non_stops = [w for w in words if w not in cls.STOPWORDS]
+            if len(non_stops) >= 2:
+                phrases.append(tg)
+
+        return phrases
+
+    @classmethod
+    def get_synonym_expansions(cls, phrase: str) -> List[str]:
+        """Returns all recognized canonical synonyms for a phrase."""
+        clean = phrase.lower().strip()
+        syns = [clean]
+        if clean in cls.CONCEPT_SYNONYMS:
+            syns.extend(cls.CONCEPT_SYNONYMS[clean])
+        else:
+            # Check inverse mapping
+            for canonical, variants in cls.CONCEPT_SYNONYMS.items():
+                if clean in variants and canonical not in syns:
+                    syns.append(canonical)
+        return syns
+
+    @classmethod
+    def find_phrase_match(cls, text: str, phrase: str) -> bool:
+        """
+        Atomic multi-token matcher:
+        Ensures the constituent words appear in strict sequence, joined only by
+        whitespace or standard hyphens/underscores.
+        Rejects sub-token prefixes: e.g. for 'cross attention', 'cross-window' is NOT a match.
+        """
+        words = cls.normalize_tokens(phrase)
+        if not words:
+            return False
+        # Build regex requiring word boundary before first word, flexible hyphen/space, and word boundary after last
+        pattern = r'\b' + r'[\s\-_]+'.join(re.escape(w) for w in words) + r'\b'
+        return bool(re.search(pattern, text.lower()))
+
+    @classmethod
+    def compute_proximity_penalty(cls, text_tokens: List[str], query_keywords: List[str]) -> float:
+        """
+        Computes a generalized proximity multiplier based on minimum span window.
+        If query keywords appear tightly clustered, returns 1.0.
+        If query keywords appear disconnected across distant paragraphs, penalizes appropriately.
+        If keywords are missing, returns 0.25.
+        """
+        if len(query_keywords) <= 1 or not text_tokens:
+            return 1.0
+
+        positions: Dict[str, List[int]] = {}
+        for idx, t in enumerate(text_tokens):
+            if t in query_keywords:
+                positions.setdefault(t, []).append(idx)
+
+        # If not all query keywords are present
+        if len(positions) < len(query_keywords):
+            return 0.35
+
+        # Calculate minimum span covering all query keywords
+        min_span = 1000000
+        # Check adjacent positions
+        all_kw = list(positions.keys())
+        first_list = positions[all_kw[0]]
+        for start_pos in first_list:
+            span_max = start_pos
+            span_min = start_pos
+            for other_kw in all_kw[1:]:
+                # find closest pos in other_kw to start_pos
+                closest = min(positions[other_kw], key=lambda x: abs(x - start_pos))
+                span_max = max(span_max, closest)
+                span_min = min(span_min, closest)
+            span_len = span_max - span_min + 1
+            if span_len < min_span:
+                min_span = span_len
+
+        # Ideal span is len(query_keywords)
+        ideal_span = len(query_keywords)
+        if min_span <= ideal_span + 2:
+            return 1.0
+        elif min_span <= ideal_span + 6:
+            return 0.75
+        elif min_span <= ideal_span + 15:
+            return 0.50
+        else:
+            return 0.35
 
     @classmethod
     def compute_lexical_score(cls, title: str, abstract: str, query: str) -> float:
+        """
+        Generalized IR lexical scoring function:
+        Score = 0.5 * TitleOverlap + 0.3 * AbstractOverlap + 0.2 * PhraseBonus
+        adjusted by strict atomic compound match and proximity cohesion.
+        """
         clean_q = (query or "").lower().strip()
         if not clean_q:
             return 0.0
 
+        q_tokens = cls.normalize_tokens(clean_q)
+        q_content_tokens = [t for t in q_tokens if t not in cls.STOPWORDS and len(t) >= 3]
+        if not q_content_tokens:
+            q_content_tokens = [t for t in q_tokens if len(t) >= 2]
+        if not q_content_tokens:
+            return 0.0
+
         title_l = (title or "").lower().strip()
         abstract_l = (abstract or "").lower().strip()
+        combined_text = f"{title_l} {abstract_l}"
 
-        # Check for compound terms in query
-        q_compounds = [cp for cp in cls.COMPOUND_PHRASES if cp.replace("-", " ") in clean_q or cp in clean_q]
+        t_tokens = cls.normalize_tokens(title_l)
+        a_tokens = cls.normalize_tokens(abstract_l)
+        t_token_set = set(t_tokens)
+        a_token_set = set(a_tokens)
 
-        # Exact query match
-        exact_query_match = (clean_q in title_l) or (clean_q in abstract_l)
+        # Dynamic query phrases (n-grams)
+        query_phrases = cls.get_query_phrases(clean_q)
 
-        # Check compound match
-        compound_matched = False
-        if q_compounds:
-            for cp in q_compounds:
-                cp_alt = cp.replace("-", " ") if "-" in cp else cp.replace(" ", "-")
-                if cp in title_l or cp_alt in title_l or cp in abstract_l or cp_alt in abstract_l:
-                    compound_matched = True
+        # Check atomic phrase matches including canonical synonyms
+        matched_phrases_count = 0
+        has_atomic_compound_match = False
+
+        for qp in query_phrases:
+            expansions = cls.get_synonym_expansions(qp)
+            for exp in expansions:
+                if cls.find_phrase_match(combined_text, exp):
+                    matched_phrases_count += 1
+                    has_atomic_compound_match = True
+                    # If target used a recognized synonym, credit the original query tokens into overlap sets
+                    for qw in cls.normalize_tokens(qp):
+                        t_token_set.add(qw)
+                        a_token_set.add(qw)
                     break
 
-        # Token set overlap
-        q_tokens = [t for t in re.findall(r'\b[a-z0-9]{3,}\b', clean_q) if t not in ("the", "for", "and", "models", "model")]
-        if not q_tokens:
-            q_tokens = re.findall(r'\b[a-z0-9]{3,}\b', clean_q)
+        # Exact whole-query match or expanded synonym match
+        exact_query_match = (clean_q in title_l) or (clean_q in abstract_l)
+        if not exact_query_match and query_phrases:
+            for qp in query_phrases:
+                for exp in cls.get_synonym_expansions(qp):
+                    if exp != qp:
+                        expanded_q = clean_q.replace(qp, exp)
+                        if (expanded_q in title_l) or (expanded_q in abstract_l):
+                            exact_query_match = True
+                            break
 
-        t_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', title_l))
-        a_tokens = set(re.findall(r'\b[a-z0-9]{3,}\b', abstract_l))
+        # Sub-token collision protection:
+        # If the query contains compound phrases, single prefix tokens (like 'cross') MUST NOT
+        # count toward individual word overlap unless their atomic compound is satisfied.
+        effective_q_tokens = list(q_content_tokens)
+        if query_phrases and not has_atomic_compound_match:
+            first_words_of_phrases = {p.split()[0] for p in query_phrases if len(p.split()) >= 2}
+            effective_q_tokens = [t for t in effective_q_tokens if t not in first_words_of_phrases]
+            if not effective_q_tokens:
+                effective_q_tokens = list(q_content_tokens)
 
-        overlap_title = len(set(q_tokens) & t_tokens) / len(q_tokens) if q_tokens else 0.0
-        overlap_abstract = len(set(q_tokens) & a_tokens) / len(q_tokens) if (q_tokens and a_tokens) else 0.0
+        overlap_title = len(set(effective_q_tokens) & t_token_set) / len(effective_q_tokens) if effective_q_tokens else 0.0
+        overlap_abstract = len(set(effective_q_tokens) & a_token_set) / len(effective_q_tokens) if effective_q_tokens else 0.0
 
         score = 0.5 * overlap_title + 0.3 * overlap_abstract
         if exact_query_match:
             score += 0.2
-        elif compound_matched:
-            score += 0.15
+        elif matched_phrases_count > 0:
+            score += min(0.2, 0.1 * matched_phrases_count)
 
-        # Penalty for disconnected split tokens:
-        # e.g. "cross attention" in query, but title/abstract only has "cross-domain", "cross-temporal" without "cross-attention"
-        if "cross attention" in clean_q or "cross-attention" in clean_q:
-            has_true_cross_attention = ("cross attention" in title_l or "cross-attention" in title_l or
-                                        "cross attention" in abstract_l or "cross-attention" in abstract_l)
-            if not has_true_cross_attention:
-                # Disconnected tokens detected
-                score *= 0.35
+        # Proximity adjustment across full document
+        if query_phrases and not has_atomic_compound_match:
+            # Penalize pseudo-matches and scattered disconnected tokens
+            proximity_factor = cls.compute_proximity_penalty(cls.normalize_tokens(combined_text), q_content_tokens)
+            score *= proximity_factor
 
-        return min(1.0, max(0.0, score))
+        return round(min(1.0, max(0.0, score)), 4)
 
 
 def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
@@ -1430,67 +1593,89 @@ async def _fetch_google_books_candidates_async(client: httpx.AsyncClient, query:
 
 async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
     """
-    Two-pass OpenAlex fetch:
+    Two-pass OpenAlex fetch with architectural synonym query expansion:
       Pass 1: Relevance-sorted query for domain alignment.
       Pass 2: Citation-sorted query to guarantee seminal foundational papers are surfaced.
-    Merges both passes deduplicated by work ID/DOI.
+      Bonus Pass (if architectural synonym applies): Searches seminal canonical equivalents (e.g. 'encoder-decoder attention transformer').
+    Merges passes deduplicated by work ID/DOI.
     """
-    headers = {"User-Agent": "LectureScribe/2.2 (mailto:academic-research@lecturescribe.local)"}
+    headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
 
     # Pass 1: Relevance-based candidates
-    task_p1 = client.get(
-        OPENALEX_API,
-        params={
-            "search": query,
-            "per-page": max(limit, 15),
-            "sort": "relevance_score:desc"
-        },
-        headers=headers,
-        timeout=3.5
-    )
+    tasks = [
+        client.get(
+            OPENALEX_API,
+            params={
+                "search": query,
+                "per-page": max(limit, 15),
+                "sort": "relevance_score:desc"
+            },
+            headers=headers,
+            timeout=3.5
+        ),
+        # Pass 2: Citation-authority candidates
+        client.get(
+            OPENALEX_API,
+            params={
+                "search": query,
+                "per-page": max(limit, 10),
+                "sort": "cited_by_count:desc"
+            },
+            headers=headers,
+            timeout=3.5
+        )
+    ]
 
-    # Pass 2: Citation-authority candidates
-    task_p2 = client.get(
-        OPENALEX_API,
-        params={
-            "search": query,
-            "per-page": max(limit, 10),
-            "sort": "cited_by_count:desc"
-        },
-        headers=headers,
-        timeout=3.5
-    )
+    # Dynamic query expansion using LexicalScorer canonical concept registry
+    clean_q = query.lower().strip()
+    query_phrases = LexicalScorer.get_query_phrases(clean_q)
+    expanded_queries_added: Set[str] = set()
+
+    for qp in query_phrases:
+        expansions = LexicalScorer.get_synonym_expansions(qp)
+        for exp in expansions:
+            if exp != qp:
+                expanded_q = clean_q.replace(qp, exp)
+                if expanded_q not in expanded_queries_added:
+                    expanded_queries_added.add(expanded_q)
+                    tasks.append(
+                        client.get(
+                            OPENALEX_API,
+                            params={
+                                "search": expanded_q,
+                                "per-page": 5,
+                                "sort": "cited_by_count:desc"
+                            },
+                            headers=headers,
+                            timeout=3.5
+                        )
+                    )
+                if len(tasks) >= 4:
+                    break
+        if len(tasks) >= 4:
+            break
 
     try:
-        resps = await asyncio.gather(task_p1, task_p2, return_exceptions=True)
-        resp1, resp2 = resps[0], resps[1]
+        resps = await asyncio.gather(*tasks, return_exceptions=True)
 
         combined_raw: List[Dict[str, Any]] = []
         seen_ids: Set[str] = set()
 
-        if isinstance(resp1, httpx.Response) and resp1.status_code == 200:
-            for item in resp1.json().get("results", []):
-                work_id = str(item.get("id") or item.get("doi") or "")
-                if work_id:
-                    seen_ids.add(work_id)
-                combined_raw.append(item)
-        elif isinstance(resp1, Exception):
-            logger.debug(f"[ReadingExtractor] [Async OpenAlex Pass 1] Exception: {resp1}")
-
-        if isinstance(resp2, httpx.Response) and resp2.status_code == 200:
-            for item in resp2.json().get("results", []):
-                work_id = str(item.get("id") or item.get("doi") or "")
-                if not work_id or work_id not in seen_ids:
-                    if work_id:
-                        seen_ids.add(work_id)
-                    combined_raw.append(item)
-        elif isinstance(resp2, Exception):
-            logger.debug(f"[ReadingExtractor] [Async OpenAlex Pass 2] Exception: {resp2}")
+        for idx, resp in enumerate(resps):
+            if isinstance(resp, httpx.Response) and resp.status_code == 200:
+                for item in resp.json().get("results", []):
+                    work_id = str(item.get("id") or item.get("doi") or "")
+                    if not work_id or work_id not in seen_ids:
+                        if work_id:
+                            seen_ids.add(work_id)
+                        combined_raw.append(item)
+            elif isinstance(resp, Exception):
+                logger.debug(f"[ReadingExtractor] [Async OpenAlex Pass {idx+1}] Exception: {resp}")
 
         if combined_raw:
             return _parse_openalex_items(combined_raw)
     except Exception as e:
-        logger.debug(f"[ReadingExtractor] [Async OpenAlex Two-Pass Search] Exception: {e}")
+        logger.debug(f"[ReadingExtractor] [Async OpenAlex Multi-Pass Search] Exception: {e}")
 
     return []
 
@@ -1652,6 +1837,16 @@ def _consolidate_and_merge_records(
         r.setdefault("journal", "")
         r.setdefault("doi", "")
         r.setdefault("is_open_access", False)
+
+        # Post-enrichment normalizer: auto-populate arxiv_id if empty but link points to arXiv
+        if not r.get("arxiv_id"):
+            found_arxiv = extract_canonical_arxiv_id(r.get("direct_pdf_url")) or \
+                          extract_canonical_arxiv_id(r.get("preview_url")) or \
+                          extract_canonical_arxiv_id(r.get("embed_url")) or \
+                          extract_canonical_arxiv_id(r.get("doi"))
+            if found_arxiv:
+                r["arxiv_id"] = found_arxiv
+
         r["relevance_score"] = compute_hybrid_relevance(r, query)
 
     return records

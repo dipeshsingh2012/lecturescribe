@@ -4,13 +4,12 @@
 
 The **Academic Literature Search Pipeline** (`search_academic_literature`) is the federated information retrieval (IR) engine in LectureScribe. It enables students and educators across diverse disciplines—Computer Science & Engineering, Medicine & Life Sciences, and Humanities—to discover authoritative, high-impact peer-reviewed literature, conference proceedings, preprints, and foundational monographs.
 
-### Current Evolution (v2.2 Architecture Hardening)
-To eliminate regressions identified in production audits:
-1. **Domain Exclusion Rules**: Enforces hard exclusion of `Europe PMC` when searching for `STEM_CS` courses (e.g. `Master of Technology`), routing strictly to OpenAlex, Semantic Scholar, Crossref, and Google Books.
-2. **Two-Pass OpenAlex Candidate Retrieval**: Queries OpenAlex concurrently with relevance sorting (`sort=relevance_score:desc`) and citation authority sorting (`sort=cited_by_count:desc`), guaranteeing foundational seminal papers (e.g. Vaswani et al., 2017) are surfaced alongside recent breakthroughs.
-3. **Strict Lexical & Compound Phrase Scoring**: Penalizes disconnected compound tokens (e.g. "cross-domain" ... "attention") and rewards authentic compound phrases ("cross attention").
-4. **Authentic Direct PDF Resolution**: Rejects publisher and DOI HTML landing pages from being falsely categorized as binary PDF streams.
-5. **Structured Telemetry**: Transparent HTTP status monitoring across Semantic Scholar and federated providers.
+### Current Evolution (v2.3 Precision Hardening)
+To address semantic precision regressions identified on technical queries (e.g. `"cross attention transformer models"` for `Master of Technology`):
+1. **Atomic Multi-Token Matcher**: Treats compound architectural terms (`"cross-attention"`, `"cross attention"`) as atomic phrases. Explicitly checks that words following `"cross"` match `"attention"`, preventing sub-token collisions from inflating scores on irrelevant terms like `"cross-window"` (Swin Transformer), `"cross-domain"`, or `"cross-temporal"`.
+2. **Canonical Architecture Foundations & Synonym Matching**: Maps foundational architectural equivalents (e.g., Vaswani et al., 2017 using *"encoder-decoder attention"*) to *"cross-attention"*, both during candidate query expansion and lexical scoring, ensuring seminal papers surface at the top.
+3. **Auto-Populate `arxiv_id`**: Added a post-enrichment normalizer that extracts canonical arXiv IDs from resolved `direct_pdf_url`, `preview_url`, `embed_url`, and `doi` strings across all providers.
+4. **Hard Domain Exclusion**: Strict routing of `STEM_CS` queries away from biomedical silos (Europe PMC).
 
 ---
 
@@ -332,13 +331,17 @@ Every item returned by `search_academic_literature` strictly conforms to the fol
 The pipeline is verified through automated test suites in both backend and frontend environments:
 
 ### Backend Test Suites (`pytest`)
-* **Test File**: [`backend/tests/test_literature_search.py`](file:///home/dipes/projects/lecturescribe/backend/tests/test_literature_search.py) (28 unit/regression tests)
+* **Test File**: [`backend/tests/test_literature_search.py`](file:///home/dipes/projects/lecturescribe/backend/tests/test_literature_search.py) (32 unit/regression tests)
 * **Test File**: [`tests/test_readings.py`](file:///home/dipes/projects/lecturescribe/tests/test_readings.py) (9 API & slide parser tests)
 
 ```
 ========================================================================================
 Test Name                                                Function Tested                 Status
 ========================================================================================
+test_lexical_scorer_generalized_arbitrary_query          Generalized IR N-Gram Proximity ✅ PASSED
+test_lexical_scorer_rejects_subtoken_collision_swin      Atomic Phrase Sub-Token Guard   ✅ PASSED
+test_lexical_scorer_canonical_synonym_encoder_decoder    Vaswani 2017 Equivalence       ✅ PASSED
+test_arxiv_id_auto_populated_from_resolved_urls          Post-Enrichment arXiv Extraction✅ PASSED
 test_domain_router_excludes_europe_pmc_for_mtech         Hard Exclusion for STEM_CS      ✅ PASSED
 test_two_pass_fetch_surfaces_foundational_papers         2-Pass OpenAlex Relevance/Cits  ✅ PASSED
 test_lexical_scorer_penalizes_disconnected_cross_tokens  Compound Strictness vs Disconn  ✅ PASSED
@@ -364,7 +367,7 @@ test_extract_year                                       4-Digit Year Extraction 
 test_normalize_doi                                      Canonical DOI Formatting        ✅ PASSED
 test_normalize_title                                    Alphanumeric Title Normalization✅ PASSED
 ========================================================================================
-Total Backend Tests Passing: 37 / 37 (100%)
+Total Backend Tests Passing: 41 / 41 (100%)
 ```
 
 ### Frontend Test Suites (`vitest`)

@@ -904,4 +904,110 @@ def test_direct_pdf_url_rejects_doi_landing_page():
     assert fallback_reader == "pdf_direct"
 
 
+def test_lexical_scorer_rejects_subtoken_collision_swin_transformer():
+    """
+    Validates that papers mentioning 'cross-window' or 'cross-domain' (e.g. Swin Transformer)
+    do not falsely match 'cross' in a 'cross-attention' query.
+    """
+    from backend.reading_extractor import LexicalScorer
+
+    query = "cross attention transformer models"
+
+    # Paper A: Swin Transformer with 'cross-window' attention
+    swin_title = "Swin Transformer: Hierarchical Vision Transformer using Shifted Windows"
+    swin_abstract = "We propose shifted windowing scheme which brings greater efficiency by limiting self-attention computation to non-overlapping local windows while also allowing for cross-window connection."
+    swin_score = LexicalScorer.compute_lexical_score(swin_title, swin_abstract, query)
+
+    # Paper B: Authentic Cross-Attention Transformer
+    ca_title = "Cross-Attention Transformer for Semantic Segmentation"
+    ca_abstract = "We design a cross-attention module that exchanges feature representations across dual transformer models."
+    ca_score = LexicalScorer.compute_lexical_score(ca_title, ca_abstract, query)
+
+    # Swin score must be heavily penalized because 'cross-window' is NOT 'cross-attention'
+    assert swin_score < 0.20
+    assert ca_score > 0.60
+    assert ca_score > 3.0 * swin_score
+
+
+def test_lexical_scorer_canonical_synonym_encoder_decoder_attention():
+    """
+    Validates that foundational paper using 'encoder-decoder attention' (Vaswani et al., 2017)
+    receives high lexical relevance for a 'cross attention transformer models' query.
+    """
+    from backend.reading_extractor import LexicalScorer
+
+    query = "cross attention transformer models"
+
+    # Vaswani et al. 2017: Attention Is All You Need
+    title = "Attention Is All You Need"
+    abstract = "In 'encoder-decoder attention' layers, the queries come from the previous decoder layer, and the memory keys and values come from the output of the encoder. We propose the Transformer, a model architecture relying entirely on an attention mechanism."
+
+    score = LexicalScorer.compute_lexical_score(title, abstract, query)
+    assert score >= 0.50
+
+
+def test_arxiv_id_auto_populated_from_resolved_urls():
+    """
+    Validates that arxiv_id is automatically extracted when direct_pdf_url or preview_url points to arXiv.
+    """
+    from backend.reading_extractor import _consolidate_and_merge_records
+
+    # Candidate with missing arxiv_id but valid arXiv direct_pdf_url
+    candidate_records = [
+        {
+            "title": "Swin Transformer",
+            "author": "Ze Liu",
+            "publication_year": "2021",
+            "reading_type": "paper",
+            "category": "reference",
+            "publisher": "",
+            "journal": "ICCV",
+            "doi": "",
+            "arxiv_id": "",  # Empty initially
+            "direct_pdf_url": "https://arxiv.org/pdf/2103.14030.pdf",
+            "preview_url": "https://arxiv.org/abs/2103.14030",
+            "reader_type": "pdf_direct",
+            "abstract": "Hierarchical vision transformer.",
+            "citation_count": 15000,
+            "influential_citation_count": 1200,
+            "source_provider": "OpenAlex",
+            "is_open_access": True
+        }
+    ]
+
+    merged = _consolidate_and_merge_records(openalex_items=candidate_records, query="vision transformer")
+    assert len(merged) == 1
+    assert merged[0]["arxiv_id"] == "2103.14030"
+
+
+def test_lexical_scorer_generalized_arbitrary_query():
+    """
+    Validates that LexicalScorer dynamically extracts n-grams and enforces
+    atomic compound proximity on completely arbitrary domains without hardcoded rules.
+    """
+    from backend.reading_extractor import LexicalScorer
+
+    # Arbitrary domain: biology / immunology
+    bio_query = "chimeric antigen receptor"
+    phrases = LexicalScorer.get_query_phrases(bio_query)
+    assert "chimeric antigen" in phrases
+    assert "antigen receptor" in phrases
+    assert "chimeric antigen receptor" in phrases
+
+    # Paper A: Legitimate CAR T-cell paper with atomic phrase
+    title_a = "Chimeric Antigen Receptor T-cell Therapy for Leukemia"
+    abs_a = "We design chimeric antigen receptor constructs targeting CD19."
+    score_a = LexicalScorer.compute_lexical_score(title_a, abs_a, bio_query)
+
+    # Paper B: Scattered / sub-token collision (e.g. "chimeric-mouse ... antigen ... receptor-like")
+    title_b = "Chimeric-mouse Models for Antigen Presentation"
+    abs_b = "We evaluate receptor-like proteins in transgenic mice."
+    score_b = LexicalScorer.compute_lexical_score(title_b, abs_b, bio_query)
+
+    assert score_a > 0.60
+    assert score_b < 0.25
+    assert score_a > 2.5 * score_b
+
+
+
 

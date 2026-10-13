@@ -1009,5 +1009,201 @@ def test_lexical_scorer_generalized_arbitrary_query():
     assert score_a > 2.5 * score_b
 
 
+def test_extract_canonical_arxiv_id_rejects_doi_numbers():
+    """
+    Issue 1 Regression Test:
+    Ensures DOIs containing 4-digit years and sequence numbers do NOT emit false arxiv_ids,
+    while valid modern and legacy arXiv identifiers are normalized properly.
+    """
+    from backend.reading_extractor import extract_canonical_arxiv_id
+
+    # DOIs must NOT emit arxiv_id
+    assert extract_canonical_arxiv_id("10.1109/iccv.2019.00069") is None
+    assert extract_canonical_arxiv_id("10.1145/3295222.3295349") is None
+    assert extract_canonical_arxiv_id("https://doi.org/10.1109/iccv.2019.00069") is None
+    assert extract_canonical_arxiv_id("10.1007/978-3-030-01225-0_13") is None
+
+    # Modern arXiv identifiers
+    assert extract_canonical_arxiv_id("1706.03762v5") == "1706.03762"
+    assert extract_canonical_arxiv_id("2103.14899") == "2103.14899"
+    assert extract_canonical_arxiv_id("arxiv:2103.14899") == "2103.14899"
+    assert extract_canonical_arxiv_id("arXiv: 2103.14899v2") == "2103.14899"
+    assert extract_canonical_arxiv_id("https://arxiv.org/abs/2103.14899v1") == "2103.14899"
+    assert extract_canonical_arxiv_id("https://arxiv.org/pdf/2103.14899.pdf") == "2103.14899"
+    assert extract_canonical_arxiv_id("doi:10.48550/arXiv.1706.03762") == "1706.03762"
+
+    # Legacy arXiv identifiers
+    assert extract_canonical_arxiv_id("hep-th/9901001v2") == "hep-th/9901001"
+    assert extract_canonical_arxiv_id("https://arxiv.org/abs/hep-th/9901001") == "hep-th/9901001"
+    assert extract_canonical_arxiv_id("arxiv:hep-th/9901001") == "hep-th/9901001"
+    assert extract_canonical_arxiv_id("math.GT/0309136") == "math.gt/0309136"
+
+
+def test_candidate_pool_bounded_top_8_and_truncated_abstracts():
+    """
+    Issue 2 Regression Test:
+    Ensures candidate pool is pruned to top N=8 based on preliminary relevance score,
+    abstracts are truncated to <= 600 chars or 120 words, and SLM output schema is compact.
+    """
+    from backend.reading_extractor import SLMReranker
+
+    # 1. Prune pool: 12 candidates pruned to 8
+    candidates = [
+        {"title": f"Paper {i}", "relevance_score": i * 0.08}
+        for i in range(12)
+    ]
+    pruned = SLMReranker.prune_candidates(candidates, max_n=8)
+    assert len(pruned) == 8
+    # Top candidates preserved in descending order
+    assert pruned[0]["relevance_score"] == 11 * 0.08
+    assert pruned[-1]["relevance_score"] == 4 * 0.08
+
+    # 2. Abstract truncation: long abstract capped to <= 600 chars
+    long_abstract = "word " * 200  # 1000 chars, 200 words
+    candidate_long = {
+        "title": "Long Abstract Paper",
+        "journal": "NeurIPS",
+        "publication_year": "2023",
+        "abstract": long_abstract
+    }
+    context = SLMReranker.format_candidate_context(candidate_long, 0)
+    assert len(context) < 800
+    # Abstract line must be truncated
+    abs_line = [line for line in context.split("\n") if line.startswith("Abstract:")][0]
+    raw_abs_in_context = abs_line.replace("Abstract: ", "")
+    assert len(raw_abs_in_context) <= 605
+    assert raw_abs_in_context.endswith("...")
+
+    # 3. Compact schema parser
+    raw_json = '[{"candidate_id": 0, "semantic_score": 0.92}, {"candidate_id": 1, "semantic_score": 0.35}]'
+    parsed_scores = SLMReranker._parse_scores(raw_json)
+    assert parsed_scores == {0: 0.92, 1: 0.35}
+
+
+@pytest.mark.anyio
+async def test_s2_circuit_breaker_60s_trip():
+    """
+    Issue 3 Regression Test:
+    Verifies that HTTP 429 on Semantic Scholar trips a 60-second in-memory circuit breaker,
+    and provider query budgets enforce single-query for S2 and capped concurrency for OpenAlex.
+    """
+    from backend.reading_extractor import SemanticScholarRateLimiter, SLMQueryPlanner
+
+    limiter = SemanticScholarRateLimiter(min_interval_seconds=0.01)
+    assert limiter.backoff_duration == 60.0
+    assert not limiter.is_circuit_open()
+
+    # Trip circuit with 429
+    limiter.record_429()
+    assert limiter.is_circuit_open() is True
+    assert limiter.backoff_duration == 120.0
+    # Immediate acquire rejected without waiting
+    assert await limiter.acquire() is False
+
+    # Query planner budget: primary queries limited to max 3
+    plan = SLMQueryPlanner.plan("cross attention transformer models", course_name="master-of-technology")
+    assert len(plan["primary_queries"]) <= 3
+    assert plan["primary_queries"][0] == "cross attention transformer models"
+
+
+def test_abstract_missing_dynamic_weight_compensation():
+    """
+    Issue 4 Regression Test:
+    Verifies that missing or short (<40 chars) abstracts shift lexical weight to citation authority,
+    and synthesized context string is created.
+    """
+    from backend.reading_extractor import (
+        compute_hybrid_relevance,
+        _impute_records_abstracts_sync
+    )
+
+    # Paper with full abstract vs paper with missing abstract
+    rec_with_abs = {
+        "title": "Attention Is All You Need",
+        "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+        "citation_count": 50000,
+        "publication_year": "2017",
+        "direct_pdf_url": "",
+        "is_open_access": False
+    }
+    rec_missing_abs = {
+        "title": "Attention Is All You Need",
+        "abstract": "",
+        "citation_count": 50000,
+        "publication_year": "2017",
+        "direct_pdf_url": "",
+        "is_open_access": False
+    }
+
+    # When abstract is missing, citation weight increases from 0.35 to 0.55
+    # Citations S_cit = min(1.0, log10(1 + 50000)/4) = min(1.0, 4.6989/4) = 1.0
+    # In rec_missing_abs, citation component contributes 0.55 * 1.0 = 0.55
+    score_missing = compute_hybrid_relevance(rec_missing_abs, "transformer models")
+    assert score_missing >= 0.55, f"Expected citation compensation >= 0.55, got {score_missing}"
+
+    # Verify synthesized context string generation
+    records = [{
+        "title": "Seminal Paper Without Abstract",
+        "journal": "ICLR",
+        "publication_year": "2020",
+        "abstract": ""
+    }]
+    _impute_records_abstracts_sync(records)
+    assert "(Note: Abstract unavailable)" in records[0]["synthesized_context"]
+    assert "Title: Seminal Paper Without Abstract" in records[0]["synthesized_context"]
+
+
+def test_monograph_relevancy_floor_excludes_low_scoring_books():
+    """
+    Issue 5 Regression Test:
+    Ensures that monographs scoring below 0.50 are excluded from course results,
+    and slots are backfilled with peer-reviewed papers.
+    """
+    from backend.reading_extractor import _format_and_interleave
+
+    # 4 papers (high relevance) and 1 off-topic book (score 0.4425, e.g. 2004 psychology book)
+    papers = [
+        {"title": f"Transformer Paper {i}", "reading_type": "paper", "relevance_score": 0.85 - i * 0.05}
+        for i in range(4)
+    ]
+    off_topic_book = {
+        "title": "Auditory and cross-modal attention",
+        "reading_type": "book",
+        "relevance_score": 0.4425
+    }
+
+    # Combined candidate pool
+    candidates = papers + [off_topic_book]
+
+    # Interleave with course_name="Master of Technology" (enforces min_book_relevance=0.50)
+    results = _format_and_interleave(
+        candidates,
+        limit=4,
+        query="cross attention",
+        course_name="Master of Technology"
+    )
+
+    # Off-topic book must be excluded, and all 4 slots backfilled by papers
+    assert len(results) == 4
+    book_results = [r for r in results if r["reading_type"] == "book"]
+    assert len(book_results) == 0, "Off-topic book with score 0.4425 was not excluded!"
+    assert all(r["reading_type"] == "paper" for r in results)
+
+    # An on-topic book with score >= 0.50 MUST be included
+    on_topic_book = {
+        "title": "Deep Learning with Transformers",
+        "reading_type": "book",
+        "relevance_score": 0.72
+    }
+    candidates_with_on_topic = papers + [on_topic_book]
+    results_with_book = _format_and_interleave(
+        candidates_with_on_topic,
+        limit=4,
+        query="cross attention",
+        course_name="Master of Technology"
+    )
+    assert any(r["reading_type"] == "book" for r in results_with_book)
+
+
 
 

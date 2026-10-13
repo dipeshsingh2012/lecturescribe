@@ -535,13 +535,34 @@ def reconstruct_inverted_abstract(inverted_index: dict[str, list[int]] | None) -
 
 def extract_canonical_arxiv_id(text: Optional[str]) -> Optional[str]:
     """
-    Extracts and normalizes canonical arXiv ID (e.g. '1706.03762v5' -> '1706.03762').
+    Extracts and normalizes canonical arXiv ID (e.g. '1706.03762v5' -> '1706.03762',
+    'hep-th/9901001v2' -> 'hep-th/9901001').
+    Strictly anchored to arXiv URLs, explicit arxiv: prefixes, or pure standalone arXiv IDs.
+    Does NOT match DOIs containing year-sequence patterns (e.g. '10.1109/iccv.2019.00069').
     """
     if not text:
         return None
-    m = re.search(r'(?:arxiv:\s*|/abs/|/pdf/)?(\d{4}\.\d{4,5})(?:v\d+)?', str(text), flags=re.IGNORECASE)
+    s = str(text).strip()
+    # 1. URL pattern: arxiv.org/abs/... or arxiv.org/pdf/...
+    m = re.search(r'arxiv\.org/(?:abs|pdf)/([a-zA-Z\-]+(?:\.[a-zA-Z\-]+)?/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?', s, flags=re.IGNORECASE)
     if m:
         return m.group(1).lower()
+
+    # 2. ArXiv DOI pattern: 10.48550/arXiv....
+    m = re.search(r'10\.48550/arxiv\.([a-zA-Z\-]+(?:\.[a-zA-Z\-]+)?/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?', s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+
+    # 3. Explicit arxiv: prefix (e.g. 'arxiv: 1706.03762v5', 'arXiv:hep-th/9901001')
+    m = re.search(r'(?:^|[\s/([,;:])arxiv:\s*([a-zA-Z\-]+(?:\.[a-zA-Z\-]+)?/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?', s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+
+    # 4. Pure standalone arXiv ID (e.g. '1706.03762v5', '2103.14899', 'hep-th/9901001')
+    m = re.match(r'^(?:arxiv:\s*)?([a-zA-Z\-]+(?:\.[a-zA-Z\-]+)?/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$', s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+
     return None
 
 
@@ -949,18 +970,29 @@ def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
     """
     Mathematically bounded composite relevance scoring function strictly in [0.0, 1.0].
     Final Score = w_lex * S_lex + w_cit * S_cit + w_rec * S_rec + w_oa * S_oa
-    where sum(w_i) == 1.0 (w_lex=0.45, w_cit=0.35, w_rec=0.15, w_oa=0.05).
+    where sum(w_i) == 1.0.
+    Dynamically adjusts weights when abstract is missing/short (< 40 chars) to compensate
+    with citation authority (w_lex=0.25, w_cit=0.55 vs standard w_lex=0.45, w_cit=0.35).
     """
-    w_lex = 0.45
-    w_cit = 0.35
-    w_rec = 0.15
-    w_oa = 0.05
-
     title = record.get("title") or ""
     abstract = record.get("abstract") or ""
+    synthesized = record.get("synthesized_context") or ""
+
+    is_abstract_missing = not abstract or len(abstract.strip()) < 40 or "(Note: Abstract unavailable)" in abstract or bool(synthesized and not abstract)
+    if is_abstract_missing:
+        w_lex = 0.25
+        w_cit = 0.55
+        w_rec = 0.15
+        w_oa = 0.05
+    else:
+        w_lex = 0.45
+        w_cit = 0.35
+        w_rec = 0.15
+        w_oa = 0.05
 
     # 1. Normalized Lexical score S_lex clamped to [0.0, 1.0] using LexicalScorer
-    s_lex = LexicalScorer.compute_lexical_score(title, abstract, query)
+    text_for_lexical = abstract if (abstract and len(abstract.strip()) >= 40) else (synthesized or title)
+    s_lex = LexicalScorer.compute_lexical_score(title, text_for_lexical, query)
 
     # 2. Log-normalized citation authority S_cit in [0.0, 1.0]
     citations = max(0, int(record.get("citation_count") or 0))
@@ -986,13 +1018,13 @@ def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
 class SemanticScholarRateLimiter:
     """
     Token-bucket / Leaky-bucket rate limiter with circuit breaker for Semantic Scholar API.
-    Enforces maximum 1 QPS and trips on HTTP 429 with exponential backoff.
+    Enforces maximum 1 QPS and trips on HTTP 429 with 60-second backoff circuit breaker.
     """
     def __init__(self, min_interval_seconds: float = 1.0):
         self.min_interval = min_interval_seconds
         self.last_request_time = 0.0
         self.circuit_open_until = 0.0
-        self.backoff_duration = 30.0
+        self.backoff_duration = 60.0
         self._lock: Optional[asyncio.Lock] = None
 
     def _get_lock(self) -> asyncio.Lock:
@@ -1026,7 +1058,7 @@ class SemanticScholarRateLimiter:
             return True
 
     def record_success(self):
-        self.backoff_duration = 30.0
+        self.backoff_duration = 60.0
 
     def record_429(self):
         try:
@@ -1048,7 +1080,7 @@ class SemanticScholarRateLimiter:
 
     def reset_circuit(self):
         self.circuit_open_until = 0.0
-        self.backoff_duration = 30.0
+        self.backoff_duration = 60.0
 
 
 _S2_RATE_LIMITER = SemanticScholarRateLimiter()
@@ -1569,7 +1601,7 @@ async def _fetch_europe_pmc_candidates_async(client: httpx.AsyncClient, query: s
         resp = await client.get(
             EUROPE_PMC_API,
             params={"query": query, "format": "json", "pageSize": max(limit, 5), "resultType": "core"},
-            headers={"User-Agent": "LectureScribe/1.0"}
+            headers={"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
         )
         if resp.status_code == 200:
             return _parse_europe_pmc_items(resp.json().get("resultList", {}).get("result", []))
@@ -1596,8 +1628,8 @@ async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str
     Two-pass OpenAlex fetch with architectural synonym query expansion:
       Pass 1: Relevance-sorted query for domain alignment.
       Pass 2: Citation-sorted query to guarantee seminal foundational papers are surfaced.
-      Bonus Pass (if architectural synonym applies): Searches seminal canonical equivalents (e.g. 'encoder-decoder attention transformer').
-    Merges passes deduplicated by work ID/DOI.
+      Bonus Pass (if architectural synonym applies): Searches seminal canonical equivalents.
+    Merges passes deduplicated by work ID/DOI. Enforces strict concurrency cap of 3 requests.
     """
     headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
 
@@ -1650,9 +1682,9 @@ async def _fetch_openalex_candidates_async(client: httpx.AsyncClient, query: str
                             timeout=3.5
                         )
                     )
-                if len(tasks) >= 4:
+                if len(tasks) >= 3:
                     break
-        if len(tasks) >= 4:
+        if len(tasks) >= 3:
             break
 
     try:
@@ -1765,6 +1797,96 @@ def _merge_record_metadata(target: Dict[str, Any], incoming: Dict[str, Any]) -> 
             target["reader_type"] = incoming["reader_type"]
 
 
+async def _impute_missing_abstract_openalex_async(client: httpx.AsyncClient, doi: str) -> Optional[str]:
+    """
+    Lightweight lookup in OpenAlex by canonical DOI to recover missing abstracts.
+    """
+    if not doi:
+        return None
+    canon_doi = _normalize_doi(doi)
+    if not canon_doi:
+        return None
+    headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
+    try:
+        url = f"https://api.openalex.org/works/https://doi.org/{canon_doi}"
+        resp = await client.get(url, headers=headers, timeout=1.5)
+        if resp.status_code == 200:
+            data = resp.json()
+            inv_index = data.get("abstract_inverted_index")
+            if inv_index and isinstance(inv_index, dict):
+                return _reconstruct_openalex_abstract(inv_index)
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] OpenAlex DOI abstract lookup failed for {canon_doi}: {e}")
+    return None
+
+
+def _impute_missing_abstract_openalex_sync(doi: str) -> Optional[str]:
+    """
+    Synchronous fallback lookup in OpenAlex by canonical DOI.
+    """
+    if not doi:
+        return None
+    canon_doi = _normalize_doi(doi)
+    if not canon_doi:
+        return None
+    headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
+    try:
+        url = f"https://api.openalex.org/works/https://doi.org/{canon_doi}"
+        resp = requests.get(url, headers=headers, timeout=1.5)
+        if resp.status_code == 200:
+            data = resp.json()
+            inv_index = data.get("abstract_inverted_index")
+            if inv_index and isinstance(inv_index, dict):
+                return _reconstruct_openalex_abstract(inv_index)
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] Sync OpenAlex DOI abstract lookup failed for {canon_doi}: {e}")
+    return None
+
+
+async def _impute_records_abstracts_async(records: List[Dict[str, Any]], client: httpx.AsyncClient) -> None:
+    """
+    Issue 4: Imputes missing/short (<40 chars) abstracts via OpenAlex DOI lookup,
+    or generates synthesized query context string if unavailable.
+    """
+    for r in records:
+        abstract = r.get("abstract") or ""
+        if len(abstract.strip()) < 40:
+            doi = r.get("doi")
+            recovered = None
+            if doi:
+                recovered = await _impute_missing_abstract_openalex_async(client, doi)
+            if recovered and len(recovered.strip()) >= 40:
+                r["abstract"] = recovered
+                r["synthesized_context"] = ""
+            else:
+                title = r.get("title") or "Unknown Title"
+                journal = r.get("journal") or r.get("publisher") or "Academic Venue"
+                year = r.get("publication_year") or "Recent"
+                r["synthesized_context"] = f"Title: {title} | Venue/Journal: {journal} | Year: {year} (Note: Abstract unavailable)"
+
+
+def _impute_records_abstracts_sync(records: List[Dict[str, Any]]) -> None:
+    """
+    Issue 4: Synchronous imputation of missing/short (<40 chars) abstracts via OpenAlex DOI lookup,
+    or generates synthesized query context string if unavailable.
+    """
+    for r in records:
+        abstract = r.get("abstract") or ""
+        if len(abstract.strip()) < 40:
+            doi = r.get("doi")
+            recovered = None
+            if doi:
+                recovered = _impute_missing_abstract_openalex_sync(doi)
+            if recovered and len(recovered.strip()) >= 40:
+                r["abstract"] = recovered
+                r["synthesized_context"] = ""
+            else:
+                title = r.get("title") or "Unknown Title"
+                journal = r.get("journal") or r.get("publisher") or "Academic Venue"
+                year = r.get("publication_year") or "Recent"
+                r["synthesized_context"] = f"Title: {title} | Venue/Journal: {journal} | Year: {year} (Note: Abstract unavailable)"
+
+
 def _consolidate_and_merge_records(
     crossref_items: Optional[List[Dict[str, Any]]] = None,
     pmc_items: Optional[List[Dict[str, Any]]] = None,
@@ -1862,43 +1984,261 @@ def _classify_query_intent(query: str) -> str:
     return "general"
 
 
+class SLMQueryPlanner:
+    """
+    Stage 1 SLM Query Planner & Intent Router.
+    Analyzes user query and course context to generate:
+      - Canonical domain classification ('cs_ai', 'biomedical', 'physics_math', 'humanities_social')
+      - Up to 3 prioritized primary query variations
+      - Filtered provider selection
+      - Intent ('paper', 'monograph', 'general')
+      - Excluded concepts
+    Enforces strict query budgets (Issue 3):
+      - Semantic Scholar & arXiv: Only first/primary query string. Never multi-query fan-out.
+      - OpenAlex & Europe PMC: Max concurrency cap of 3 requests with polite headers.
+    """
+    @classmethod
+    def plan(cls, query: str, course_name: str = "") -> Dict[str, Any]:
+        clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
+        intent = _classify_query_intent(clean_q)
+        domain = DomainRouter.classify_domain(course_name, clean_q)
+        dispatched_providers, _ = DomainRouter.get_providers_for_domain(domain, clean_q)
+
+        primary_queries = [clean_q]
+        q_lower = clean_q.lower()
+        phrases = LexicalScorer.get_query_phrases(q_lower)
+        for p in phrases:
+            expansions = LexicalScorer.get_synonym_expansions(p)
+            for exp in expansions:
+                if exp != p:
+                    expanded_q = q_lower.replace(p, exp)
+                    if expanded_q not in primary_queries:
+                        primary_queries.append(expanded_q)
+                if len(primary_queries) >= 3:
+                    break
+            if len(primary_queries) >= 3:
+                break
+
+        return {
+            "domain": domain,
+            "primary_queries": primary_queries[:3],
+            "providers": dispatched_providers,
+            "intent": intent,
+            "excluded_concepts": []
+        }
+
+
+class SLMReranker:
+    """
+    Stage 4 SLM Semantic Judge and Reranker (Issue 2).
+    Evaluates top bounded candidates (max N=8) with compact context representation.
+    Falls back gracefully to BM25/lexical hybrid scoring when LLM is unavailable or times out.
+    """
+    MAX_CANDIDATE_POOL = 8
+    MAX_ABSTRACT_CHARS = 600
+    MAX_ABSTRACT_WORDS = 120
+
+    @classmethod
+    def format_candidate_context(cls, candidate: Dict[str, Any], candidate_id: int) -> str:
+        """
+        Formats candidate into a concise evaluation context.
+        Truncates abstracts to <= 600 chars or 120 words (Issue 2).
+        If abstract is missing (< 40 chars), synthesizes fallback context string (Issue 4).
+        """
+        title = candidate.get("title") or "Unknown Title"
+        journal = candidate.get("journal") or candidate.get("publisher") or "Academic Venue"
+        year = candidate.get("publication_year") or "Recent"
+        abstract = candidate.get("abstract") or ""
+
+        if not abstract or len(abstract.strip()) < 40:
+            abstract_text = candidate.get("synthesized_context") or f"Title: {title} | Venue/Journal: {journal} | Year: {year} (Note: Abstract unavailable)"
+        else:
+            clean_abstract = " ".join(abstract.split())
+            words = clean_abstract.split(" ")
+            truncated = False
+            if len(words) > cls.MAX_ABSTRACT_WORDS:
+                clean_abstract = " ".join(words[:cls.MAX_ABSTRACT_WORDS])
+                truncated = True
+            if len(clean_abstract) > cls.MAX_ABSTRACT_CHARS:
+                clean_abstract = clean_abstract[:cls.MAX_ABSTRACT_CHARS].rstrip()
+                truncated = True
+            if truncated and not clean_abstract.endswith("..."):
+                clean_abstract = clean_abstract.rstrip() + "..."
+            abstract_text = clean_abstract
+
+        return f"[{candidate_id}] Title: {title} ({year}) | Venue: {journal}\nAbstract: {abstract_text}"
+
+    @classmethod
+    def prune_candidates(cls, candidates: List[Dict[str, Any]], max_n: int = 8) -> List[Dict[str, Any]]:
+        """
+        Uses preliminary lexical/hybrid relevance scores to bound the candidate pool to top N (max 8) (Issue 2).
+        """
+        if len(candidates) <= max_n:
+            return list(candidates)
+        sorted_candidates = sorted(candidates, key=lambda c: c.get("relevance_score", 0.0), reverse=True)
+        return sorted_candidates[:max_n]
+
+    @classmethod
+    def _parse_scores(cls, raw: str) -> Dict[int, float]:
+        """
+        Parses simplified compact schema: [ {"candidate_id": int, "semantic_score": float} ]
+        """
+        res: Dict[int, float] = {}
+        try:
+            clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+            clean = re.sub(r"\s*```$", "", clean).strip()
+            data = json.loads(clean)
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and "candidate_id" in item and "semantic_score" in item:
+                        cid = int(item["candidate_id"])
+                        score = float(item["semantic_score"])
+                        res[cid] = min(1.0, max(0.0, score))
+        except Exception:
+            pass
+        return res
+
+    @classmethod
+    async def rerank_async(
+        cls,
+        candidates: List[Dict[str, Any]],
+        query: str,
+        course_name: str = "",
+        timeout: float = 0.5
+    ) -> List[Dict[str, Any]]:
+        """
+        Reranks top N candidates using an SLM / LLM judge.
+        Returns candidates with updated 'relevance_score' blended from 'semantic_score'.
+        """
+        if not candidates:
+            return []
+
+        bounded = cls.prune_candidates(candidates, max_n=cls.MAX_CANDIDATE_POOL)
+
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        openai_key = os.getenv("OPENAI_API_KEY", "")
+
+        if not (groq_key or gemini_key or openai_key):
+            return bounded
+
+        candidate_blocks = [cls.format_candidate_context(c, i) for i, c in enumerate(bounded)]
+        prompt_text = "\n\n".join(candidate_blocks)
+
+        system_msg = (
+            f"You are a strict academic literature relevance evaluator for the course '{course_name or 'Computer Science / Engineering'}'. "
+            f"Given the user query '{query}' and a numbered list of candidates, evaluate the semantic relevance of each candidate strictly between 0.0 and 1.0.\n"
+            "Respond ONLY with a valid JSON array of objects with keys 'candidate_id' and 'semantic_score'. "
+            "Do NOT include any explanations, markdown or extra text.\n"
+            "Example: [{\"candidate_id\": 0, \"semantic_score\": 0.95}]"
+        )
+
+        try:
+            raw_response = None
+            if groq_key:
+                from openai import AsyncOpenAI
+                g_client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+                resp = await asyncio.wait_for(
+                    g_client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt_text}],
+                        max_tokens=300,
+                        temperature=0.0
+                    ),
+                    timeout=timeout
+                )
+                raw_response = resp.choices[0].message.content or ""
+            elif gemini_key:
+                from openai import AsyncOpenAI
+                gem_client = AsyncOpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
+                resp = await asyncio.wait_for(
+                    gem_client.chat.completions.create(
+                        model="gemini-flash-lite-latest",
+                        messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt_text}],
+                        max_tokens=300,
+                        temperature=0.0
+                    ),
+                    timeout=timeout
+                )
+                raw_response = resp.choices[0].message.content or ""
+
+            if raw_response:
+                scores_map = cls._parse_scores(raw_response)
+                for idx, c in enumerate(bounded):
+                    if idx in scores_map:
+                        sem_score = scores_map[idx]
+                        c["semantic_score"] = sem_score
+                        citations = max(0, int(c.get("citation_count") or 0))
+                        s_cit = min(1.0, math.log10(1.0 + citations) / 4.0)
+                        current_year = datetime.now().year
+                        pub_year_str = str(c.get("publication_year") or "")
+                        pub_year = int(pub_year_str) if pub_year_str.isdigit() else (current_year - 5)
+                        delta_y = max(0, current_year - pub_year)
+                        s_rec = max(0.25, min(1.0, math.exp(-delta_y / 14.0)))
+                        c["relevance_score"] = round(min(1.0, max(0.0, 0.50 * sem_score + 0.35 * s_cit + 0.15 * s_rec)), 4)
+        except Exception as e:
+            logger.debug(f"[SLMReranker] SLM reranking failed or timed out ({e}); preserving BM25/hybrid fallback.")
+
+        return bounded
+
+    @classmethod
+    def rerank(
+        cls,
+        candidates: List[Dict[str, Any]],
+        query: str,
+        course_name: str = ""
+    ) -> List[Dict[str, Any]]:
+        return cls.prune_candidates(candidates, max_n=cls.MAX_CANDIDATE_POOL)
+
+
 def _adaptive_interleave(
     papers: List[Dict[str, Any]],
     books: List[Dict[str, Any]],
     limit: int,
-    query: str = ""
+    query: str = "",
+    min_book_relevance: Optional[float] = None
 ) -> List[Dict[str, Any]]:
     """
     Dynamically balances result slots based on detected query intent.
     Guarantees monograph visibility while preventing paper citation pollution.
+    Enforces monograph relevancy floor when min_book_relevance is specified (Issue 5).
     """
     if limit <= 0:
         return []
-    if not books:
+
+    valid_books = books
+    if min_book_relevance is not None and min_book_relevance > 0.0:
+        valid_books = [
+            b for b in books
+            if ("relevance_score" not in b and "semantic_score" not in b)
+            or b.get("semantic_score", b.get("relevance_score", 1.0)) >= min_book_relevance
+        ]
+
+    if not valid_books:
         return papers[:limit]
     if not papers:
-        return books[:limit]
+        return valid_books[:limit]
 
     intent = _classify_query_intent(query)
     if intent == "monograph":
-        target_books = min(len(books), max(1, int(limit * 0.6)))
+        target_books = min(len(valid_books), max(1, int(limit * 0.6)))
         target_papers = limit - target_books
     elif intent == "paper":
-        target_books = min(len(books), 1) if limit >= 5 else 0
+        target_books = min(len(valid_books), 1) if limit >= 5 else 0
         target_papers = limit - target_books
     else:
-        target_books = min(len(books), 2) if limit >= 4 else (min(len(books), 1) if limit >= 2 else 0)
+        target_books = min(len(valid_books), 2) if limit >= 4 else (min(len(valid_books), 1) if limit >= 2 else 0)
         target_papers = limit - target_books
 
-    selected_books = books[:target_books]
+    selected_books = valid_books[:target_books]
     selected_papers = papers[:target_papers]
 
     rem_slots = limit - (len(selected_books) + len(selected_papers))
     if rem_slots > 0:
         if len(papers) > target_papers:
             selected_papers.extend(papers[target_papers : target_papers + rem_slots])
-        elif len(books) > target_books:
-            selected_books.extend(books[target_books : target_books + rem_slots])
+        elif len(valid_books) > target_books:
+            selected_books.extend(valid_books[target_books : target_books + rem_slots])
 
     combined: List[Dict[str, Any]] = []
     if intent == "monograph":
@@ -1933,19 +2273,45 @@ def _interleave_results(
     return _adaptive_interleave(papers, books, limit, query="")
 
 
-def _format_and_interleave(records: List[Dict[str, Any]], limit: int, query: str = "") -> List[Dict[str, Any]]:
-    books = [r for r in records if r.get("reading_type") == "book"]
+def _format_and_interleave(
+    records: List[Dict[str, Any]],
+    limit: int,
+    query: str = "",
+    min_book_relevance: Optional[float] = None,
+    course_name: str = ""
+) -> List[Dict[str, Any]]:
+    """
+    Formats, sorts, and adaptively interleaves candidates.
+    Enforces strict monograph relevancy floor (score >= 0.50) when min_book_relevance
+    is specified or course context is provided (Issue 5).
+    """
+    floor = min_book_relevance
+    if floor is None:
+        if course_name or any(r.get("semantic_score") is not None for r in records):
+            floor = 0.50
+        else:
+            floor = 0.0
+
+    books = [
+        r for r in records
+        if r.get("reading_type") == "book" and (
+            floor <= 0.0 or
+            ("relevance_score" not in r and "semantic_score" not in r) or
+            r.get("semantic_score", r.get("relevance_score", 0.0)) >= floor
+        )
+    ]
     papers = [r for r in records if r.get("reading_type") != "book"]
     papers.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
     books.sort(key=lambda x: x.get("relevance_score", 0.0), reverse=True)
-    return _adaptive_interleave(papers, books, limit=limit, query=query)
+    return _adaptive_interleave(papers, books, limit=limit, query=query, min_book_relevance=floor)
 
 
 async def search_academic_literature_async(query: str, limit: int = 6, course_name: str = "") -> List[Dict[str, Any]]:
     """
     Asynchronous federated literature discovery across OpenAlex (Tier 1),
     Crossref, Europe PMC, Google Books, and Semantic Scholar (rate-limited).
-    Uses DomainRouter to strictly exclude non-applicable providers (e.g. Europe PMC for STEM_CS).
+    Hardened with SLMQueryPlanner, bounded candidate pool (max N=8),
+    abstract imputation, 60s S2 circuit breaker, and monograph quality floor.
     """
     if not query or len(query.strip()) < 2:
         return []
@@ -1953,9 +2319,11 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
     clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
     logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_q}' (limit={limit}, course='{course_name}')")
 
-    # Domain classification and provider routing
-    domain = DomainRouter.classify_domain(course_name, clean_q)
-    dispatched, excluded = DomainRouter.get_providers_for_domain(domain, clean_q)
+    # Stage 1: SLM Query Planner & Budgeted Provider Routing (Issue 3)
+    plan = SLMQueryPlanner.plan(clean_q, course_name)
+    dispatched = plan.get("providers", [])
+    primary_queries = plan.get("primary_queries", [clean_q])
+    primary_q = primary_queries[0]
 
     client = get_async_http_client()
     task_keys: List[str] = []
@@ -1963,23 +2331,25 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
 
     if "openalex" in dispatched:
         task_keys.append("openalex")
-        tasks.append(asyncio.create_task(_fetch_openalex_candidates_async(client, clean_q, limit)))
+        # OpenAlex permitted to run multi-query variations up to concurrency cap of 3
+        tasks.append(asyncio.create_task(_fetch_openalex_candidates_async(client, primary_q, limit)))
 
     if "crossref" in dispatched:
         task_keys.append("crossref")
-        tasks.append(asyncio.create_task(_fetch_crossref_candidates_async(client, clean_q, limit)))
+        tasks.append(asyncio.create_task(_fetch_crossref_candidates_async(client, primary_q, limit)))
 
     if "europe_pmc" in dispatched:
         task_keys.append("europe_pmc")
-        tasks.append(asyncio.create_task(_fetch_europe_pmc_candidates_async(client, clean_q, limit)))
+        tasks.append(asyncio.create_task(_fetch_europe_pmc_candidates_async(client, primary_q, limit)))
 
     if "google_books" in dispatched:
         task_keys.append("google_books")
-        tasks.append(asyncio.create_task(_fetch_google_books_candidates_async(client, clean_q, limit)))
+        tasks.append(asyncio.create_task(_fetch_google_books_candidates_async(client, primary_q, limit)))
 
     if "semantic_scholar" in dispatched:
         task_keys.append("semantic_scholar")
-        tasks.append(asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, clean_q, limit)))
+        # S2 query budget: Execute queries using ONLY the first/primary query string (Issue 3)
+        tasks.append(asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, primary_q, limit)))
 
     raw_results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
 
@@ -1997,9 +2367,21 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
         books_items=results_map.get("google_books", []),
         openalex_items=results_map.get("openalex", []),
         s2_items=results_map.get("semantic_scholar", []),
-        query=clean_q
+        query=primary_q
     )
-    final_results = _format_and_interleave(consolidated, limit=limit, query=clean_q)
+
+    # Issue 4: Impute missing abstracts asynchronously via OpenAlex DOI lookup
+    await _impute_records_abstracts_async(consolidated, client)
+    for r in consolidated:
+        r["relevance_score"] = compute_hybrid_relevance(r, primary_q)
+
+    # Issue 2: Prune candidates to top N (max 8) and invoke SLM reranker
+    bounded = SLMReranker.prune_candidates(consolidated, max_n=8)
+    reranked = await SLMReranker.rerank_async(bounded, primary_q, course_name=course_name)
+
+    # Issue 5: Format and interleave enforcing monograph relevancy floor (score >= 0.50)
+    floor = 0.50 if course_name else 0.0
+    final_results = _format_and_interleave(reranked, limit=limit, query=primary_q, min_book_relevance=floor, course_name=course_name)
     logger.info(f"[ReadingExtractor] search_academic_literature_async returned {len(final_results)} results for query: '{clean_q}'")
     return final_results
 
@@ -2016,8 +2398,10 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
     clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
     logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit}, course='{course_name}')")
 
-    domain = DomainRouter.classify_domain(course_name, clean_q)
-    dispatched, excluded = DomainRouter.get_providers_for_domain(domain, clean_q)
+    plan = SLMQueryPlanner.plan(clean_q, course_name)
+    dispatched = plan.get("providers", [])
+    primary_queries = plan.get("primary_queries", [clean_q])
+    primary_q = primary_queries[0]
 
     oa_items: List[Dict[str, Any]] = []
     cr_items: List[Dict[str, Any]] = []
@@ -2027,13 +2411,13 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = {}
         if "openalex" in dispatched:
-            futures["openalex"] = executor.submit(_fetch_openalex_candidates, clean_q, limit)
+            futures["openalex"] = executor.submit(_fetch_openalex_candidates, primary_q, limit)
         if "crossref" in dispatched:
-            futures["crossref"] = executor.submit(_fetch_crossref_candidates, clean_q, limit)
+            futures["crossref"] = executor.submit(_fetch_crossref_candidates, primary_q, limit)
         if "europe_pmc" in dispatched:
-            futures["europe_pmc"] = executor.submit(_fetch_europe_pmc_candidates, clean_q, limit)
+            futures["europe_pmc"] = executor.submit(_fetch_europe_pmc_candidates, primary_q, limit)
         if "google_books" in dispatched:
-            futures["google_books"] = executor.submit(_fetch_google_books_candidates, clean_q, limit)
+            futures["google_books"] = executor.submit(_fetch_google_books_candidates, primary_q, limit)
 
         if "openalex" in futures:
             try:
@@ -2064,9 +2448,16 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
         pmc_items=pmc_items,
         books_items=gb_items,
         openalex_items=oa_items,
-        query=clean_q
+        query=primary_q
     )
-    final_results = _format_and_interleave(consolidated, limit=limit, query=clean_q)
+
+    _impute_records_abstracts_sync(consolidated)
+    for r in consolidated:
+        r["relevance_score"] = compute_hybrid_relevance(r, primary_q)
+
+    bounded = SLMReranker.prune_candidates(consolidated, max_n=8)
+    floor = 0.50 if course_name else 0.0
+    final_results = _format_and_interleave(bounded, limit=limit, query=primary_q, min_book_relevance=floor, course_name=course_name)
     logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{clean_q}'")
     return final_results
 

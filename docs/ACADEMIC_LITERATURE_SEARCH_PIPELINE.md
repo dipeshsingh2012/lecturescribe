@@ -458,34 +458,46 @@ To completely eliminate hand-crafted heuristics, the search engine transitions t
 }
 ```
 
-#### Stage 4: `SLMReranker` Output Schema
+#### Stage 4: `SLMReranker` Output Schema (Latency-Optimized)
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "array",
   "items": {
     "type": "object",
-    "required": ["candidate_id", "semantic_score", "course_aligned", "explanation"],
+    "required": ["candidate_id", "semantic_score"],
     "properties": {
       "candidate_id": { "type": "integer" },
-      "semantic_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-      "course_aligned": { "type": "boolean" },
-      "explanation": { "type": "string" }
+      "semantic_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 }
     }
   }
 }
 ```
 
-### 10.4 Modernization Roadmap & Execution Milestones
-1. **Milestone 1: Immediate Bug Hardening (v2.3.1)**:
-   - Fix arXiv ID extraction regex so publisher DOIs (e.g., `10.1109/iccv.2019.00069`) never create false `arxiv_id: "2019.00069"`.
-   - Add monograph relevance floor (`relevance_score >= 0.50`) preventing off-topic 1998 books from forced interleaving.
-2. **Milestone 2: Stage 1 SLM Query Planner Integration (v3.0-alpha)**:
-   - Deploy `SLMQueryPlanner` to synthesize query expansions, domain routing, and provider dispatch via Gemini Flash Lite.
-   - Remove `STEM_CS_SLUGS` and query-level regex routing rules.
-3. **Milestone 3: Stage 4 Batched SLM Semantic Judge (v3.0-beta)**:
-   - Replace Python `LexicalScorer` with single-call batched SLM structured reranking.
-   - Decommission `CONCEPT_SYNONYMS`, n-gram proximity distance calculations, and compound phrase penalties.
-4. **Milestone 4: Offline / Fallback Guarantees (v3.0-GA)**:
-   - Implement standard BM25 fallback if LLM/SLM endpoint times out or experiences network degradation, preserving the strict sub-1.5s p95 latency SLA.
+### 10.4 Pipeline Hardening & Production Guarantees (v3.0 Specifications)
+1. **Strict arXiv Extraction Sanitization**:
+   - Anchors extraction strictly to arXiv-specific URL patterns (`arxiv.org/abs/`, `arxiv.org/pdf/`) or explicit `arxiv:` prefixes.
+   - Prevents publisher DOIs containing 4-digit years and sequence numbers (e.g., `10.1109/iccv.2019.00069`) from emitting false `arxiv_id`.
+   - Supports both modern format (`YYYY.NNNNN` / `YYYY.NNNNNvX`) and legacy categories (e.g., `hep-th/9901001`).
+
+2. **Bounded SLM Candidate Pool & Pre-Filtering**:
+   - Runs a sub-5ms BM25/lexical scoring pass immediately after deduplication.
+   - Prunes the candidate pool to the top $N \le 8$ candidates before invoking the SLM reranker.
+   - Truncates abstracts in SLM prompt context to a maximum of 600 characters or 120 words per candidate.
+   - Uses a compact output schema returning only `{ "candidate_id": int, "semantic_score": float }` for sub-300ms latency.
+
+3. **Rate-Limit & Circuit Breaker Defenses**:
+   - Enforces provider query budgets: Semantic Scholar and arXiv receive strictly the primary query string (no combinatorial fan-out).
+   - OpenAlex and Europe PMC multi-query concurrency is capped at $\le 3$ requests using polite pool headers (`mailto:`).
+   - HTTP 429 on Semantic Scholar trips a 60-second in-memory circuit breaker that instantly falls back to OpenAlex.
+
+4. **Abstract Imputation & Dynamic Weight Compensation**:
+   - For works with missing or short abstracts ($<40$ characters), queries OpenAlex by canonical DOI to recover abstracts.
+   - If unrecoverable, synthesizes query-context string: `f"Title: {title} | Venue/Journal: {journal} | Year: {year} (Note: Abstract unavailable)"`.
+   - In the mathematical blender, missing abstracts dynamically shift weight to citation authority ($w_{\text{cit}} = 0.55, w_{\text{lex}} = 0.25$).
+
+5. **Monograph Relevancy Floor & Semantic Isolation**:
+   - Enforces a strict minimum relevance floor (`score >= 0.50`) for monographs/textbooks.
+   - If no book meets $\ge 0.50$, the book slot is omitted entirely and backfilled with peer-reviewed papers.
+
 

@@ -1354,17 +1354,24 @@ async def test_s2_circuit_breaker_bypasses_network_call():
 
 def test_reranker_system_prompt_contains_generalized_academic_criteria():
     """
-    Validates Requirement 3: SLMReranker system prompt guides the judge to evaluate
-    Foundational Relevance (>= 0.90), Application Relevance (>= 0.75), and Negative Disambiguation (<= 0.40).
+    Validates Requirement 1: SLMReranker system prompt guides the judge with strict 4-tier rubric:
+    0.90-1.00 (Core Architectural Breakthrough), 0.70-0.89 (Substantial Application),
+    0.45-0.69 (Marginal/Variant/Derivative Usage), < 0.40 (Irrelevant / Drop Threshold),
+    and the explicit anti-clustering Instruction Directive.
     """
     from backend.reading_extractor import SLMReranker
     import inspect
 
     src = inspect.getsource(SLMReranker.rerank_async)
-    assert "Foundational Relevance" in src
-    assert "Application Relevance" in src
-    assert "Negative Disambiguation" in src
-    assert "<= 0.40" in src
+    assert "Core Architectural Breakthrough" in src
+    assert "0.90 – 1.00" in src or "0.90" in src
+    assert "Substantial Application" in src
+    assert "Marginal / Variant / Derivative Usage" in src
+    assert "0.45 – 0.69" in src or "0.45" in src
+    assert "< 0.40" in src
+    assert "Do not cluster scores around 0.80–0.85" in src
+    assert "Instruction Directive" in src
+
 
 
 @pytest.mark.anyio
@@ -1572,6 +1579,96 @@ async def test_generalized_multidomain_query_planning_and_dual_pass():
             assert any(case["query"] in st for st in searched_terms)
             assert any(case["mock_plan"]["foundational_nomenclature"] in st for st in searched_terms)
             assert len(items) >= 2
+
+
+@pytest.mark.anyio
+async def test_reranker_scoring_distribution_and_variance():
+    """
+    Validates Requirement 1: Stage 4 SLMReranker appropriately differentiates scores across the rubric:
+      - 0.90 - 1.00: Core breakthrough (e.g., Attention Is All You Need / Asymmetric cross attention)
+      - 0.70 - 0.89: Substantial application (e.g., Cross-attention in diffusion models)
+      - 0.45 - 0.69: Marginal / spatial variant (e.g., Criss-Cross attention CCNet)
+      - < 0.40: Irrelevant / token collision (dropped by hard semantic floor)
+    """
+    from backend.reading_extractor import SLMReranker
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import json
+
+    candidates = [
+        {
+            "title": "Attention Is All You Need",
+            "authors": "Vaswani et al.",
+            "publication_year": 2017,
+            "abstract": "We introduce the Transformer, introducing encoder-decoder cross-attention...",
+            "citation_count": 85000,
+            "doi": "10.5555/vaswani2017"
+        },
+        {
+            "title": "High-Resolution Image Synthesis with Latent Diffusion Models",
+            "authors": "Rombach et al.",
+            "publication_year": 2022,
+            "abstract": "We integrate cross-attention layers into the model architecture for general conditioning inputs...",
+            "citation_count": 12000,
+            "doi": "10.5555/rombach2022"
+        },
+        {
+            "title": "CCNet: Criss-Cross Attention for Semantic Segmentation",
+            "authors": "Huang et al.",
+            "publication_year": 2019,
+            "abstract": "For each pixel, a criss-cross attention module harvests contextual information along orthogonal paths...",
+            "citation_count": 1500,
+            "doi": "10.5555/huang2019"
+        },
+        {
+            "title": "Recommendations for Cardiac Chamber Quantification by Echocardiography",
+            "authors": "Lang et al.",
+            "publication_year": 2015,
+            "abstract": "Clinical guidance for echocardiographic chamber quantification...",
+            "citation_count": 18200,
+            "doi": "10.5555/lang2015"
+        }
+    ]
+
+    mock_scores = [
+        {"candidate_id": 0, "semantic_score": 0.95},  # Core breakthrough
+        {"candidate_id": 1, "semantic_score": 0.82},  # Substantial application
+        {"candidate_id": 2, "semantic_score": 0.55},  # Marginal / spatial variant
+        {"candidate_id": 3, "semantic_score": 0.10},  # Irrelevant collision
+    ]
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [
+        MagicMock(message=MagicMock(content=json.dumps(mock_scores)))
+    ]
+    mock_groq_client = MagicMock()
+    mock_groq_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+
+    with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test_key"}), \
+         patch("openai.AsyncOpenAI", return_value=mock_groq_client):
+        reranked = await SLMReranker.rerank_async(
+            candidates,
+            query="cross attention",
+            course_name="Deep Learning",
+            negative_disambiguation=["criss-cross", "cardiology"]
+        )
+
+    # 1. Candidate 3 (< 0.40) must be dropped by the hard semantic floor
+    scored_titles = [c["title"] for c in reranked]
+    assert "Recommendations for Cardiac Chamber Quantification by Echocardiography" not in scored_titles
+
+    # 2. Vaswani (0.95) must score higher than Latent Diffusion (0.82) and CCNet (0.55)
+    vaswani = next(c for c in reranked if "Vaswani" in c.get("authors", ""))
+    rombach = next(c for c in reranked if "Rombach" in c.get("authors", ""))
+    ccnet = next(c for c in reranked if "CCNet" in c["title"])
+
+    assert vaswani["semantic_score"] == 0.95
+    assert rombach["semantic_score"] == 0.82
+    assert ccnet["semantic_score"] == 0.55
+
+    # 3. Overall blended relevance_score must respect this clear semantic discrimination
+    assert vaswani["relevance_score"] > rombach["relevance_score"]
+    assert rombach["relevance_score"] > ccnet["relevance_score"]
+
 
 
 

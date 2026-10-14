@@ -1879,7 +1879,7 @@ class SLMQueryPlanner:
             "Rules:\n"
             "1. 'verbatim_query' must preserve contiguous tokens in double quotes if multi-word.\n"
             "2. 'foundational_nomenclature' MUST identify the origin/seminal terminology used in the foundational literature (e.g. for 'cross attention' -> 'encoder-decoder attention', for 'flash attention' -> 'exact attention with IO-awareness' or 'fast attention', for 'raft consensus' -> 'consensus algorithm', for 'mrna vaccines' -> 'lipid nanoparticle mRNA'). Do NOT append generic filler nouns like 'mechanism', 'approach', or 'method'.\n"
-            "3. 'architectural_class' is the broader technical family or framework.\n"
+            "3. 'architectural_class' is the broader technical family, scientific paradigm, or foundational architectural term (e.g., 'encoder-decoder attention transformer', 'asymmetric cross attention', 'transformer models'). When a concept spans multiple subfields (e.g., attention across Seq2Seq/NLP, Multimodal, and Vision), balance disciplinary coverage across foundational/Seq2Seq terminology and do not exclusively pull from one narrow application modality unless explicitly specified by the query or course context.\n"
             "4. 'negative_disambiguation' lists terms from other fields or superficial token collisions that must be excluded or penalized.\n"
             "5. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
             "6. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
@@ -2116,15 +2116,20 @@ class SLMReranker:
 
         disambig_note = ""
         if negative_disambiguation:
-            disambig_note = f"\nNegative Disambiguation: Candidates that only match due to superficial token overlap with terms in {negative_disambiguation} MUST be penalized with a low semantic score (<= 0.40)."
+            disambig_note = f"\n- < 0.40 (Irrelevant / Token Collision): Drop threshold. Superficially matches keywords or affixes ({negative_disambiguation}) but represents an unrelated mechanism."
+        else:
+            disambig_note = "\n- < 0.40 (Irrelevant / Token Collision): Drop threshold. Superficially matches keywords or affixes but represents an unrelated mechanism."
 
         system_msg = (
             f"You are a strict academic literature relevance evaluator for the course '{course_name or 'General Academic'}'.\n"
             f"User Query: '{query}'\n\n"
-            "Evaluate each numbered candidate against the following generalized academic relevance criteria strictly between 0.0 and 1.0:\n"
-            "1. Foundational Relevance (>= 0.90): If a candidate introduced, pioneered, or formalized the underlying theoretical mechanism, algorithm, or principle (even if published under historical or formal nomenclature rather than modern shorthand), assign a high score (0.90 - 1.0).\n"
-            "2. Application Relevance (>= 0.75): If a candidate directly applies, benchmarks, or extends the core mechanism to solve domain problems with architectural depth, assign a strong score (0.75 - 0.89).\n"
-            f"3. Negative Disambiguation (<= 0.40): If a candidate is off-topic or only matches due to superficial/compound token collision, assign a low score (<= 0.40).{disambig_note}\n\n"
+            "Evaluate each numbered candidate against the following strict academic scoring rubric strictly between 0.0 and 1.0:\n"
+            "- 0.90 – 1.00 (Core Architectural Breakthrough / Direct Focus): The paper's primary contribution is the exact mechanism queried (e.g., novel asymmetric cross-attention formulation, canonical transformer cross-attention control, or foundational Seq2Seq attention).\n"
+            "- 0.70 – 0.89 (Substantial Application / Integrated Module): The paper uses the exact mechanism in a significant capacity within a larger system or multi-modal pipeline (e.g., dual-branch feature fusion, cross-attention in diffusion models).\n"
+            "- 0.45 – 0.69 (Marginal / Variant / Derivative Usage): The paper uses a tangential, spatial-only, or non-standard variant (e.g., orthogonal/spatial axis pooling like criss-cross attention, or minor downstream evaluation).\n"
+            f"{disambig_note.strip()}\n\n"
+            "Instruction Directive:\n"
+            "Do not cluster scores around 0.80–0.85. Actively differentiate between papers whose central theoretical contribution is the queried mechanism versus those that merely apply it as a sub-component.\n\n"
             "Respond ONLY with a valid JSON array of objects with keys 'candidate_id' and 'semantic_score'. "
             "Do NOT include any explanations, markdown or extra text.\n"
             "Example: [{\"candidate_id\": 0, \"semantic_score\": 0.95}]"

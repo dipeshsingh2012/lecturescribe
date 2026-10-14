@@ -31,6 +31,38 @@ except ImportError:
 DEFAULT_BUCKET_NAME = os.getenv("GCS_RESOURCES_BUCKET", "lecturescribe-resources")
 
 
+def to_gcs_course_slug(course_name: Optional[str]) -> str:
+    """
+    Generate a normalized GCS directory slug for a course.
+    Strips leading course codes and numbers (e.g. '1.1 ', '1.4 ', '1-4-', '14-', '11-')
+    so all lectures and resources align under the canonical course directory.
+    """
+    if not course_name:
+        return "general"
+    clean = str(course_name).strip()
+
+    # Strip leading path wrapper if present (e.g. 'courses/...')
+    if clean.startswith("courses/"):
+        parts = clean[len("courses/"):].split("/")
+        clean = parts[0] if parts else clean
+
+    # Strip leading numerical or index prefix e.g. "1.1 ", "1.4 - ", "1.9: ", "1-4-", "14-", "11-"
+    # 1. Decimal formats: "1.1 ", "1.4", "1.9"
+    clean = re.sub(r'^\s*\d+[\s.\-_]+\d+[\s.\-_:]*', '', clean)
+    # 2. Collapsed 2-digit index or single digit prefix followed by delimiter: "14-", "11-", "1-", "1. "
+    clean = re.sub(r'^\s*\d{1,2}[\s.\-_:]+', '', clean)
+
+    # Clean punctuation and slugify
+    clean = re.sub(r'[^a-zA-Z0-9\- ]', '', clean.lower())
+    slug = re.sub(r'\s+', '-', clean.strip()).strip('-')
+
+    # Normalize known course aliases / typos to maintain unified GCS directory
+    if slug in ("applied-mathematics-for-data-science-and-ai", "applied-mathemartics-for-data-science-and-ai"):
+        slug = "applied-mathemartics-for-data-science-and-ai"
+
+    return slug or "general"
+
+
 class GCSStorageService:
     def __init__(self, bucket_name: Optional[str] = None):
         self.bucket_name = bucket_name or DEFAULT_BUCKET_NAME
@@ -53,17 +85,20 @@ class GCSStorageService:
             print(f"[GCS Notice] Cloud Storage client not initialized with ADC ({e}). Running in mock/emulated mode.")
             return None
 
-    def _get_bucket(self):
+    def _get_bucket(self, bucket_name: Optional[str] = None):
         client = self._get_client()
         if not client:
             return None
-        if self._bucket is not None:
+        target = bucket_name or self.bucket_name
+        if target == self.bucket_name and self._bucket is not None:
             return self._bucket
         try:
-            self._bucket = client.bucket(self.bucket_name)
-            return self._bucket
+            b = client.bucket(target)
+            if target == self.bucket_name:
+                self._bucket = b
+            return b
         except Exception as e:
-            print(f"[GCS Warning] Could not access bucket '{self.bucket_name}': {e}")
+            print(f"[GCS Warning] Could not access bucket '{target}': {e}")
             return None
 
     @staticmethod
@@ -79,7 +114,7 @@ class GCSStorageService:
     @staticmethod
     def get_resource_blob_path(course_slug: str, video_id: Optional[str], filename: str) -> str:
         """Generate a hierarchical GCS blob name: courses/{course}/lectures/{video_id}/{uuid}_{file}"""
-        safe_course = re.sub(r'[^a-z0-9\-]', '', course_slug.lower()) or "general"
+        safe_course = to_gcs_course_slug(course_slug)
         safe_name = GCSStorageService.clean_filename(filename)
         unique_prefix = uuid.uuid4().hex[:10]
         
@@ -92,7 +127,7 @@ class GCSStorageService:
     @staticmethod
     def get_course_note_blob_path(course_slug: str, user_email: str, note_id: str) -> str:
         """Generate GCS blob path for a course scratchpad note."""
-        safe_course = re.sub(r'[^a-z0-9\-]', '', (course_slug or "general").lower()) or "general"
+        safe_course = to_gcs_course_slug(course_slug)
         safe_email = re.sub(r'[^a-zA-Z0-9_\-@.]', '_', (user_email or "user").strip().lower())
         safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '', str(note_id))
         return f"courses/{safe_course}/notes/{safe_email}/{safe_id}.txt"
@@ -220,12 +255,39 @@ class GCSStorageService:
         if not bucket:
             return None
 
+        def _build(name: str, size: Optional[int]) -> Dict[str, Any]:
+            view_url = self.generate_download_signed_url(name, expires_minutes=180, disposition="inline")
+            return {
+                "blob_name": name,
+                "gcs_uri": f"gs://{self.bucket_name}/{name}",
+                "view_url": view_url,
+                "filename": os.path.basename(name),
+                "size_bytes": size
+            }
+
+        # 0. In-process cache of previously found blobs (signing a fresh URL is local and ~1ms,
+        # whereas each list_blobs round-trip costs hundreds of ms). Only hits are cached so a
+        # finished background upload is discovered on the next lookup.
+        found_cache = self.__dict__.setdefault("_video_blob_cache", {})
+        cache_key = (self.bucket_name, str(video_id))
+        cached = found_cache.get(cache_key)
+        if cached and time.monotonic() - cached[2] < 1800:
+            return _build(cached[0], cached[1])
+
+        def _remember(b) -> Dict[str, Any]:
+            found_cache[cache_key] = (b.name, b.size, time.monotonic())
+            return _build(b.name, b.size)
+
         # Build candidate prefixes
         prefixes = []
         if course_name:
-            clean_course = re.sub(r'[^a-zA-Z0-9\- ]', '', course_name.lower())
-            course_slug = re.sub(r'\s+', '-', clean_course.strip())
+            course_slug = to_gcs_course_slug(course_name)
             prefixes.append(f"courses/{course_slug}/lectures/{video_id}/")
+            # Also check alternative raw slug if different
+            raw_clean = re.sub(r'[^a-zA-Z0-9\- ]', '', str(course_name).lower())
+            raw_slug = re.sub(r'\s+', '-', raw_clean.strip())
+            if raw_slug and raw_slug != course_slug:
+                prefixes.append(f"courses/{raw_slug}/lectures/{video_id}/")
 
         prefixes.append(f"lectures/{video_id}/")
 
@@ -235,30 +297,20 @@ class GCSStorageService:
                 blobs = list(bucket.list_blobs(prefix=prefix))
                 for b in blobs:
                     if b.name.endswith((".mp4", ".mkv", ".webm")):
-                        view_url = self.generate_download_signed_url(b.name, expires_minutes=180, disposition="inline")
-                        return {
-                            "blob_name": b.name,
-                            "gcs_uri": f"gs://{self.bucket_name}/{b.name}",
-                            "view_url": view_url,
-                            "filename": os.path.basename(b.name),
-                            "size_bytes": b.size
-                        }
+                        return _remember(b)
             except Exception as e:
                 print(f"[GCS Lookup Notice] {e}")
 
-        # 2. Fallback: scan across all courses if course_name wasn't exact
+        # 2. Fallback: find the video under any course without listing the whole bucket
         try:
-            all_blobs = list(bucket.list_blobs(prefix="courses/"))
+            try:
+                all_blobs = bucket.list_blobs(prefix="courses/", match_glob=f"courses/*/lectures/{video_id}/*")
+            except TypeError:
+                # Older google-cloud-storage without match_glob support
+                all_blobs = bucket.list_blobs(prefix="courses/")
             for b in all_blobs:
                 if f"/lectures/{video_id}/" in b.name and b.name.endswith((".mp4", ".mkv", ".webm")):
-                    view_url = self.generate_download_signed_url(b.name, expires_minutes=180, disposition="inline")
-                    return {
-                        "blob_name": b.name,
-                        "gcs_uri": f"gs://{self.bucket_name}/{b.name}",
-                        "view_url": view_url,
-                        "filename": os.path.basename(b.name),
-                        "size_bytes": b.size
-                    }
+                    return _remember(b)
         except Exception:
             pass
 
@@ -293,6 +345,10 @@ class GCSStorageService:
         if not blob_name:
             return False
         self._mock_blobs.pop(blob_name, None)
+        video_cache = self.__dict__.get("_video_blob_cache")
+        if video_cache:
+            for k in [k for k, v in list(video_cache.items()) if v[0] == blob_name]:
+                video_cache.pop(k, None)
         bucket = self._get_bucket()
         if not bucket:
             return True
@@ -314,7 +370,7 @@ class GCSStorageService:
     ) -> str:
         """Upload string text directly to GCS."""
         target_bucket_name = bucket_name or self.bucket_name
-        bucket = self._get_bucket()
+        bucket = self._get_bucket(target_bucket_name)
         if bucket:
             try:
                 blob = bucket.blob(blob_name)

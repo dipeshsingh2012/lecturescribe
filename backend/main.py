@@ -65,7 +65,7 @@ from backend.mcp_integration import router as mcp_router
 from backend.google_drive_service import google_drive_service
 from backend.summary_generator import generate_summary_sections
 from backend.redis_service import redis_cache
-from backend.gcs_storage import gcs_storage_service
+from backend.gcs_storage import gcs_storage_service, to_gcs_course_slug
 from backend.transcription_jobs import (
     async_transcription_is_enabled,
     dispatch_transcription_job,
@@ -197,7 +197,7 @@ class RegenerateSummaryRequest(BaseModel):
 
 class GenerateLectureSummaryRequest(BaseModel):
     video_id: str
-    summary_type: str = "15_min"
+    summary_type: str = "comprehensive"
     video_title: Optional[str] = None
     cues: Optional[List[Dict[str, Any]]] = None
     user_email: Optional[str] = None
@@ -848,6 +848,8 @@ def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
 
 _active_gcs_uploads: Dict[str, Dict[str, Any]] = {}
 _gcs_upload_lock = threading.Lock()
+# Small shared pool for fanning out independent request-path I/O (Postgres vs. GCS) concurrently.
+_lecture_io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="lecture-io")
 DEFAULT_LMS_REFERER = os.getenv("LMS_REFERER", "https://learning.iiitdwd.ac.in/")
 
 
@@ -857,15 +859,21 @@ def _trigger_background_gcs_upload(
     course_name: str,
     cues: List[Dict[str, Any]],
     player_config: Optional[Dict[str, Any]] = None,
-    referer: Optional[str] = None
+    referer: Optional[str] = None,
+    skip_existing_check: bool = False
 ) -> bool:
-    """Safely start background video transfer to GCS if not already uploaded or in progress."""
+    """Safely start background video transfer to GCS if not already uploaded or in progress.
+
+    Pass ``skip_existing_check=True`` when the caller has just run ``find_lecture_video``
+    and got no result, to avoid a duplicate GCS listing round-trip.
+    """
     if not video_id:
         return False
 
-    existing_gcs = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=course_name)
-    if existing_gcs:
-        return False
+    if not skip_existing_check:
+        existing_gcs = gcs_storage_service.find_lecture_video(video_id=video_id, course_name=course_name)
+        if existing_gcs:
+            return False
 
     with _gcs_upload_lock:
         if video_id in _active_gcs_uploads and _active_gcs_uploads[video_id].get("status") == "UPLOADING":
@@ -923,8 +931,7 @@ def _async_upload_video_to_gcs_worker(
                     _active_gcs_uploads[video_id]["stage"] = "No stream format available"
             return
 
-        clean_cname = re.sub(r'[^a-zA-Z0-9\- ]', '', course_name.lower())
-        cslug = re.sub(r'\s+', '-', clean_cname.strip()) or "general"
+        cslug = to_gcs_course_slug(course_name)
         effective_prefix = f"courses/{cslug}/lectures"
 
         with _gcs_upload_lock:
@@ -963,6 +970,80 @@ def _async_upload_video_to_gcs_worker(
         threading.Thread(target=_cleanup, daemon=True).start()
 
 
+COMPREHENSIVE_SUMMARY_PROMPT = (
+    "Generate Full Comprehensive Summary without word limits; provide an exhaustive, in-depth academic "
+    "study guide and full synthesis grounded strictly in the transcript."
+)
+_summary_gen_locks: Dict[str, threading.Lock] = {}
+_summary_gen_locks_guard = threading.Lock()
+
+
+def _get_summary_lock(video_id: str, user_email: Optional[str]) -> threading.Lock:
+    """Per (lecture, user) lock so two summary generations never run in parallel for the same target."""
+    key = f"{video_id}:{(user_email or '').strip().lower()}"
+    with _summary_gen_locks_guard:
+        return _summary_gen_locks.setdefault(key, threading.Lock())
+
+
+def generate_and_store_comprehensive_summary(
+    video_id: str,
+    title: str,
+    cues: List[Dict[str, Any]],
+    user_email: Optional[str] = None
+) -> bool:
+    """Generate the comprehensive study guide from the FULL transcript, derive the plain-text
+    submission version, and persist both. Returns True if a summary was stored.
+
+    Deliberately bypasses the chat/RAG path: retrieval only sees a handful of top-k chunks, which
+    produces summaries that miss parts of the lecture.
+    """
+    transcript = "\n".join(
+        f"[{c.get('time') or '00:00'}] {str(c.get('text')).strip()}"
+        for c in cues
+        if str(c.get("text") or "").strip()
+    )
+    if not transcript:
+        raise ValueError(f"No transcript text available for video {video_id}.")
+
+    res = pinecone_rag_engine.generate_full_transcript_summary(
+        transcript_str=transcript,
+        lecture_title=title,
+        video_id=video_id,
+        user_original_request=COMPREHENSIVE_SUMMARY_PROMPT,
+        user_email=user_email,
+    )
+    markdown_text = (res.get("answer") or "").strip()
+    if not markdown_text:
+        return False
+
+    submission_text = ""
+    try:
+        sub_res = pinecone_rag_engine.generate_submission_version(
+            original_text=markdown_text,
+            video_id=video_id,
+            word_count=120,
+            query=COMPREHENSIVE_SUMMARY_PROMPT,
+        )
+        submission_text = sub_res.get("submission_text") or ""
+    except Exception as sub_err:
+        print(f"⚠️ [Submission Gen Notice]: {sub_err}")
+    # Falls back to a cleaned copy of the study guide if the submission LLM chain failed.
+    submission_text = pinecone_rag_engine._clean_for_submission(
+        submission_text or markdown_text, preserve_paragraphs=True
+    )
+
+    return db_manager.save_lecture_summary(
+        video_id=video_id,
+        summary_type="comprehensive",
+        markdown_text=markdown_text,
+        submission_text=submission_text,
+        citations=res.get("citations") or [],
+        word_count=len([w for w in submission_text.split() if w]),
+        model=res.get("model") or "",
+        user_email=user_email,
+    )
+
+
 def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str, str]], user_email: Optional[str] = None):
     """
     Background worker for offloading Algolia indexing, Pinecone vector upsert,
@@ -989,36 +1070,15 @@ def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str,
         # Pre-synthesize comprehensive study summary if not already created
         existing_summary = db_manager.get_lecture_summary(clean_vid, "comprehensive", user_email=user_email)
         if not existing_summary or not existing_summary.get("markdownText"):
-            print(f"⚡ [Background Auto-Summary] Synthesizing comprehensive study guide for video '{clean_vid}'...")
-            prompt = "Generate Full Comprehensive Summary without word limits; provide an exhaustive, in-depth academic study guide and full synthesis grounded strictly in the transcript."
-            res = process_chat_message(
-                user_prompt=prompt,
-                video_id=clean_vid,
-                video_title=title,
-                cues=cues,
-                user_email=user_email,
-                bypass_cache=False,
-                chat_history=[],
-                save_to_db=False
-            )
-            markdown_text = res.get("reply") or ""
-            raw_sub_text = res.get("submission_text") or markdown_text
-            submission_text = pinecone_rag_engine._clean_for_submission(raw_sub_text, preserve_paragraphs=True)
-            word_count = len([w for w in submission_text.split() if w])
-            citations = res.get("citations") or []
-            model = res.get("model") or ""
-            if markdown_text:
-                db_manager.save_lecture_summary(
-                    video_id=clean_vid,
-                    summary_type="comprehensive",
-                    markdown_text=markdown_text,
-                    submission_text=submission_text,
-                    citations=citations,
-                    word_count=word_count,
-                    model=model,
-                    user_email=user_email
-                )
-                print(f"✅ [Background Auto-Summary] Successfully stored comprehensive summary for video '{clean_vid}'.")
+            lock = _get_summary_lock(clean_vid, user_email)
+            # A user-triggered generation may already be running; don't duplicate the LLM work.
+            if lock.acquire(blocking=False):
+                try:
+                    print(f"⚡ [Background Auto-Summary] Synthesizing comprehensive study guide for video '{clean_vid}'...")
+                    generate_and_store_comprehensive_summary(clean_vid, title, cues, user_email)
+                    print(f"✅ [Background Auto-Summary] Successfully stored comprehensive summary for video '{clean_vid}'.")
+                finally:
+                    lock.release()
     except Exception as sum_err:
         logger.warning(f"[Background Auto-Summary Notice] {clean_vid}: {sum_err}")
 
@@ -1037,6 +1097,8 @@ def process_lecture_import(
     saved = db_manager.get_saved_video(clean_vid)
     if saved:
         print(f"[DB Cache Hit] Video '{clean_vid}' found in database. Skipping transcript and summary re-generation.")
+        # Shallow copy so per-request fields (signed URLs, upload status) don't leak into the shared L1 cache entry.
+        saved = dict(saved)
         saved["cached"] = True
         saved_cues = saved.get("cues") or []
         saved["transcript_available"] = bool(saved_cues)
@@ -1048,12 +1110,36 @@ def process_lecture_import(
         saved["course_name"] = course_title
         saved["course_slug"] = to_course_slug(course_title)
         clean_email = email.strip() if isinstance(email, str) else None
-        drive_url = db_manager.get_drive_folder_url(clean_vid, clean_email)
+
+        def _db_work() -> Optional[str]:
+            # Drive URL lookup -> user library upsert -> Redis invalidation (order matters).
+            d_url = db_manager.get_drive_folder_url(clean_vid, clean_email)
+            if clean_email:
+                db_manager.record_user_lecture(
+                    user_email=clean_email,
+                    video_id=clean_vid,
+                    title=saved["title"],
+                    duration=saved.get("duration", "Unknown"),
+                    source_url=saved.get("sourceUrl", f"https://vimeo.com/{clean_vid}"),
+                    course_name=course_title,
+                    drive_folder_url=d_url
+                )
+                if redis_cache:
+                    redis_cache.invalidate_user(clean_email)
+            return d_url
+
+        # Postgres and GCS are independent network round-trips: run them concurrently.
+        db_future = _lecture_io_executor.submit(_db_work)
+        gcs_future = _lecture_io_executor.submit(
+            gcs_storage_service.find_lecture_video, video_id=clean_vid, course_name=course_title
+        )
+        gcs_video = gcs_future.result()
+        drive_url = db_future.result()
+
         if drive_url:
             saved["drive_folder_url"] = drive_url
             saved["driveFolderUrl"] = drive_url
         # Check if self-hosted video is stored in GCS
-        gcs_video = gcs_storage_service.find_lecture_video(video_id=clean_vid, course_name=course_title)
         if gcs_video:
             saved["gcs_video_url"] = gcs_video["view_url"]
             saved["gcsVideoUrl"] = gcs_video["view_url"]
@@ -1070,23 +1156,11 @@ def process_lecture_import(
                 course_name=course_title,
                 cues=saved.get("cues", []),
                 player_config=player_config,
-                referer=lms_page_url
+                referer=lms_page_url,
+                skip_existing_check=True
             )
             saved["is_uploading"] = is_uploading
             saved["upload_status"] = "UPLOADING" if is_uploading else "IDLE"
-
-        if clean_email:
-            db_manager.record_user_lecture(
-                user_email=clean_email,
-                video_id=clean_vid,
-                title=saved["title"],
-                duration=saved.get("duration", "Unknown"),
-                source_url=saved.get("sourceUrl", f"https://vimeo.com/{clean_vid}"),
-                course_name=course_title,
-                drive_folder_url=drive_url
-            )
-            if redis_cache:
-                redis_cache.invalidate_user(clean_email)
         return saved
 
     # 2. Extract video config: use provided player_config or fetch fresh from Vimeo
@@ -1163,8 +1237,9 @@ def process_lecture_import(
         if redis_cache:
             redis_cache.invalidate_user(email.strip())
 
-    drive_url = db_manager.get_drive_folder_url(clean_vid, email)
+    drive_future = _lecture_io_executor.submit(db_manager.get_drive_folder_url, clean_vid, email)
     gcs_video = gcs_storage_service.find_lecture_video(video_id=clean_vid, course_name=derived_course)
+    drive_url = drive_future.result()
     gcs_url = gcs_video["view_url"] if gcs_video else None
     is_uploading = False
     if not gcs_video:
@@ -1174,7 +1249,8 @@ def process_lecture_import(
             course_name=derived_course,
             cues=cues,
             player_config=config,
-            referer=lms_page_url
+            referer=lms_page_url,
+            skip_existing_check=True
         )
 
     return {
@@ -1697,9 +1773,10 @@ def process_chat_message(
             }
 
     # 2. Conversational RAG execution
+    # Hydrate the process-local chunk store only. Pinecone vectors and the Algolia index are written
+    # at import time (and on cue edits), so re-upserting them per request is redundant network I/O.
     if cues is not None and len(cues) > 0 and len(pinecone_rag_engine.local_chunks) == 0:
-        pinecone_rag_engine.ingest_transcript(vid, title, cues)
-        algolia_service.ingest_cues(vid, title, cues)
+        pinecone_rag_engine.ingest_transcript(vid, title, cues, upsert=False)
 
     try:
         print("🔍 [Chat Engine] Executing conversational RAG pipeline")
@@ -1929,7 +2006,7 @@ def get_lecture_summaries_endpoint(
     user_email: Optional[str] = Query(None, description="User email for personalized summaries")
 ):
     """
-    Retrieve all saved lecture summaries (15_min, comprehensive) for a video.
+    Retrieve all saved lecture summaries for a video, keyed by summary type.
     """
     vid = str(video_id).strip()
     if not vid:
@@ -1947,16 +2024,15 @@ def get_lecture_summaries_endpoint(
 @app.post("/api/summary/generate")
 def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
     """
-    Generate or regenerate a dedicated lecture summary (15_min or comprehensive)
-    and persist it to lecturescribe_lecture_summaries without polluting chat logs.
+    Generate or regenerate the comprehensive lecture summary from the full transcript and persist it
+    to lecturescribe_lecture_summaries without touching chat logs or the chat/RAG pipeline.
     """
     vid = str(req.video_id).strip()
     if not vid or vid == "active":
         raise HTTPException(status_code=400, detail="A valid video_id is required.")
 
-    summary_type = req.summary_type.strip().lower()
-    if summary_type not in ["15_min", "comprehensive"]:
-        summary_type = "15_min" if "15" in summary_type else "comprehensive"
+    # Comprehensive is the only supported summary type; any legacy value (e.g. "15_min") maps to it.
+    summary_type = "comprehensive"
 
     # Return existing summary if cached and bypass_cache is False
     if not req.bypass_cache:
@@ -1975,43 +2051,27 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
     if not cues:
         raise HTTPException(status_code=404, detail=f"No cues found for video {vid} to generate summary.")
 
-    print(f"📥 [Summary API] Received /api/summary/generate for video '{vid}' | Type: {summary_type} | Bypass Cache: {req.bypass_cache}")
-    print("⏩ [Pinecone Engine] Bypassing vector upsert for /api/summary/generate — summary operates directly on chronological transcript cues.")
+    print(f"📥 [Summary API] Received /api/summary/generate for video '{vid}' | Bypass Cache: {req.bypass_cache} | Cues: {len(cues)}")
 
-    prompt = (
-        "Create a summary for a 15 min read"
-        if summary_type == "15_min"
-        else "Generate Full Comprehensive Summary without word limits; provide an exhaustive, in-depth academic study guide and full synthesis grounded strictly in the transcript."
-    )
+    lock = _get_summary_lock(vid, req.user_email)
+    waited = lock.locked()
+    with lock:
+        if waited:
+            # Another generation (e.g. the import-time background job) for this lecture/user just
+            # finished while we waited; reuse its result instead of paying for a second LLM run.
+            fresh = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
+            if fresh and fresh.get("markdownText"):
+                return {"status": "success", "video_id": vid, "summary": fresh, "cached": True}
+        try:
+            stored = generate_and_store_comprehensive_summary(vid, title, cues, req.user_email)
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"❌ [Summary API] Generation failed for '{vid}': {e}")
+            raise HTTPException(status_code=502, detail=f"Summary generation failed: {e}")
 
-    res = process_chat_message(
-        user_prompt=prompt,
-        video_id=vid,
-        video_title=title,
-        cues=cues,
-        user_email=req.user_email,
-        bypass_cache=req.bypass_cache or False,
-        chat_history=[],
-        save_to_db=False  # Do not pollute chat logs!
-    )
-
-    markdown_text = res.get("reply") or ""
-    raw_sub_text = res.get("submission_text") or markdown_text
-    submission_text = pinecone_rag_engine._clean_for_submission(raw_sub_text, preserve_paragraphs=True)
-    word_count = len([w for w in submission_text.split() if w])
-    citations = res.get("citations") or []
-    model = res.get("model") or ""
-
-    db_manager.save_lecture_summary(
-        video_id=vid,
-        summary_type=summary_type,
-        markdown_text=markdown_text,
-        submission_text=submission_text,
-        citations=citations,
-        word_count=word_count,
-        model=model,
-        user_email=req.user_email
-    )
+    if not stored:
+        raise HTTPException(status_code=502, detail="Summary generation returned no content.")
 
     saved_record = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
     return {
@@ -2582,9 +2642,8 @@ def presign_resource_upload(req: PresignUploadRequest):
     if not req.filename or not req.filename.strip():
         raise HTTPException(status_code=400, detail="Filename cannot be empty.")
 
-    clean_course = (req.course_name or "general").strip().lower().replace(" ", "-")
     blob_name = gcs_storage_service.get_resource_blob_path(
-        course_slug=clean_course,
+        course_slug=req.course_name, # type: ignore
         video_id=req.video_id,
         filename=req.filename.strip()
     )
@@ -3440,9 +3499,8 @@ def upload_lecture_bundle_to_gcs(req: GCSUploadRequest):
     # Consolidate prefix into unified course hierarchy: courses/<course-slug>/lectures
     effective_prefix = req.folder_prefix
     if not effective_prefix or effective_prefix == "lectures":
-        raw_cname = (saved.get("course_name") if saved else None) or extract_course_name(title)
-        clean_cname = re.sub(r'[^a-zA-Z0-9\- ]', '', raw_cname.lower())
-        cslug = re.sub(r'\s+', '-', clean_cname.strip()) or "general"
+        raw_cname = (saved.get("course_name") if saved else None) or req.course_name or extract_course_name(title)
+        cslug = to_gcs_course_slug(raw_cname)
         effective_prefix = f"courses/{cslug}/lectures"
 
     result = gcs_storage_service.upload_lecture_bundle(

@@ -12,10 +12,25 @@ class TestGCSStorageService(unittest.TestCase):
         self.assertEqual(GCSStorageService.clean_filename("../../../etc/passwd"), "passwd")
         self.assertEqual(GCSStorageService.clean_filename("lecture#1 [notes]!.docx"), "lecture_1__notes__.docx")
 
+    def test_to_gcs_course_slug(self):
+        from backend.gcs_storage import to_gcs_course_slug
+        self.assertEqual(to_gcs_course_slug("1.1 Applied Mathematics for Data Science and AI"), "applied-mathemartics-for-data-science-and-ai")
+        self.assertEqual(to_gcs_course_slug("11-applied-mathematics-for-data-science-and-ai"), "applied-mathemartics-for-data-science-and-ai")
+        self.assertEqual(to_gcs_course_slug("1.4 Introduction to Computer Vision"), "introduction-to-computer-vision")
+        self.assertEqual(to_gcs_course_slug("14-introduction-to-computer-vision"), "introduction-to-computer-vision")
+        self.assertEqual(to_gcs_course_slug("1.7 Introduction to AI in Healthcare"), "introduction-to-ai-in-healthcare")
+        self.assertEqual(to_gcs_course_slug("1.9 Data Science Lab"), "data-science-lab")
+        self.assertEqual(to_gcs_course_slug("Machine-Learning-101"), "machine-learning-101")
+        self.assertEqual(to_gcs_course_slug(None), "general")
+
     def test_get_resource_blob_path(self):
         path = GCSStorageService.get_resource_blob_path("Machine-Learning-101", "123456", "slides.pdf")
         self.assertTrue(path.startswith("courses/machine-learning-101/lectures/123456/"))
         self.assertTrue(path.endswith("_slides.pdf"))
+
+        numbered_path = GCSStorageService.get_resource_blob_path("1.4 Introduction to Computer Vision", "999888", "notes.pdf")
+        self.assertTrue(numbered_path.startswith("courses/introduction-to-computer-vision/lectures/999888/"))
+        self.assertTrue(numbered_path.endswith("_notes.pdf"))
 
         general_path = GCSStorageService.get_resource_blob_path("General", None, "syllabus.docx")
         self.assertTrue(general_path.startswith("courses/general/general/"))

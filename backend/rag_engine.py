@@ -115,8 +115,13 @@ class Llama3PineconeRAGStore:
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
 
-    def ingest_transcript(self, video_id: str, video_title: str, cues: List[Dict[str, str]], window_size: int = 8, overlap: int = 3) -> int:
-        """Chunk transcript cues & upsert embeddings to Pinecone."""
+    def ingest_transcript(self, video_id: str, video_title: str, cues: List[Dict[str, str]], window_size: int = 8, overlap: int = 3, upsert: bool = True) -> int:
+        """Chunk transcript cues & upsert embeddings to Pinecone.
+
+        With ``upsert=False`` only the in-memory chunk store is (re)built and no network call is
+        made. Use it to lazily hydrate the process-local store for a lecture whose vectors were
+        already written at import time (vector ids and embeddings are deterministic).
+        """
         if self.video_id == video_id and len(self.local_chunks) > 0:
             return len(self.local_chunks)
 
@@ -144,7 +149,6 @@ class Llama3PineconeRAGStore:
             if chunk_text.strip():
                 chunk_count += 1
                 vec_id = f"vimeo-{video_id}-chunk-{chunk_count}"
-                embedding = self._generate_embedding(chunk_text.strip())
 
                 metadata = {
                     "video_id": video_id,
@@ -163,13 +167,14 @@ class Llama3PineconeRAGStore:
                 }
                 self.local_chunks.append(chunk_obj)
 
-                vectors_to_upsert.append({
-                    "id": vec_id,
-                    "values": embedding,
-                    "metadata": metadata
-                })
+                if upsert:
+                    vectors_to_upsert.append({
+                        "id": vec_id,
+                        "values": self._generate_embedding(chunk_text.strip()),
+                        "metadata": metadata
+                    })
 
-        if self.index and vectors_to_upsert:
+        if upsert and self.index and vectors_to_upsert:
             try:
                 batch_size = 100
                 for b_i in range(0, len(vectors_to_upsert), batch_size):
@@ -788,7 +793,7 @@ class Llama3PineconeRAGStore:
                 except Exception:
                     pass
             if target_cues:
-                self.ingest_transcript(target_video_id, lecture_title, target_cues)
+                self.ingest_transcript(target_video_id, lecture_title, target_cues, upsert=False)
 
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
@@ -1519,6 +1524,7 @@ class Llama3PineconeRAGStore:
         video_id: str,
         user_original_request: str,
         user_email: Optional[str] = None,
+        allow_sections_fallback: bool = False,
     ) -> Dict[str, Any]:
         """SUMMARY-branch completion: Uncut, chronological context processed by Groq or Gemini."""
         import requests
@@ -1557,9 +1563,32 @@ class Llama3PineconeRAGStore:
         word_count = len(transcript_str.split())
         print(f"📊 [Summary Engine] Lecture transcript length: ~{word_count} words across {len(transcript_str.splitlines())} cues")
 
-        # 1. Groq - only if transcript fits safely within TPM limits (< 25,000 words)
-        if groq_key and word_count <= 25000:
-            for g_model in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+        # Rough token estimate (~4 chars/token) plus the completion budget, since Groq's TPM/ITPM
+        # limits count both. Models whose per-minute limit is below this are skipped up front instead
+        # of burning a round trip on a guaranteed HTTP 413.
+        est_prompt_tokens = (len(system_prompt) + len(user_prompt)) // 4
+        groq_models = [
+            # (model, per-minute token limit on the on-demand tier; override via GROQ_TPM_LIMIT)
+            ("openai/gpt-oss-120b", int(os.getenv("GROQ_TPM_LIMIT", "8000"))),
+            ("qwen/qwen3.8-27b", int(os.getenv("GROQ_ITPM_LIMIT_QWEN", "7000"))),
+            ("openai/gpt-oss-20b", int(os.getenv("GROQ_TPM_LIMIT", "8000"))),
+        ]
+        groq_completion_budget = 8192
+
+        # 1. Groq - only for models whose limits can actually fit this transcript. For TPM-limited
+        # models input and max_tokens both count, so the completion budget is sized to what is left.
+        if groq_key:
+            for g_model, g_limit in groq_models:
+                if "qwen" in g_model:
+                    # ITPM limit applies to input tokens only.
+                    fits = est_prompt_tokens <= g_limit
+                    completion_budget = groq_completion_budget
+                else:
+                    completion_budget = min(groq_completion_budget, g_limit - est_prompt_tokens - 300)
+                    fits = completion_budget >= 2500
+                if not fits:
+                    print(f"⏭️ [Summary Engine] Skipping Groq {g_model}: ~{est_prompt_tokens} prompt tokens don't fit its {g_limit} tokens/min limit.")
+                    continue
                 print(f"🚀 [Summary Engine] Dispatching to Groq {g_model}...")
                 t_groq_start = time.time()
                 try:
@@ -1570,7 +1599,7 @@ class Llama3PineconeRAGStore:
                             {"role": "user", "content": user_prompt}
                         ],
                         "temperature": 0.2,
-                        "max_tokens": 8192
+                        "max_tokens": completion_budget
                     }
                     groq_headers = {
                         "Authorization": f"Bearer {groq_key}",
@@ -1591,37 +1620,51 @@ class Llama3PineconeRAGStore:
                         print(f"⚠️ [Groq Summary Notice] Groq {g_model} returned HTTP {r.status_code}: {r.text[:180]}. Cascading...")
                 except Exception as ge:
                     print(f"⚠️ [Groq Summary Notice] Error with {g_model} ({ge}). Cascading...")
-        elif groq_key and word_count > 25000:
-            print(f"🚀 [Summary Engine] Lecture context is large (~{word_count} words). Directing straight to Google Gemini 3.8 Flash (1M+ context window)...")
 
-        # 2. Google Gemini
+        # 2. Google Gemini (1M-token context). Transient 429/5xx ("high demand") are retried with
+        # backoff, then the next model is tried, before giving up.
         if gemini_key:
-            candidate_models = ["gemini-3.8-flash"]
+            candidate_models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash"]
             payload = {
                 "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192}
+                # Thinking-capable models spend part of this budget on reasoning, so leave headroom.
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 16384}
             }
             headers = {"Content-Type": "application/json"}
+            retry_delays = [2.0, 5.0]
 
             for model_name in candidate_models:
                 api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
-                t_gem_start = time.time()
-                print(f"🚀 [Summary Engine] Dispatching to Google {model_name}...")
-                try:
-                    resp = requests.post(api_url, headers=headers, json=payload, timeout=90)
+                for attempt in range(len(retry_delays) + 1):
+                    t_gem_start = time.time()
+                    print(f"🚀 [Summary Engine] Dispatching to Google {model_name} (attempt {attempt + 1})...")
+                    try:
+                        resp = requests.post(api_url, headers=headers, json=payload, timeout=120)
+                    except Exception as e:
+                        print(f"⚠️ [Gemini Summary Notice] {model_name} request error ({e})")
+                        break
                     if resp.status_code == 200:
-                        res_data = resp.json()
-                        final_answer = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        gem_dur = time.time() - t_gem_start
-                        print(f"✅ [Summary Engine] Google {model_name} completed in {gem_dur:.2f}s")
-                        return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
-                    else:
-                        print(f"⚠️ [Gemini Summary Notice] Google {model_name} returned HTTP {resp.status_code}: {resp.text[:180]}")
-                except Exception as e:
-                    print(f"⚠️ [Gemini Summary Notice] Error ({e})")
-        # 3. Fallback: Synthesize from saved summary sections for this specific video
-        if target_video_id and target_video_id != "active":
+                        candidate = (resp.json().get("candidates") or [{}])[0]
+                        parts = (candidate.get("content") or {}).get("parts") or []
+                        final_answer = "".join(p.get("text", "") for p in parts).strip()
+                        if final_answer:
+                            if candidate.get("finishReason") == "MAX_TOKENS":
+                                print(f"⚠️ [Gemini Summary Notice] {model_name} hit the output token limit; summary may be cut off.")
+                            gem_dur = time.time() - t_gem_start
+                            print(f"✅ [Summary Engine] Google {model_name} completed in {gem_dur:.2f}s")
+                            return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
+                        print(f"⚠️ [Gemini Summary Notice] {model_name} returned an empty answer (finishReason={candidate.get('finishReason')}).")
+                        break
+                    print(f"⚠️ [Gemini Summary Notice] Google {model_name} returned HTTP {resp.status_code}: {resp.text[:180]}")
+                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < len(retry_delays):
+                        time.sleep(retry_delays[attempt])
+                        continue
+                    break
+
+        # 3. Optional last resort: chapter outline from stored summary sections. Off by default because
+        # a short chapter outline must never be stored as if it were the comprehensive study guide.
+        if allow_sections_fallback and target_video_id and target_video_id != "active":
             try:
                 from backend.database import db_manager
                 saved = db_manager.get_saved_video(target_video_id)

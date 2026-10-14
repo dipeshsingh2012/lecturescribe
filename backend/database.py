@@ -64,10 +64,43 @@ POSTGRES_URL = os.getenv("DATABASE_URL")
 
 try:
     import psycopg2
+    import psycopg2.extensions
     from psycopg2.extras import RealDictCursor, execute_values
     HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
+
+import threading
+
+# Max number of idle connections kept warm for reuse; connections above this are really closed.
+_PG_POOL_MAX_IDLE = int(os.getenv("PG_POOL_MAX_IDLE", "10"))
+# Idle connections older than this are pinged (SELECT 1) before reuse to detect server-side drops.
+_PG_POOL_PING_AFTER_SECONDS = float(os.getenv("PG_POOL_PING_AFTER_SECONDS", "30"))
+
+if HAS_PSYCOPG2:
+    class _PooledConnection(psycopg2.extensions.connection):
+        """psycopg2 connection whose ``close()`` returns it to the owning manager's pool.
+
+        Opening a fresh TLS connection to a remote (e.g. Neon) Postgres costs ~1-3s, and every
+        DB helper here follows ``conn = self._get_connection() ... finally: conn.close()``.
+        Overriding ``close()`` makes all of those call sites reuse warm connections transparently.
+        """
+        _pool_owner = None
+        _last_released = 0.0
+
+        def close(self):
+            owner = self._pool_owner
+            if owner is not None and not self.closed:
+                owner._release_connection(self)
+                return
+            super().close()
+
+        def _really_close(self):
+            self._pool_owner = None
+            try:
+                super().close()
+            except Exception:
+                pass
 
 
 class RelationalDBManager:
@@ -110,11 +143,89 @@ class RelationalDBManager:
         return os.getenv("DATABASE_URL")
 
     def _get_connection(self):
-        """Create and return a new PostgreSQL connection with RealDictCursor."""
+        """Return a PostgreSQL connection with RealDictCursor, reusing a warm pooled one when possible.
+
+        Callers keep the existing ``conn.close()`` pattern; for pooled connections ``close()``
+        hands the connection back to the idle pool instead of tearing down the TLS session.
+        """
         url = self.postgres_url
         if not url:
             raise ValueError("DATABASE_URL is not set.")
-        return psycopg2.connect(url, cursor_factory=RealDictCursor, connect_timeout=5)
+
+        pool_lock = self.__dict__.setdefault("_pg_pool_lock", threading.Lock())
+        with pool_lock:
+            idle = self.__dict__.setdefault("_pg_pool_idle", [])
+            # Drop pool if URL changed or we are in a forked child (sockets must not be shared).
+            if self.__dict__.get("_pg_pool_url") != url or self.__dict__.get("_pg_pool_pid") != os.getpid():
+                stale = list(idle)
+                idle.clear()
+                self._pg_pool_url = url
+                same_process = self.__dict__.get("_pg_pool_pid") == os.getpid()
+                self._pg_pool_pid = os.getpid()
+            else:
+                stale = []
+                same_process = True
+        if same_process:
+            for c in stale:
+                c._really_close()
+        elif stale:
+            # Inherited from a parent process: never close (that would terminate the parent's
+            # session over the shared socket); just keep references so GC doesn't finalize them.
+            self.__dict__.setdefault("_pg_pool_orphans", []).extend(stale)
+
+        while True:
+            with pool_lock:
+                conn = idle.pop() if idle else None
+            if conn is None:
+                break
+            if conn.closed:
+                continue
+            if time.monotonic() - conn._last_released > _PG_POOL_PING_AFTER_SECONDS:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1;")
+                    conn.rollback()
+                except Exception:
+                    conn._really_close()
+                    continue
+            return conn
+
+        conn = psycopg2.connect(
+            url,
+            cursor_factory=RealDictCursor,
+            connection_factory=_PooledConnection,
+            connect_timeout=5,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=3,
+        )
+        try:
+            conn._pool_owner = self
+        except Exception:
+            pass
+        return conn
+
+    def _release_connection(self, conn) -> None:
+        """Return a connection to the idle pool (called from ``_PooledConnection.close()``)."""
+        try:
+            if conn.closed or conn.info.transaction_status != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+                # Leave no open/aborted transaction behind for the next borrower.
+                conn.rollback()
+            if conn.autocommit:
+                conn.autocommit = False
+        except Exception:
+            conn._really_close()
+            return
+        conn._last_released = time.monotonic()
+        lock = self.__dict__.setdefault("_pg_pool_lock", threading.Lock())
+        with lock:
+            idle = self.__dict__.setdefault("_pg_pool_idle", [])
+            if os.getpid() == self.__dict__.get("_pg_pool_pid") and len(idle) < _PG_POOL_MAX_IDLE:
+                idle.append(conn)
+                return
+        conn._really_close()
+
 
     def _init_postgres_schema(self, _first_init: bool = True):
         """Initialize PostgreSQL schema for LectureScribe tables.
@@ -2544,7 +2655,12 @@ class RelationalDBManager:
                     """, (clean_email, video_id, title, duration, source_url, drive_folder_url, derived_course))
                     conn.commit()
             try:
-                self.auto_map_videos_to_user(clean_email)
+                # Full-table backfill; throttle per user so repeated lecture opens don't pay for it.
+                last_maps = self.__dict__.setdefault("_auto_map_last_run", {})
+                now_ts = time.monotonic()
+                if now_ts - last_maps.get(clean_email, -1e9) > 600:
+                    last_maps[clean_email] = now_ts
+                    self.auto_map_videos_to_user(clean_email)
             except Exception as map_err:
                 print(f"[PostgreSQL Notice] Auto-map during write skipped ({map_err}).")
             return True

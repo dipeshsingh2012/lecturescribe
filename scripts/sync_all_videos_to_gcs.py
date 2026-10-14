@@ -40,7 +40,7 @@ if REPO_ROOT not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
-from backend.gcs_storage import gcs_storage_service
+from backend.gcs_storage import gcs_storage_service, to_gcs_course_slug
 from backend.vimeo_client import (
     fetch_player_config,
     get_video_download_streams,
@@ -55,12 +55,8 @@ DEFAULT_STATE_FILE = os.path.join(REPO_ROOT, "scripts", "sync_tracking.json")
 
 
 def slugify_course(course_name: Optional[str]) -> str:
-    """Normalize course name into GCS directory slug."""
-    if not course_name:
-        return "general"
-    clean = re.sub(r'[^a-zA-Z0-9\- ]', '', course_name.lower())
-    clean = re.sub(r'\s+', '-', clean.strip())
-    return clean or "general"
+    """Normalize course name into canonical GCS directory slug."""
+    return to_gcs_course_slug(course_name)
 
 
 def load_tracking_state(state_file: str = DEFAULT_STATE_FILE) -> Dict[str, Any]:

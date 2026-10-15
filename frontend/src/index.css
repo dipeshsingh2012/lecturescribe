@@ -200,17 +200,18 @@ mark,
 .katex-display {
   display: block;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   max-width: 100%;
-  padding: 6px 2px;
-  margin: 0.5rem 0;
+  padding: 12px 6px;
+  margin: 0.85rem 0;
+  line-height: 1.45;
   scrollbar-width: thin;
   scrollbar-color: rgba(100, 116, 139, 0.4) transparent;
   -webkit-overflow-scrolling: touch;
 }
 
 .katex-display::-webkit-scrollbar {
-  height: 4px;
+  height: 5px;
 }
 
 .katex-display::-webkit-scrollbar-thumb {
@@ -226,9 +227,10 @@ p .katex,
 li .katex {
   display: inline-block;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   max-width: 100%;
-  vertical-align: middle;
+  vertical-align: baseline;
+  padding: 2px 2px;
   scrollbar-width: thin;
   scrollbar-color: rgba(100, 116, 139, 0.4) transparent;
 }
@@ -242,6 +244,29 @@ p .katex::-webkit-scrollbar-thumb,
 li .katex::-webkit-scrollbar-thumb {
   background: rgba(100, 116, 139, 0.3);
   border-radius: 3px;
+}
+
+/* Enhanced Formula Height & Typography in Lecture Summaries and Reading Views */
+.summary-markdown-container .katex-display,
+.summary-submission-container .katex-display,
+.popout-reader-wrap .katex-display {
+  font-size: 1.18em;
+  margin: 1.25rem 0;
+  padding: 16px 8px;
+  line-height: 1.5;
+  min-height: 2.2em;
+}
+
+.summary-markdown-container .katex,
+.summary-submission-container .katex,
+.popout-reader-wrap .katex {
+  font-size: 1.05em;
+}
+
+.summary-markdown-container p,
+.summary-submission-container p,
+.popout-reader-wrap p {
+  line-height: 1.8;
 }
 
 /* ==========================================================================
@@ -281,6 +306,48 @@ li .katex::-webkit-scrollbar-thumb {
   max-height: 100%;
   overflow: hidden;
   position: relative;
+  transition: flex 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Panel Expansion (VS Code / Antigravity style expand) */
+.lecture-workspace-layout.panel-expanded .lecture-player-panel {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lecture-workspace-layout.panel-expanded .lecture-tool-panel {
+  flex: 1 1 100%;
+  width: 100%;
+  max-width: 100%;
+  border-left: none;
+}
+
+.lecture-workspace-layout.panel-expanded .lecture-mobile-nav {
+  display: none !important;
+}
+
+/* Reading Mode Typography for Expanded Summary */
+.summary-markdown-container.expanded-reader,
+.summary-submission-container.expanded-reader {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 36px 48px;
+  font-size: 1rem;
+  line-height: 1.8;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+}
+
+@media (max-width: 899px) {
+  .summary-markdown-container.expanded-reader,
+  .summary-submission-container.expanded-reader {
+    padding: 20px 18px;
+    font-size: 0.95rem;
+  }
 }
 
 /* Lecture Title */

@@ -390,7 +390,7 @@ class RelationalDBManager:
                             video_id VARCHAR(64),
                             course_name VARCHAR(255) NOT NULL,
                             user_email VARCHAR(255) NOT NULL,
-                            title VARCHAR(255) NOT NULL,
+                            title TEXT NOT NULL,
                             filename VARCHAR(255) NOT NULL,
                             blob_name VARCHAR(512),
                             file_type VARCHAR(32) NOT NULL,
@@ -487,8 +487,8 @@ class RelationalDBManager:
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_readings (
                             id SERIAL PRIMARY KEY,
                             course_name VARCHAR(255) NOT NULL,
-                            title VARCHAR(255) NOT NULL,
-                            author VARCHAR(255),
+                            title TEXT NOT NULL,
+                            author TEXT,
                             edition VARCHAR(100),
                             reading_type VARCHAR(32) DEFAULT 'book',
                             category VARCHAR(64) DEFAULT 'recommended',
@@ -505,6 +505,10 @@ class RelationalDBManager:
                         ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS embed_url TEXT;
                         ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS reader_type VARCHAR(64) DEFAULT 'embed';
                         ALTER TABLE lecturescribe_course_readings ADD COLUMN IF NOT EXISTS is_lending BOOLEAN DEFAULT FALSE;
+                        ALTER TABLE lecturescribe_course_readings ALTER COLUMN title TYPE TEXT;
+                        ALTER TABLE lecturescribe_course_readings ALTER COLUMN author TYPE TEXT;
+                        ALTER TABLE lecturescribe_resources ALTER COLUMN title TYPE TEXT;
+                        ALTER TABLE lecturescribe_course_notes ALTER COLUMN title TYPE TEXT;
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_chat_logs (
                             id SERIAL PRIMARY KEY,
@@ -630,7 +634,7 @@ class RelationalDBManager:
                             note_id VARCHAR(128) UNIQUE NOT NULL,
                             course_name VARCHAR(255) NOT NULL,
                             user_email VARCHAR(255) NOT NULL,
-                            title VARCHAR(255) NOT NULL DEFAULT 'Untitled Note',
+                            title TEXT NOT NULL DEFAULT 'Untitled Note',
                             blob_name VARCHAR(512) NOT NULL,
                             file_size_bytes BIGINT DEFAULT 0,
                             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

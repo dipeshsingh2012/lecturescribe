@@ -126,3 +126,44 @@ class TestReadingEndpoints(unittest.TestCase):
         res_list = self.client.get(f"/api/course/{self.test_course}/readings")
         self.assertTrue(any("Sepsis-3" in r["title"] for r in res_list.json()["readings"]))
 
+    def test_add_course_reading_lengthy_title(self):
+        lengthy_title = (
+            "A Comprehensive Survey and Systematic Taxonomy of Modern Deep Learning Architectures "
+            "for Multimodal Representation Learning, Cross-Attention Transformer Networks, and Generative "
+            "Diffusion Models in Computational Neuroscience and Bioinformatics: Methods, Benchmarks, "
+            "Open Challenges, and Future Prospects Across Large-Scale Heterogeneous Academic Repositories"
+        )
+        self.assertGreater(len(lengthy_title), 255)
+        lengthy_author = (
+            "Professor Jonathan Alexander Worthington-Smythe, Dr. Catherine Elizabeth Montgomery-Dupont, "
+            "Dr. Benjamin Harrison-Fitzgerald, Dr. Anastasia Romanovna Rostova, and The International Consortium "
+            "for Deep Learning in Biological Computing Research"
+        )
+        self.assertGreater(len(lengthy_author), 200)
+
+        paper_payload = {
+            "title": lengthy_title,
+            "author": lengthy_author,
+            "edition": "2026",
+            "reading_type": "journal",
+            "category": "reference",
+            "journal": "Nature Machine Intelligence",
+            "doi": "10.1038/s42256-026-00999-x",
+            "is_open_access": True
+        }
+        res = self.client.post(
+            f"/api/course/{self.test_course}/add-reading",
+            json=paper_payload
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("reading", data)
+        self.assertEqual(data["reading"]["title"], lengthy_title)
+        self.assertEqual(data["reading"]["author"], lengthy_author)
+
+        # Verify it appears in course readings query
+        res_list = self.client.get(f"/api/course/{self.test_course}/readings")
+        self.assertEqual(res_list.status_code, 200)
+        self.assertTrue(any(r["title"] == lengthy_title for r in res_list.json()["readings"]))
+

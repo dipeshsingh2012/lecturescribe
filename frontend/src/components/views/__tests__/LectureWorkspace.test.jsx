@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import LectureWorkspace from '../LectureWorkspace';
 import { LMS_THEMES } from '../../../store/themeStore';
 
@@ -195,6 +195,42 @@ describe('LectureWorkspace', () => {
     );
 
     expect(screen.getAllByText('Weekly Lecture Notes').length).toBeGreaterThan(0);
+  });
+
+  it('renders LectureSummary and toggles panel-expanded class when expand is clicked and collapses on Escape', () => {
+    const summaryHook = {
+      currentSummary: {
+        id: 1,
+        markdownText: '# Introduction',
+        submissionText: 'Intro summary prose'
+      },
+      viewMode: 'study',
+      setViewMode: vi.fn(),
+      loading: false,
+      generating: false,
+      transcriptAvailable: true,
+      copyText: vi.fn(),
+      generateSummary: vi.fn()
+    };
+
+    const { container } = render(
+      <LectureWorkspace
+        {...baseProps}
+        activeTab="summary"
+        summaryHook={summaryHook}
+      />
+    );
+
+    const layout = container.querySelector('.lecture-workspace-layout');
+    expect(layout).not.toHaveClass('panel-expanded');
+
+    const expandBtn = screen.getByRole('button', { name: /Expand reading view/i });
+    fireEvent.click(expandBtn);
+    expect(layout).toHaveClass('panel-expanded');
+
+    // Press Escape to restore
+    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' });
+    expect(layout).not.toHaveClass('panel-expanded');
   });
 });
 

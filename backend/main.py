@@ -91,6 +91,12 @@ from backend.transcript_correction import (
     review_transcript_cues,
     explain_selected_transcript_text,
 )
+from backend.podcast_service import (
+    get_podcast_metadata,
+    create_or_refresh_podcast,
+    trigger_background_podcast_generation,
+    PODCASTS_DIR,
+)
 
 _TRANSCRIPTION_JOB_ID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -1075,8 +1081,15 @@ def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str,
             if lock.acquire(blocking=False):
                 try:
                     print(f"⚡ [Background Auto-Summary] Synthesizing comprehensive study guide for video '{clean_vid}'...")
-                    generate_and_store_comprehensive_summary(clean_vid, title, cues, user_email)
+                    summary_record = generate_and_store_comprehensive_summary(clean_vid, title, cues, user_email)
                     print(f"✅ [Background Auto-Summary] Successfully stored comprehensive summary for video '{clean_vid}'.")
+                    if summary_record and summary_record.get("markdownText"):
+                        trigger_background_podcast_generation(
+                            video_id=clean_vid,
+                            title=title,
+                            text=summary_record.get("markdownText"),
+                            mode="study"
+                        )
                 finally:
                     lock.release()
     except Exception as sum_err:
@@ -2073,6 +2086,14 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
     if not stored:
         raise HTTPException(status_code=502, detail="Summary generation returned no content.")
 
+    if stored and stored.get("markdownText"):
+        trigger_background_podcast_generation(
+            video_id=vid,
+            title=title,
+            text=stored.get("markdownText"),
+            mode="study"
+        )
+
     saved_record = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
     return {
         "status": "success",
@@ -2080,6 +2101,117 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
         "summary": saved_record,
         "cached": False
     }
+
+
+# ==============================================================================
+# Lecture Podcast & Single-Narrator Audio Recap Endpoints
+# ==============================================================================
+
+class GeneratePodcastRequest(BaseModel):
+    video_id: str
+    title: Optional[str] = "Lecture Summary"
+    text: Optional[str] = None
+    mode: Optional[str] = "study"
+    force_refresh: Optional[bool] = False
+    user_email: Optional[str] = None
+
+
+@app.get("/api/lectures/{video_id}/podcast")
+def get_lecture_podcast_endpoint(
+    video_id: str,
+    mode: str = Query("study", description="Mode: 'study' for full summary, 'submission' for assignment prose")
+):
+    """Retrieve metadata and stream URL for an existing lecture podcast audio recap."""
+    clean_vid = str(video_id).strip()
+    if not clean_vid or clean_vid == "active":
+        raise HTTPException(status_code=400, detail="Valid video_id is required.")
+
+    meta = get_podcast_metadata(clean_vid, mode=mode)
+    if not meta or not meta.get("exists"):
+        return {
+            "status": "success",
+            "data": {
+                "exists": False,
+                "video_id": clean_vid,
+                "mode": mode,
+                "status": "none"
+            }
+        }
+
+    return {
+        "status": "success",
+        "data": meta
+    }
+
+
+@app.post("/api/lectures/{video_id}/podcast/generate")
+def generate_lecture_podcast_endpoint(
+    video_id: str,
+    req: GeneratePodcastRequest
+):
+    """Generate or retrieve a single-narrator podcast audio recap using Google TTS."""
+    clean_vid = str(video_id).strip() or str(req.video_id).strip()
+    if not clean_vid or clean_vid == "active":
+        raise HTTPException(status_code=400, detail="Valid video_id is required.")
+
+    mode = "submission" if req.mode == "submission" else "study"
+    effective_text = req.text
+
+    # If text not supplied in payload, fetch from saved summary in database
+    if not effective_text:
+        saved_summary = db_manager.get_lecture_summary(clean_vid, "comprehensive", user_email=req.user_email)
+        if saved_summary:
+            if mode == "submission":
+                effective_text = saved_summary.get("submissionText") or saved_summary.get("markdownText")
+            else:
+                effective_text = saved_summary.get("markdownText")
+
+    # If still not found, check video record for outline / description
+    if not effective_text:
+        saved_vid = db_manager.get_video(clean_vid, user_email=req.user_email)
+        if saved_vid:
+            effective_text = saved_vid.get("description") or saved_vid.get("title")
+
+    if not effective_text:
+        raise HTTPException(status_code=404, detail="No summary or transcript text available to generate podcast narration.")
+
+    title = req.title or "Lecture Summary"
+    try:
+        meta = create_or_refresh_podcast(
+            video_id=clean_vid,
+            title=title,
+            text=effective_text,
+            mode=mode,
+            force_refresh=bool(req.force_refresh)
+        )
+        return {
+            "status": "success",
+            "data": meta
+        }
+    except Exception as e:
+        logger.error(f"[Podcast API] Generation error for '{clean_vid}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate podcast audio: {e}")
+
+
+@app.get("/api/lectures/{video_id}/podcast/stream")
+def stream_lecture_podcast_endpoint(
+    video_id: str,
+    mode: str = Query("study", description="Mode: 'study' or 'submission'")
+):
+    """Stream the generated MP3 audio file for the lecture podcast."""
+    clean_vid = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(video_id).strip())
+    clean_mode = "submission" if mode == "submission" else "study"
+    mp3_path = PODCASTS_DIR / f"{clean_vid}_{clean_mode}.mp3"
+
+    if not mp3_path.exists() or mp3_path.stat().st_size == 0:
+        raise HTTPException(status_code=404, detail="Podcast audio not found. Please generate it first.")
+
+    return FileResponse(
+        path=str(mp3_path),
+        media_type="audio/mpeg",
+        filename=f"{clean_vid}_{clean_mode}_podcast.mp3",
+        headers={"Accept-Ranges": "bytes"}
+    )
 
 
 # ==============================================================================

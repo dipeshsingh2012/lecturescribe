@@ -27,6 +27,7 @@ export default function MarkdownWithTimestamps({
       return (
         <button
           key={key}
+          data-timestamp={ts}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -58,6 +59,7 @@ export default function MarkdownWithTimestamps({
     return (
       <button
         key={key}
+        data-timestamp={ts}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();

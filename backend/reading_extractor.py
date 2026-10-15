@@ -19,7 +19,7 @@ import concurrent.futures
 import asyncio
 import math
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 
 import requests
 import httpx
@@ -34,6 +34,54 @@ OPEN_LIBRARY_API = "https://openlibrary.org/search.json"
 ARCHIVE_ORG_SEARCH_API = "https://archive.org/advancedsearch.php"
 CROSSREF_API = "https://api.crossref.org/works"
 EUROPE_PMC_API = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
+
+def extract_citation_components(query: str) -> Tuple[str, str, str]:
+    """
+    Decomposes academic queries like:
+      - 'Vaswani et al. Attention Is All You Need'
+      - 'Attention Is All You Need (Vaswani 2017)'
+      - 'He et al., Deep Residual Learning for Image Recognition'
+      - 'Designing Data-Intensive Applications by Martin Kleppmann'
+    Returns: (clean_title_or_topic, author_filter, year_filter)
+    """
+    text = query.strip()
+    if not text:
+        return "", "", ""
+
+    # 1. Strip query prefix markers
+    text = re.sub(r'^(?:paper|book|reading|journal|title|topic)\s*:\s*', '', text, flags=re.IGNORECASE).strip()
+
+    # 2. Extract 4-digit year if present (e.g., '(2017)' or standalone '2017')
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', text)
+    year = year_match.group(1) if year_match else ""
+    if year:
+        text = re.sub(rf'\b\(?{year}\)?\b', '', text).strip()
+
+    # 3. Extract author prefix with 'et al.' or 'and colleagues' (e.g., 'Vaswani et al. Attention Is All You Need')
+    author = ""
+    author_prefix_match = re.match(
+        r'^([A-Z][a-zA-Z\-\'\s]+?)\s+(?:et\s+al\.?|and\s+colleagues)\s*[,:\-–—.]*\s*(.+)$',
+        text,
+        flags=re.IGNORECASE
+    )
+    if author_prefix_match:
+        author = author_prefix_match.group(1).strip()
+        text = author_prefix_match.group(2).strip()
+    else:
+        # Check trailing author (e.g. 'Attention Is All You Need by Vaswani et al.' or 'Designing Data-Intensive Applications by Martin Kleppmann')
+        by_match = re.search(
+            r'\b(?:by|author:?)\s+([A-Z][a-zA-Z\-\'\s]+?)(?:\s+et\s+al\.?)?$',
+            text,
+            flags=re.IGNORECASE
+        )
+        if by_match:
+            author = by_match.group(1).strip()
+            text = text[:by_match.start()].strip()
+
+    # 4. Clean leftover trailing punctuation or stray quotes
+    clean_text = re.sub(r'^[\s\-–—:.,"]+|[\s\-–—:.,"]+$', '', text).strip()
+    return clean_text or query, author, year
 
 
 def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") -> Dict[str, Any]:
@@ -52,8 +100,6 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
     logger.info(f"[ReadingExtractor] Resolving digital book reader for title='{title}', author='{author}', isbn='{isbn}'")
     clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', title).strip()
     clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip()
-    lt = title.lower()
-    la = author.lower()
 
     # 1. First Priority: OpenLibrary API (curated catalog of published books + exact IA book IDs)
     try:
@@ -210,7 +256,6 @@ def resolve_digital_book_reader(title: str, author: str = "", isbn: str = "") ->
     return {}
 
 
-
 def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
     """
     Query Google Books API (free, keyless) to retrieve official cover,
@@ -220,10 +265,14 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
         logger.debug(f"[ReadingExtractor] [Google Books API] Title '{title}' too short; skipping.")
         return {}
 
-    query_parts = [f'intitle:"{title.strip()}"']
-    if author and len(author.strip()) >= 3:
-        clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip()
-        query_parts.append(f'inauthor:"{clean_author}"')
+    clean_t, parsed_author, _ = extract_citation_components(title)
+    final_author = parsed_author or author
+
+    query_parts = [f'intitle:"{clean_t.strip()}"']
+    if final_author and len(final_author.strip()) >= 3:
+        clean_author = re.sub(r'(?i)\bet al\.?\b', '', final_author).strip().split()[0]
+        if clean_author:
+            query_parts.append(f'inauthor:"{clean_author}"')
 
     query = " ".join(query_parts)
     logger.debug(f"[ReadingExtractor] [Google Books API] Querying primary: {query}")
@@ -256,7 +305,7 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
                 logger.info(f"[ReadingExtractor] [Google Books API] Primary search matched: '{vol.get('title')}' by {vol.get('authors', [])}")
                 return {
                     "matched_title": vol.get("title", title),
-                    "matched_authors": ", ".join(vol.get("authors", [])) or author,
+                    "matched_authors": ", ".join(vol.get("authors", [])) or final_author,
                     "cover_url": cover_url,
                     "preview_url": preview_url,
                     "isbn": isbn,
@@ -272,7 +321,7 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
 
     # Fallback broader title search without intitle: quotes if first attempt yielded nothing
     try:
-        clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', title).strip()
+        clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', clean_t).strip()
         logger.debug(f"[ReadingExtractor] [Google Books API] Querying fallback broader: '{clean_title}'")
         resp = requests.get(
             GOOGLE_BOOKS_API,
@@ -294,7 +343,7 @@ def fetch_google_books_metadata(title: str, author: str = "") -> Dict[str, Any]:
                 logger.info(f"[ReadingExtractor] [Google Books API] Fallback search matched: '{vol.get('title')}'")
                 return {
                     "matched_title": vol.get("title", title),
-                    "matched_authors": ", ".join(vol.get("authors", [])) or author,
+                    "matched_authors": ", ".join(vol.get("authors", [])) or final_author,
                     "cover_url": cover_url,
                     "preview_url": preview_url,
                     "isbn": "",
@@ -318,10 +367,10 @@ def fetch_crossref_metadata(title: str, author: str = "") -> Dict[str, Any]:
     if not title or len(title.strip()) < 3:
         return {}
 
-    clean_title = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', title, flags=re.IGNORECASE).strip()
-    clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip()
+    clean_title, parsed_author, _ = extract_citation_components(title)
+    final_author = parsed_author or author
 
-    query = f"{clean_title} {clean_author}".strip()
+    query = f"{clean_title} {final_author}".strip()
     try:
         resp = requests.get(
             CROSSREF_API,
@@ -342,7 +391,7 @@ def fetch_crossref_metadata(title: str, author: str = "") -> Dict[str, Any]:
                         authors_list.append(f"{given} {family}".strip() if given else family)
                     elif a.get("name"):
                         authors_list.append(a.get("name"))
-                matched_a = ", ".join(authors_list) or author
+                matched_a = ", ".join(authors_list) or final_author
                 containers = it.get("container-title") or []
                 journal = containers[0] if containers else it.get("publisher", "")
                 doi = it.get("DOI", "")
@@ -379,11 +428,13 @@ def fetch_europe_pmc_metadata(title: str, author: str = "") -> Dict[str, Any]:
     if not title or len(title.strip()) < 3:
         return {}
 
-    clean_title = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', title, flags=re.IGNORECASE).strip()
+    clean_title, parsed_author, _ = extract_citation_components(title)
+    final_author = parsed_author or author
+
     query = f'TITLE:"{clean_title}"'
-    if author:
-        clean_author = re.sub(r'(?i)\bet al\.?\b', '', author).strip().split()[0]
-        if clean_author:
+    if final_author:
+        clean_author = final_author.split()[0]
+        if clean_author and len(clean_author) >= 3:
             query += f' AUTH:"{clean_author}"'
 
     try:
@@ -398,7 +449,7 @@ def fetch_europe_pmc_metadata(title: str, author: str = "") -> Dict[str, Any]:
             if results:
                 r = results[0]
                 matched_t = (r.get("title") or clean_title).rstrip(".")
-                matched_a = r.get("authorString") or author
+                matched_a = r.get("authorString") or final_author
                 journal = r.get("journalTitle") or ""
                 year = str(r.get("pubYear") or "")
                 doi = r.get("doi") or ""
@@ -619,7 +670,7 @@ class DirectPdfResolver:
         return False
 
     @classmethod
-    def resolve_pdf(cls, candidate_url: Optional[str], arxiv_id: Optional[str] = None) -> tuple[str, str]:
+    def resolve_pdf(cls, candidate_url: Optional[str], arxiv_id: Optional[str] = None) -> Tuple[str, str]:
         """
         Returns (direct_pdf_url, reader_type).
         If authentic PDF, returns (clean_url, "pdf_direct").
@@ -700,13 +751,13 @@ class DomainRouter:
         if re.search(r'\b(clinical|patient|rct|oncology|disease|therapy|pubmed|pmcid)\b', q_lower):
             return "BIOMEDICAL"
 
-        if re.search(r'\b(transformer|neural network|algorithm|compiler|deep learning|arxiv|gpu)\b', q_lower):
+        if re.search(r'\b(transformer|neural network|algorithm|compiler|deep learning|arxiv|gpu|attention)\b', q_lower):
             return "STEM_CS"
 
         return "GENERAL"
 
     @classmethod
-    def get_providers_for_domain(cls, domain: str, query: str = "") -> tuple[List[str], List[str]]:
+    def get_providers_for_domain(cls, domain: str, query: str = "") -> Tuple[List[str], List[str]]:
         """
         Returns (dispatched_providers, excluded_providers).
         """
@@ -715,10 +766,8 @@ class DomainRouter:
         excluded: List[str] = []
 
         if domain == "STEM_CS":
-            # Primary: OpenAlex, Semantic Scholar, Crossref, Google Books (if monograph intent or general)
-            dispatched = ["openalex", "semantic_scholar", "crossref"]
-            if intent in ("monograph", "general"):
-                dispatched.append("google_books")
+            # Primary: OpenAlex, Semantic Scholar, Crossref, Google Books
+            dispatched = ["openalex", "semantic_scholar", "crossref", "google_books"]
             # HARD EXCLUSION: Europe PMC is forbidden
             excluded = ["europe_pmc"]
         elif domain == "BIOMEDICAL":
@@ -728,11 +777,21 @@ class DomainRouter:
             excluded = []
         else:
             # General / Unconstrained
-            dispatched = ["openalex", "semantic_scholar", "crossref", "europe_pmc", "google_books"]
+            dispatched = ["openalex", "semantic_scholar", "crossref", "google_books"]
             excluded = []
 
         logger.info(f"[DomainRouter] Dispatching to: {dispatched} | Excluded: {excluded} (domain={domain})")
         return dispatched, excluded
+
+
+def _classify_query_intent(query: str) -> str:
+    """Classifies user query intent into 'monograph', 'paper', or 'general'."""
+    q_lower = query.lower()
+    if re.search(r'\b(textbook|handbook|monograph|guide|introduction to|principles of|volume|edition|concepts)\b', q_lower):
+        return "monograph"
+    if re.search(r'\b(et al|jama|nejm|nature|ieee|arxiv|doi|proceedings|trial|paper|conference)\b', q_lower):
+        return "paper"
+    return "general"
 
 
 def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
@@ -740,43 +799,61 @@ def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
     Mathematically bounded composite relevance scoring function strictly in [0.0, 1.0].
     Final Score = w_lex * S_lex + w_cit * S_cit + w_rec * S_rec + w_oa * S_oa
     where sum(w_i) == 1.0.
-    Dynamically adjusts weights when abstract is missing/short (< 40 chars) to compensate
-    with citation authority (w_lex=0.25, w_cit=0.55 vs standard w_lex=0.45, w_cit=0.35).
+    Dynamically balances lexical exact-match boost, citation authority, recency, and open access.
     """
     title = record.get("title") or ""
     abstract = record.get("abstract") or ""
     synthesized = record.get("synthesized_context") or ""
 
+    clean_q, author_q, _ = extract_citation_components(query)
+    clean_q_lower = clean_q.lower().strip()
+    title_lower = title.lower().strip()
+
     is_abstract_missing = not abstract or len(abstract.strip()) < 40 or "(Note: Abstract unavailable)" in abstract or bool(synthesized and not abstract)
     if is_abstract_missing:
-        w_lex = 0.25
-        w_cit = 0.55
+        w_lex = 0.40
+        w_cit = 0.40
         w_rec = 0.15
         w_oa = 0.05
     else:
-        w_lex = 0.45
-        w_cit = 0.35
+        w_lex = 0.50
+        w_cit = 0.30
         w_rec = 0.15
         w_oa = 0.05
 
     # 1. Normalized Lexical score S_lex clamped to [0.0, 1.0]
-    clean_q = (query or "").lower().strip()
-    q_tokens = set(re.findall(r'[a-z0-9]+', clean_q))
+    q_tokens = set(re.findall(r'[a-z0-9]+', clean_q_lower))
     stopwords = {"a", "an", "the", "and", "or", "in", "on", "at", "to", "for", "with", "by", "from", "of", "as", "is", "are", "be"}
     content_q_tokens = {t for t in q_tokens if t not in stopwords and len(t) >= 2} or q_tokens
 
     text_for_lexical = abstract if (abstract and len(abstract.strip()) >= 40) else (synthesized or title)
-    t_tokens = set(re.findall(r'[a-z0-9]+', (title or "").lower()))
+    t_tokens = set(re.findall(r'[a-z0-9]+', title_lower))
     doc_tokens = set(re.findall(r'[a-z0-9]+', (text_for_lexical or "").lower()))
+
+    norm_target = _normalize_title(clean_q)
+    norm_candidate = _normalize_title(title)
 
     if not content_q_tokens:
         s_lex = 0.0
     else:
         overlap_title = len(content_q_tokens & t_tokens) / len(content_q_tokens)
         overlap_doc = len(content_q_tokens & doc_tokens) / len(content_q_tokens)
-        s_lex = min(1.0, 0.6 * overlap_title + 0.4 * overlap_doc)
-        if clean_q and clean_q in (title or "").lower():
-            s_lex = min(1.0, s_lex + 0.2)
+        s_lex = min(1.0, 0.7 * overlap_title + 0.3 * overlap_doc)
+
+        # Exact title equality or substring match gives heavy direct bonus
+        if norm_target and norm_candidate and norm_target == norm_candidate:
+            s_lex = 1.0
+        elif clean_q_lower and (clean_q_lower in title_lower or title_lower in clean_q_lower):
+            s_lex = min(1.0, s_lex + 0.35)
+
+    # Author surname alignment boost
+    author_matches = False
+    if author_q:
+        author_tokens = _extract_author_surnames(record.get("author", ""))
+        target_surnames = {s.lower() for s in author_q.split() if len(s) >= 3}
+        if author_tokens & target_surnames:
+            author_matches = True
+            s_lex = min(1.0, s_lex + 0.25)
 
     # 2. Log-normalized citation authority S_cit in [0.0, 1.0]
     citations = max(0, int(record.get("citation_count") or 0))
@@ -796,6 +873,12 @@ def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
 
     # Composite score strictly guaranteed in [0.0, 1.0]
     final_score = (w_lex * s_lex) + (w_cit * s_cit) + (w_rec * s_rec) + (w_oa * s_oa)
+
+    # FAST-PATH OVERRIDE: Exact Title + Matching Author gets priority score
+    if norm_target and norm_candidate and norm_target == norm_candidate:
+        if author_matches or citations > 1000:
+            final_score = max(final_score, 0.95)
+
     return round(min(1.0, max(0.0, final_score)), 4)
 
 
@@ -898,8 +981,6 @@ def _are_records_equivalent(rec_a: Dict[str, Any], rec_b: Dict[str, Any]) -> boo
 
     # Exact normalized title match
     if norm_a == norm_b:
-        # Bypass the ±1 year guard whenever an exact title match with matching author surnames
-        # is confirmed (accounting for multi-year lag between arXiv preprints and journal versions).
         if author_overlap:
             return True
         if not years_compatible:
@@ -1167,7 +1248,7 @@ def _parse_openalex_items(items: list) -> List[Dict[str, Any]]:
         pub_year = str(it.get("publication_year") or "")
         doi = _normalize_doi(it.get("doi") or "")
 
-        # Extract canonical arXiv ID
+        # Extract canonical arXiv ID from ids, doi, or alternate locations
         raw_ids = it.get("ids", {})
         arxiv_raw = raw_ids.get("arxiv") or it.get("id") or (it.get("doi") or "")
         arxiv_id = extract_canonical_arxiv_id(arxiv_raw)
@@ -1180,6 +1261,16 @@ def _parse_openalex_items(items: list) -> List[Dict[str, Any]]:
         oa_obj = it.get("open_access") or {}
         is_oa = bool(oa_obj.get("is_oa", False))
         candidate_pdf = oa_obj.get("oa_url") or ""
+
+        # Check alternate locations in OpenAlex for arXiv ID and direct PDFs
+        for loc in it.get("locations", []):
+            loc_pdf = loc.get("pdf_url") or ""
+            loc_landing = loc.get("landing_page_url") or ""
+            if not arxiv_id:
+                arxiv_id = extract_canonical_arxiv_id(loc_pdf) or extract_canonical_arxiv_id(loc_landing)
+            if not candidate_pdf and loc_pdf:
+                candidate_pdf = loc_pdf
+
         direct_pdf, reader_type = DirectPdfResolver.resolve_pdf(candidate_pdf, arxiv_id)
         if direct_pdf:
             is_oa = True
@@ -1189,13 +1280,31 @@ def _parse_openalex_items(items: list) -> List[Dict[str, Any]]:
         journal = _clean_html_text(source_obj.get("display_name") or "")
         publisher = _clean_html_text(source_obj.get("host_organization_name") or "")
 
+        # REPRINT GUARD: If OpenAlex's primary_location is a later anthology reprint (e.g. 2025)
+        # of an earlier arXiv paper (e.g. '1706.03762' -> 2017), restore original year, DOI, and venue.
+        if arxiv_id and re.match(r'^\d{4}\.\d{4,5}$', arxiv_id):
+            yy = int(arxiv_id[:2])
+            arxiv_year = (1900 + yy) if yy >= 91 else (2000 + yy)
+            if not pub_year.isdigit() or (int(pub_year) - arxiv_year >= 2):
+                pub_year = str(arxiv_year)
+                doi = f"10.48550/arxiv.{arxiv_id}"
+                # Try to find a non-reprint conference/journal venue in locations, else use arXiv
+                orig_venue = ""
+                for loc in it.get("locations", []):
+                    s_name = _clean_html_text((loc.get("source") or {}).get("display_name") or "")
+                    if s_name and s_name != journal and "arxiv" not in s_name.lower():
+                        orig_venue = s_name
+                        break
+                journal = orig_venue or "arXiv (Cornell University)"
+                publisher = "Cornell University" if not orig_venue else ""
+
         citations = it.get("cited_by_count") or 0
 
-        preview_url = it.get("doi") or direct_pdf or raw_ids.get("openalex") or ""
+        preview_url = f"https://doi.org/{doi}" if doi else (direct_pdf or raw_ids.get("openalex") or "")
         embed_url = direct_pdf if direct_pdf else ""
 
         type_str = (it.get("type") or "").lower()
-        if "book" in type_str:
+        if "book" in type_str and not arxiv_id:
             reading_type = "book"
             category = "primary_textbook"
         else:
@@ -1227,7 +1336,6 @@ def _parse_openalex_items(items: list) -> List[Dict[str, Any]]:
             "relevance_score": 0.0,
         })
     return results
-
 
 def _parse_semantic_scholar_items(items: list) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
@@ -1288,11 +1396,13 @@ def _parse_semantic_scholar_items(items: list) -> List[Dict[str, Any]]:
 
 # Candidate Fetchers
 def _fetch_crossref_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    clean_title, author, _ = extract_citation_components(query)
+    q = f"{clean_title} {author}".strip()
     try:
         resp = requests.get(
             CROSSREF_API,
             params={
-                "query.bibliographic": query,
+                "query.bibliographic": q,
                 "rows": max(limit, 5),
                 "filter": "type:journal-article,type:proceedings-article,type:book,type:book-chapter"
             },
@@ -1307,10 +1417,16 @@ def _fetch_crossref_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
 
 
 def _fetch_europe_pmc_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    clean_title, author, _ = extract_citation_components(query)
+    q = f'TITLE:"{clean_title}"'
+    if author:
+        author_word = author.split()[0]
+        if len(author_word) >= 3:
+            q += f' AUTH:"{author_word}"'
     try:
         resp = requests.get(
             EUROPE_PMC_API,
-            params={"query": query, "format": "json", "pageSize": max(limit, 5), "resultType": "core"},
+            params={"query": q, "format": "json", "pageSize": max(limit, 5), "resultType": "core"},
             headers={"User-Agent": "LectureScribe/1.0"},
             timeout=3.5
         )
@@ -1322,10 +1438,12 @@ def _fetch_europe_pmc_candidates(query: str, limit: int) -> List[Dict[str, Any]]
 
 
 def _fetch_google_books_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    clean_title, author, _ = extract_citation_components(query)
+    q = f"{clean_title} {author}".strip()
     try:
         resp = requests.get(
             GOOGLE_BOOKS_API,
-            params={"q": query, "maxResults": min(max(limit, 4), 10), "printType": "books"},
+            params={"q": q, "maxResults": min(max(limit, 4), 10), "printType": "books"},
             timeout=3.5
         )
         if resp.status_code == 200:
@@ -1336,30 +1454,88 @@ def _fetch_google_books_candidates(query: str, limit: int) -> List[Dict[str, Any
 
 
 def _fetch_openalex_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
+    clean_title, author, _ = extract_citation_components(query)
+    headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
+    combined_raw: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+
+    # Pass 1: Author + Title filter if author is supplied
+    if author:
+        author_surname = author.split()[0].strip()
+        try:
+            resp = requests.get(
+                OPENALEX_API,
+                params={
+                    "filter": f"title.search:{clean_title},raw_author_name.search:{author_surname}",
+                    "per-page": max(limit, 10),
+                    "sort": "cited_by_count:desc"
+                },
+                headers=headers,
+                timeout=3.5
+            )
+            if resp.status_code == 200:
+                for item in resp.json().get("results", []):
+                    w_id = str(item.get("id") or item.get("doi") or "")
+                    if w_id and w_id not in seen_ids:
+                        seen_ids.add(w_id)
+                        combined_raw.append(item)
+        except Exception as e:
+            logger.debug(f"[ReadingExtractor] Sync OpenAlex Author filter lookup failed: {e}")
+
+    # Pass 2: Title filter sorted by citations (guarantees landmark papers are surfaced)
     try:
         resp = requests.get(
             OPENALEX_API,
             params={
-                "search": query,
-                "per-page": max(limit, 8),
-                "sort": "relevance_score:desc"
+                "filter": f"title.search:{clean_title}",
+                "per-page": max(limit, 10),
+                "sort": "cited_by_count:desc"
             },
-            headers={"User-Agent": "LectureScribe/2.1 (mailto:academic-research@lecturescribe.local)"},
+            headers=headers,
             timeout=3.5
         )
         if resp.status_code == 200:
-            return _parse_openalex_items(resp.json().get("results", []))
+            for item in resp.json().get("results", []):
+                w_id = str(item.get("id") or item.get("doi") or "")
+                if w_id and w_id not in seen_ids:
+                    seen_ids.add(w_id)
+                    combined_raw.append(item)
     except Exception as e:
-        logger.debug(f"[ReadingExtractor] [OpenAlex Search] Exception: {e}")
-    return []
+        logger.debug(f"[ReadingExtractor] Sync OpenAlex Title citation lookup failed: {e}")
+
+    # Pass 3: General search for broader topics
+    search_q = f"{clean_title} {author}".strip() if author else clean_title
+    try:
+        resp = requests.get(
+            OPENALEX_API,
+            params={
+                "search": search_q,
+                "per-page": max(limit, 8),
+                "sort": "relevance_score:desc"
+            },
+            headers=headers,
+            timeout=3.5
+        )
+        if resp.status_code == 200:
+            for item in resp.json().get("results", []):
+                w_id = str(item.get("id") or item.get("doi") or "")
+                if w_id and w_id not in seen_ids:
+                    seen_ids.add(w_id)
+                    combined_raw.append(item)
+    except Exception as e:
+        logger.debug(f"[ReadingExtractor] Sync OpenAlex General search failed: {e}")
+
+    return _parse_openalex_items(combined_raw) if combined_raw else []
 
 
 async def _fetch_crossref_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    clean_title, author, _ = extract_citation_components(query)
+    q = f"{clean_title} {author}".strip()
     try:
         resp = await client.get(
             CROSSREF_API,
             params={
-                "query.bibliographic": query,
+                "query.bibliographic": q,
                 "rows": max(limit, 5),
                 "filter": "type:journal-article,type:proceedings-article,type:book,type:book-chapter"
             },
@@ -1373,10 +1549,16 @@ async def _fetch_crossref_candidates_async(client: httpx.AsyncClient, query: str
 
 
 async def _fetch_europe_pmc_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    clean_title, author, _ = extract_citation_components(query)
+    q = f'TITLE:"{clean_title}"'
+    if author:
+        author_word = author.split()[0]
+        if len(author_word) >= 3:
+            q += f' AUTH:"{author_word}"'
     try:
         resp = await client.get(
             EUROPE_PMC_API,
-            params={"query": query, "format": "json", "pageSize": max(limit, 5), "resultType": "core"},
+            params={"query": q, "format": "json", "pageSize": max(limit, 5), "resultType": "core"},
             headers={"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
         )
         if resp.status_code == 200:
@@ -1387,10 +1569,12 @@ async def _fetch_europe_pmc_candidates_async(client: httpx.AsyncClient, query: s
 
 
 async def _fetch_google_books_candidates_async(client: httpx.AsyncClient, query: str, limit: int) -> List[Dict[str, Any]]:
+    clean_title, author, _ = extract_citation_components(query)
+    q = f"{clean_title} {author}".strip()
     try:
         resp = await client.get(
             GOOGLE_BOOKS_API,
-            params={"q": query, "maxResults": min(max(limit, 4), 10), "printType": "books"}
+            params={"q": q, "maxResults": min(max(limit, 4), 10), "printType": "books"}
         )
         if resp.status_code == 200:
             return _parse_google_books_items(resp.json().get("items", []))
@@ -1406,25 +1590,49 @@ async def _fetch_openalex_candidates_async(
     expanded_queries: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """
-    Two-pass OpenAlex fetch with architectural synonym query expansion:
-      Pass 1: Relevance-sorted query for domain alignment.
-      Pass 2: Citation-sorted query to guarantee seminal foundational papers are surfaced.
-      Pass 3 (if expanded_queries supplied): Dispatches candidate fetch using domain-appropriate synonyms
-             (e.g., historical equivalents, formal nomenclature) to surface foundational literature.
-    Merges passes deduplicated by work ID/DOI. Enforces strict concurrency cap of 3 requests.
+    OpenAlex fetcher supporting both exact titles, landmark citations, and broad topics:
+      - Pass 1: Author surname filter + title search sorted by citations (if author supplied)
+      - Pass 2: Direct title filter (`title.search`) sorted by `cited_by_count:desc` to surface landmark papers
+      - Pass 3: General BM25 search across full text & abstracts for topic exploration
     """
     headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
+    clean_title, author, _ = extract_citation_components(query)
 
-    # Protect exact keyword phrasing: wrap multi-word queries in quotes if not already quoted
-    clean_q = query.strip()
-    if clean_q and " " in clean_q and not (clean_q.startswith('"') and clean_q.endswith('"')):
-        search_q = f'"{clean_q}"'
-    else:
-        search_q = clean_q
+    tasks = []
 
-    # Pass 1: Relevance-sorted query for domain alignment
-    # Pass 2: Citation-sorted query to surface seminal foundational papers
-    tasks = [
+    # Pass 1: Targeted Author filter + Title search
+    if author:
+        author_surname = author.split()[0].strip()
+        tasks.append(
+            client.get(
+                OPENALEX_API,
+                params={
+                    "filter": f"title.search:{clean_title},raw_author_name.search:{author_surname}",
+                    "per-page": max(limit, 10),
+                    "sort": "cited_by_count:desc"
+                },
+                headers=headers,
+                timeout=3.5
+            )
+        )
+
+    # Pass 2: Direct Title search sorted by citations (guarantees landmark papers like Vaswani 2017 surface)
+    tasks.append(
+        client.get(
+            OPENALEX_API,
+            params={
+                "filter": f"title.search:{clean_title}",
+                "per-page": max(limit, 10),
+                "sort": "cited_by_count:desc"
+            },
+            headers=headers,
+            timeout=3.5
+        )
+    )
+
+    # Pass 3: Broad BM25 query for topics and adjacent literature
+    search_q = f"{clean_title} {author}".strip() if author else clean_title
+    tasks.append(
         client.get(
             OPENALEX_API,
             params={
@@ -1434,32 +1642,19 @@ async def _fetch_openalex_candidates_async(
             },
             headers=headers,
             timeout=3.5
-        ),
-        client.get(
-            OPENALEX_API,
-            params={
-                "search": search_q,
-                "per-page": max(limit, 10),
-                "sort": "cited_by_count:desc"
-            },
-            headers=headers,
-            timeout=3.5
         )
-    ]
+    )
 
-    # Pass 3 (Authority / Foundational / Expanded Pass):
-    # Query high-capacity providers using foundational_nomenclature or canonical expanded queries
-    # sorted by cited_by_count:desc up to concurrency cap of 3 requests
-    if expanded_queries:
+    # Pass 4: Topic expansion pass (if expanded_queries supplied)
+    if expanded_queries and len(tasks) < 4:
         for eq in expanded_queries:
             clean_eq = eq.strip()
-            if clean_eq and clean_eq.lower() not in (clean_q.lower(), search_q.lower()) and len(tasks) < 3:
-                eq_search = f'"{clean_eq}"' if (" " in clean_eq and not (clean_eq.startswith('"') and clean_eq.endswith('"'))) else clean_eq
+            if clean_eq and clean_eq.lower() not in (clean_title.lower(), search_q.lower()):
                 tasks.append(
                     client.get(
                         OPENALEX_API,
                         params={
-                            "search": eq_search,
+                            "search": clean_eq,
                             "per-page": max(limit, 10),
                             "sort": "cited_by_count:desc"
                         },
@@ -1467,10 +1662,13 @@ async def _fetch_openalex_candidates_async(
                         timeout=3.5
                     )
                 )
+                break
+
+    # Cap concurrency to 4 requests
+    tasks = tasks[:4]
 
     try:
         resps = await asyncio.gather(*tasks, return_exceptions=True)
-
         combined_raw: List[Dict[str, Any]] = []
         seen_ids: Set[str] = set()
 
@@ -1498,6 +1696,10 @@ async def _fetch_semantic_scholar_candidates_async(client: httpx.AsyncClient, qu
     if not allowed:
         logger.info("[SemanticScholar] [Telemetry] Request rejected by local rate limiter/circuit breaker.")
         return []
+
+    clean_title, author, _ = extract_citation_components(query)
+    search_q = f"{clean_title} {author}".strip() if author else clean_title
+
     try:
         api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
         headers = {"User-Agent": "LectureScribe/2.2"}
@@ -1507,7 +1709,7 @@ async def _fetch_semantic_scholar_candidates_async(client: httpx.AsyncClient, qu
         fields = "title,authors,year,citationCount,influentialCitationCount,abstract,openAccessPdf,externalIds,venue"
         resp = await client.get(
             SEMANTIC_SCHOLAR_API,
-            params={"query": query, "limit": max(limit, 5), "fields": fields},
+            params={"query": search_q, "limit": max(limit, 5), "fields": fields},
             headers=headers,
             timeout=3.0
         )
@@ -1535,21 +1737,37 @@ async def _fetch_semantic_scholar_candidates_async(client: httpx.AsyncClient, qu
 
 
 def _merge_record_metadata(target: Dict[str, Any], incoming: Dict[str, Any]) -> None:
-    """Enriches canonical target record with incoming metadata."""
+    """Enriches canonical target record with incoming metadata, preferring higher-citation original editions."""
+    inc_cit = incoming.get("citation_count") or 0
+    tar_cit = target.get("citation_count") or 0
+    incoming_is_more_authoritative = inc_cit > tar_cit
+
     # 1. Citations
-    target["citation_count"] = max(target.get("citation_count") or 0, incoming.get("citation_count") or 0)
+    target["citation_count"] = max(tar_cit, inc_cit)
     target["influential_citation_count"] = max(
         target.get("influential_citation_count") or 0, incoming.get("influential_citation_count") or 0
     )
 
-    # 2. PMCID & PMC Reader
+    # 2. If incoming record has more citations (or is original preprint/edition), prefer its core metadata
+    if incoming_is_more_authoritative:
+        for k in ("doi", "journal", "publisher", "publication_year", "preview_url"):
+            if incoming.get(k):
+                target[k] = incoming[k]
+    else:
+        # Keep earliest valid publication year for identical works (original paper vs later reprint)
+        yr_t = str(target.get("publication_year") or "")
+        yr_i = str(incoming.get("publication_year") or "")
+        if yr_t.isdigit() and yr_i.isdigit() and int(yr_i) < int(yr_t):
+            target["publication_year"] = yr_i
+
+    # 3. PMCID & PMC Reader
     if incoming.get("pmcid"):
         target["pmcid"] = incoming["pmcid"]
         if not target.get("direct_pdf_url"):
             target["embed_url"] = incoming.get("embed_url") or f"https://europepmc.org/articles/{incoming['pmcid']}"
             target["reader_type"] = "pmc_reader"
 
-    # 3. Direct PDF & arXiv ID
+    # 4. Direct PDF & arXiv ID
     if incoming.get("arxiv_id") and not target.get("arxiv_id"):
         target["arxiv_id"] = incoming["arxiv_id"]
     if incoming.get("direct_pdf_url") and not target.get("direct_pdf_url"):
@@ -1557,17 +1775,17 @@ def _merge_record_metadata(target: Dict[str, Any], incoming: Dict[str, Any]) -> 
         target["reader_type"] = "pdf_direct"
         target["embed_url"] = incoming["direct_pdf_url"]
 
-    # 4. Open Access flag
+    # 5. Open Access flag
     if incoming.get("is_open_access"):
         target["is_open_access"] = True
 
-    # 5. Abstract - take longer non-empty
+    # 6. Abstract - take longer non-empty
     inc_abs = incoming.get("abstract") or ""
     tar_abs = target.get("abstract") or ""
     if len(inc_abs) > len(tar_abs):
         target["abstract"] = inc_abs
 
-    # 6. Identifiers and bibliographic fields
+    # 7. Fill remaining empty identifiers and bibliographic fields
     for k in ("doi", "journal", "publisher", "publication_year", "preview_url", "isbn", "cover_url"):
         if not target.get(k) and incoming.get(k):
             target[k] = incoming[k]
@@ -1778,26 +1996,18 @@ def _consolidate_and_merge_records(
 
         # Post-enrichment normalizer: auto-populate arxiv_id if empty but link points to arXiv
         if not r.get("arxiv_id"):
-            found_arxiv = extract_canonical_arxiv_id(r.get("direct_pdf_url")) or \
-                          extract_canonical_arxiv_id(r.get("preview_url")) or \
-                          extract_canonical_arxiv_id(r.get("embed_url")) or \
-                          extract_canonical_arxiv_id(r.get("doi"))
+            found_arxiv = (
+                extract_canonical_arxiv_id(r.get("direct_pdf_url")) or
+                extract_canonical_arxiv_id(r.get("preview_url")) or
+                extract_canonical_arxiv_id(r.get("embed_url")) or
+                extract_canonical_arxiv_id(r.get("doi"))
+            )
             if found_arxiv:
                 r["arxiv_id"] = found_arxiv
 
         r["relevance_score"] = compute_hybrid_relevance(r, query)
 
     return records
-
-
-def _classify_query_intent(query: str) -> str:
-    """Classifies user query intent into 'monograph', 'paper', or 'general'."""
-    q_lower = query.lower()
-    if re.search(r'\b(textbook|handbook|monograph|guide|introduction to|principles of|volume|edition)\b', q_lower):
-        return "monograph"
-    if re.search(r'\b(et al|jama|nejm|nature|ieee|arxiv|doi|proceedings|trial|paper|journal)\b', q_lower):
-        return "paper"
-    return "general"
 
 
 class SLMQueryPlanner:
@@ -1809,27 +2019,27 @@ class SLMQueryPlanner:
       - Filtered provider selection
       - Intent ('paper', 'monograph', 'general')
       - Excluded concepts
-    Enforces strict query budgets (Issue 3):
+    Enforces strict query budgets:
       - Semantic Scholar & arXiv: Only first/primary query string. Never multi-query fan-out.
       - OpenAlex & Europe PMC: Max concurrency cap of 3 requests with polite headers.
     """
     @classmethod
     def _heuristic_fallback_plan(cls, query: str, course_name: str = "") -> Dict[str, Any]:
-        clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
-        intent = _classify_query_intent(clean_q)
-        domain = DomainRouter.classify_domain(course_name, clean_q)
-        dispatched_providers, _ = DomainRouter.get_providers_for_domain(domain, clean_q)
+        clean_title, author, _ = extract_citation_components(query)
+        intent = _classify_query_intent(query)
+        domain = DomainRouter.classify_domain(course_name, clean_title)
+        dispatched_providers, _ = DomainRouter.get_providers_for_domain(domain, clean_title)
 
-        primary_queries = [clean_q]
-        quoted_v = f'"{clean_q}"' if (" " in clean_q and not (clean_q.startswith('"') and clean_q.endswith('"'))) else clean_q
+        primary_queries = [clean_title]
 
         return {
             "domain": str(domain).lower(),
-            "verbatim_query": quoted_v,
-            "foundational_nomenclature": clean_q,
+            "verbatim_query": clean_title,
+            "author_filter": author,
+            "foundational_nomenclature": clean_title,
             "architectural_class": "",
             "negative_disambiguation": [],
-            "primary_query": clean_q,
+            "primary_query": clean_title,
             "expanded_queries": [],
             "primary_queries": primary_queries[:3],
             "providers": dispatched_providers,
@@ -1837,7 +2047,6 @@ class SLMQueryPlanner:
             "negative_concepts": [],
             "excluded_concepts": []
         }
-
 
     @classmethod
     def plan(cls, query: str, course_name: str = "") -> Dict[str, Any]:
@@ -1852,8 +2061,8 @@ class SLMQueryPlanner:
         domain classification, primary query expansions, provider dispatch, and negative concepts.
         Falls back seamlessly to _heuristic_fallback_plan if keys are missing or timeout occurs.
         """
-        clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
-        fallback = cls._heuristic_fallback_plan(clean_q, course_name)
+        clean_title, author, _ = extract_citation_components(query)
+        fallback = cls._heuristic_fallback_plan(query, course_name)
 
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -1865,28 +2074,28 @@ class SLMQueryPlanner:
         system_prompt = (
             "You are a strict Stage 1 Academic Query Planner & Intent Router for university research.\n"
             f"Course context: '{course_name or 'General Academic'}'\n\n"
-            "Given the user query, decompose the technical query into generalized academic search slots. "
+            "Given the user query, identify whether it is a topic, specific book title, or research paper citation. "
             "Output ONLY a valid JSON object conforming to:\n"
             "{\n"
-            '  "verbatim_query": "<user exact phrase, preserving contiguous tokens in quotes, e.g. \\"cross attention\\">",\n'
-            '  "foundational_nomenclature": "<the historical or formal terminology under which the underlying mechanism/principle was originally published, e.g. encoder-decoder attention>",\n'
-            '  "architectural_class": "<the broader scientific or technical paradigm, e.g. transformer models>",\n'
-            '  "negative_disambiguation": ["<sub-token or partial match 1 in other disciplines causing false collisions>", "<false collision 2>"],\n'
+            '  "verbatim_query": "<pure document or book title, or topic, WITHOUT author or et al. tokens>",\n'
+            '  "author_filter": "<primary author surname if mentioned in query, else \\"\\">",\n'
+            '  "foundational_nomenclature": "<historical or formal technical terminology under which the mechanism was originally published, e.g. self-attention mechanism>",\n'
+            '  "architectural_class": "<broader paradigm or domain, e.g. transformer architectures>",\n'
+            '  "negative_disambiguation": ["<false collision 1>", "<false collision 2>"],\n'
             '  "domain": "cs_ai" | "biomedical" | "physics_math" | "humanities_social",\n'
-            '  "providers": ["openalex", "crossref", "semantic_scholar"],\n'
+            '  "providers": ["openalex", "crossref", "semantic_scholar", "google_books"],\n'
             '  "intent": "paper" | "monograph" | "general"\n'
             "}\n"
             "Rules:\n"
-            "1. 'verbatim_query' must preserve contiguous tokens in double quotes if multi-word.\n"
-            "2. 'foundational_nomenclature' MUST identify the origin/seminal terminology used in the foundational literature (e.g. for 'cross attention' -> 'encoder-decoder attention', for 'flash attention' -> 'exact attention with IO-awareness' or 'fast attention', for 'raft consensus' -> 'consensus algorithm', for 'mrna vaccines' -> 'lipid nanoparticle mRNA'). Do NOT append generic filler nouns like 'mechanism', 'approach', or 'method'.\n"
-            "3. 'architectural_class' is the broader technical family, scientific paradigm, or foundational architectural term (e.g., 'encoder-decoder attention transformer', 'asymmetric cross attention', 'transformer models'). When a concept spans multiple subfields (e.g., attention across Seq2Seq/NLP, Multimodal, and Vision), balance disciplinary coverage across foundational/Seq2Seq terminology and do not exclusively pull from one narrow application modality unless explicitly specified by the query or course context.\n"
-            "4. 'negative_disambiguation' lists terms from other fields or superficial token collisions that must be excluded or penalized.\n"
-            "5. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
-            "6. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
-            "7. Return ONLY the raw JSON object. No markdown, no fences, no explanation."
+            "1. Strip citation markers like 'Vaswani et al.', 'He et al. 2016', or 'by Martin Kleppmann' from verbatim_query.\n"
+            "2. If query mentions a textbook or book title (e.g., 'Designing Data-Intensive Applications', 'Pattern Recognition and Machine Learning'), set intent to 'monograph' and ensure 'google_books' is in providers.\n"
+            "3. If query is a topic (e.g. 'Self-Attention Mechanisms', 'Distributed Consensus'), provide 1-2 authoritative canonical equivalents in foundational_nomenclature.\n"
+            "4. If domain is STEM Computer Science / AI, DO NOT include 'europe_pmc' in 'providers'. Include 'openalex' and 'semantic_scholar'.\n"
+            "5. If domain is Biomedical / Clinical, include 'europe_pmc', 'openalex', and 'crossref'.\n"
+            "6. Return ONLY the raw JSON object. No markdown, no fences, no explanation."
         )
 
-        user_prompt = f"User Query: {clean_q}"
+        user_prompt = f"User Query: {query}"
 
         try:
             raw_response = None
@@ -1942,15 +2151,15 @@ class SLMQueryPlanner:
                 if isinstance(data, dict):
                     domain = data.get("domain") or fallback["domain"]
 
-                    # Extract generalized slots
                     verbatim_q = data.get("verbatim_query")
                     if not isinstance(verbatim_q, str) or not verbatim_q.strip():
-                        verbatim_q = data.get("primary_query") or clean_q
+                        verbatim_q = data.get("primary_query") or clean_title
                     verbatim_q = str(verbatim_q).strip()
+
+                    auth = str(data.get("author_filter") or author).strip()
 
                     foundational_nom = data.get("foundational_nomenclature")
                     if not isinstance(foundational_nom, str) or not foundational_nom.strip():
-                        # fallback to expanded_queries if present
                         exps = data.get("expanded_queries")
                         foundational_nom = str(exps[0]).strip() if (isinstance(exps, list) and exps) else ""
                     foundational_nom = str(foundational_nom).strip()
@@ -1960,12 +2169,9 @@ class SLMQueryPlanner:
                     neg_disambig = data.get("negative_disambiguation")
                     if not isinstance(neg_disambig, list):
                         neg_disambig = data.get("negative_concepts") or data.get("excluded_concepts") or []
-                    if not isinstance(neg_disambig, list):
-                        neg_disambig = []
                     negative_disambiguation = [str(x).strip() for x in neg_disambig if str(x).strip()]
 
-                    # Backward-compatibility mappings
-                    pri_q = verbatim_q.strip('"').strip() or clean_q
+                    pri_q = verbatim_q.strip('"').strip() or clean_title
                     expanded_queries: List[str] = []
                     if foundational_nom and foundational_nom.lower() != pri_q.lower():
                         expanded_queries.append(foundational_nom)
@@ -1999,6 +2205,7 @@ class SLMQueryPlanner:
                     return {
                         "domain": domain,
                         "verbatim_query": verbatim_q,
+                        "author_filter": auth,
                         "foundational_nomenclature": foundational_nom,
                         "architectural_class": arch_class,
                         "negative_disambiguation": negative_disambiguation,
@@ -2034,12 +2241,13 @@ class SLMReranker:
         If abstract is missing (< 40 chars), synthesizes fallback context string (Issue 4).
         """
         title = candidate.get("title") or "Unknown Title"
+        author = candidate.get("author") or "Unknown Author"
         journal = candidate.get("journal") or candidate.get("publisher") or "Academic Venue"
         year = candidate.get("publication_year") or "Recent"
         abstract = candidate.get("abstract") or ""
 
         if not abstract or len(abstract.strip()) < 40:
-            abstract_text = candidate.get("synthesized_context") or f"Title: {title} | Venue/Journal: {journal} | Year: {year} (Note: Abstract unavailable)"
+            abstract_text = candidate.get("synthesized_context") or f"Title: {title} | Author: {author} | Venue/Journal: {journal} | Year: {year} (Note: Abstract unavailable)"
         else:
             clean_abstract = " ".join(abstract.split())
             words = clean_abstract.split(" ")
@@ -2054,7 +2262,7 @@ class SLMReranker:
                 clean_abstract = clean_abstract.rstrip() + "..."
             abstract_text = clean_abstract
 
-        return f"[{candidate_id}] Title: {title} ({year}) | Venue: {journal}\nAbstract: {abstract_text}"
+        return f"[{candidate_id}] Title: {title} by {author} ({year}) | Venue: {journal}\nAbstract: {abstract_text}"
 
     @classmethod
     def prune_candidates(cls, candidates: List[Dict[str, Any]], max_n: int = 8) -> List[Dict[str, Any]]:
@@ -2102,6 +2310,7 @@ class SLMReranker:
         if not candidates:
             return []
 
+        clean_title, author_filter, _ = extract_citation_components(query)
         bounded = cls.prune_candidates(candidates, max_n=cls.MAX_CANDIDATE_POOL)
 
         groq_key = os.getenv("GROQ_API_KEY", "")
@@ -2122,11 +2331,11 @@ class SLMReranker:
 
         system_msg = (
             f"You are a strict academic literature relevance evaluator for the course '{course_name or 'General Academic'}'.\n"
-            f"User Query: '{query}'\n\n"
+            f"User Query: '{query}' (Target Title/Topic: '{clean_title}', Target Author: '{author_filter}')\n\n"
             "Evaluate each numbered candidate against the following strict academic scoring rubric strictly between 0.0 and 1.0:\n"
-            "- 0.90 – 1.00 (Core Architectural Breakthrough / Direct Focus): The paper's primary contribution is the exact mechanism queried (e.g., novel asymmetric cross-attention formulation, canonical transformer cross-attention control, or foundational Seq2Seq attention).\n"
-            "- 0.70 – 0.89 (Substantial Application / Integrated Module): The paper uses the exact mechanism in a significant capacity within a larger system or multi-modal pipeline (e.g., dual-branch feature fusion, cross-attention in diffusion models).\n"
-            "- 0.45 – 0.69 (Marginal / Variant / Derivative Usage): The paper uses a tangential, spatial-only, or non-standard variant (e.g., orthogonal/spatial axis pooling like criss-cross attention, or minor downstream evaluation).\n"
+            "- 0.95 – 1.00 (Core Architectural Breakthrough / Direct Focus / Exact Work): The exact paper or textbook requested by the user, or seminal work defining the queried topic.\n"
+            "- 0.75 – 0.94 (Substantial Application / Integrated Module / Authoritative Textbook): The paper/textbook directly addresses the query topic or uses the queried mechanism centrally.\n"
+            "- 0.45 – 0.74 (Marginal / Variant / Derivative Usage): The paper uses a tangential, spatial-only, or non-standard variant or minor downstream evaluation.\n"
             f"{disambig_note.strip()}\n\n"
             "Instruction Directive:\n"
             "Do not cluster scores around 0.80–0.85. Actively differentiate between papers whose central theoretical contribution is the queried mechanism versus those that merely apply it as a sub-component.\n\n"
@@ -2184,14 +2393,21 @@ class SLMReranker:
 
             if raw_response:
                 scores_map = cls._parse_scores(raw_response)
-                # Hard minimum semantic floor: drop any candidate with semantic_score < 0.40
                 MIN_SEMANTIC_SCORE_FLOOR = 0.40
                 scored_candidates: List[Dict[str, Any]] = []
+
+                norm_clean = _normalize_title(clean_title)
 
                 for idx, c in enumerate(bounded):
                     if idx in scores_map:
                         sem_score = scores_map[idx]
                         c["semantic_score"] = sem_score
+
+                        # Exact title match guarantee
+                        if norm_clean and norm_clean == _normalize_title(c.get("title", "")):
+                            sem_score = max(sem_score, 0.98)
+                            c["semantic_score"] = sem_score
+
                         # HARD FILTER: Citation count must NEVER compensate for zero or near-zero semantic alignment
                         if sem_score < MIN_SEMANTIC_SCORE_FLOOR:
                             continue
@@ -2202,7 +2418,12 @@ class SLMReranker:
                         pub_year = int(pub_year_str) if pub_year_str.isdigit() else (current_year - 5)
                         delta_y = max(0, current_year - pub_year)
                         s_rec = max(0.25, min(1.0, math.exp(-delta_y / 14.0)))
-                        c["relevance_score"] = round(min(1.0, max(0.0, 0.50 * sem_score + 0.35 * s_cit + 0.15 * s_rec)), 4)
+
+                        computed_rel = round(min(1.0, max(0.0, 0.55 * sem_score + 0.30 * s_cit + 0.15 * s_rec)), 4)
+                        if norm_clean and norm_clean == _normalize_title(c.get("title", "")):
+                            computed_rel = max(computed_rel, 0.95)
+
+                        c["relevance_score"] = computed_rel
                         scored_candidates.append(c)
 
                 return scored_candidates
@@ -2251,7 +2472,7 @@ def _adaptive_interleave(
 
     intent = _classify_query_intent(query)
     if intent == "monograph":
-        target_books = min(len(valid_books), max(1, int(limit * 0.6)))
+        target_books = min(len(valid_books), max(1, int(limit * 0.7)))
         target_papers = limit - target_books
     elif intent == "paper":
         target_books = min(len(valid_books), 1) if limit >= 5 else 0
@@ -2312,15 +2533,12 @@ def _format_and_interleave(
 ) -> List[Dict[str, Any]]:
     """
     Formats, sorts, and adaptively interleaves candidates.
-    Enforces strict monograph relevancy floor (score >= 0.50) when min_book_relevance
+    Enforces strict monograph relevancy floor when min_book_relevance
     is specified or course context is provided (Issue 5).
     """
     floor = min_book_relevance
     if floor is None:
-        if course_name or any(r.get("semantic_score") is not None for r in records):
-            floor = 0.50
-        else:
-            floor = 0.0
+        floor = 0.40 if course_name else 0.0
 
     books = [
         r for r in records
@@ -2345,19 +2563,18 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
     """
     Asynchronous federated literature discovery across OpenAlex (Tier 1),
     Crossref, Europe PMC, Google Books, and Semantic Scholar (rate-limited).
-    Hardened with SLMQueryPlanner, bounded candidate pool (max N=8),
-    abstract imputation, 60s S2 circuit breaker, and monograph quality floor.
+    Handles exact paper citations, specific book titles, and general topics.
     """
     if not query or len(query.strip()) < 2:
         return []
 
-    clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
-    logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_q}' (limit={limit}, course='{course_name}')")
+    clean_title, author, _ = extract_citation_components(query)
+    logger.info(f"[ReadingExtractor] Searching academic literature & books async for: '{clean_title}' (author='{author}', limit={limit}, course='{course_name}')")
 
     # Stage 1: Neural SLM Query Planner & Budgeted Provider Routing
-    plan = await SLMQueryPlanner.plan_async(clean_q, course_name)
+    plan = await SLMQueryPlanner.plan_async(query, course_name)
     dispatched = plan.get("providers", [])
-    primary_q = plan.get("primary_query") or (plan.get("primary_queries") or [clean_q])[0]
+    primary_q = plan.get("primary_query") or clean_title
     expanded_queries = plan.get("expanded_queries") or []
 
     client = get_async_http_client()
@@ -2366,27 +2583,27 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
 
     if "openalex" in dispatched:
         task_keys.append("openalex")
-        # OpenAlex searches primary query (relevance + citations) + expanded query variations up to concurrency cap of 3
-        tasks.append(asyncio.create_task(_fetch_openalex_candidates_async(client, primary_q, limit, expanded_queries=expanded_queries)))
+        # OpenAlex searches primary query (relevance + citations) + expanded query variations up to concurrency cap of 4
+        tasks.append(asyncio.create_task(_fetch_openalex_candidates_async(client, query, limit, expanded_queries=expanded_queries)))
 
     if "crossref" in dispatched:
         task_keys.append("crossref")
-        tasks.append(asyncio.create_task(_fetch_crossref_candidates_async(client, primary_q, limit)))
+        tasks.append(asyncio.create_task(_fetch_crossref_candidates_async(client, query, limit)))
 
     if "europe_pmc" in dispatched:
         task_keys.append("europe_pmc")
-        tasks.append(asyncio.create_task(_fetch_europe_pmc_candidates_async(client, primary_q, limit)))
+        tasks.append(asyncio.create_task(_fetch_europe_pmc_candidates_async(client, query, limit)))
 
     if "google_books" in dispatched:
         task_keys.append("google_books")
-        tasks.append(asyncio.create_task(_fetch_google_books_candidates_async(client, primary_q, limit)))
+        tasks.append(asyncio.create_task(_fetch_google_books_candidates_async(client, query, limit)))
 
     if "semantic_scholar" in dispatched:
         # Check circuit breaker before issuing network task: skip instantly if tripped
         if not _S2_RATE_LIMITER.is_circuit_open():
             task_keys.append("semantic_scholar")
             # S2 query budget: Execute queries using ONLY the first/primary query string (Issue 3)
-            tasks.append(asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, primary_q, limit)))
+            tasks.append(asyncio.create_task(_fetch_semantic_scholar_candidates_async(client, query, limit)))
         else:
             logger.info("[ReadingExtractor] S2 circuit breaker is open. Bypassing S2 fetch immediately.")
 
@@ -2406,20 +2623,20 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
         books_items=results_map.get("google_books", []),
         openalex_items=results_map.get("openalex", []),
         s2_items=results_map.get("semantic_scholar", []),
-        query=primary_q
+        query=query
     )
 
     # Issue 4: Impute missing abstracts asynchronously via OpenAlex DOI lookup
     await _impute_records_abstracts_async(consolidated, client)
     for r in consolidated:
-        r["relevance_score"] = compute_hybrid_relevance(r, primary_q)
+        r["relevance_score"] = compute_hybrid_relevance(r, query)
 
     # Issue 2: Prune candidates to top N (max 8) and invoke SLM reranker
     bounded = SLMReranker.prune_candidates(consolidated, max_n=8)
     neg_disambig = plan.get("negative_disambiguation") or plan.get("negative_concepts") or []
     reranked = await SLMReranker.rerank_async(
         bounded,
-        primary_q,
+        query,
         course_name=course_name,
         negative_disambiguation=neg_disambig
     )
@@ -2432,10 +2649,10 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
         if ("semantic_score" not in item or item["semantic_score"] is None or item["semantic_score"] >= MIN_SEMANTIC_SCORE_FLOOR)
     ]
 
-    # Issue 5: Format and interleave enforcing monograph relevancy floor (score >= 0.50)
-    floor = 0.50 if course_name else 0.0
-    final_results = _format_and_interleave(filtered_reranked, limit=limit, query=primary_q, min_book_relevance=floor, course_name=course_name)
-    logger.info(f"[ReadingExtractor] search_academic_literature_async returned {len(final_results)} results for query: '{clean_q}'")
+    # Issue 5: Format and interleave enforcing monograph relevancy floor
+    floor = 0.40 if course_name else 0.0
+    final_results = _format_and_interleave(filtered_reranked, limit=limit, query=query, min_book_relevance=floor, course_name=course_name)
+    logger.info(f"[ReadingExtractor] search_academic_literature_async returned {len(final_results)} results for query: '{query}'")
     return final_results
 
 
@@ -2448,13 +2665,11 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
     if not query or len(query.strip()) < 2:
         return []
 
-    clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
-    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_q}' (limit={limit}, course='{course_name}')")
+    clean_title, author, _ = extract_citation_components(query)
+    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_title}' (author='{author}', limit={limit}, course='{course_name}')")
 
-    plan = SLMQueryPlanner.plan(clean_q, course_name)
+    plan = SLMQueryPlanner.plan(query, course_name)
     dispatched = plan.get("providers", [])
-    primary_queries = plan.get("primary_queries", [clean_q])
-    primary_q = primary_queries[0]
 
     oa_items: List[Dict[str, Any]] = []
     cr_items: List[Dict[str, Any]] = []
@@ -2464,13 +2679,13 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = {}
         if "openalex" in dispatched:
-            futures["openalex"] = executor.submit(_fetch_openalex_candidates, primary_q, limit)
+            futures["openalex"] = executor.submit(_fetch_openalex_candidates, query, limit)
         if "crossref" in dispatched:
-            futures["crossref"] = executor.submit(_fetch_crossref_candidates, primary_q, limit)
+            futures["crossref"] = executor.submit(_fetch_crossref_candidates, query, limit)
         if "europe_pmc" in dispatched:
-            futures["europe_pmc"] = executor.submit(_fetch_europe_pmc_candidates, primary_q, limit)
+            futures["europe_pmc"] = executor.submit(_fetch_europe_pmc_candidates, query, limit)
         if "google_books" in dispatched:
-            futures["google_books"] = executor.submit(_fetch_google_books_candidates, primary_q, limit)
+            futures["google_books"] = executor.submit(_fetch_google_books_candidates, query, limit)
 
         if "openalex" in futures:
             try:
@@ -2501,19 +2716,18 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
         pmc_items=pmc_items,
         books_items=gb_items,
         openalex_items=oa_items,
-        query=primary_q
+        query=query
     )
 
     _impute_records_abstracts_sync(consolidated)
     for r in consolidated:
-        r["relevance_score"] = compute_hybrid_relevance(r, primary_q)
+        r["relevance_score"] = compute_hybrid_relevance(r, query)
 
     bounded = SLMReranker.prune_candidates(consolidated, max_n=8)
-    floor = 0.50 if course_name else 0.0
-    final_results = _format_and_interleave(bounded, limit=limit, query=primary_q, min_book_relevance=floor, course_name=course_name)
-    logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{clean_q}'")
+    floor = 0.40 if course_name else 0.0
+    final_results = _format_and_interleave(bounded, limit=limit, query=query, min_book_relevance=floor, course_name=course_name)
+    logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{query}'")
     return final_results
-
 
 
 def search_web_reading_links(title: str, author: str = "", course_name: str = "") -> List[Dict[str, str]]:

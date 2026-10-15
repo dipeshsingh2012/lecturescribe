@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   FileText,
   BookOpen,
@@ -6,16 +6,24 @@ import {
   Check,
   RefreshCw,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  Maximize2,
+  Minimize2,
+  ExternalLink,
+  Headphones
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import LecturePodcastPlayer from './LecturePodcastPlayer';
 
 export default function LectureSummary({
   summaryHook,
   activeData,
   handleCueClick,
-  handleCrossLectureClick
+  handleCrossLectureClick,
+  isExpanded = false,
+  onToggleExpand
 }) {
+  const [isPodcastOpen, setIsPodcastOpen] = useState(false);
   const {
     currentSummary,
     viewMode,
@@ -33,6 +41,119 @@ export default function LectureSummary({
   const wordCount = currentSummary?.wordCount || (
     currentSubmissionText ? currentSubmissionText.trim().split(/\s+/).filter(Boolean).length : 0
   );
+
+  const handlePopOutWindow = () => {
+    if (typeof window === 'undefined') return;
+    const title = activeData?.title ? `${activeData.title} — Summary Notes` : 'Lecture Summary';
+    const popup = window.open('', '_blank', 'width=920,height=880,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes');
+    if (!popup) {
+      alert('Pop-up window was blocked by your browser. Please allow popups for this site.');
+      return;
+    }
+
+    const currentStyles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map(el => el.outerHTML)
+      .join('\n');
+
+    const contentHtml = document.querySelector('.summary-markdown-container, .summary-submission-container')?.innerHTML ||
+      (currentSummary ? (viewMode === 'submission' ? currentSubmissionText : currentSummary.markdownText) : 'No summary content available.');
+
+    popup.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  ${currentStyles}
+  <style>
+    body {
+      background: var(--bg-dark, #0d1117);
+      color: var(--text-primary, #e6edf3);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin: 0;
+      padding: 32px 20px;
+      display: flex;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+    .popout-reader-wrap {
+      max-width: 880px;
+      width: 100%;
+      background: var(--card-bg, #161b22);
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+      border-radius: 12px;
+      padding: 36px 44px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+      line-height: 1.8;
+    }
+    .popout-topbar {
+      border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+      padding-bottom: 18px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .popout-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin: 0;
+      color: var(--text-primary, #e6edf3);
+    }
+    .popout-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-secondary, #8b949e);
+      margin-top: 4px;
+    }
+    .popout-print-btn {
+      background: var(--panel-bg, #21262d);
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+      color: var(--text-primary, #e6edf3);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.15s ease;
+    }
+    .popout-print-btn:hover {
+      background: var(--theme-primary, #1f6feb);
+      color: #ffffff;
+    }
+  </style>
+</head>
+<body>
+  <div class="popout-reader-wrap">
+    <div class="popout-topbar">
+      <div>
+        <h1 class="popout-title">${title}</h1>
+        <div class="popout-subtitle">
+          ${viewMode === 'submission' ? 'Assignment Submission Prose' : 'Study Notes'} • Detached Reading Window
+        </div>
+      </div>
+      <button class="popout-print-btn" onclick="window.print()">Print / PDF</button>
+    </div>
+    <div class="popout-body">
+      ${contentHtml}
+    </div>
+  </div>
+  <script>
+    document.addEventListener('click', function(e) {
+      const btn = e.target.closest('button[data-timestamp], a[data-timestamp]');
+      if (btn && window.opener) {
+        const time = btn.getAttribute('data-timestamp') || btn.textContent.replace(/[^0-9:]/g, '').trim();
+        if (time) {
+          window.opener.postMessage({ type: 'LECTURESCRIBE_SEEK', timestamp: time }, '*');
+        }
+      }
+    });
+  </script>
+</body>
+</html>`);
+    popup.document.close();
+  };
 
   return (
     <div style={{
@@ -82,8 +203,87 @@ export default function LectureSummary({
           </div>
         </div>
 
-        {/* Action: Regenerate */}
+        {/* Action Buttons: Podcast Audio, Pop-out, Expand/Restore, and Regenerate */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {currentSummary && (
+            <button
+              type="button"
+              onClick={() => setIsPodcastOpen((prev) => !prev)}
+              title={isPodcastOpen ? "Hide podcast audio player" : "Listen to single-narrator podcast recap (Google TTS)"}
+              aria-label={isPodcastOpen ? "Hide podcast player" : "Listen to lecture summary podcast"}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: isPodcastOpen ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
+                background: isPodcastOpen ? 'var(--highlight-bg)' : 'var(--panel-bg)',
+                color: isPodcastOpen ? 'var(--theme-primary)' : 'var(--text-secondary)',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <Headphones size={13} />
+              <span>{isPodcastOpen ? 'Hide Podcast' : 'Audio Podcast'}</span>
+            </button>
+          )}
+
+          {currentSummary && (
+            <button
+              type="button"
+              onClick={handlePopOutWindow}
+              title="Pop out summary into a detached window"
+              aria-label="Pop out summary into detached window"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: '1px solid var(--border-color)',
+                background: 'var(--panel-bg)',
+                color: 'var(--text-secondary)',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <ExternalLink size={13} />
+              <span>Pop Out</span>
+            </button>
+          )}
+
+          {typeof onToggleExpand === 'function' && (
+            <button
+              type="button"
+              onClick={onToggleExpand}
+              title={isExpanded ? "Collapse back to split view (Esc)" : "Expand summary to full workspace (like VS Code)"}
+              aria-label={isExpanded ? "Collapse reading view" : "Expand reading view"}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: isExpanded ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
+                background: isExpanded ? 'var(--highlight-bg)' : 'var(--panel-bg)',
+                color: isExpanded ? 'var(--theme-primary)' : 'var(--text-secondary)',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              {isExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              <span>{isExpanded ? 'Restore (Esc)' : 'Expand'}</span>
+            </button>
+          )}
+
+          {/* Action: Regenerate */}
           <button
             type="button"
             onClick={() => generateSummary('comprehensive', true)}
@@ -216,6 +416,22 @@ export default function LectureSummary({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {isExpanded && (
+            <span style={{
+              fontSize: '0.72rem',
+              color: 'var(--text-secondary)',
+              background: 'var(--card-bg)',
+              border: '1px solid var(--border-color)',
+              padding: '2px 8px',
+              borderRadius: '6px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}>
+              Press <kbd style={{ padding: '0 4px', background: 'var(--panel-bg)', borderRadius: '3px', border: '1px solid var(--border-color)', fontSize: '0.7rem' }}>Esc</kbd> to restore
+            </span>
+          )}
+
           {viewMode === 'submission' && Boolean(currentSubmissionText) && (
             <span style={{
               fontSize: '0.74rem',
@@ -231,6 +447,32 @@ export default function LectureSummary({
             }}>
               • {wordCount} words
             </span>
+          )}
+
+          {currentSummary && (
+            <button
+              type="button"
+              onClick={() => setIsPodcastOpen((prev) => !prev)}
+              title={isPodcastOpen ? "Hide podcast audio player" : `Listen to ${viewMode === 'submission' ? 'submission prose' : 'lecture summary'} podcast (Google TTS)`}
+              aria-label={isPodcastOpen ? "Hide podcast player" : "Listen to podcast audio"}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: isPodcastOpen ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
+                background: isPodcastOpen ? 'var(--highlight-bg)' : 'var(--card-bg)',
+                color: isPodcastOpen ? 'var(--theme-primary)' : 'var(--text-primary)',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <Headphones size={13} />
+              <span>{isPodcastOpen ? 'Hide Audio' : 'Audio Podcast'}</span>
+            </button>
           )}
 
           {currentSummary && (
@@ -271,7 +513,8 @@ export default function LectureSummary({
         minHeight: 0,
         overflowY: 'auto',
         overflowX: 'hidden',
-        padding: '20px 24px'
+        padding: isExpanded ? '28px 36px 60px' : '20px 24px',
+        scrollBehavior: 'smooth'
       }}>
         {!transcriptAvailable ? (
           <div style={{
@@ -462,49 +705,70 @@ export default function LectureSummary({
               </button>
             </div>
           )
-        ) : viewMode === 'study' ? (
-          <div
-            className="summary-markdown-container"
-            style={{
-              background: 'var(--card-bg)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '10px',
-              padding: '24px 28px',
-              color: 'var(--text-primary)',
-              lineHeight: '1.75',
-              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
-            }}
-          >
-            <MarkdownWithTimestamps
-              content={currentSummary.markdownText}
-              citations={currentSummary.citations}
-              onCueClick={handleCueClick}
-              onCrossLectureClick={handleCrossLectureClick}
-            />
-          </div>
         ) : (
-          <div
-            className="summary-submission-container"
-            style={{
-              background: 'var(--card-bg)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '10px',
-              padding: '24px 28px',
-              fontSize: '0.92rem',
-              lineHeight: '1.75',
-              color: 'var(--text-primary)',
-              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
-            }}
-          >
-            {currentSubmissionText ? (
-              <MarkdownWithTimestamps
-                content={currentSubmissionText}
-                citations={currentSummary?.citations || []}
-                onCueClick={handleCueClick}
-                onCrossLectureClick={handleCrossLectureClick}
+          <div style={{
+            maxWidth: isExpanded ? '920px' : '100%',
+            margin: isExpanded ? '0 auto' : '0',
+            width: '100%'
+          }}>
+            {isPodcastOpen && (
+              <LecturePodcastPlayer
+                videoId={activeData?.videoId || currentSummary?.videoId || ''}
+                title={activeData?.title || 'Lecture Summary'}
+                mode={viewMode}
+                summaryText={viewMode === 'submission' ? currentSubmissionText : currentSummary.markdownText}
+                onClose={() => setIsPodcastOpen(false)}
               />
+            )}
+
+            {viewMode === 'study' ? (
+              <div
+                className={`summary-markdown-container ${isExpanded ? 'expanded-reader' : ''}`}
+                style={{
+                  background: 'var(--card-bg)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '10px',
+                  padding: isExpanded ? '32px 48px' : '24px 28px',
+                  color: 'var(--text-primary)',
+                  lineHeight: '1.75',
+                  fontSize: isExpanded ? '0.98rem' : '0.92rem',
+                  boxShadow: isExpanded ? '0 4px 20px rgba(0, 0, 0, 0.12)' : '0 1px 3px rgba(0, 0, 0, 0.05)',
+                  transition: 'all 0.25s ease'
+                }}
+              >
+                <MarkdownWithTimestamps
+                  content={currentSummary.markdownText}
+                  citations={currentSummary.citations}
+                  onCueClick={handleCueClick}
+                  onCrossLectureClick={handleCrossLectureClick}
+                />
+              </div>
             ) : (
-              <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No submission prose available.</p>
+              <div
+                className={`summary-submission-container ${isExpanded ? 'expanded-reader' : ''}`}
+                style={{
+                  background: 'var(--card-bg)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '10px',
+                  padding: isExpanded ? '32px 48px' : '24px 28px',
+                  fontSize: isExpanded ? '1rem' : '0.92rem',
+                  lineHeight: '1.8',
+                  color: 'var(--text-primary)',
+                  boxShadow: isExpanded ? '0 4px 20px rgba(0, 0, 0, 0.12)' : '0 1px 3px rgba(0, 0, 0, 0.05)',
+                  transition: 'all 0.25s ease'
+                }}
+              >
+                {currentSubmissionText ? (
+                  <MarkdownWithTimestamps
+                    content={currentSubmissionText}
+                    citations={currentSummary?.citations || []}
+                    onCueClick={handleCueClick}
+                    onCrossLectureClick={handleCrossLectureClick}
+                  />
+                ) : (
+                  <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No submission prose available.</p>
+                )}
+              </div>
             )}
           </div>
         )}

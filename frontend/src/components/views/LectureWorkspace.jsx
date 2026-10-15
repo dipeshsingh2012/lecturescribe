@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Bot, FileText, HelpCircle, Search, Paperclip } from 'lucide-react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
@@ -77,6 +77,33 @@ export default function LectureWorkspace({
   explanationLoading = quiz?.explanationLoading,
   fetchDetailedExplanation = quiz?.fetchDetailedExplanation
 }) {
+  const [isPanelExpanded, setIsPanelExpanded] = useState(false);
+
+  // Allow pressing Esc to restore split view
+  useEffect(() => {
+    if (!isPanelExpanded) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsPanelExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPanelExpanded]);
+
+  // Support postMessage seeking from detached pop-out window
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data?.type === 'LECTURESCRIBE_SEEK' && event.data.timestamp) {
+        if (typeof handleCueClick === 'function') {
+          handleCueClick(event.data.timestamp);
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [handleCueClick]);
+
   const transcriptAvailable =
     activeData?.transcript_available !== false &&
     Array.isArray(activeData?.cues) &&
@@ -108,7 +135,7 @@ export default function LectureWorkspace({
   };
 
   return (
-    <div className="lecture-workspace-layout">
+    <div className={`lecture-workspace-layout ${isPanelExpanded ? 'panel-expanded' : ''}`}>
       {/* Left Panel: Real Embedded Vimeo Player */}
       <LecturePlayer
         activeData={activeData}
@@ -212,6 +239,8 @@ export default function LectureWorkspace({
             activeData={activeData}
             handleCueClick={handleCueClick}
             handleCrossLectureClick={handleCrossLectureClick}
+            isExpanded={isPanelExpanded}
+            onToggleExpand={() => setIsPanelExpanded((prev) => !prev)}
           />
         ) : activeTab === 'transcript' ? (
           <TranscriptSearch

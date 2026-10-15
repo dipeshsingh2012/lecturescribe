@@ -122,4 +122,75 @@ describe('LectureSummary component', () => {
 
     expect(screen.getByText(/imported without a transcript/i)).toBeInTheDocument();
   });
+
+  it('triggers onToggleExpand when clicking Expand button and displays Restore in expanded mode', () => {
+    const onToggleExpand = vi.fn();
+    const hook = createHookMock();
+    const { rerender, container } = render(
+      <LectureSummary
+        summaryHook={hook}
+        onToggleExpand={onToggleExpand}
+        isExpanded={false}
+      />
+    );
+
+    const expandBtn = screen.getByRole('button', { name: /Expand reading view/i });
+    expect(expandBtn).toBeInTheDocument();
+    fireEvent.click(expandBtn);
+    expect(onToggleExpand).toHaveBeenCalledTimes(1);
+
+    // Re-render in expanded mode
+    rerender(
+      <LectureSummary
+        summaryHook={hook}
+        onToggleExpand={onToggleExpand}
+        isExpanded={true}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Collapse reading view/i })).toBeInTheDocument();
+    expect(container.querySelector('.expanded-reader')).toBeInTheDocument();
+  });
+
+  it('handles popping out the summary into a detached window when Pop Out is clicked', () => {
+    const openMock = vi.fn().mockReturnValue({
+      document: {
+        write: vi.fn(),
+        close: vi.fn()
+      }
+    });
+    vi.stubGlobal('open', openMock);
+
+    const hook = createHookMock();
+    render(<LectureSummary summaryHook={hook} activeData={{ title: 'Deep Learning' }} />);
+
+    const popOutBtn = screen.getByRole('button', { name: /Pop out summary into detached window/i });
+    expect(popOutBtn).toBeInTheDocument();
+    fireEvent.click(popOutBtn);
+
+    expect(openMock).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('toggles the podcast audio player when clicking Audio Podcast button', () => {
+    const hook = createHookMock();
+    render(<LectureSummary summaryHook={hook} activeData={{ videoId: 'vid-podcast-1', title: 'Deep Learning' }} />);
+
+    // Audio podcast buttons exist in action bar and summary toolbar
+    const podcastButtons = screen.getAllByRole('button', { name: /podcast/i });
+    expect(podcastButtons.length).toBeGreaterThanOrEqual(1);
+
+    // Player is initially not open
+    expect(screen.queryByTestId('lecture-podcast-player')).not.toBeInTheDocument();
+
+    // Click the podcast button to open the audio player
+    fireEvent.click(podcastButtons[0]);
+    expect(screen.getByTestId('lecture-podcast-player')).toBeInTheDocument();
+    expect(screen.getByText(/Podcast Audio Recap/i)).toBeInTheDocument();
+    expect(screen.getByText(/Single Narrator • Google TTS/i)).toBeInTheDocument();
+
+    // Click again to close / hide the player
+    fireEvent.click(podcastButtons[0]);
+    expect(screen.queryByTestId('lecture-podcast-player')).not.toBeInTheDocument();
+  });
 });

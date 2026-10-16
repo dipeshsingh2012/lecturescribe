@@ -161,7 +161,7 @@ Because lecture summaries (study notes and academic assignment submissions) are 
 1. User clicks **Review transcript** in the transcript header.
 2. Backend checks audio sources:
    - Google Cloud Storage (`courses/<course_slug>/lectures/<video_id>/...`).
-   - Authorized Vimeo HLS extraction.
+   - Authorized video stream HLS extraction.
    - If audio is inaccessible, returns actionable error with optional text-only proofreading fallback.
 3. Backend segments audio into 5–10 minute chunks with 15–20s overlap and aligns matching cues.
 4. Gemini Multimodal Audio generates candidate suggestions:
@@ -285,7 +285,7 @@ CREATE INDEX IF NOT EXISTS idx_annotations_user_vid
 
 ### Phase 3: Audio-Grounded AI Review & Math Conversion Engine
 1. **Audio Resolver & Chunking**:
-   - Resolve audio from GCS or Vimeo HLS stream; chunk with `ffmpeg` (5–10 min with 15s overlap).
+   - Resolve audio from GCS or external video HLS stream; chunk with `ffmpeg` (5–10 min with 15s overlap).
 2. **Gemini Multimodal Audio Integration**:
    - Structured JSON schema prompt for both speech recognition corrections and spoken math $\to$ LaTeX formatting.
 3. **Review Drawer UI**:

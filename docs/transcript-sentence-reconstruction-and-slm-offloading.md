@@ -4,7 +4,7 @@ Last updated: 2026-10-11
 
 ## Executive Summary
 
-In LectureScribe, raw speech-to-text (ASR) transcription sources (Whisper, Vimeo WebVTT, Zoom cloud recordings) deliver transcript cues fragmented into 2–4 second segments. These cues typically lack natural sentence boundaries, include speech disfluencies (*"um"*, *"basically"*, *"so that is why"*), and contain conversational meeting check-ins (*"am I audible"*, *"can you hear me"*, *"screen visible"*).
+In LectureScribe, raw speech-to-text (ASR) transcription sources (Whisper, native WebVTT, Zoom cloud recordings) deliver transcript cues fragmented into 2–4 second segments. These cues typically lack natural sentence boundaries, include speech disfluencies (*"um"*, *"basically"*, *"so that is why"*), and contain conversational meeting check-ins (*"am I audible"*, *"can you hear me"*, *"screen visible"*).
 
 [`backend/summary_generator.py`](file:///home/dipes/projects/lecturescribe/backend/summary_generator.py) currently implements [`reconstruct_sentences(cues)`](file:///home/dipes/projects/lecturescribe/backend/summary_generator.py#L62-L94) to stitch fragments into grammatical sentences, filter out logistics banter, and prune speech fillers before generating chapter sections and summaries.
 

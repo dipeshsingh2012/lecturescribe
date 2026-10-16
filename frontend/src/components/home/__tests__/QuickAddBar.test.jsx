@@ -12,7 +12,7 @@ describe('QuickAddBar', () => {
     const setCacheNotice = vi.fn();
     render(
       <QuickAddBar
-        urlInput="https://vimeo.com/123456"
+        urlInput="https://video.lecturescribe.local/123456"
         setUrlInput={setUrlInput}
         setCacheNotice={setCacheNotice}
         handlePasteUrl={vi.fn()}
@@ -23,10 +23,10 @@ describe('QuickAddBar', () => {
     );
 
     const input = screen.getByPlaceholderText(/Paste any lecture video URL or ID/i);
-    expect(input).toHaveValue('https://vimeo.com/123456');
+    expect(input).toHaveValue('https://video.lecturescribe.local/123456');
 
-    fireEvent.change(input, { target: { value: 'https://vimeo.com/999' } });
-    expect(setUrlInput).toHaveBeenCalledWith('https://vimeo.com/999');
+    fireEvent.change(input, { target: { value: 'https://video.lecturescribe.local/999' } });
+    expect(setUrlInput).toHaveBeenCalledWith('https://video.lecturescribe.local/999');
     expect(setCacheNotice).toHaveBeenCalledWith(null);
   });
 
@@ -34,7 +34,7 @@ describe('QuickAddBar', () => {
     const handleTranscribe = vi.fn();
     render(
       <QuickAddBar
-        urlInput="https://vimeo.com/123456"
+        urlInput="https://video.lecturescribe.local/123456"
         setUrlInput={vi.fn()}
         setCacheNotice={vi.fn()}
         handlePasteUrl={vi.fn()}
@@ -47,7 +47,7 @@ describe('QuickAddBar', () => {
     const btn = screen.getByRole('button', { name: /Transcribe & Study/i });
     expect(btn).not.toBeDisabled();
     fireEvent.click(btn);
-    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/123456', true);
+    expect(handleTranscribe).toHaveBeenCalledWith('https://video.lecturescribe.local/123456', true);
 
     const input = screen.getByPlaceholderText(/Paste any lecture video URL or ID/i);
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
@@ -71,7 +71,7 @@ describe('QuickAddBar', () => {
 
     rerender(
       <QuickAddBar
-        urlInput="https://vimeo.com/123456"
+        urlInput="https://video.lecturescribe.local/123456"
         setUrlInput={vi.fn()}
         setCacheNotice={vi.fn()}
         handlePasteUrl={vi.fn()}
@@ -87,7 +87,7 @@ describe('QuickAddBar', () => {
     const handleTranscribe = vi.fn();
     const { rerender } = render(
       <QuickAddBar
-        urlInput="https://vimeo.com/76979871"
+        urlInput="https://video.lecturescribe.local/76979871"
         setUrlInput={vi.fn()}
         setCacheNotice={vi.fn()}
         handlePasteUrl={vi.fn()}
@@ -105,12 +105,12 @@ describe('QuickAddBar', () => {
     expect(button).not.toBeDisabled();
 
     fireEvent.click(button);
-    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/76979871', true);
+    expect(handleTranscribe).toHaveBeenCalledWith('https://video.lecturescribe.local/76979871', true);
 
     // When loading is true with custom buttonLabel, it shows 'Adding...'
     rerender(
       <QuickAddBar
-        urlInput="https://vimeo.com/76979871"
+        urlInput="https://video.lecturescribe.local/76979871"
         setUrlInput={vi.fn()}
         setCacheNotice={vi.fn()}
         handlePasteUrl={vi.fn()}

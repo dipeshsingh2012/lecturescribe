@@ -1,6 +1,6 @@
 # 🎓 LectureScribe
 
-> **Vimeo Video Lecture Transcript Extractor, Instant Search & AI RAG Tutor**
+> **Lecture Video Transcript Extractor, Instant Search & AI RAG Tutor**
 >
 > **Triad + SLM-Routed Architecture:** **PostgreSQL** (Source of Truth) · **Algolia** (Instant Typo-Tolerant Search) · **Pinecone** (Dense Vector RAG) · **Local Ollama SLM Router** that automatically bifurcates user queries into a full-transcript **SUMMARY** path (hybrid-search / RRF bypassed) or a targeted **CHAT** path (Pinecone + Algolia + Reciprocal Rank Fusion + multi-step agent tool loop).
 
@@ -8,17 +8,17 @@
 
 ## ✨ Features
 
-- ⚡ **Direct Vimeo Ingestion:** Ingests timestamped captions and video metadata directly from Vimeo API endpoints without headless browser rendering.
-- 🔄 **Smart Caching & Deduplication:** Videos transcribed and summarized once are persisted to the database. Pasting the same Vimeo URL reuses existing transcripts and executive summaries with **0ms re-generation**.
+- ⚡ **Direct Video Ingestion:** Ingests timestamped captions and video metadata directly from video API endpoints without headless browser rendering.
+- 🔄 **Smart Caching & Deduplication:** Videos transcribed and summarized once are persisted to the database. Pasting the same video URL reuses existing transcripts and executive summaries with **0ms re-generation**.
 - 🧠 **Local SLM Intent Router (Ollama):** A tiny local LLM (default: `qwen2.5:3b`) running on `http://localhost:11434` classifies every incoming message:
   - **SUMMARY intent:** Full, uncut transcript with `[MM:SS]` timestamps is piped straight to the cloud LLM in a single shot. **No Pinecone search, no Algolia search, no RRF fusion, no agent tool loop.** User never sees a truncated or chunked transcript.
   - **CHAT intent:** Existing Pinecone (dense) + Algolia (sparse) hybrid search with custom **Reciprocal Rank Fusion (RRF, k=60)** followed by a 4-step cloud-LLM agent tool loop (lecture outline, transcript search, transcript window, web search, final synthesis).
   - Router fail-safe: If Ollama is unreachable, every query falls back to CHAT (never to SUMMARY, so users never accidentally skip retrieval when they wanted a targeted answer).
-- 🔍 **Algolia Instant Search:** Sub-10ms keyword search with full typo-tolerance across thousands of transcript cues. Clicking any cue jumps the Vimeo player directly to that timestamp.
+- 🔍 **Algolia Instant Search:** Sub-10ms keyword search with full typo-tolerance across thousands of transcript cues. Clicking any cue jumps the video player directly to that timestamp.
 - 🤖 **Pinecone Vector RAG Tutor + Agentic Tool Loop:** Semantic RAG chatbot powered by dense embeddings, an RRF-fused reranker, and a 4-step agent that can fetch the full lecture outline, search the transcript, pull a bounded time window, or ground itself against DuckDuckGo + Wikipedia. All answers carry clickable inline `[MM:SS]` timestamps and a pill-bar of structured citations.
 - 📊 **Structured Executive AI Summaries:** Automatically generates structured takeaway sections (Course Structure, Core Concepts, Thrust Areas, Q&A) on every ingest — reused on all future loads.
-- 🎬 **Embedded Vimeo Player Integration:** Synchronized video playback using `@vimeo/player` SDK with active cue highlighting during playback.
-- 🧩 **Chrome Browser Extension:** 1-click Vimeo video capture from any LMS (Canvas, Blackboard, Coursera, Moodle) or webpage with floating on-player action badges and instant workspace sync.
+- 🎬 **Embedded Video Player Integration:** Synchronized video playback with active cue highlighting during playback.
+- 🧩 **Browser Extension:** 1-click video capture from any LMS (Canvas, Blackboard, Coursera, Moodle) or webpage with floating on-player action badges and instant workspace sync.
 - 💾 **Relational Database:** Persistent storage powered directly by Cloud PostgreSQL (Neon DB / Supabase / RDS) for multi-user libraries, transcripts, and full chat history with per-message model tags.
 - 🚀 **Hosted Redis Query Cache:** Optional Upstash / Redis Cloud / local Redis with configurable 30-day TTL — identical repeat queries return in **<1 ms**.
 - 🧾 **Academic Submission Mode:** Every AI answer includes a condensed 100–150 word graduate-tone submission with word-count badge and 1-click copy, so students can paste directly into assignment responses.
@@ -84,7 +84,7 @@
 
 ```
                    ┌─────────────────────────┐
-                   │    Vimeo Video URL      │
+                   │    Lecture Video URL    │
                    └───────────┬─────────────┘
                                │
                                ▼
@@ -371,7 +371,7 @@ Open the app: [http://localhost:5173](http://localhost:5173)
 #   Activate venv first, then:
 pytest tests/ -v
 #   Single-file: pytest tests/test_api_health.py -v
-#   Includes: health endpoint, transcript ingest, RAG, caching, submission generation, summary generator, Vimeo client.
+#   Includes: health endpoint, transcript ingest, RAG, caching, submission generation, summary generator, video client.
 
 # ----- Frontend tests (Vitest, ./frontend/) -----
 cd frontend && npm run test
@@ -416,7 +416,7 @@ lecturescribe/
 │   ├── reading_extractor.py      # Extract course textbooks/readings from transcripts & slides, digital reader resolver
 │   ├── gcs_storage.py            # Google Cloud Storage resources bucket upload (V4 signed URLs)
 │   ├── google_drive_service.py   # Google Drive 1-click full-bundle background export
-│   ├── vimeo_client.py           # Vimeo player config, manifest, WebVTT caption + stream extractor
+│   ├── video_client.py           # Video player config, manifest, WebVTT caption + stream extractor
 │   ├── web_search.py             # Free DuckDuckGo + Wikipedia grounding (no paid key)
 │   └── Dockerfile                # Backend-only container
 ├── frontend/
@@ -435,7 +435,7 @@ lecturescribe/
 │   │   ├── utils/                # formatters (cleanSubmissionFallback, timestamps, sizes, routing)
 │   │   ├── App.jsx               # Top-level routing, Google OAuth, workspace layout
 │   │   └── main.jsx / index.css
-│   ├── package.json              # React 18, Vite 5, @vimeo/player, react-markdown, lucide-react, zustand, vitest
+│   ├── package.json              # React 18, Vite 5, react-markdown, lucide-react, zustand, vitest
 │   ├── vite.config.js            # /api proxy to http://localhost:8000
 │   └── vitest.config.js          # JSDOM test runner
 ├── tests/                        # pytest suite (api health, transcript, caching, submission, services)
@@ -531,7 +531,6 @@ Priority order the agent uses is: **Groq → Hugging Face → Gemini → OpenAI*
 | Variable | Default | Notes |
 |---|---|---|
 | `WARMUP_VIDEO_ID` | (unset) | Optional. If set, the server ingests cues + embeds this video ID into Pinecone + Algolia during boot (useful on deployments to avoid cold-start on a popular lecture). |
-| `VIMEO_TOKEN` | (unset) | Optional. Adds higher rate limits / private-video caption access when reading from Vimeo. |
 
 ---
 

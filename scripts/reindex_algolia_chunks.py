@@ -6,8 +6,8 @@ Migration script to compress existing fine-grained Algolia transcript records
 into consolidated ~30-second windowed chunks.
 
 Reduces the total Algolia record footprint by 80-90% by:
-1. Deleting legacy per-cue records (`vimeo-{video_id}-{cue_idx}`) via `delete_by(filters='video_id:<id>')`.
-2. Building ~30s aggregated chunk records (`vimeo-{video_id}-chunk-{chunk_idx}`).
+1. Deleting legacy per-cue records (`lecture-{video_id}-{cue_idx}`) via `delete_by(filters='video_id:<id>')`.
+2. Building ~30s aggregated chunk records (`lecture-{video_id}-chunk-{chunk_idx}`).
 3. Ingesting the new chunk records into the Algolia Cloud index.
 
 Usage:

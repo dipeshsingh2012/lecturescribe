@@ -85,6 +85,7 @@ export default function App() {
     setSelectedCourse,
     activeCourseData: course.activeCourseData,
     effectiveCourses: library.effectiveCourses,
+    userLibrary: library.userLibrary,
     fetchUserLibrary: library.fetchUserLibrary,
     navigateTo,
     initChatMessages: (t, v, cues, options) => tutor.initChatMessages(t, v, cues, options),
@@ -211,7 +212,7 @@ export default function App() {
     if (initialCourse) {
       setSelectedCourse(prev => (prev && normalizeCourseSlug(prev) === normalizeCourseSlug(initialCourse) ? prev : initialCourse));
     }
-    if (initialVidId) handleTranscribe(`https://vimeo.com/${initialVidId}`, false, initialCourse);
+    if (initialVidId) handleTranscribe(initialVidId, false, initialCourse);
     if (initialNoteId) setActiveNoteId(initialNoteId);
 
     const onPopState = () => {
@@ -227,7 +228,7 @@ export default function App() {
 
       if (videoId) {
         if (lecture.activeDataRef.current?.videoId !== videoId) {
-          handleTranscribe(`https://vimeo.com/${videoId}`, false, courseName);
+          handleTranscribe(videoId, false, courseName);
         }
       } else {
         setActiveData(null);

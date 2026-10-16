@@ -148,7 +148,7 @@ class Llama3PineconeRAGStore:
 
             if chunk_text.strip():
                 chunk_count += 1
-                vec_id = f"vimeo-{video_id}-chunk-{chunk_count}"
+                vec_id = f"lecture-{video_id}-chunk-{chunk_count}"
 
                 metadata = {
                     "video_id": video_id,

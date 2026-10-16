@@ -182,17 +182,17 @@ def test_vimeo_url_resolves_and_downloads_media(monkeypatch, tmp_path):
 
     with patch.object(transcription.requests, "get", return_value=config_response) as get_config:
         source = transcription.download_media_url(
-            "https://vimeo.com/123456789?share=copy",
+            "https://video.lecturescribe.local/123456789?share=copy",
             tmp_path / "source.media",
         )
 
     assert source == stream_url
     get_config.assert_called_once()
-    assert get_config.call_args.args[0] == "https://player.vimeo.com/video/123456789/config"
+    assert get_config.call_args.args[0] == "https://player.lecturescribe.local/video/123456789/config"
     assert get_config.call_args.kwargs["allow_redirects"] is False
 
 
-def test_extract_audio_uses_safe_protocols_for_vimeo_hls(tmp_path):
+def test_extract_audio_uses_safe_protocols_for_video_hls(tmp_path):
     observed_args = []
 
     def mock_ffmpeg(args):
@@ -201,7 +201,7 @@ def test_extract_audio_uses_safe_protocols_for_vimeo_hls(tmp_path):
 
     with patch.object(transcription, "_run_ffmpeg", side_effect=mock_ffmpeg):
         chunks = transcription.extract_audio(
-            "https://vod-adaptive-ak.vimeocdn.com/signed/playlist.m3u8",
+            "https://vod-adaptive-ak.cdn.lecturescribe.local/signed/playlist.m3u8",
             tmp_path,
         )
 
@@ -209,13 +209,13 @@ def test_extract_audio_uses_safe_protocols_for_vimeo_hls(tmp_path):
     assert observed_args[0][:2] == ["-protocol_whitelist", "https,tls,tcp,crypto"]
 
 
-def test_vimeo_url_rejects_non_video_paths(tmp_path):
+def test_video_url_rejects_non_video_paths(tmp_path):
     try:
-        transcription.download_media_url("https://vimeo.com/channels/staffpicks/123", tmp_path / "source.media")
+        transcription.download_media_url("https://video.lecturescribe.local/channels/staffpicks/123", tmp_path / "source.media")
     except ValueError as exc:
-        assert "Only Vimeo video page URLs" in str(exc)
+        assert "Only video page URLs" in str(exc)
     else:
-        raise AssertionError("Expected an invalid Vimeo page path to be rejected.")
+        raise AssertionError("Expected an invalid video page path to be rejected.")
 
 
 def test_upload_endpoint_requires_groq_key(monkeypatch):

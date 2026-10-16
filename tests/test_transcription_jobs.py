@@ -44,7 +44,7 @@ class TestTranscriptionJobs(unittest.TestCase):
         get_video.return_value = {
             "title": "Lecture",
             "duration": "45m",
-            "sourceUrl": "https://vimeo.com/123",
+            "sourceUrl": "https://video.lecturescribe.local/123",
             "course_name": "AI",
             "cues": [],
             "summarySections": [],
@@ -64,7 +64,7 @@ class TestTranscriptionJobs(unittest.TestCase):
             "123",
             "Lecture",
             "45m",
-            "https://vimeo.com/123",
+            "https://video.lecturescribe.local/123",
             "Groq Whisper",
             saved_cues,
             [],

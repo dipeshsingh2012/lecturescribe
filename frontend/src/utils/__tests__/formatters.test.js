@@ -77,30 +77,30 @@ describe('formatters utility functions', () => {
       expect(extractVideoId('\n1229247139\t')).toBe('1229247139');
     });
 
-    it('extracts ID from standard Vimeo URLs', () => {
-      expect(extractVideoId('https://vimeo.com/76979871')).toBe('76979871');
-      expect(extractVideoId('http://vimeo.com/76979871')).toBe('76979871');
-      expect(extractVideoId('https://www.vimeo.com/76979871')).toBe('76979871');
-      expect(extractVideoId('vimeo.com/76979871')).toBe('76979871');
+    it('extracts ID from standard video URLs', () => {
+      expect(extractVideoId('https://video.local/76979871')).toBe('76979871');
+      expect(extractVideoId('http://video.local/76979871')).toBe('76979871');
+      expect(extractVideoId('https://www.video.local/76979871')).toBe('76979871');
+      expect(extractVideoId('video.local/76979871')).toBe('76979871');
     });
 
     it('extracts ID from player and embed URLs', () => {
-      expect(extractVideoId('https://vimeo.com/video/76979871')).toBe('76979871');
-      expect(extractVideoId('https://player.vimeo.com/video/76979871')).toBe('76979871');
+      expect(extractVideoId('https://video.local/video/76979871')).toBe('76979871');
+      expect(extractVideoId('https://player.video.local/video/76979871')).toBe('76979871');
     });
 
     it('extracts ID from URLs with query parameters and fragments', () => {
-      expect(extractVideoId('vimeo.com/76979871?autoplay=1')).toBe('76979871');
-      expect(extractVideoId('https://vimeo.com/76979871?autoplay=1&muted=true')).toBe('76979871');
-      expect(extractVideoId('https://vimeo.com/76979871#t=30s')).toBe('76979871');
-      expect(extractVideoId('https://vimeo.com/76979871/')).toBe('76979871');
+      expect(extractVideoId('video.local/76979871?autoplay=1')).toBe('76979871');
+      expect(extractVideoId('https://video.local/76979871?autoplay=1&muted=true')).toBe('76979871');
+      expect(extractVideoId('https://video.local/76979871#t=30s')).toBe('76979871');
+      expect(extractVideoId('https://video.local/76979871/')).toBe('76979871');
     });
 
     it('extracts ID from unlisted, channel, group, and manage URLs', () => {
-      expect(extractVideoId('https://vimeo.com/76979871/abc123def')).toBe('76979871');
-      expect(extractVideoId('https://vimeo.com/channels/staffpicks/76979871')).toBe('76979871');
-      expect(extractVideoId('https://vimeo.com/groups/motion/videos/76979871')).toBe('76979871');
-      expect(extractVideoId('https://vimeo.com/manage/videos/76979871')).toBe('76979871');
+      expect(extractVideoId('https://video.local/76979871/abc123def')).toBe('76979871');
+      expect(extractVideoId('https://video.local/channels/staffpicks/76979871')).toBe('76979871');
+      expect(extractVideoId('https://video.local/groups/motion/videos/76979871')).toBe('76979871');
+      expect(extractVideoId('https://video.local/manage/videos/76979871')).toBe('76979871');
     });
 
     it('returns trimmed string for non-matching URLs', () => {

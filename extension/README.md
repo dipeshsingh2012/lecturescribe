@@ -1,8 +1,8 @@
 # 🎓 LectureScribe - Browser Extension (Chrome & Firefox)
 
-> **Vimeo Video Capture & AI Tutor Companion for LectureScribe**
+> **Video Capture & AI Tutor Companion for LectureScribe**
 > Universal Manifest V3 extension compatible with **Google Chrome, Mozilla Firefox, Brave, Microsoft Edge, and Arc**.
-> Automatically detects Vimeo lectures and embedded players on any webpage or LMS (Canvas, Blackboard, Coursera, Moodle, etc.) and connects them directly to your LectureScribe workspace.
+> Automatically detects lectures and embedded players on any webpage or LMS (Canvas, Blackboard, Coursera, Moodle, etc.) and connects them directly to your LectureScribe workspace.
 
 ---
 
@@ -13,14 +13,14 @@
    - Includes official `browser_specific_settings.gecko` configuration for Firefox Add-ons.
    - Native async/await operations throughout background, content, popup, and options scripts.
 
-2. **Universal Vimeo Detection:**
-   - Detects Vimeo video pages (`vimeo.com/*`).
-   - Detects embedded Vimeo players (`player.vimeo.com/video/*`).
+2. **Universal Video Detection:**
+   - Detects lecture video pages.
+   - Detects embedded video players.
    - Detects nested iframes and LMS video embeds (`all_frames: true`).
    - Dynamic scanning via `MutationObserver` for single-page applications (Canvas, Moodle, Coursera).
 
 3. **On-Page Floating Action Badge:**
-   - Injects a sleek, non-intrusive floating pill directly over detected Vimeo players.
+   - Injects a sleek, non-intrusive floating pill directly over detected video players.
    - Provides exactly two dedicated actions:
      - 🚀 **Open LectureScribe**: Launches the lecture workspace (`/lecture/{videoId}`).
      - 📥 **Copy to LectureScribe**: Triggers the shared backend ingestion pipeline (extracting transcripts, generating AI summaries, indexing into Pinecone/Algolia, and associating with detected LMS course context), then opens the lecture directly in its course context (`/course/{course_slug}/lecture/{videoId}`).
@@ -34,10 +34,10 @@
    - Live backend status indicator (`http://localhost:8000` or production Cloud Run API).
    - Instant DB cache check (highlights lectures already saved in database).
    - Quick actions to **Open in LectureScribe** or **Copy to LectureScribe** directly from the toolbar.
-   - Manual ingest form to paste any Vimeo URL or ID on demand.
+   - Manual ingest form to paste any Video URL or ID on demand.
 
 6. **Context Menu & Deep Linking:**
-   - Right-click any Vimeo link: **"🎓 Open Vimeo Video in LectureScribe"**.
+   - Right-click any video link: **"🎓 Open Video in LectureScribe"**.
    - Configurable host endpoints for local development (`localhost:5173`) and production deployment.
 
 
@@ -53,7 +53,7 @@
    ```
 2. Click the **Load Temporary Add-on...** button.
 3. Browse to the `extension` directory and select [`manifest.json`](file:///home/dipes/projects/lecturescribe/extension/manifest.json) (or select the packaged ZIP in `extension/dist/`).
-4. The extension will load immediately with the ID `lecturescribe-vimeo-capture@lecturescribe.local`.
+4. The extension will load immediately with the ID `lecturescribe-capture@lecturescribe.local`.
 5. Pin the extension to your Firefox toolbar.
 
 ### 🌐 Google Chrome / Brave / Edge / Arc
@@ -105,8 +105,8 @@ Click the extension icon and select the **⚙️ Settings** gear, or right-click
    # Terminal 2 - Frontend
    cd frontend && npm run dev
    ```
-2. In Firefox or Chrome, navigate to any page with Vimeo videos, e.g.:
-   - Any Vimeo video page: `https://vimeo.com/76979871`
+2. In Firefox or Chrome, navigate to any page with lecture videos, e.g.:
+   - Any video page or embedded player: `https://video.lecturescribe.local/76979871`
    - Any LMS page (Canvas, Blackboard, Coursera, Moodle) with embedded lecture videos.
 3. Observe:
    - Floating `🎓 LectureScribe` pill on the video embed.

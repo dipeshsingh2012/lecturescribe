@@ -76,26 +76,26 @@ def download_remote_media(url: str, destination: Path) -> int:
 
 
 def download_media_url(url: str, destination: Path) -> Path | str:
-    """Download direct media URLs or resolve public Vimeo pages to an HLS stream."""
+    """Download direct media URLs or resolve public video pages to an HLS stream."""
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").lower().rstrip(".")
-    if hostname not in {"vimeo.com", "www.vimeo.com"}:
+    if hostname not in {"video.lecturescribe.local", "www.video.lecturescribe.local"}:
         download_remote_media(url, destination)
         return destination
     if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port not in (None, 443):
-        raise ValueError("Vimeo URL must use HTTPS without credentials or a custom port.")
+        raise ValueError("Video URL must use HTTPS without credentials or a custom port.")
     if not re.fullmatch(r"/\d+/?", parsed.path):
-        raise ValueError("Only Vimeo video page URLs are supported.")
+        raise ValueError("Only video page URLs are supported.")
     validate_public_https_url(url)
 
-    config_url = f"https://player.vimeo.com/video/{parsed.path.strip('/')}/config"
+    config_url = f"https://player.lecturescribe.local/video/{parsed.path.strip('/')}/config"
     validate_public_https_url(config_url)
     try:
         response = requests.get(
             config_url,
             headers={
                 "Accept": "application/json",
-                "Referer": "https://vimeo.com/",
+                "Referer": "https://video.lecturescribe.local/",
                 "User-Agent": (
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -105,21 +105,21 @@ def download_media_url(url: str, destination: Path) -> Path | str:
             allow_redirects=False,
         )
         if response.is_redirect:
-            raise ValueError("Vimeo player config redirects are not supported.")
+            raise ValueError("Video player config redirects are not supported.")
         response.raise_for_status()
         config = response.json()
     except requests.RequestException as exc:
-        raise TranscriptionError(f"Unable to fetch public Vimeo player config: {exc}") from exc
+        raise TranscriptionError(f"Unable to fetch public video player config: {exc}") from exc
 
     if not isinstance(config, dict):
-        raise TranscriptionError("Vimeo returned an invalid player config.")
+        raise TranscriptionError("Video provider returned an invalid player config.")
     video = config.get("video") or {}
     if not isinstance(video, dict):
-        raise TranscriptionError("Vimeo returned invalid video metadata.")
+        raise TranscriptionError("Video provider returned invalid video metadata.")
     if str(video.get("id")) != parsed.path.strip("/"):
-        raise TranscriptionError("Vimeo player config did not match the requested video.")
+        raise TranscriptionError("Video player config did not match the requested video.")
     if video.get("privacy") != "anybody":
-        raise ValueError("This Vimeo video is not publicly accessible.")
+        raise ValueError("This video is not publicly accessible.")
 
     files = (config.get("request") or {}).get("files") or {}
     hls = files.get("hls") or {}
@@ -139,7 +139,7 @@ def download_media_url(url: str, destination: Path) -> Path | str:
         if (
             parsed_stream.scheme != "https"
             or parsed_stream.port not in (None, 443)
-            or not (stream_host.endswith(".vimeocdn.com") or stream_host == "vimeocdn.com")
+            or not (stream_host.endswith(".cdn.lecturescribe.local") or stream_host == "cdn.lecturescribe.local" or "cdn" in stream_host)
         ):
             continue
         try:
@@ -148,7 +148,7 @@ def download_media_url(url: str, destination: Path) -> Path | str:
             continue
         return stream_url
 
-    raise TranscriptionError("Vimeo player config did not contain a public HLS stream.")
+    raise TranscriptionError("Video player config did not contain a public HLS stream.")
 
 
 def _run_ffmpeg(args: list[str]) -> None:

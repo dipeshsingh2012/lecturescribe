@@ -37,30 +37,25 @@ ext.runtime.onInstalled.addListener(async () => {
   try {
     ext.contextMenus.create({
       id: "lecturescribe-open-link",
-      title: "🎓 Open Vimeo Video in LectureScribe",
-      contexts: ["link"],
-      targetUrlPatterns: [
-        "*://vimeo.com/*",
-        "*://*.vimeo.com/*",
-        "*://player.vimeo.com/video/*"
-      ]
+      title: "🎓 Open Video in LectureScribe",
+      contexts: ["link", "video"]
     });
   } catch (err) {
     console.debug("Context menu setup notice:", err);
   }
 });
 
-// Helper to extract Vimeo video ID from URL
-function extractVimeoId(url) {
+// Helper to extract video ID from URL
+function extractVideoId(url) {
   if (!url) return null;
-  const match = url.match(/(?:vimeo\.com\/(?:channels\/[^\/]+\/|groups\/[^\/]+\/videos\/|manage\/videos\/|video\/)?|player\.vimeo\.com\/video\/)(\d+)/);
+  const match = url.match(/(?:[/?=]|^)(\d{6,12})(?:[/?&#]|$)/);
   return match ? match[1] : null;
 }
 
 // Handle Context Menu clicks
 ext.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === "lecturescribe-open-link" && info.linkUrl) {
-    const videoId = extractVimeoId(info.linkUrl);
+  if (info.menuItemId === "lecturescribe-open-link" && (info.linkUrl || info.srcUrl)) {
+    const videoId = extractVideoId(info.linkUrl || info.srcUrl);
     if (videoId) {
       const settings = await getSettings();
       const targetUrl = `${settings.webAppUrl.replace(/\/+$/, "")}/lecture/${videoId}`;
@@ -107,7 +102,7 @@ async function updateBadge(tabId) {
 ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender?.tab?.id;
 
-  if (message.type === "VIMEO_VIDEOS_DETECTED" && tabId) {
+  if ((message.type === "VIDEOS_DETECTED" || message.type === "VIMEO_VIDEOS_DETECTED") && tabId) {
     let currentMap = tabVideos.get(tabId);
     if (!currentMap) {
       currentMap = new Map();
@@ -244,7 +239,7 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
             videoId: data.videoId,
             cached: Boolean(data.cached_in_db),
             synced_to_gcs: Boolean(data.synced_to_gcs),
-            video_source: data.video_source || "vimeo",
+            video_source: data.video_source || "external",
             blob_name: data.blob_name || null,
             gcs_uri: data.gcs_uri || null,
             size_mb: data.size_mb || null,
@@ -263,7 +258,7 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
             success: true,
             cached: Boolean(data.cached),
             synced_to_gcs: Boolean(data.gcs_video_url || data.video_source === "gcs"),
-            video_source: data.video_source || (data.gcs_video_url ? "gcs" : "vimeo"),
+            video_source: data.video_source || (data.gcs_video_url ? "gcs" : "external"),
             title: data.title || null,
             duration: data.duration || null,
             transcript_available: Boolean(data.transcript_available),

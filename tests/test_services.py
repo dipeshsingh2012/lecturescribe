@@ -40,7 +40,7 @@ class TestServices(unittest.TestCase):
             "email": "dipesh.singh2012@gmail.com",
             "video_id": "1229629089",
             "video_title": "Introduction to Speech and Natural Language Processing",
-            "video_url": "https://vimeo.com/1229629089",
+            "video_url": "https://video.lecturescribe.local/1229629089",
             "duration_seconds": "1h 18m"
         }
         req = UserLibraryRecordRequest(**payload)
@@ -292,13 +292,13 @@ class TestServices(unittest.TestCase):
         # First query: lecturescribe_videos -> 3 existing lectures
         # Second query: lecturescribe_user_library -> 1 newly added lecture + 1 existing with drive_folder_url
         general_videos = [
-            {"video_id": "101", "title": "Calculus 1", "duration": "45m", "source_url": "https://vimeo.com/101", "course_name": "Applied Mathematics", "created_at": None},
-            {"video_id": "102", "title": "Linear Algebra", "duration": "50m", "source_url": "https://vimeo.com/102", "course_name": "Applied Mathematics", "created_at": None},
-            {"video_id": "103", "title": "Probability", "duration": "60m", "source_url": "https://vimeo.com/103", "course_name": "Applied Mathematics", "created_at": None}
+            {"video_id": "101", "title": "Calculus 1", "duration": "45m", "source_url": "https://video.lecturescribe.local/101", "course_name": "Applied Mathematics", "created_at": None},
+            {"video_id": "102", "title": "Linear Algebra", "duration": "50m", "source_url": "https://video.lecturescribe.local/102", "course_name": "Applied Mathematics", "created_at": None},
+            {"video_id": "103", "title": "Probability", "duration": "60m", "source_url": "https://video.lecturescribe.local/103", "course_name": "Applied Mathematics", "created_at": None}
         ]
         user_lib_videos = [
-            {"video_id": "103", "title": "Probability", "duration": "60m", "source_url": "https://vimeo.com/103", "drive_folder_url": "https://drive.google.com/103", "last_viewed_at": None, "course_name": "Applied Mathematics"},
-            {"video_id": "104", "title": "Optimization (Newly Added)", "duration": "55m", "source_url": "https://vimeo.com/104", "drive_folder_url": None, "last_viewed_at": None, "course_name": "Applied Mathematics"}
+            {"video_id": "103", "title": "Probability", "duration": "60m", "source_url": "https://video.lecturescribe.local/103", "drive_folder_url": "https://drive.google.com/103", "last_viewed_at": None, "course_name": "Applied Mathematics"},
+            {"video_id": "104", "title": "Optimization (Newly Added)", "duration": "55m", "source_url": "https://video.lecturescribe.local/104", "drive_folder_url": None, "last_viewed_at": None, "course_name": "Applied Mathematics"}
         ]
 
         mock_cursor.fetchall.side_effect = [general_videos, user_lib_videos]
@@ -326,7 +326,7 @@ class TestServices(unittest.TestCase):
                 "title": "Discrete Math Lecture",
                 "duration": "40m",
                 "course_name": "Discrete Math",
-                "sourceUrl": "https://vimeo.com/201"
+                "sourceUrl": "https://video.lecturescribe.local/201"
             }
             try:
                 course = db_manager.get_course_details("Discrete Math")

@@ -17,7 +17,7 @@ from backend.algolia_service import algolia_service
 from backend.database import db_manager
 from backend.rag_engine import pinecone_rag_engine
 from backend.redis_service import redis_cache
-from backend.vimeo_client import format_timestamp
+from backend.video_client import format_timestamp
 
 
 def _required_config(name: str) -> str:
@@ -184,7 +184,7 @@ def process_transcription_job(job_id: str) -> None:
             service_url = _required_config("TRANSCRIPTION_SERVICE_URL").rstrip("/")
             response = requests.post(
                 f"{service_url}/transcribe/url",
-                json={"url": f"https://vimeo.com/{job['video_id']}"},
+                json={"url": video.get("sourceUrl") or f"https://video.lecturescribe.local/{job['video_id']}"},
                 timeout=(15, 900),
             )
             if not response.ok:
@@ -195,8 +195,8 @@ def process_transcription_job(job_id: str) -> None:
             cues = transcription_payload_to_cues(transcription)
             if not cues:
                 raise RuntimeError("Transcription service returned no transcript text.")
-            title = video.get("title") or f"Vimeo Video {job['video_id']}"
-            source_url = video.get("sourceUrl") or f"https://vimeo.com/{job['video_id']}"
+            title = video.get("title") or f"Video {job['video_id']}"
+            source_url = video.get("sourceUrl") or f"https://video.lecturescribe.local/{job['video_id']}"
             db_manager.save_video_transcript(
                 job["video_id"],
                 title,
@@ -209,7 +209,7 @@ def process_transcription_job(job_id: str) -> None:
                 course_name=video.get("course_name"),
             )
         else:
-            title = video.get("title") or f"Vimeo Video {job['video_id']}"
+            title = video.get("title") or f"Video {job['video_id']}"
 
         db_manager.update_transcription_job(job_id, "processing", "indexing")
         algolia_service.ingest_cues(job["video_id"], title, cues)

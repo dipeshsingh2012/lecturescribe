@@ -36,7 +36,7 @@ Implement Reciprocal Rank Fusion (RRF) hybrid retrieval combining Pinecone (dens
       })
     });
     ```
-  - **Rationale**: The backend already stores transcripts in PostgreSQL, Pinecone, and Algolia during initial video ingestion (`/api/vimeo/transcript`). Serializing thousands of cue objects on every chat prompt is completely redundant.
+  - **Rationale**: The backend already stores transcripts in PostgreSQL, Pinecone, and Algolia during initial video ingestion (`/api/transcript`). Serializing thousands of cue objects on every chat prompt is completely redundant.
 
 ---
 

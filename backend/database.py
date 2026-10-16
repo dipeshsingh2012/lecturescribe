@@ -2886,8 +2886,8 @@ class RelationalDBManager:
                             "title": r["title"],
                             "video_title": r["title"],
                             "duration": r["duration"] or "Unknown",
-                            "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
-                            "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "sourceUrl": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
+                            "video_url": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
                             "driveFolderUrl": r["drive_folder_url"],
                             "drive_folder_url": r["drive_folder_url"],
                             "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
@@ -3008,8 +3008,8 @@ class RelationalDBManager:
                             "title": r["title"],
                             "video_title": r["title"],
                             "duration": r.get("duration") or "Unknown",
-                            "sourceUrl": r.get("source_url") or f"https://vimeo.com/{vid}",
-                            "video_url": r.get("source_url") or f"https://vimeo.com/{vid}",
+                            "sourceUrl": r.get("source_url") or f"https://video.lecturescribe.local/{vid}",
+                            "video_url": r.get("source_url") or f"https://video.lecturescribe.local/{vid}",
                             "driveFolderUrl": u_data.get("drive_folder_url") if u_data else None,
                             "drive_folder_url": u_data.get("drive_folder_url") if u_data else None,
                             "lastViewedAt": str(u_data["last_viewed_at"]) if u_data and u_data.get("last_viewed_at") else str(r["created_at"]) if r.get("created_at") else None,
@@ -3030,8 +3030,8 @@ class RelationalDBManager:
                             "title": u["title"],
                             "video_title": u["title"],
                             "duration": u.get("duration") or "Unknown",
-                            "sourceUrl": u.get("source_url") or f"https://vimeo.com/{vid}",
-                            "video_url": u.get("source_url") or f"https://vimeo.com/{vid}",
+                            "sourceUrl": u.get("source_url") or f"https://video.lecturescribe.local/{vid}",
+                            "video_url": u.get("source_url") or f"https://video.lecturescribe.local/{vid}",
                             "driveFolderUrl": u.get("drive_folder_url"),
                             "drive_folder_url": u.get("drive_folder_url"),
                             "lastViewedAt": str(u["last_viewed_at"]) if u.get("last_viewed_at") else None,
@@ -3081,8 +3081,8 @@ class RelationalDBManager:
                     "title": v.get("title", f"Video {vid_id}"),
                     "video_title": v.get("title", f"Video {vid_id}"),
                     "duration": v.get("duration", "Unknown"),
-                    "sourceUrl": v.get("sourceUrl", f"https://vimeo.com/{vid_id}"),
-                    "video_url": v.get("sourceUrl", f"https://vimeo.com/{vid_id}"),
+                    "sourceUrl": v.get("sourceUrl", f"https://video.lecturescribe.local/{vid_id}"),
+                    "video_url": v.get("sourceUrl", f"https://video.lecturescribe.local/{vid_id}"),
                     "driveFolderUrl": None,
                     "drive_folder_url": None,
                     "lastViewedAt": None,
@@ -3130,8 +3130,8 @@ class RelationalDBManager:
                             "title": r["title"],
                             "video_title": r["title"],
                             "duration": r["duration"] or "Unknown",
-                            "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
-                            "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "sourceUrl": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
+                            "video_url": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
                             "driveFolderUrl": r["drive_folder_url"],
                             "drive_folder_url": r["drive_folder_url"],
                             "lastViewedAt": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
@@ -3176,8 +3176,8 @@ class RelationalDBManager:
                             "title": r["title"],
                             "video_title": r["title"],
                             "duration": r["duration"] or "Unknown",
-                            "sourceUrl": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
-                            "video_url": r["source_url"] or f"https://vimeo.com/{r['video_id']}",
+                            "sourceUrl": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
+                            "video_url": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
                             "driveFolderUrl": r["drive_folder_url"],
                             "drive_folder_url": r["drive_folder_url"],
                             "lastViewedAt": str(r["created_at"]) if r["created_at"] else None,
@@ -4104,7 +4104,7 @@ class RelationalDBManager:
                             INSERT INTO lecturescribe_videos (video_id, title, duration, source_url, caption_label)
                             VALUES (%s, %s, %s, %s, %s)
                             ON CONFLICT (video_id) DO NOTHING;
-                        """, (video_id, f"Lecture {video_id}", "", f"https://vimeo.com/{video_id}", "Caption track"))
+                        """, (video_id, f"Lecture {video_id}", "", f"https://video.lecturescribe.local/{video_id}", "Caption track"))
 
                     # Ensure cue_id exists in lecturescribe_transcript_cues to satisfy foreign key
                     if clean_cue_id is not None:

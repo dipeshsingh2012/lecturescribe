@@ -49,7 +49,7 @@ from backend.calendar_parser import calendar_service, SLOT_LABELS
 from backend.whatsapp_service import whatsapp_service
 
 # Import extraction and service modules
-from backend.vimeo_client import (
+from backend.video_client import (
     extract_video_id,
     fetch_player_config,
     get_text_tracks,
@@ -316,7 +316,7 @@ def get_lecture_by_id(
     email: Optional[str] = Query(None, description="Signed-in user email for LMS library"),
     course_name: Optional[str] = Query(None, description="Optional course name to associate video with")
 ):
-    """Dedicated API endpoint for fetching a lecture workspace by Vimeo video ID."""
+    """Dedicated API endpoint for fetching a lecture workspace by video ID."""
     return get_transcript(url=video_id, email=email, course_name=course_name)
 
 
@@ -327,7 +327,7 @@ def transcribe_lecture(
 ):
     """Generate and persist a transcript for an imported lecture without captions."""
     if not re.fullmatch(r"\d+", video_id):
-        raise HTTPException(status_code=400, detail="A valid Vimeo video ID is required.")
+        raise HTTPException(status_code=400, detail="A valid video ID is required.")
 
     service_url = os.getenv("TRANSCRIPTION_SERVICE_URL", "").strip().rstrip("/")
     if not service_url:
@@ -392,7 +392,7 @@ def transcribe_lecture(
             content=transcription_job_status(job),
         )
 
-    source_url = f"https://vimeo.com/{video_id}"
+    source_url = f"https://video.lecturescribe.local/{video_id}"
     try:
         response = requests.post(
             f"{service_url}/transcribe/url",
@@ -426,7 +426,7 @@ def transcribe_lecture(
     if not cues:
         raise HTTPException(status_code=502, detail="Transcription service returned no transcript text.")
 
-    title = saved.get("title") or f"Vimeo Video {video_id}"
+    title = saved.get("title") or f"Video {video_id}"
     duration = saved.get("duration") or "Unknown"
     course_name = saved.get("course_name")
     db_manager.save_video_transcript(
@@ -1177,22 +1177,23 @@ def process_lecture_import(
         saved["course_slug"] = to_course_slug(course_title)
         clean_email = email.strip() if isinstance(email, str) else None
 
-        def _db_work() -> Optional[str]:
-            # Drive URL lookup -> user library upsert -> Redis invalidation (order matters).
+        def _db_work():
+            # Drive URL lookup -> progress lookup -> user library upsert -> Redis invalidation (order matters).
             d_url = db_manager.get_drive_folder_url(clean_vid, clean_email)
+            prog = db_manager.get_lecture_progress(clean_vid, user_email=clean_email)
             if clean_email:
                 db_manager.record_user_lecture(
                     user_email=clean_email,
                     video_id=clean_vid,
                     title=saved["title"],
                     duration=saved.get("duration", "Unknown"),
-                    source_url=saved.get("sourceUrl", f"https://vimeo.com/{clean_vid}"),
+                    source_url=saved.get("sourceUrl", f"https://video.lecturescribe.local/{clean_vid}"),
                     course_name=course_title,
                     drive_folder_url=d_url
                 )
                 if redis_cache:
                     redis_cache.invalidate_user(clean_email)
-            return d_url
+            return d_url, prog
 
         # Postgres and GCS are independent network round-trips: run them concurrently.
         db_future = _lecture_io_executor.submit(_db_work)
@@ -1200,8 +1201,10 @@ def process_lecture_import(
             gcs_storage_service.find_lecture_video, video_id=clean_vid, course_name=course_title
         )
         gcs_video = gcs_future.result()
-        drive_url = db_future.result()
+        drive_url, lecture_prog = db_future.result()
 
+        if lecture_prog:
+            saved["progress"] = lecture_prog
         if drive_url:
             saved["drive_folder_url"] = drive_url
             saved["driveFolderUrl"] = drive_url
@@ -1229,14 +1232,14 @@ def process_lecture_import(
             saved["upload_status"] = "UPLOADING" if is_uploading else "IDLE"
         return saved
 
-    # 2. Extract video config: use provided player_config or fetch fresh from Vimeo
+    # 2. Extract video config: use provided player_config or fetch fresh from video provider
     if player_config and isinstance(player_config, dict):
         config = player_config
     else:
         config = fetch_player_config(clean_vid)
 
     details = video_details or {}
-    title = details.get("title") or config.get("video", {}).get("title", f"Vimeo Video {clean_vid}")
+    title = details.get("title") or config.get("video", {}).get("title", f"Video {clean_vid}")
     raw_dur = details.get("duration") or config.get("video", {}).get("duration", 6060)
     if isinstance(raw_dur, int):
         mins = raw_dur // 60
@@ -1248,7 +1251,7 @@ def process_lecture_import(
     tracks = get_text_tracks(config)
     track = next((t for t in tracks if t.get("default")), tracks[0]) if tracks else None
     cues = []
-    transcript_message = "This video was imported, but Vimeo has no caption or subtitle tracks available."
+    transcript_message = "This video was imported, but has no caption or subtitle tracks available."
     if track:
         vtt_url = track.get("url") or track.get("src")
         if vtt_url:
@@ -1262,17 +1265,17 @@ def process_lecture_import(
                 if not cues:
                     transcript_message = "This video was imported, but its caption track contains no transcript text."
             except Exception as exc:
-                print(f"⚠️ [Vimeo Caption Notice] Could not retrieve captions for video '{clean_vid}': {exc}")
+                print(f"⚠️ [Caption Notice] Could not retrieve captions for video '{clean_vid}': {exc}")
                 transcript_message = "This video was imported, but its caption track could not be downloaded."
         else:
-            transcript_message = "This video was imported, but Vimeo did not provide a downloadable caption track."
+            transcript_message = "This video was imported, but did not provide a downloadable caption track."
 
     transcript_available = bool(cues)
     if transcript_available:
         transcript_message = None
     # Chapters/summaries are generated in the background worker to prevent blocking HTTP ingestion
     summary_sections = []
-    source_url = f"https://vimeo.com/{clean_vid}"
+    source_url = f"https://video.lecturescribe.local/{clean_vid}"
     caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
     raw_course = course_name if isinstance(course_name, str) else None
     candidate_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
@@ -1346,7 +1349,7 @@ def process_lecture_import(
 
 @app.get("/api/transcript")
 def get_transcript(
-    url: str = Query(..., description="Vimeo URL or Video ID"),
+    url: str = Query(..., description="Video URL or Video ID"),
     email: Optional[str] = Query(None, description="Signed-in user email for LMS library"),
     course_name: Optional[str] = Query(None, description="Optional course name to associate video with")
 ):
@@ -2036,7 +2039,7 @@ def chat_with_transcript(req: ChatRequest):
 
 @app.get("/api/chat/history")
 def get_chat_history(
-    video_id: str = Query(..., description="Vimeo Video ID"),
+    video_id: str = Query(..., description="Video ID"),
     email: Optional[str] = Query(None, description="User email for scoped history"),
     user_email: Optional[str] = Query(None, description="User email alias")
 ):
@@ -2057,7 +2060,7 @@ def get_chat_history(
 
 @app.delete("/api/chat/history")
 def clear_chat_history(
-    video_id: str = Query(..., description="Vimeo Video ID"),
+    video_id: str = Query(..., description="Video ID"),
     email: Optional[str] = Query(None, description="User email for scoped history"),
     user_email: Optional[str] = Query(None, description="User email alias")
 ):
@@ -2079,7 +2082,7 @@ def clear_chat_history(
 @app.delete("/api/chat/message")
 def delete_chat_message(
     message_id: str = Query(..., description="Message ID to delete (e.g., msg_user_123 or msg_bot_123)"),
-    video_id: Optional[str] = Query(None, description="Optional Vimeo Video ID"),
+    video_id: Optional[str] = Query(None, description="Optional Video ID"),
     email: Optional[str] = Query(None, description="User email for scoped deletion"),
     user_email: Optional[str] = Query(None, description="User email alias")
 ):
@@ -2164,7 +2167,7 @@ def regenerate_summary(req: RegenerateSummaryRequest):
 
 @app.get("/api/summary/lecture")
 def get_lecture_summaries_endpoint(
-    video_id: str = Query(..., description="Vimeo video ID"),
+    video_id: str = Query(..., description="Video ID"),
     user_email: Optional[str] = Query(None, description="User email for personalized summaries")
 ):
     """
@@ -3778,7 +3781,7 @@ def upload_lecture_bundle_to_gcs(req: GCSUploadRequest):
             pass
 
     if not video_id:
-        raise HTTPException(status_code=400, detail="A valid video_id or Vimeo URL is required.")
+        raise HTTPException(status_code=400, detail="A valid video_id or video URL is required.")
 
     target_bucket = req.bucket_name or gcs_storage_service.bucket_name
     print(f"\n==================================================================")
@@ -3807,7 +3810,7 @@ def upload_lecture_bundle_to_gcs(req: GCSUploadRequest):
             config = fetch_player_config(video_id, h_hash=req.h_hash, referer=req.referer)
         except Exception as e:
             config_error = str(e)
-            print(f"⚠️ [Vimeo Config Notice during GCS upload]: {e}")
+            print(f"⚠️ [Config Notice during GCS upload]: {e}")
     else:
         print(f"✨ [GCS Upload] Using client-authenticated player config from browser extension.")
 
@@ -3835,7 +3838,7 @@ def upload_lecture_bundle_to_gcs(req: GCSUploadRequest):
                     ]
                     print(f"📝 [GCS Captions Extracted] {len(cues)} cues segments downloaded.")
         except Exception as e:
-            print(f"⚠️ [Vimeo Parsing Notice during GCS upload]: {e}")
+            print(f"⚠️ [Parsing Notice during GCS upload]: {e}")
 
     # Fallback to database cache if available
     if not cues and saved and saved.get("cues"):
@@ -3847,7 +3850,7 @@ def upload_lecture_bundle_to_gcs(req: GCSUploadRequest):
     # Disallow false success: if video config failed and no transcript/cues exist, raise error
     if not cues and not streams_info and not (saved and saved.get("cues")):
         detail_msg = (
-            f"Vimeo returned 403 Forbidden for video {video_id}. "
+            f"Video provider returned 403 Forbidden for video {video_id}. "
             "This video is protected, private, or domain-restricted. "
             "Please play the video in your browser so the LectureScribe extension can capture the session config."
         ) if "403" in str(config_error or "") else (
@@ -3893,7 +3896,7 @@ def upload_lecture_bundle_to_gcs(req: GCSUploadRequest):
 
 
 @app.get("/api/video/download-options")
-def get_download_options(url: str = Query(..., description="Vimeo URL or Video ID")):
+def get_download_options(url: str = Query(..., description="Video URL or Video ID")):
     """Extract direct progressive MP4 downloads, adaptive HLS streams, and CLI download commands."""
     try:
         video_id = extract_video_id(url)
@@ -3932,7 +3935,7 @@ def upload_lecture_bundle_to_gdrive(
             pass
 
     if not video_id:
-        raise HTTPException(status_code=400, detail="A valid video_id or Vimeo URL is required.")
+        raise HTTPException(status_code=400, detail="A valid video_id or video URL is required.")
 
     if not req.access_token:
         raise HTTPException(
@@ -3964,7 +3967,7 @@ def upload_lecture_bundle_to_gdrive(
                     for s in raw_segments
                 ]
     except Exception as e:
-        print(f"⚠️ [Vimeo Config Notice during bundle upload]: {e}")
+        print(f"⚠️ [Config Notice during bundle upload]: {e}")
 
     if not cues and saved and saved.get("cues"):
         cues = saved.get("cues", [])

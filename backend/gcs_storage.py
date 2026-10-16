@@ -411,7 +411,7 @@ class GCSStorageService:
         target_bucket_name = bucket_name or self.bucket_name
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Referer": referer if (referer and referer.startswith("http")) else "https://vimeo.com/"
+            "Referer": referer if (referer and referer.startswith("http")) else ""
         }
 
         print(f"📡 [GCS Video Stream] Initiating CDN connection: {video_url[:80]}...")
@@ -543,7 +543,7 @@ class GCSStorageService:
 
         ydl_opts = {
             "http_headers": {
-                "Referer": referer if (referer and referer.startswith("http")) else "https://vimeo.com/",
+                "Referer": referer if (referer and referer.startswith("http")) else "",
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             },
             "nocheckcertificate": True,
@@ -670,7 +670,7 @@ class GCSStorageService:
         # 3. Download guide
         guide_lines = [
             f"Lecture: {title}",
-            f"Vimeo ID: {video_id}",
+            f"Video ID: {video_id}",
             f"GCS Bundle: gs://{target_bucket}/{folder_base}/",
             "",
             "Files included in this folder:",

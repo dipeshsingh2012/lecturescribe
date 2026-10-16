@@ -38,7 +38,7 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     await act(async () => {
-      await result.current.handleTranscribe('https://vimeo.com/76979871', true, 'Media Studies');
+      await result.current.handleTranscribe('https://video.lecturescribe.local/76979871', true, 'Media Studies');
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
@@ -63,7 +63,7 @@ describe('useLectureIngestion hook functionality', () => {
         title: 'Introduction to Generative AI',
         cues: [],
         transcript_available: false,
-        transcript_message: 'This video was imported, but Vimeo has no caption tracks.'
+        transcript_message: 'This video was imported, but has no caption or subtitle tracks available.'
       })
     });
 
@@ -81,7 +81,7 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     await act(async () => {
-      await result.current.handleTranscribe('https://vimeo.com/1233458452');
+      await result.current.handleTranscribe('https://video.lecturescribe.local/1233458452');
     });
 
     expect(result.current.activeData.videoId).toBe('1233458452');
@@ -121,7 +121,7 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     await act(async () => {
-      await result.current.handleTranscribe('https://vimeo.com/1233458452');
+      await result.current.handleTranscribe('https://video.lecturescribe.local/1233458452');
     });
     await act(async () => {
       await result.current.handleGenerateTranscript();
@@ -188,7 +188,7 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     await act(async () => {
-      await result.current.handleTranscribe('https://vimeo.com/1233458452');
+      await result.current.handleTranscribe('https://video.lecturescribe.local/1233458452');
     });
     await act(async () => {
       await result.current.handleGenerateTranscript();
@@ -244,7 +244,7 @@ describe('useLectureIngestion hook functionality', () => {
     expect(result.current.activeData.cached).toBe(true);
   });
 
-  it('extracts video ID from complex Vimeo URL during ingestion', async () => {
+  it('extracts video ID from complex video URL during ingestion', async () => {
     const lecturePayload = {
       videoId: '55443322',
       title: 'Advanced Machine Learning',
@@ -273,7 +273,7 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     await act(async () => {
-      await result.current.handleTranscribe('https://vimeo.com/55443322?autoplay=1&muted=true#t=1m');
+      await result.current.handleTranscribe('https://video.lecturescribe.local/55443322?autoplay=1&muted=true#t=1m');
     });
 
     expect(result.current.activeData.videoId).toBe('55443322');
@@ -305,7 +305,7 @@ describe('useLectureIngestion hook functionality', () => {
     act(() => {
       const mockEvent = {
         clipboardData: {
-          getData: () => 'https://vimeo.com/12345678?param=1'
+          getData: () => 'https://video.lecturescribe.local/12345678?param=1'
         }
       };
       result.current.handlePasteUrl(mockEvent);
@@ -341,9 +341,9 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     act(() => {
-      result.current.setUrlInput('https://vimeo.com/11223344');
+      result.current.setUrlInput('https://video.lecturescribe.local/11223344');
     });
-    expect(result.current.urlInput).toBe('https://vimeo.com/11223344');
+    expect(result.current.urlInput).toBe('https://video.lecturescribe.local/11223344');
 
     await act(async () => {
       await result.current.handleTranscribe();
@@ -377,9 +377,9 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     act(() => {
-      result.current.setUrlInput('https://vimeo.com/88776655');
+      result.current.setUrlInput('https://video.lecturescribe.local/88776655');
     });
-    expect(result.current.urlInput).toBe('https://vimeo.com/88776655');
+    expect(result.current.urlInput).toBe('https://video.lecturescribe.local/88776655');
 
     await act(async () => {
       await result.current.handleTranscribe();
@@ -410,7 +410,7 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     act(() => {
-      result.current.setUrlInput('https://vimeo.com/invalid-video');
+      result.current.setUrlInput('https://video.lecturescribe.local/invalid-video');
     });
 
     await act(async () => {
@@ -418,7 +418,7 @@ describe('useLectureIngestion hook functionality', () => {
     });
 
     // The input should remain so user can fix it, but error is shown
-    expect(result.current.urlInput).toBe('https://vimeo.com/invalid-video');
+    expect(result.current.urlInput).toBe('https://video.lecturescribe.local/invalid-video');
     expect(result.current.error).toContain('Video not found or private');
     expect(result.current.activeData).toBeNull();
   });
@@ -454,11 +454,11 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     act(() => {
-      result.current.setUrlInput('https://vimeo.com/11223344');
+      result.current.setUrlInput('https://video.lecturescribe.local/11223344');
     });
 
     await act(async () => {
-      await result.current.handleTranscribe('https://vimeo.com/11223344', false, 'Media Studies', true);
+      await result.current.handleTranscribe('https://video.lecturescribe.local/11223344', false, 'Media Studies', true);
     });
 
     // Should NOT navigate away or activate workspace
@@ -532,7 +532,7 @@ describe('useLectureIngestion hook functionality', () => {
           job_id: 'job-err',
           status: 'failed',
           stage: 'failed',
-          error: 'Vimeo audio stream unreachable'
+          error: 'Video audio stream unreachable'
         })
       });
 
@@ -550,14 +550,14 @@ describe('useLectureIngestion hook functionality', () => {
     );
 
     await act(async () => {
-      await result.current.handleTranscribe('https://vimeo.com/556677');
+      await result.current.handleTranscribe('https://video.lecturescribe.local/556677');
     });
     await act(async () => {
       await result.current.handleGenerateTranscript();
     });
 
     expect(result.current.transcriptionLoading).toBe(false);
-    expect(result.current.transcriptionError).toBe('Vimeo audio stream unreachable');
+    expect(result.current.transcriptionError).toBe('Video audio stream unreachable');
     expect(localStorage.getItem('lecturescribe_transcription_jobs')).toBe('{}');
   });
 

@@ -23,7 +23,7 @@ from backend.gcs_storage import gcs_storage_service
 
 def resolve_lecture_audio_file(video_id: str, course_name: Optional[str] = None) -> Optional[Path]:
     """
-    Locate local audio/video file or extract temporary audio from GCS / Vimeo.
+    Locate local audio/video file or extract temporary audio from GCS or remote media source.
     Returns a Path to a local media file if available, else None.
     """
     # 1. Check GCS for stored lecture video

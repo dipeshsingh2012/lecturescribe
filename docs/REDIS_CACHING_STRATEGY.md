@@ -10,7 +10,7 @@
 ## 1. Executive Summary & Problem Statement
 
 ### Core Truths
-1. **Transcripts are 100% Immutable**: Once a Vimeo video lecture is transcribed and processed, its timestamps, cues, spoken words, and chapter roadmap never change for that `video_id`.
+1. **Transcripts are 100% Immutable**: Once a video lecture is transcribed and processed, its timestamps, cues, spoken words, and chapter roadmap never change for that `video_id`.
 2. **Student Inquiries are Highly Repetitive**: Students studying the same lecture frequently request identical or near-identical overviews (*"Create a summary for a 15 min read"*, *"Explain UNet architecture"*, *"What are the homework deadlines?"*).
 
 ### The Bottleneck Today

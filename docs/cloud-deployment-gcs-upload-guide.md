@@ -8,7 +8,7 @@
 
 ## 1. Overview & Context
 
-LectureScribe allows capturing Vimeo lectures (transcripts, AI summaries, captions, metadata) and the video file itself directly to Google Cloud Storage (`gs://lecturescribe-resources`).
+LectureScribe allows capturing lecture videos (transcripts, AI summaries, captions, metadata) and the video file itself directly to Google Cloud Storage (`gs://lecturescribe-resources`).
 
 While running the FastAPI backend locally (`http://localhost:8000`) works seamlessly, running this workload entirely in the cloud eliminates the need to keep a local server active on your machine.
 
@@ -18,7 +18,7 @@ This document details the trade-offs, constraints, and exact deployment steps fo
 
 ## 2. Technical Comparison: Cloud Run vs. Cloud Functions
 
-Private and LMS-embedded Vimeo lectures are delivered via **Adaptive Fragmented MP4 HLS (`.m3u8` with `sf=fmp4`)**, requiring downloading fragments, audio/video demuxing via FFmpeg, and chunked streaming into GCS.
+Private and LMS-embedded lectures are delivered via **Adaptive Fragmented MP4 HLS (`.m3u8` with `sf=fmp4`)**, requiring downloading fragments, audio/video demuxing via FFmpeg, and chunked streaming into GCS.
 
 | Dimension | Local Host | Google Cloud Run (Recommended) | Google Cloud Functions (Gen 2) | Google Cloud Functions (Gen 1) |
 | :--- | :--- | :--- | :--- | :--- |

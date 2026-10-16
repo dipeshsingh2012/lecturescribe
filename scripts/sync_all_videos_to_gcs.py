@@ -5,7 +5,7 @@ scripts/sync_all_videos_to_gcs.py
 Robust batch synchronizer and tracking engine to sync lectures from PostgreSQL
 into Google Cloud Storage (gs://lecturescribe-resources).
 
-Downloads Vimeo HLS video streams & captions using university LMS referer session,
+Downloads HLS video streams & captions using university LMS referer session,
 muxes into standard MP4, and uploads to the consolidated GCS course hierarchy:
   courses/<course_slug>/lectures/<video_id>/<safe_title>.mp4
 
@@ -41,7 +41,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
 from backend.gcs_storage import gcs_storage_service, to_gcs_course_slug
-from backend.vimeo_client import (
+from backend.video_client import (
     fetch_player_config,
     get_video_download_streams,
     get_text_tracks,
@@ -261,16 +261,16 @@ def sync_single_video(
             save_tracking_state(state, state_file)
             return {"status": "skipped", "video_id": vid, "reason": "already_cached", "size_mb": status.get("size_mb")}
 
-    # 2. Probe Vimeo player config
+    # 2. Probe video player config
     try:
-        print(f"🔍 Probing Vimeo player config via referer: {referer}...")
+        print(f"🔍 Probing video player config via referer: {referer}...")
         cfg = fetch_player_config(vid, referer=referer)
         streams = get_video_download_streams(cfg, vid)
         hls_master = streams.get("hls", {}).get("master_url")
         prog_streams = streams.get("progressive_streams", [])
         tracks = get_text_tracks(cfg)
 
-        print(f"   Vimeo Title:      {cfg.get('video', {}).get('title')}")
+        print(f"   Video Title:      {cfg.get('video', {}).get('title')}")
         print(f"   Progressive MP4s: {len(prog_streams)} streams")
         print(f"   HLS Master URL:   {'Found' if hls_master else 'None'}")
         print(f"   Caption Tracks:   {len(tracks)} found")
@@ -396,7 +396,7 @@ def main():
     parser.add_argument("--video-id", type=str, default=None, help="Process a specific video ID only")
     parser.add_argument("--course", type=str, default=None, help="Process videos for a specific course only")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of videos to process in this run")
-    parser.add_argument("--referer", type=str, default=DEFAULT_REFERER, help="HTTP Referer for Vimeo authentication")
+    parser.add_argument("--referer", type=str, default=DEFAULT_REFERER, help="HTTP Referer for video provider authentication")
     parser.add_argument("--max-height", type=int, default=720, help="Max resolution for video download (e.g. 720, 1080)")
     parser.add_argument("--state-file", type=str, default=DEFAULT_STATE_FILE, help="Path to JSON tracking file")
 

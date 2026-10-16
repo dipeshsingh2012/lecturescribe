@@ -45,7 +45,7 @@ describe('CourseLectures', () => {
     const lectures = [
       {
         video_id: '998877',
-        video_url: 'https://vimeo.com/998877',
+        video_url: 'https://video.lecturescribe.local/998877',
         video_title: 'Classical Mechanics Lecture 1',
         total_duration_seconds: 3600,
         cue_count: 50,
@@ -70,7 +70,7 @@ describe('CourseLectures', () => {
 
     const studyBtn = screen.getByRole('button', { name: /Study Lecture →/i });
     fireEvent.click(studyBtn);
-    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/998877', true, 'Physics 101');
+    expect(handleTranscribe).toHaveBeenCalledWith('https://video.lecturescribe.local/998877', true, 'Physics 101');
 
     const deleteBtn = screen.getByRole('button', { name: /Remove from My Library/i });
     fireEvent.click(deleteBtn);
@@ -81,7 +81,7 @@ describe('CourseLectures', () => {
     const lectures = [
       {
         video_id: '998877',
-        video_url: 'https://vimeo.com/998877',
+        video_url: 'https://video.lecturescribe.local/998877',
         video_title: 'Classical Mechanics Lecture 1',
         drive_folder_url: 'https://drive.google.com/drive/folders/test-folder-123',
         total_duration_seconds: 3600,
@@ -120,7 +120,7 @@ describe('CourseLectures', () => {
     const lectures = [
       {
         video_id: '998877',
-        video_url: 'https://vimeo.com/998877',
+        video_url: 'https://video.lecturescribe.local/998877',
         video_title: 'Classical Mechanics Lecture 1',
         total_duration_seconds: 3600,
         progress: {
@@ -150,6 +150,6 @@ describe('CourseLectures', () => {
     const resumeBtn = screen.getByRole('button', { name: /Resume \(24:15\) →/i });
     expect(resumeBtn).toBeInTheDocument();
     fireEvent.click(resumeBtn);
-    expect(handleTranscribe).toHaveBeenCalledWith('https://vimeo.com/998877', true, 'Physics 101');
+    expect(handleTranscribe).toHaveBeenCalledWith('https://video.lecturescribe.local/998877', true, 'Physics 101');
   });
 });

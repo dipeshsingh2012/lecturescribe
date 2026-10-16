@@ -120,7 +120,7 @@ describe('HomeView', () => {
         {...baseProps}
         selectedCourse="Biostatistics"
         activeCourseData={{ course_name: 'Biostatistics' }}
-        urlInput="https://vimeo.com/123456"
+        urlInput="https://video.lecturescribe.local/123456"
         handleTranscribe={handleTranscribe}
       />
     );
@@ -133,7 +133,7 @@ describe('HomeView', () => {
 
     fireEvent.click(addBtn);
     expect(handleTranscribe).toHaveBeenCalledWith(
-      'https://vimeo.com/123456',
+      'https://video.lecturescribe.local/123456',
       false,
       'Biostatistics',
       true

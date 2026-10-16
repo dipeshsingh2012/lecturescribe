@@ -137,10 +137,18 @@ export default function TranscriptSearch({
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (e.defaultPrevented) return;
       if (e.code !== 'Space' && e.key !== ' ') return;
       const activeEl = document.activeElement;
       const tag = activeEl?.tagName?.toUpperCase();
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || activeEl?.isContentEditable) {
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        tag === 'BUTTON' ||
+        activeEl?.isContentEditable ||
+        activeEl?.closest?.('.lecture-player-panel')
+      ) {
         return;
       }
       e.preventDefault();
@@ -311,43 +319,54 @@ export default function TranscriptSearch({
     }
   };
 
-  // Auto-scroll active cue into center view as video plays (Webex style)
+  // Auto-scroll active cue into center view as video plays or resumes on page load (Webex style)
   useEffect(() => {
     if (!autoScroll) return;
-    if (activeCueIdx >= 0 && cueRefs.current[activeCueIdx] && scrollContainerRef.current) {
-      const activeEl = cueRefs.current[activeCueIdx];
-      const container = scrollContainerRef.current;
-      const isJump = Math.abs(activeCueIdx - (prevActiveCueRef.current ?? activeCueIdx)) > 1;
-      const scrollBehavior = isJump ? 'auto' : 'smooth';
-      prevActiveCueRef.current = activeCueIdx;
+    const performScrollToActive = () => {
+      if (activeCueIdx >= 0 && cueRefs.current[activeCueIdx] && scrollContainerRef.current) {
+        const activeEl = cueRefs.current[activeCueIdx];
+        const container = scrollContainerRef.current;
+        const isJump = Math.abs(activeCueIdx - (prevActiveCueRef.current ?? 0)) > 1;
+        const scrollBehavior = isJump ? 'auto' : 'smooth';
+        prevActiveCueRef.current = activeCueIdx;
 
-      isProgrammaticScrollRef.current = true;
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+        isProgrammaticScrollRef.current = true;
+        if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
 
-      const targetTop = activeEl.offsetTop - (container.clientHeight / 2) + (activeEl.clientHeight / 2);
-      const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
-      const clampedTarget = Math.min(maxScroll, Math.max(0, targetTop));
+        const targetTop = activeEl.offsetTop - (container.clientHeight / 2) + (activeEl.clientHeight / 2);
+        const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+        const clampedTarget = Math.min(maxScroll, Math.max(0, targetTop));
 
-      if (typeof container.scrollTo === 'function') {
-        container.scrollTo({
-          top: clampedTarget,
-          behavior: scrollBehavior
-        });
-      } else {
-        container.scrollTop = clampedTarget;
+        if (typeof container.scrollTo === 'function') {
+          container.scrollTo({
+            top: clampedTarget,
+            behavior: scrollBehavior
+          });
+        } else {
+          container.scrollTop = clampedTarget;
+        }
+        if (typeof activeEl?.scrollIntoView === 'function') {
+          activeEl.scrollIntoView({
+            behavior: scrollBehavior,
+            block: 'center'
+          });
+        }
+
+        scrollTimeoutRef.current = setTimeout(() => {
+          isProgrammaticScrollRef.current = false;
+        }, 500);
       }
-      if (typeof activeEl?.scrollIntoView === 'function') {
-        activeEl.scrollIntoView({
-          behavior: scrollBehavior,
-          block: 'center'
-        });
-      }
+    };
 
-      scrollTimeoutRef.current = setTimeout(() => {
-        isProgrammaticScrollRef.current = false;
-      }, 500);
+    performScrollToActive();
+    let layoutTimer = null;
+    if (activeCueIdx > 0) {
+      layoutTimer = setTimeout(performScrollToActive, 80);
     }
-  }, [activeCueIdx, autoScroll]);
+    return () => {
+      if (layoutTimer) clearTimeout(layoutTimer);
+    };
+  }, [activeCueIdx, autoScroll, displayCues.length]);
 
   const handleRecenter = useCallback(() => {
     setAutoScroll(true);
@@ -1149,32 +1168,6 @@ export default function TranscriptSearch({
               <Search size={15} color="var(--theme-primary)" /> Instant Transcript Search
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {/* Play / Pause Video Directly from Transcript */}
-              <button
-                type="button"
-                data-testid="transcript-play-pause-btn"
-                onClick={onToggleVideoPlayback}
-                title={localPlaying ? "Pause video playback (Space)" : "Play / Pause video playback (Space)"}
-                aria-label={localPlaying ? "Pause video" : "Play or Pause video"}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  background: localPlaying ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                  color: localPlaying ? '#ef4444' : '#10b981',
-                  border: localPlaying ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(16, 185, 129, 0.35)',
-                  padding: '2px 8px',
-                  borderRadius: '12px',
-                  fontSize: '0.72rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease'
-                }}
-              >
-                {localPlaying ? <Pause size={12} /> : <Play size={12} />}
-                <span>{localPlaying ? 'Pause' : 'Play / Pause'}</span>
-              </button>
-
               {/* Review Drawer Button */}
               {videoId && (
                 <button
@@ -1594,14 +1587,72 @@ export default function TranscriptSearch({
                   WebkitUserSelect: 'none',
                   MozUserSelect: 'none'
                 }}>
-                  {isActive && (
-                    <Volume2
-                      size={12}
-                      color="var(--theme-primary)"
-                      className="active-speaker-icon"
-                      aria-label="Current playback cue"
-                    />
-                  )}
+                  {isActive ? (
+                    <button
+                      type="button"
+                      data-testid="transcript-play-pause-btn"
+                      data-cue-play-pause={idx}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleVideoPlayback();
+                      }}
+                      title={localPlaying ? 'Pause video (Space)' : 'Play video (Space)'}
+                      aria-label={localPlaying ? 'Pause video' : 'Play video'}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        background: localPlaying ? 'rgba(0, 117, 237, 0.12)' : 'rgba(16, 185, 129, 0.14)',
+                        color: localPlaying ? 'var(--theme-primary)' : '#10b981',
+                        border: localPlaying ? '1px solid rgba(0, 117, 237, 0.3)' : '1px solid rgba(16, 185, 129, 0.35)',
+                        borderRadius: '4px',
+                        padding: '1px 4px',
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <Volume2
+                        size={11}
+                        color="var(--theme-primary)"
+                        className="active-speaker-icon"
+                        aria-label="Current playback cue"
+                      />
+                      {localPlaying ? (
+                        <Pause size={11} fill="currentColor" />
+                      ) : (
+                        <Play size={11} fill="currentColor" />
+                      )}
+                    </button>
+                  ) : (isHovered || (activeCueIdx < 0 && idx === 0)) ? (
+                    <button
+                      type="button"
+                      data-testid={activeCueIdx < 0 && idx === 0 ? 'transcript-play-pause-btn' : `cue-play-pause-btn-${idx}`}
+                      data-cue-play-pause={idx}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCueClick(cue.time, idx);
+                        setLocalPlaying(true);
+                      }}
+                      title={`Play from ${cue.time}`}
+                      aria-label={`Play cue at ${cue.time}`}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'rgba(0, 117, 237, 0.1)',
+                        color: 'var(--theme-primary)',
+                        border: '1px solid rgba(0, 117, 237, 0.25)',
+                        borderRadius: '4px',
+                        padding: '2px 4px',
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <Play size={10} fill="currentColor" />
+                    </button>
+                  ) : null}
                   <span style={{
                     fontFamily: 'monospace',
                     fontSize: '0.76rem',

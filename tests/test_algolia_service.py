@@ -33,7 +33,7 @@ class TestAlgoliaFootprintOptimization(unittest.TestCase):
 
         # Verify chunk structure
         first_chunk = chunks[0]
-        self.assertEqual(first_chunk["objectID"], "vimeo-test_vid_1-chunk-0")
+        self.assertEqual(first_chunk["objectID"], "lecture-test_vid_1-chunk-0")
         self.assertEqual(first_chunk["video_id"], "test_vid_1")
         self.assertEqual(first_chunk["timestamp"], "00:00")
         self.assertEqual(first_chunk["seconds"], 0)
@@ -55,7 +55,7 @@ class TestAlgoliaFootprintOptimization(unittest.TestCase):
         self.service.client.save_objects.assert_called_once()
         saved_objects = self.service.client.save_objects.call_args.kwargs["objects"]
         self.assertEqual(len(saved_objects), 1)
-        self.assertEqual(saved_objects[0]["objectID"], "vimeo-vid_99-chunk-0")
+        self.assertEqual(saved_objects[0]["objectID"], "lecture-vid_99-chunk-0")
         self.assertIn("First sentence. Second sentence. Third sentence.", saved_objects[0]["text"])
 
     def test_single_cue_update_saves_only_affected_chunk(self):
@@ -76,7 +76,7 @@ class TestAlgoliaFootprintOptimization(unittest.TestCase):
         # save_object should be called EXACTLY once with the matching chunk
         self.service.client.save_object.assert_called_once()
         saved_body = self.service.client.save_object.call_args.kwargs["body"]
-        self.assertEqual(saved_body["objectID"], "vimeo-vid_99-chunk-1")
+        self.assertEqual(saved_body["objectID"], "lecture-vid_99-chunk-1")
         self.assertIn("Target cue with typo.", saved_body["text"])
         self.assertIn(3, saved_body["cue_ids"])
 

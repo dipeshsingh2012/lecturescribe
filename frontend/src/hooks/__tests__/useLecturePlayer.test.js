@@ -2,20 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useLecturePlayer } from '../useLecturePlayer';
 
-vi.mock('@vimeo/player', () => {
-  return {
-    default: vi.fn().mockImplementation(() => ({
-      on: vi.fn(),
-      off: vi.fn(),
-      ready: vi.fn().mockResolvedValue(undefined),
-      getCurrentTime: vi.fn().mockResolvedValue(0),
-      setCurrentTime: vi.fn().mockResolvedValue(undefined),
-      play: vi.fn().mockResolvedValue(undefined),
-      destroy: vi.fn()
-    }))
-  };
-});
-
 describe('useLecturePlayer hook functionality', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -160,15 +146,16 @@ describe('useLecturePlayer hook functionality', () => {
       eventListeners[event] = handler;
     });
 
-    const VimeoPlayer = (await import('@vimeo/player')).default;
-    VimeoPlayer.mockImplementationOnce(() => ({
+    const iframe = document.createElement('iframe');
+    iframe.__playerAdapter = {
       on: mockOn,
       off: vi.fn(),
       ready: vi.fn().mockResolvedValue(undefined),
       getCurrentTime: vi.fn().mockResolvedValue(0),
       setCurrentTime: vi.fn().mockResolvedValue(undefined),
-      play: vi.fn().mockResolvedValue(undefined)
-    }));
+      play: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn()
+    };
 
     const activeData = {
       videoId: 'v100',
@@ -183,7 +170,7 @@ describe('useLecturePlayer hook functionality', () => {
 
     // Simulate attaching iframe
     act(() => {
-      result.current.iframeRef.current = document.createElement('iframe');
+      result.current.iframeRef.current = iframe;
     });
 
     // Re-render hook with activeData
@@ -208,16 +195,17 @@ describe('useLecturePlayer hook functionality', () => {
 
   it('silently auto-resumes playback from saved progress in database', async () => {
     const mockSetCurrentTime = vi.fn().mockResolvedValue(undefined);
-    const VimeoPlayer = (await import('@vimeo/player')).default;
-    VimeoPlayer.mockImplementationOnce(() => ({
+    const iframe = document.createElement('iframe');
+    iframe.__playerAdapter = {
       on: vi.fn(),
       off: vi.fn(),
-      ready: vi.fn().mockImplementation((cb) => Promise.resolve()),
+      ready: vi.fn().mockResolvedValue(undefined),
       getCurrentTime: vi.fn().mockResolvedValue(0),
       setCurrentTime: mockSetCurrentTime,
       getDuration: vi.fn().mockResolvedValue(3600),
-      play: vi.fn().mockResolvedValue(undefined)
-    }));
+      play: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn()
+    };
 
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -241,7 +229,6 @@ describe('useLecturePlayer hook functionality', () => {
       ]
     };
 
-    const iframe = document.createElement('iframe');
     const { result } = renderHook(() => {
       const hook = useLecturePlayer(activeData, 'student@example.com');
       hook.iframeRef.current = iframe;
@@ -319,5 +306,151 @@ describe('useLecturePlayer hook functionality', () => {
     expect(videoEl.play).toHaveBeenCalled();
     expect(result.current.activeCueIdx).toBe(1);
   });
+
+  it('resumes HTML5 video seeker and transcript cue from progress even if active_cue_idx is 0 or video emits initial 0s timeupdate', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        progress: {
+          last_timestamp: '14:20',
+          last_seconds: 860,
+          duration_seconds: 3600,
+          progress_percent: 23.9,
+          active_cue_idx: 0
+        }
+      })
+    });
+
+    const activeData = {
+      videoId: 'v200',
+      duration: '1h 0m',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '05:00', text: 'Part 1' },
+        { time: '14:20', text: 'Resumed Topic' }
+      ],
+      progress: {
+        last_timestamp: '14:20',
+        last_seconds: 860,
+        duration_seconds: 3600,
+        progress_percent: 23.9,
+        active_cue_idx: 0
+      }
+    };
+
+    const videoEl = document.createElement('video');
+    videoEl.currentTime = 0;
+    Object.defineProperty(videoEl, 'duration', { value: 3600, configurable: true });
+    Object.defineProperty(videoEl, 'readyState', { value: 1, configurable: true });
+
+    const { result, rerender } = renderHook(({ data }) => {
+      const hook = useLecturePlayer(data, 'student@example.com');
+      hook.iframeRef.current = videoEl;
+      return hook;
+    }, { initialProps: { data: activeData } });
+
+    // Re-render so effect runs with attached videoEl
+    rerender({ data: { ...activeData } });
+
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 20));
+    });
+
+    expect(videoEl.currentTime).toBe(860);
+    expect(result.current.activeCueIdx).toBe(2);
+
+    // Simulate browser resetting video.currentTime to 0 when src changes to GCS stream URL
+    act(() => {
+      videoEl.currentTime = 0;
+      videoEl.dispatchEvent(new Event('timeupdate'));
+      videoEl.dispatchEvent(new Event('loadedmetadata'));
+    });
+
+    expect(videoEl.currentTime).toBe(860);
+    expect(result.current.activeCueIdx).toBe(2);
+  });
+
+  it('plays video cleanly without infinite recursion when readyState is 0 before metadata loads', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        progress: {
+          last_timestamp: '14:20',
+          last_seconds: 860,
+          duration_seconds: 3600,
+          progress_percent: 23.9,
+          active_cue_idx: 2
+        }
+      })
+    });
+
+    const activeData = {
+      videoId: 'v201',
+      duration: '1h 0m',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '05:00', text: 'Part 1' },
+        { time: '14:20', text: 'Resumed Topic' }
+      ],
+      progress: {
+        last_timestamp: '14:20',
+        last_seconds: 860,
+        duration_seconds: 3600,
+        progress_percent: 23.9,
+        active_cue_idx: 2
+      }
+    };
+
+    const videoEl = document.createElement('video');
+    let internalTime = 0;
+    let currentReadyState = 0;
+    Object.defineProperty(videoEl, 'readyState', {
+      get: () => currentReadyState,
+      configurable: true
+    });
+    Object.defineProperty(videoEl, 'currentTime', {
+      get: () => internalTime,
+      set: (val) => {
+        // Real browser behavior: setting currentTime when readyState === 0 is ignored and stays 0
+        if (currentReadyState >= 1) {
+          internalTime = val;
+        }
+      },
+      configurable: true
+    });
+    const playSpy = vi.fn().mockImplementation(() => {
+      videoEl.dispatchEvent(new Event('play'));
+      videoEl.dispatchEvent(new Event('timeupdate'));
+      return Promise.resolve();
+    });
+    videoEl.play = playSpy;
+
+    const { result, rerender } = renderHook(({ data }) => {
+      const hook = useLecturePlayer(data, 'student@example.com');
+      hook.iframeRef.current = videoEl;
+      return hook;
+    }, { initialProps: { data: activeData } });
+
+    rerender({ data: { ...activeData } });
+
+    // Trigger timeupdate while readyState is still 0 (must not recurse!)
+    act(() => {
+      videoEl.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(result.current.activeCueIdx).toBe(2);
+
+    // Now metadata loads and user plays video
+    act(() => {
+      currentReadyState = 1;
+      videoEl.dispatchEvent(new Event('loadedmetadata'));
+      result.current.handleTogglePlayPause();
+    });
+
+    expect(internalTime).toBe(860);
+    expect(playSpy).toHaveBeenCalled();
+  });
 });
+
 

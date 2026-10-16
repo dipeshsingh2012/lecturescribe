@@ -49,20 +49,55 @@ export const extractVideoId = (url) => {
   const trimmed = String(url).trim();
   if (/^\d+$/.test(trimmed)) return trimmed;
 
-  // Match vimeo.com/ followed by any optional paths, ending with the digit ID
-  const match = trimmed.match(/vimeo\.com\/(?:.*?\/)?(\d+)(?:[?/#]|$)/);
+  // Match optional path segments ending with the digit ID
+  const match = trimmed.match(/(?:^|\/)(?:channels\/[^/]+\/|groups\/[^/]+\/videos\/|manage\/videos\/|video\/)?(\d+)(?:[?/#]|$)/);
   return match ? match[1] : trimmed;
 };
 
 export const parseTimestampToSeconds = (ts) => {
   if (!ts) return 0;
-  const parts = ts.split(':').map(Number);
-  if (parts.length === 3) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  } else if (parts.length === 2) {
-    return parts[0] * 60 + parts[1];
+  if (typeof ts === 'number') return isNaN(ts) ? 0 : ts;
+  const str = String(ts).trim();
+  if (!str) return 0;
+  if (str.includes(':')) {
+    const parts = str.split(':').map(Number);
+    if (parts.some(isNaN)) return 0;
+    if (parts.length === 3) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    } else if (parts.length === 2) {
+      return parts[0] * 60 + parts[1];
+    }
+    return 0;
   }
-  return 0;
+  const hmMatch = str.match(/^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?$/i);
+  if (hmMatch && (hmMatch[1] || hmMatch[2] || hmMatch[3])) {
+    const h = parseInt(hmMatch[1] || '0', 10);
+    const m = parseInt(hmMatch[2] || '0', 10);
+    const s = parseInt(hmMatch[3] || '0', 10);
+    return h * 3600 + m * 60 + s;
+  }
+  const num = Number(str);
+  return isNaN(num) ? 0 : num;
+};
+
+export const isGcsSignedUrlFresh = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  try {
+    const dateMatch = url.match(/[?&]X-Goog-Date=(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/i);
+    const expMatch = url.match(/[?&]X-Goog-Expires=(\d+)/i);
+    if (dateMatch && expMatch) {
+      const [, y, m, d, hh, mm, ss] = dateMatch;
+      const signedAtMs = Date.UTC(+y, +m - 1, +d, +hh, +mm, +ss);
+      const expiresSec = parseInt(expMatch[1], 10);
+      if (!isNaN(signedAtMs) && !isNaN(expiresSec)) {
+        // Treat as expired if within 5 minutes of expiry
+        return Date.now() < signedAtMs + Math.max(0, expiresSec - 300) * 1000;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const formatSecondsToTimestamp = (sec) => {

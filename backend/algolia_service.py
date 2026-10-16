@@ -189,7 +189,7 @@ class AlgoliaSearchService:
 
                 chunk_idx = len(chunks)
                 chunks.append({
-                    "objectID": f"vimeo-{video_id}-chunk-{chunk_idx}",
+                    "objectID": f"lecture-{video_id}-chunk-{chunk_idx}",
                     "video_id": video_id,
                     "video_title": video_title,
                     "timestamp": start_ts,

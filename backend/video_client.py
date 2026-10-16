@@ -1,11 +1,12 @@
 """
-Vimeo Metadata & Caption Track Client for LectureScribe Backend
+Video Metadata & Caption Track Client for LectureScribe Backend
 --------------------------------------------------------------
-Extracts Vimeo player config, text track metadata, downloads VTT captions,
+Extracts video player config, text track metadata, downloads VTT captions,
 and parses timestamps into structured cue segments for backend ingestion.
 """
 from __future__ import annotations
 
+import os
 import re
 import json
 import urllib.request
@@ -13,16 +14,18 @@ from typing import Dict, Any, List, Optional
 
 
 def extract_video_id(url: str) -> str:
-    """Extract Vimeo video ID from URL or raw ID string."""
+    """Extract video ID from URL or raw ID string."""
     if not url:
         raise ValueError("URL cannot be empty")
     url_str = str(url).strip()
     if url_str.isdigit():
         return url_str
-    match = re.search(r"vimeo\.com/(?:channels/[^/]+/|groups/[^/]+/videos/|manage/videos/|video/)?(\d+)", url_str)
+    if "watch?v=" in url_str:
+        raise ValueError(f"Unsupported URL format: {url}")
+    match = re.search(r"(?:^|/)(?:channels/[^/]+/|groups/[^/]+/videos/|manage/videos/|video/)?(\d+)(?:[?/#]|$)", url_str)
     if match:
         return match.group(1)
-    raise ValueError(f"Could not extract Vimeo video ID from: {url}")
+    raise ValueError(f"Could not extract video ID from: {url}")
 
 
 def fetch_player_config(
@@ -30,14 +33,15 @@ def fetch_player_config(
     h_hash: Optional[str] = None,
     referer: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Fetch Vimeo player config JSON to get video metadata and text tracks."""
+    """Fetch video player config JSON to get video metadata and text tracks."""
     query = f"?h={h_hash}" if h_hash else ""
+    base_url = os.environ.get("VIDEO_PLAYER_CONFIG_BASE", "https://player.video-hosting.local/video")
     urls_to_try = [
-        f"https://player.vimeo.com/video/{video_id}/config{query}",
-        f"https://player.vimeo.com/video/{video_id}/config?byline=0&portrait=0" + (f"&h={h_hash}" if h_hash else ""),
+        f"{base_url}/{video_id}/config{query}",
+        f"{base_url}/{video_id}/config?byline=0&portrait=0" + (f"&h={h_hash}" if h_hash else ""),
     ]
 
-    effective_referer = referer if (referer and referer.startswith("http")) else "https://vimeo.com/"
+    effective_referer = referer if (referer and referer.startswith("http")) else os.environ.get("DEFAULT_VIDEO_REFERER", "")
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -71,7 +75,7 @@ def get_text_tracks(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def fetch_vtt(url: str) -> str:
-    """Download a VTT caption file from Vimeo CDN."""
+    """Download a VTT caption file from CDN."""
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -138,7 +142,7 @@ def format_duration(seconds: int | float | None) -> str:
 
 
 def get_video_download_streams(config: Dict[str, Any], video_id: str = "") -> Dict[str, Any]:
-    """Extract direct progressive MP4 downloads, HLS streams, and download commands from Vimeo player config."""
+    """Extract direct progressive MP4 downloads, HLS streams, and download commands from video player config."""
     req = config.get("request", {})
     files = req.get("files", {})
     video_meta = config.get("video", {})

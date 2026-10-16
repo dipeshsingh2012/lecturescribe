@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import Player from '@vimeo/player';
 import { API_BASE } from '../utils/constants';
 import { parseTimestampToSeconds, formatSecondsToTimestamp } from '../utils/formatters';
 
-function createHtml5VideoAdapter(videoEl) {
+export function createHtml5VideoAdapter(videoEl) {
   const listeners = new Map();
 
   const wrapHandler = (event, fn) => {
@@ -11,6 +10,23 @@ function createHtml5VideoAdapter(videoEl) {
       fn({ seconds: videoEl.currentTime, duration: videoEl.duration });
     };
   };
+
+  const applyPendingResumeOnLoad = () => {
+    const pending = (typeof videoEl.__pendingResumeSec === 'number' && videoEl.__pendingResumeSec > 0)
+      ? videoEl.__pendingResumeSec
+      : (typeof videoEl.__targetResumeSec === 'number' && videoEl.__targetResumeSec > 0 ? videoEl.__targetResumeSec : null);
+    if (typeof pending === 'number' && pending > 0 && (videoEl.currentTime || 0) < 1) {
+      try {
+        videoEl.currentTime = pending;
+        if (typeof CustomEvent === 'function') {
+          videoEl.dispatchEvent(new CustomEvent('lecturescribe:seek', { detail: { seconds: pending } }));
+        }
+      } catch (_) {}
+    }
+  };
+
+  videoEl.addEventListener('loadedmetadata', applyPendingResumeOnLoad);
+  videoEl.addEventListener('canplay', applyPendingResumeOnLoad, { once: true });
 
   return {
     on(event, fn) {
@@ -29,16 +45,26 @@ function createHtml5VideoAdapter(videoEl) {
         eventMap.delete(fn);
       }
     },
+    destroy() {
+      videoEl.removeEventListener('loadedmetadata', applyPendingResumeOnLoad);
+      videoEl.removeEventListener('canplay', applyPendingResumeOnLoad);
+    },
     ready() {
       if (videoEl.readyState >= 1) {
         return Promise.resolve();
       }
       return new Promise((resolve) => {
-        const onLoaded = () => {
-          videoEl.removeEventListener('loadedmetadata', onLoaded);
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          videoEl.removeEventListener('loadedmetadata', finish);
+          clearTimeout(fallbackTimer);
           resolve();
         };
-        videoEl.addEventListener('loadedmetadata', onLoaded);
+        videoEl.addEventListener('loadedmetadata', finish);
+        // Resolve after 150ms even if metadata is still buffering so DB progress fetch & cue sync never block
+        const fallbackTimer = setTimeout(finish, 150);
       });
     },
     getDuration() {
@@ -49,16 +75,41 @@ function createHtml5VideoAdapter(videoEl) {
     },
     setCurrentTime(sec) {
       try {
-        videoEl.currentTime = sec;
+        if (videoEl.readyState === 0) {
+          videoEl.__pendingResumeSec = sec;
+        } else {
+          videoEl.__pendingResumeSec = null;
+        }
+        try {
+          videoEl.currentTime = sec;
+        } catch (_) {}
+        if (typeof CustomEvent === 'function') {
+          videoEl.dispatchEvent(new CustomEvent('lecturescribe:seek', { detail: { seconds: sec } }));
+        }
         return Promise.resolve(sec);
       } catch (err) {
         return Promise.reject(err);
       }
     },
     play() {
+      const pending = videoEl.__pendingResumeSec;
+      if (typeof pending === 'number' && pending > 0 && (videoEl.readyState >= 1 || typeof videoEl.readyState !== 'number')) {
+        videoEl.__pendingResumeSec = null;
+        if ((videoEl.currentTime || 0) < 1) {
+          try {
+            videoEl.currentTime = pending;
+          } catch (_) {}
+        }
+      }
+      if (typeof CustomEvent === 'function' && typeof videoEl.dispatchEvent === 'function') {
+        videoEl.dispatchEvent(new CustomEvent('lecturescribe:wantplay', { detail: { playing: true } }));
+      }
       return videoEl.play ? videoEl.play() : Promise.resolve();
     },
     pause() {
+      if (typeof CustomEvent === 'function' && typeof videoEl.dispatchEvent === 'function') {
+        videoEl.dispatchEvent(new CustomEvent('lecturescribe:wantplay', { detail: { playing: false } }));
+      }
       if (typeof videoEl.pause === 'function') videoEl.pause();
       return Promise.resolve();
     },
@@ -66,6 +117,62 @@ function createHtml5VideoAdapter(videoEl) {
       return Promise.resolve(Boolean(videoEl.paused || videoEl.ended));
     }
   };
+}
+
+export function createIframeVideoAdapter(iframeEl) {
+  if (iframeEl && iframeEl.__playerAdapter) {
+    return typeof iframeEl.__playerAdapter === 'function' ? iframeEl.__playerAdapter(iframeEl) : iframeEl.__playerAdapter;
+  }
+  const listeners = new Map();
+  const trigger = (event, data) => {
+    const handlers = listeners.get(event);
+    if (handlers) {
+      handlers.forEach(fn => fn(data));
+    }
+  };
+  const adapter = {
+    on(event, fn) {
+      if (!listeners.has(event)) {
+        listeners.set(event, new Set());
+      }
+      listeners.get(event).add(fn);
+    },
+    off(event, fn) {
+      const set = listeners.get(event);
+      if (set) {
+        set.delete(fn);
+      }
+    },
+    ready() {
+      return Promise.resolve();
+    },
+    getDuration() {
+      return Promise.resolve(0);
+    },
+    getCurrentTime() {
+      return Promise.resolve(0);
+    },
+    setCurrentTime(sec) {
+      trigger('seeked', { seconds: sec });
+      return Promise.resolve(sec);
+    },
+    play() {
+      trigger('play', {});
+      return Promise.resolve();
+    },
+    pause() {
+      trigger('pause', {});
+      return Promise.resolve();
+    },
+    destroy() {
+      listeners.clear();
+    },
+    _trigger: trigger
+  };
+  if (iframeEl) {
+    iframeEl.__playerAdapter = adapter;
+  }
+  return adapter;
 }
 
 export function useLecturePlayer(activeData, userEmail = null) {
@@ -83,6 +190,8 @@ export function useLecturePlayer(activeData, userEmail = null) {
   const activeCueIdxRef = useRef(0);
   const durationRef = useRef(0);
   const saveDebounceTimerRef = useRef(null);
+  const targetResumeSecRef = useRef(0);
+  const prevVideoIdRef = useRef(null);
 
   // Instant Search Handler strictly via Algolia Cloud
   useEffect(() => {
@@ -127,8 +236,109 @@ export function useLecturePlayer(activeData, userEmail = null) {
     return () => clearTimeout(timer);
   }, [searchQuery, activeData]);
 
-  // Connect Vimeo Player SDK or HTML5 Video adapter to track current playhead timestamp and sync progress
+  // Connect Video Player SDK or HTML5 Video adapter to track current playhead timestamp and sync progress
   useEffect(() => {
+    const vidId = activeData?.videoId;
+    if (vidId && prevVideoIdRef.current !== vidId) {
+      prevVideoIdRef.current = vidId;
+      targetResumeSecRef.current = 0;
+      currentSecRef.current = 0;
+      lastSavedSecRef.current = 0;
+      durationRef.current = 0;
+    }
+
+    const updateCueFromSeconds = (currentSec) => {
+      if (typeof currentSec !== 'number' || isNaN(currentSec)) return 0;
+      const cues = activeData?.cues || [];
+      if (!cues.length) return 0;
+      let matchIdx = -1;
+      for (let i = cues.length - 1; i >= 0; i--) {
+        const cueSec = parseTimestampToSeconds(cues[i].time);
+        if (currentSec >= cueSec) {
+          matchIdx = i;
+          break;
+        }
+      }
+      const finalIdx = matchIdx !== -1 ? matchIdx : 0;
+      setActiveCueIdx(finalIdx);
+      activeCueIdxRef.current = finalIdx;
+      return finalIdx;
+    };
+
+    const resolveResumeFromProgress = (prog) => {
+      if (!prog) return 0;
+      if (prog.duration_seconds && prog.duration_seconds > 0 && !durationRef.current) {
+        durationRef.current = Number(prog.duration_seconds);
+      }
+      const rawSec = (typeof prog.last_seconds === 'number' && prog.last_seconds > 2)
+        ? prog.last_seconds
+        : (Number(prog.last_seconds) > 2
+          ? Number(prog.last_seconds)
+          : parseTimestampToSeconds(prog.last_timestamp));
+      if (!rawSec || rawSec <= 2) return 0;
+      const dur = Number(prog.duration_seconds) || durationRef.current || 0;
+      const pct = typeof prog.progress_percent === 'number' ? prog.progress_percent : 0;
+      const isCompleted = pct >= 98 || (dur > 0 && (rawSec / dur) >= 0.98);
+      return isCompleted ? 0 : rawSec;
+    };
+
+    const applyResumePosition = (sec, progCueIdx = null, playerInstance = null) => {
+      if (!sec || sec <= 0) return false;
+      targetResumeSecRef.current = sec;
+      currentSecRef.current = sec;
+      lastSavedSecRef.current = sec;
+
+      const computedCueIdx = updateCueFromSeconds(sec);
+      if (computedCueIdx === 0 && typeof progCueIdx === 'number' && progCueIdx > 0) {
+        setActiveCueIdx(progCueIdx);
+        activeCueIdxRef.current = progCueIdx;
+      }
+
+      const activePlayer = playerInstance || playerRef.current;
+      if (activePlayer && typeof activePlayer.setCurrentTime === 'function') {
+        activePlayer.setCurrentTime(sec).catch(() => {});
+      } else if (iframeRef.current && iframeRef.current.tagName === 'VIDEO') {
+        try {
+          iframeRef.current.__targetResumeSec = sec;
+          if (iframeRef.current.readyState >= 1 || typeof iframeRef.current.readyState !== 'number') {
+            iframeRef.current.__pendingResumeSec = null;
+            iframeRef.current.currentTime = sec;
+          } else {
+            iframeRef.current.__pendingResumeSec = sec;
+            try {
+              iframeRef.current.currentTime = sec;
+            } catch (_) {}
+          }
+          if (typeof CustomEvent === 'function') {
+            iframeRef.current.dispatchEvent(new CustomEvent('lecturescribe:seek', { detail: { seconds: sec } }));
+          }
+        } catch (_) {}
+      }
+      return true;
+    };
+
+    // Immediately restore transcript cue and target time from URL ?t= or preloaded activeData.progress
+    // even before the video element finishes loading metadata
+    if (activeData) {
+      let immediateRestored = false;
+      if (typeof window !== 'undefined') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const tParam = urlParams.get('t') || (window.location.hash.startsWith('#t=') ? window.location.hash.slice(3) : null);
+        if (tParam) {
+          const sec = isNaN(tParam) ? parseTimestampToSeconds(tParam) : Number(tParam);
+          if (sec > 0) {
+            immediateRestored = applyResumePosition(sec);
+          }
+        }
+      }
+      if (!immediateRestored && activeData.progress && targetResumeSecRef.current <= 0) {
+        const progSec = resolveResumeFromProgress(activeData.progress);
+        if (progSec > 2) {
+          applyResumePosition(progSec, activeData.progress.active_cue_idx);
+        }
+      }
+    }
+
     if (iframeRef.current && activeData) {
       try {
         if (!durationRef.current) {
@@ -148,12 +358,18 @@ export function useLecturePlayer(activeData, userEmail = null) {
 
         const player = iframeRef.current.tagName === 'VIDEO'
           ? createHtml5VideoAdapter(iframeRef.current)
-          : new Player(iframeRef.current);
+          : createIframeVideoAdapter(iframeRef.current);
         playerRef.current = player;
+
+        // If we already resolved a target resume timestamp (e.g. from activeData.progress or previous render before GCS URL updated), apply it to the player immediately
+        if (targetResumeSecRef.current > 0) {
+          applyResumePosition(targetResumeSecRef.current, activeCueIdxRef.current, player);
+        }
 
         const saveProgressToDb = async (sec, cueIdx) => {
           if (!activeData?.videoId) return;
           const safeSec = typeof sec === 'number' && !isNaN(sec) ? Math.max(0, sec) : currentSecRef.current;
+          if (safeSec <= 1 && targetResumeSecRef.current > 2) return;
           const safeIdx = typeof cueIdx === 'number' ? cueIdx : activeCueIdxRef.current;
           lastSavedSecRef.current = safeSec;
 
@@ -187,34 +403,28 @@ export function useLecturePlayer(activeData, userEmail = null) {
           }, 3000);
         };
 
-        const updateCueFromSeconds = (currentSec) => {
-          if (typeof currentSec !== 'number') return 0;
-          const cues = activeData.cues || [];
-          if (!cues.length) return 0;
-          let matchIdx = -1;
-          for (let i = cues.length - 1; i >= 0; i--) {
-            const cueSec = parseTimestampToSeconds(cues[i].time);
-            if (currentSec >= cueSec) {
-              matchIdx = i;
-              break;
-            }
-          }
-          const finalIdx = matchIdx !== -1 ? matchIdx : 0;
-          setActiveCueIdx(finalIdx);
-          activeCueIdxRef.current = finalIdx;
-          return finalIdx;
-        };
-
         const handleTimeChange = (data) => {
           const sec = (data && typeof data.seconds === 'number') ? data.seconds : null;
           if (sec !== null) {
+            // Ignore initial 0s timeupdate emitted when video element mounts or switches src before seek completes
+            if (sec < 1 && targetResumeSecRef.current > 2) {
+              return;
+            }
+            const isVideoPlaying = iframeRef.current?.tagName === 'VIDEO' ? !iframeRef.current.paused : false;
+            if (isVideoPlaying && targetResumeSecRef.current > 0 && sec >= 1) {
+              if (iframeRef.current) iframeRef.current.__pendingResumeSec = null;
+              targetResumeSecRef.current = 0;
+            }
             currentSecRef.current = sec;
             const newCueIdx = updateCueFromSeconds(sec);
             if (Math.abs(sec - lastSavedSecRef.current) >= 5) {
               scheduleProgressSave(sec, newCueIdx);
             }
           } else if (player && typeof player.getCurrentTime === 'function') {
-            player.getCurrentTime().then(updateCueFromSeconds).catch(() => {});
+            player.getCurrentTime().then(s => {
+              if (s < 1 && targetResumeSecRef.current > 2) return;
+              updateCueFromSeconds(s);
+            }).catch(() => {});
           }
         };
 
@@ -223,7 +433,14 @@ export function useLecturePlayer(activeData, userEmail = null) {
             clearTimeout(saveDebounceTimerRef.current);
           }
           const sec = (data && typeof data.seconds === 'number') ? data.seconds : currentSecRef.current;
+          if (sec < 1 && targetResumeSecRef.current > 2) {
+            return;
+          }
           if (sec > 0) {
+            if (targetResumeSecRef.current > 0 && Math.abs(sec - targetResumeSecRef.current) > 2) {
+              targetResumeSecRef.current = 0;
+              if (iframeRef.current) iframeRef.current.__pendingResumeSec = null;
+            }
             currentSecRef.current = sec;
             updateCueFromSeconds(sec);
             saveProgressToDb(sec, activeCueIdxRef.current);
@@ -251,9 +468,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
               if (tParam) {
                 const sec = isNaN(tParam) ? parseTimestampToSeconds(tParam) : Number(tParam);
                 if (sec > 0) {
-                  player.setCurrentTime(sec).catch(() => {});
-                  updateCueFromSeconds(sec);
-                  currentSecRef.current = sec;
+                  applyResumePosition(sec, null, player);
                   restored = true;
                 }
               }
@@ -267,29 +482,20 @@ export function useLecturePlayer(activeData, userEmail = null) {
                 if (res.ok) {
                   const resData = await res.json();
                   const prog = resData?.progress;
-                  if (prog && typeof prog.last_seconds === 'number' && prog.last_seconds > 2) {
-                    if (prog.duration_seconds && prog.duration_seconds > 0 && !durationRef.current) {
-                      durationRef.current = prog.duration_seconds;
-                    }
-                    const dur = prog.duration_seconds || durationRef.current || 0;
-                    const isCompleted = dur > 0 && (prog.last_seconds / dur) >= 0.98;
-                    if (!isCompleted) {
-                      await player.setCurrentTime(prog.last_seconds).catch(() => {});
-                      if (typeof prog.active_cue_idx === 'number' && prog.active_cue_idx >= 0) {
-                        setActiveCueIdx(prog.active_cue_idx);
-                        activeCueIdxRef.current = prog.active_cue_idx;
-                      } else {
-                        updateCueFromSeconds(prog.last_seconds);
-                      }
-                      currentSecRef.current = prog.last_seconds;
-                      lastSavedSecRef.current = prog.last_seconds;
-                      restored = true;
-                    }
+                  const progSec = resolveResumeFromProgress(prog);
+                  if (progSec > 2) {
+                    applyResumePosition(progSec, prog?.active_cue_idx, player);
+                    restored = true;
                   }
                 }
               } catch (err) {
                 console.warn("Could not restore lecture progress from DB:", err);
               }
+            }
+
+            if (!restored && targetResumeSecRef.current > 2) {
+              applyResumePosition(targetResumeSecRef.current, activeCueIdxRef.current, player);
+              restored = true;
             }
 
             if (!restored && typeof player.getCurrentTime === 'function') {
@@ -302,7 +508,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
           if (saveDebounceTimerRef.current) {
             clearTimeout(saveDebounceTimerRef.current);
           }
-          if (activeData?.videoId && currentSecRef.current > 0) {
+          if (activeData?.videoId && currentSecRef.current > 2) {
             saveProgressToDb(currentSecRef.current, activeCueIdxRef.current);
           }
           if (typeof player.off === 'function') {
@@ -312,9 +518,12 @@ export function useLecturePlayer(activeData, userEmail = null) {
             player.off('play', handleTimeChange);
             player.off('pause', handlePauseOrSeeked);
           }
+          if (typeof player.destroy === 'function') {
+            player.destroy();
+          }
         };
       } catch (err) {
-        console.warn("Vimeo Player SDK init warning:", err);
+        console.warn("Video Player SDK init warning:", err);
       }
     }
   }, [activeData, userEmail]);
@@ -329,14 +538,41 @@ export function useLecturePlayer(activeData, userEmail = null) {
       const onPause = () => setIsPlaying(false);
       el.addEventListener('play', onPlay);
       el.addEventListener('pause', onPause);
+      el.addEventListener('ended', onPause);
       return () => {
         el.removeEventListener('play', onPlay);
         el.removeEventListener('pause', onPause);
+        el.removeEventListener('ended', onPause);
       };
     }
-  }, [iframeRef?.current]);
+  }, [activeData]);
 
   const handleTogglePlayPause = useCallback(() => {
+    const video = (iframeRef?.current && iframeRef.current.tagName === 'VIDEO')
+      ? iframeRef.current
+      : (typeof document !== 'undefined' ? document.querySelector('video') : null);
+    if (video && typeof video.pause === 'function') {
+      if (video.paused || video.ended) {
+        if (playerRef.current && typeof playerRef.current.play === 'function') {
+          const res = playerRef.current.play();
+          if (res && typeof res.catch === 'function') res.catch(() => {});
+        } else if (typeof video.play === 'function') {
+          const res = video.play();
+          if (res && typeof res.catch === 'function') res.catch(() => {});
+        }
+        setIsPlaying(true);
+      } else {
+        if (playerRef.current && typeof playerRef.current.pause === 'function') {
+          const res = playerRef.current.pause();
+          if (res && typeof res.catch === 'function') res.catch(() => {});
+        } else {
+          video.pause();
+        }
+        setIsPlaying(false);
+      }
+      return;
+    }
+
     if (playerRef.current && typeof playerRef.current.getPaused === 'function') {
       playerRef.current.getPaused().then(paused => {
         if (paused) {
@@ -350,17 +586,6 @@ export function useLecturePlayer(activeData, userEmail = null) {
         playerRef.current.pause().catch(() => {});
         setIsPlaying(false);
       });
-      return;
-    }
-
-    const video = iframeRef?.current || document.querySelector('video');
-    if (video && typeof video.pause === 'function') {
-      if (video.paused || video.ended) {
-        video.play().then(() => setIsPlaying(true)).catch(() => {});
-      } else {
-        video.pause();
-        setIsPlaying(false);
-      }
       return;
     }
 
@@ -400,9 +625,21 @@ export function useLecturePlayer(activeData, userEmail = null) {
     setActiveCueIdx(targetIdx);
     activeCueIdxRef.current = targetIdx;
     currentSecRef.current = secs;
+    targetResumeSecRef.current = secs;
     if (playerRef.current) {
       playerRef.current.setCurrentTime(secs).catch(err => console.log("Seek error:", err));
       playerRef.current.play().catch(err => console.log("Autoplay blocked:", err));
+    } else if (iframeRef.current && iframeRef.current.tagName === 'VIDEO') {
+      try {
+        iframeRef.current.__pendingResumeSec = secs;
+        iframeRef.current.currentTime = secs;
+        if (typeof CustomEvent === 'function') {
+          iframeRef.current.dispatchEvent(new CustomEvent('lecturescribe:seek', { detail: { seconds: secs } }));
+        }
+        if (typeof iframeRef.current.play === 'function') {
+          iframeRef.current.play().catch(() => {});
+        }
+      } catch (_) {}
     }
 
     // Persist progress immediately on manual cue click

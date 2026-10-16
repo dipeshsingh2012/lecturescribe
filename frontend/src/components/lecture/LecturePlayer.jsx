@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
-import { formatSecondsToTimestamp } from '../../utils/formatters';
+import { formatSecondsToTimestamp, parseTimestampToSeconds, isGcsSignedUrlFresh } from '../../utils/formatters';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
 
@@ -75,11 +75,13 @@ export default function LecturePlayer({
   );
   const hasTranscript = Array.isArray(activeData.cues) &&
     activeData.cues.some((cue) => String(cue?.text || '').trim());
+  const rawGcsVideoUrl = activeData.gcs_video_url || activeData.gcsVideoUrl;
+  const freshGcsVideoUrl = isGcsSignedUrlFresh(rawGcsVideoUrl) ? rawGcsVideoUrl : null;
   const [videoCollapsed, setVideoCollapsed] = useState(false);
   const [gcsUploadState, setGcsUploadState] = useState({
     isUploading: Boolean(activeData.is_uploading),
     stage: activeData.upload_stage || 'Processing video stream...',
-    syncedToGcs: Boolean(activeData.gcs_video_url || activeData.gcsVideoUrl)
+    syncedToGcs: Boolean(freshGcsVideoUrl)
   });
 
   // Track & poll Cloud Storage video upload status
@@ -87,7 +89,7 @@ export default function LecturePlayer({
     const vid = activeData?.videoId;
     if (!vid) return;
 
-    if (activeData.gcs_video_url || activeData.gcsVideoUrl) {
+    if (freshGcsVideoUrl) {
       setGcsUploadState({
         isUploading: false,
         stage: 'Complete',
@@ -145,7 +147,7 @@ export default function LecturePlayer({
       isMounted = false;
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [activeData?.videoId, activeData?.gcs_video_url, activeData?.gcsVideoUrl, setActiveData]);
+  }, [activeData?.videoId, freshGcsVideoUrl, setActiveData]);
 
   const [triggeringSync, setTriggeringSync] = useState(false);
 
@@ -196,10 +198,24 @@ export default function LecturePlayer({
     }
   };
 
-  // Custom Player Controls State (Vimeo-level parity)
+  // Custom Player Controls State (Full parity)
   const containerRef = useRef(null);
+  const wantPlayRef = useRef(false);
+  const targetSeekRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
+  const [currentTime, setCurrentTime] = useState(() => {
+    const prog = activeData?.progress;
+    if (!prog) return 0;
+    const sec = (typeof prog.last_seconds === 'number' && prog.last_seconds > 2)
+      ? prog.last_seconds
+      : parseTimestampToSeconds(prog.last_timestamp);
+    const dur = Number(prog.duration_seconds || activeData?.duration_seconds || activeData?.total_duration_seconds || 0) || parseTimestampToSeconds(activeData?.duration);
+    const pct = typeof prog.progress_percent === 'number' ? prog.progress_percent : 0;
+    const isCompleted = pct >= 98 || (dur > 0 && (sec / dur) >= 0.98);
+    const initialSec = !isCompleted && sec > 2 ? sec : 0;
+    targetSeekRef.current = initialSec;
+    return initialSec;
+  });
   const [duration, setDuration] = useState(0);
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -212,11 +228,64 @@ export default function LecturePlayer({
   const [speedMenuAnchor, setSpeedMenuAnchor] = useState(null);
   const hideControlsTimerRef = useRef(null);
 
+  useEffect(() => {
+    wantPlayRef.current = false;
+  }, [activeData?.videoId]);
+
+  useEffect(() => {
+    const prog = activeData?.progress;
+    if (!prog) return;
+    const sec = (typeof prog.last_seconds === 'number' && prog.last_seconds > 2)
+      ? prog.last_seconds
+      : parseTimestampToSeconds(prog.last_timestamp);
+    const dur = Number(prog.duration_seconds || activeData?.duration_seconds || activeData?.total_duration_seconds || 0) || parseTimestampToSeconds(activeData?.duration);
+    const pct = typeof prog.progress_percent === 'number' ? prog.progress_percent : 0;
+    const isCompleted = pct >= 98 || (dur > 0 && (sec / dur) >= 0.98);
+    if (!isCompleted && sec > 2) {
+      if (targetSeekRef.current <= 0) {
+        targetSeekRef.current = sec;
+      }
+      setCurrentTime(prev => (prev < 1 ? sec : prev));
+    }
+  }, [activeData?.videoId, activeData?.progress]);
+
+  useEffect(() => {
+    const video = iframeRef?.current;
+    if (!video || typeof video.addEventListener !== 'function') return;
+    const onCustomSeek = (e) => {
+      const sec = e?.detail?.seconds;
+      if (typeof sec === 'number' && !isNaN(sec) && !isScrubbing) {
+        targetSeekRef.current = sec;
+        setCurrentTime(sec);
+      }
+    };
+    const onWantPlay = (e) => {
+      wantPlayRef.current = Boolean(e?.detail?.playing);
+    };
+    video.addEventListener('lecturescribe:seek', onCustomSeek);
+    video.addEventListener('lecturescribe:wantplay', onWantPlay);
+    return () => {
+      video.removeEventListener('lecturescribe:seek', onCustomSeek);
+      video.removeEventListener('lecturescribe:wantplay', onWantPlay);
+    };
+  }, [activeData?.videoId, gcsUploadState.isUploading, isScrubbing]);
+
   // Video event handlers
   const handleTimeUpdate = () => {
     const video = iframeRef?.current;
     if (!video || isScrubbing) return;
-    setCurrentTime(video.currentTime || 0);
+    const nextSec = video.currentTime || 0;
+    const pending = (typeof video.__pendingResumeSec === 'number' && video.__pendingResumeSec > 2)
+      ? video.__pendingResumeSec
+      : targetSeekRef.current;
+    if (nextSec < 1 && video.paused && pending > 2) {
+      setCurrentTime(pending);
+    } else {
+      if (nextSec >= 1 && !video.paused) {
+        targetSeekRef.current = 0;
+      }
+      setCurrentTime(nextSec);
+    }
     if (video.duration && !isNaN(video.duration)) {
       setDuration(video.duration);
     }
@@ -233,12 +302,34 @@ export default function LecturePlayer({
     if (video.duration && !isNaN(video.duration)) {
       setDuration(video.duration);
     }
+    const pending = (typeof video.__pendingResumeSec === 'number' && video.__pendingResumeSec > 0)
+      ? video.__pendingResumeSec
+      : targetSeekRef.current;
+    if (typeof pending === 'number' && pending > 0) {
+      video.__pendingResumeSec = null;
+      targetSeekRef.current = 0;
+      if ((video.currentTime || 0) < 1) {
+        try {
+          video.currentTime = pending;
+        } catch (_) {}
+      }
+      setCurrentTime(video.currentTime || pending);
+    } else if ((video.currentTime || 0) > 0) {
+      setCurrentTime(video.currentTime);
+    }
     setVolume(video.volume);
     setIsMuted(video.muted);
     setPlaybackRate(video.playbackRate || 1);
+    if (wantPlayRef.current && video.paused) {
+      const p = video.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    }
   };
 
   const handlePlayStateChange = (playing) => {
+    if (playing) {
+      wantPlayRef.current = true;
+    }
     setIsPlaying(playing);
     if (!playing) {
       setShowControls(true);
@@ -249,8 +340,29 @@ export default function LecturePlayer({
     const video = iframeRef?.current;
     if (!video) return;
     if (video.paused || video.ended) {
-      video.play().catch(() => {});
+      wantPlayRef.current = true;
+      const pending = (typeof video.__pendingResumeSec === 'number' && video.__pendingResumeSec > 0)
+        ? video.__pendingResumeSec
+        : targetSeekRef.current;
+      if (typeof pending === 'number' && pending > 0) {
+        if ((video.currentTime || 0) < 1 && (video.readyState >= 1 || typeof video.readyState !== 'number')) {
+          video.__pendingResumeSec = null;
+          targetSeekRef.current = 0;
+          try {
+            video.currentTime = pending;
+          } catch (_) {}
+        }
+      }
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch((err) => {
+          if (err?.name !== 'AbortError') {
+            wantPlayRef.current = false;
+          }
+        });
+      }
     } else {
+      wantPlayRef.current = false;
       video.pause();
     }
   };
@@ -258,7 +370,10 @@ export default function LecturePlayer({
   const skipSeconds = (sec) => {
     const video = iframeRef?.current;
     if (!video) return;
-    const newTime = Math.min(Math.max(0, (video.currentTime || 0) + sec), duration || video.duration || 0);
+    video.__pendingResumeSec = null;
+    targetSeekRef.current = 0;
+    const baseTime = video.currentTime || currentTime || 0;
+    const newTime = Math.min(Math.max(0, baseTime + sec), duration || video.duration || Infinity);
     video.currentTime = newTime;
     setCurrentTime(newTime);
   };
@@ -266,6 +381,8 @@ export default function LecturePlayer({
   const handleSeek = (newVal) => {
     const video = iframeRef?.current;
     if (!video) return;
+    video.__pendingResumeSec = null;
+    targetSeekRef.current = newVal;
     video.currentTime = newVal;
     setCurrentTime(newVal);
   };
@@ -530,7 +647,7 @@ export default function LecturePlayer({
         </Tooltip>
       </Box>
 
-      {/* Video Player Container with Custom Controls (Vimeo parity) */}
+      {/* Video Player Container with Custom Controls */}
       <Box
         ref={containerRef}
         tabIndex={0}
@@ -556,7 +673,7 @@ export default function LecturePlayer({
         }}
       >
         {(() => {
-          const hasGcsStream = Boolean(activeData.gcs_video_url || activeData.gcsVideoUrl);
+          const hasGcsStream = Boolean(freshGcsVideoUrl);
           if (gcsUploadState.isUploading && !hasGcsStream) {
             return (
               <Box
@@ -622,8 +739,17 @@ export default function LecturePlayer({
             );
           }
 
-          const streamUrl = activeData.gcs_video_url || activeData.gcsVideoUrl || `/api/videos/${encodeURIComponent(activeData.videoId)}/stream`;
-          const effectiveDuration = duration || (typeof activeData.duration === 'number' ? activeData.duration : 0);
+          const streamUrl = freshGcsVideoUrl || `${API_BASE || ''}/api/videos/${encodeURIComponent(activeData.videoId)}/stream`;
+          const rawCaptionsUrl = activeData.captions_vtt_url || activeData.captionsUrl;
+          const freshCaptionsUrl = isGcsSignedUrlFresh(rawCaptionsUrl) ? rawCaptionsUrl : null;
+          const fallbackDuration =
+            (typeof activeData.duration === 'number' && activeData.duration > 0 ? activeData.duration : 0) ||
+            Number(activeData.duration_seconds || activeData.total_duration_seconds || activeData.progress?.duration_seconds || 0) ||
+            parseTimestampToSeconds(activeData.duration) ||
+            (Array.isArray(activeData.cues) && activeData.cues.length > 0
+              ? parseTimestampToSeconds(activeData.cues[activeData.cues.length - 1]?.time) + 30
+              : 0);
+          const effectiveDuration = duration || fallbackDuration;
           const bufferedPercent = effectiveDuration > 0 ? Math.min(100, (bufferedEnd / effectiveDuration) * 100) : 0;
           const currentPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
 
@@ -635,18 +761,39 @@ export default function LecturePlayer({
                 playsInline
                 preload="metadata"
                 onTimeUpdate={handleTimeUpdate}
+                onSeeked={handleTimeUpdate}
+                onSeeking={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
+                onCanPlay={() => {
+                  const v = iframeRef?.current;
+                  if (v && wantPlayRef.current && v.paused) {
+                    const p = v.play();
+                    if (p && typeof p.catch === 'function') p.catch(() => {});
+                  }
+                }}
+                onError={() => {
+                  if (freshGcsVideoUrl && typeof setActiveData === 'function') {
+                    setActiveData(prev => prev ? {
+                      ...prev,
+                      gcs_video_url: null,
+                      gcsVideoUrl: null
+                    } : prev);
+                  }
+                }}
                 onPlay={() => handlePlayStateChange(true)}
                 onPause={() => handlePlayStateChange(false)}
-                onEnded={() => handlePlayStateChange(false)}
+                onEnded={() => {
+                  wantPlayRef.current = false;
+                  handlePlayStateChange(false);
+                }}
                 onClick={togglePlay}
                 style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, objectFit: 'contain', cursor: 'pointer' }}
                 title={activeData.title}
               >
-                {(activeData.captions_vtt_url || activeData.captionsUrl) && (
+                {freshCaptionsUrl && (
                   <track
                     kind="subtitles"
-                    src={activeData.captions_vtt_url || activeData.captionsUrl}
+                    src={freshCaptionsUrl}
                     srcLang="en"
                     label="English"
                     default

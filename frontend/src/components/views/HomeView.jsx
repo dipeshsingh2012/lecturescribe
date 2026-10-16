@@ -470,7 +470,7 @@ export default function HomeView({
           reviewMode={courseQuiz.reviewMode}
           handleSelectLecture={(vid, cName, ts) => {
             const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';
-            handleTranscribe(`https://vimeo.com/${vid}${tParam}`, false, cName, false, ts);
+            handleTranscribe(`${vid}${tParam}`, false, cName, false, ts);
             if (typeof handleCueClick === 'function' && ts) {
               setTimeout(() => handleCueClick(ts), 350);
             }
@@ -495,7 +495,7 @@ export default function HomeView({
           copiedResponseId={courseTutor.copiedResponseId}
           chatEndRef={courseTutor.chatEndRef}
           chatInputRef={courseTutor.chatInputRef}
-          handleSelectLecture={(vid, cName, ts) => handleTranscribe(`https://vimeo.com/${vid}`, false, cName)}
+          handleSelectLecture={(vid, cName, ts) => handleTranscribe(vid, false, cName)}
           currentTheme={currentTheme}
         />
       ) : (courseViewTab === 'resources' || courseViewTab === 'library') ? (

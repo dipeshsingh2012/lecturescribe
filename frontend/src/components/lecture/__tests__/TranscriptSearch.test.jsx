@@ -1374,14 +1374,18 @@ describe('TranscriptSearch', () => {
     global.fetch = originalFetch;
   });
 
-  it('toggles video play/pause from transcript toolbar button and Space shortcut', async () => {
+  it('toggles video play/pause directly from the cue icon button and Space shortcut', async () => {
     const handleTogglePlayPause = vi.fn();
+    const handleCueClick = vi.fn();
     render(
       <TranscriptSearch
-        displayCues={[{ id: 'c1', time: '00:10', text: 'Sample transcript line' }]}
+        displayCues={[
+          { id: 'c1', time: '00:10', text: 'Sample transcript line' },
+          { id: 'c2', time: '00:25', text: 'Second transcript line' }
+        ]}
         searchQuery=""
         setSearchQuery={vi.fn()}
-        handleCueClick={vi.fn()}
+        handleCueClick={handleCueClick}
         activeCueIdx={0}
         isPlaying={true}
         handleTogglePlayPause={handleTogglePlayPause}
@@ -1389,9 +1393,10 @@ describe('TranscriptSearch', () => {
     );
 
     const playPauseBtn = screen.getByTestId('transcript-play-pause-btn');
-    expect(playPauseBtn).toHaveTextContent(/Pause/i);
+    expect(playPauseBtn).toHaveAttribute('aria-label', 'Pause video');
     fireEvent.click(playPauseBtn);
     expect(handleTogglePlayPause).toHaveBeenCalledTimes(1);
+    expect(handleCueClick).not.toHaveBeenCalled();
 
     fireEvent.keyDown(window, { key: ' ', code: 'Space' });
     expect(handleTogglePlayPause).toHaveBeenCalledTimes(2);

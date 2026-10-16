@@ -7,7 +7,7 @@
 // Cross-browser namespace support
 const ext = typeof browser !== "undefined" ? browser : chrome;
 
-const VIMEO_REGEX = /(?:vimeo\.com\/(?:channels\/[^\/]+\/|groups\/[^\/]+\/videos\/|manage\/videos\/|video\/)?|player\.vimeo\.com\/video\/)?(\d+)/i;
+const VIDEO_REGEX = /(?:(?:video\/)?|(?:[/?=]))(\d{6,12})(?:[/?&#]|$)|^(\d+)$/i;
 
 let currentSettings = {
   webAppUrl: "http://localhost:5173",
@@ -106,7 +106,7 @@ async function loadDetectedVideos() {
     detectedCount.textContent = String(videos.length);
 
     if (videos.length === 0) {
-      renderEmptyState("No Vimeo videos detected on this tab.<br>Navigate to a page with Vimeo embeds or paste an ID below.");
+      renderEmptyState("No videos detected on this tab.<br>Navigate to a page with video embeds or paste an ID below.");
       return;
     }
 
@@ -136,13 +136,13 @@ function renderVideosList(videos) {
 
     const typeLabel = video.type === "player_embed" ? "Player Embed" :
                       video.type === "embedded_iframe" ? "Embedded Iframe" :
-                      video.type === "direct_page" ? "Vimeo Page" : "Page Link";
+                      video.type === "direct_page" ? "Direct Page" : "Page Link";
 
     card.innerHTML = `
       <div class="ls-card-header">
         <div class="ls-card-info">
-          <div class="ls-card-title" title="${escapeHtml(video.title || `Vimeo Video ${video.videoId}`)}">
-            ${escapeHtml(video.title || `Vimeo Video ${video.videoId}`)}
+          <div class="ls-card-title" title="${escapeHtml(video.title || `Video ${video.videoId}`)}">
+            ${escapeHtml(video.title || `Video ${video.videoId}`)}
           </div>
           <div class="ls-card-meta">
             <span class="ls-id-badge">ID: ${video.videoId}</span>
@@ -266,15 +266,15 @@ async function checkVideoCacheStatus(videoId) {
 function handleManualSubmit() {
   const raw = manualInput.value.trim();
   if (!raw) {
-    manualError.textContent = "Please enter a Vimeo URL or Video ID";
+    manualError.textContent = "Please enter a Video URL or Video ID";
     return;
   }
 
-  const match = raw.match(VIMEO_REGEX);
-  const videoId = match ? match[1] : null;
+  const match = raw.match(VIDEO_REGEX);
+  const videoId = match ? (match[1] || match[2]) : null;
 
   if (!videoId) {
-    manualError.textContent = "Invalid Vimeo URL or ID. Example: 76979871";
+    manualError.textContent = "Invalid Video URL or ID. Example: 76979871";
     return;
   }
 

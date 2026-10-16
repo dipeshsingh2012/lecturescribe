@@ -296,9 +296,9 @@ class GoogleDriveService:
                 job["progress"] = 10
 
             # Determine best source URL for yt-dlp:
-            # Prefer direct CDN master playlist URL (hls_url) to avoid Vimeo webpage bot blocks!
+            # Prefer direct CDN master playlist URL (hls_url)
             hls_url = (streams_info or {}).get("hls_url")
-            source_url = hls_url if hls_url else f"https://player.vimeo.com/video/{video_id}"
+            source_url = hls_url if hls_url else (streams_info or {}).get("source_url", "")
 
             ydl_opts = {
                 "outtmpl": str(temp_dir / f"{safe_title}.%(ext)s"),
@@ -544,7 +544,7 @@ class GoogleDriveService:
                 "",
                 "1. Multi-bitrate HLS Stream URL:",
             ]
-            hls_url = (streams_info or {}).get("hls_url", f"https://player.vimeo.com/video/{video_id}")
+            hls_url = (streams_info or {}).get("hls_url", (streams_info or {}).get("source_url", ""))
             guide_lines.append(f"   {hls_url}\n")
             guide_lines.append("2. Download with yt-dlp (Recommended):")
             guide_lines.append(f"   yt-dlp \"{hls_url}\" -o \"{title}.mp4\"\n")

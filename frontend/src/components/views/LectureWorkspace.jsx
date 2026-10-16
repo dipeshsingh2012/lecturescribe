@@ -139,7 +139,7 @@ export default function LectureWorkspace({
 
   return (
     <div className={`lecture-workspace-layout ${isPanelExpanded ? 'panel-expanded' : ''}`}>
-      {/* Left Panel: Real Embedded Vimeo Player */}
+      {/* Left Panel: Real Embedded Video Player */}
       <LecturePlayer
         activeData={activeData}
         activeCourseData={activeCourseData}

@@ -1,7 +1,23 @@
 import { useState, useRef, useEffect } from 'react';
 import { API_BASE } from '../utils/constants';
-import { extractVideoId } from '../utils/formatters';
+import { extractVideoId, isGcsSignedUrlFresh } from '../utils/formatters';
 import { normalizeCourseSlug } from '../utils/routing';
+
+function sanitizeCachedEntry(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  const copy = { ...entry };
+  const gcsUrl = copy.gcs_video_url || copy.gcsVideoUrl;
+  if (gcsUrl && !isGcsSignedUrlFresh(gcsUrl)) {
+    delete copy.gcs_video_url;
+    delete copy.gcsVideoUrl;
+  }
+  const vttUrl = copy.captions_vtt_url || copy.captionsUrl;
+  if (vttUrl && !isGcsSignedUrlFresh(vttUrl)) {
+    delete copy.captions_vtt_url;
+    delete copy.captionsUrl;
+  }
+  return copy;
+}
 
 export function useLectureIngestion({
   userEmail,
@@ -9,6 +25,7 @@ export function useLectureIngestion({
   setSelectedCourse,
   activeCourseData,
   effectiveCourses = [],
+  userLibrary = [],
   fetchUserLibrary,
   navigateTo,
   initChatMessages,
@@ -26,7 +43,14 @@ export function useLectureIngestion({
   const [cachedVideos, setCachedVideos] = useState(() => {
     try {
       const stored = localStorage.getItem('lecturescribe_cached_videos');
-      return stored ? JSON.parse(stored) : {};
+      if (!stored) return {};
+      const parsed = JSON.parse(stored);
+      if (!parsed || typeof parsed !== 'object') return {};
+      const cleaned = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        cleaned[k] = sanitizeCachedEntry(v);
+      }
+      return cleaned;
     } catch {
       return {};
     }
@@ -38,6 +62,21 @@ export function useLectureIngestion({
   useEffect(() => {
     activeDataRef.current = activeData;
   }, [activeData]);
+
+  // If activeData was loaded before course/library finished loading, attach progress once available
+  useEffect(() => {
+    if (!activeData?.videoId || activeData.progress) return;
+    const vid = String(activeData.videoId);
+    const allKnown = [
+      ...(activeCourseData?.lectures || []),
+      ...(effectiveCourses?.flatMap(c => c.lectures || []) || []),
+      ...(userLibrary || [])
+    ];
+    const matchWithProg = allKnown.find(l => String(l.video_id || l.videoId) === vid && l.progress);
+    if (matchWithProg?.progress) {
+      setActiveData(prev => (prev && String(prev.videoId) === vid && !prev.progress) ? { ...prev, progress: matchWithProg.progress } : prev);
+    }
+  }, [activeData?.videoId, activeData?.progress, activeCourseData, effectiveCourses, userLibrary]);
 
   useEffect(() => {
     transcriptionControllerRef.current?.abort();
@@ -285,7 +324,7 @@ export function useLectureIngestion({
     }
 
     if (cachedVideos[vidId]) {
-      const cached = cachedVideos[vidId];
+      const cached = sanitizeCachedEntry(cachedVideos[vidId]);
       const transcriptAvailable = Array.isArray(cached.cues) &&
         cached.cues.some((cue) => String(cue?.text || '').trim().length > 0);
       const cachedTranscriptMessage = transcriptAvailable
@@ -303,10 +342,19 @@ export function useLectureIngestion({
       if (finalCourse && !stayOnCoursePage) {
         setSelectedCourse(finalCourse);
         if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/lecture/') || window.location.pathname.includes('%20') || window.location.pathname.includes(' '))) {
-          navigateTo(`/course/${finalSlug}/lecture/${vidId}`, true);
+          navigateTo(`/course/${finalSlug}/lecture/${vidId}${timeParam}`, true);
         }
       }
-      const existingDriveUrl = cached.drive_folder_url || cached.driveFolderUrl || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(vidId))?.drive_folder_url || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(vidId))?.driveFolderUrl;
+      const allKnownLectures = [
+        ...(activeCourseData?.lectures || []),
+        ...(effectiveCourses?.flatMap(c => c.lectures || []) || []),
+        ...(userLibrary || [])
+      ];
+      const existingLecture =
+        allKnownLectures.find(l => String(l.video_id || l.videoId) === String(vidId) && l.progress) ||
+        allKnownLectures.find(l => String(l.video_id || l.videoId) === String(vidId));
+      const existingDriveUrl = cached.drive_folder_url || cached.driveFolderUrl || existingLecture?.drive_folder_url || existingLecture?.driveFolderUrl;
+      const existingProgress = existingLecture?.progress || cached.progress || null;
       
       const loadedActive = {
         ...cached,
@@ -314,6 +362,7 @@ export function useLectureIngestion({
         course_slug: finalSlug,
         drive_folder_url: existingDriveUrl,
         driveFolderUrl: existingDriveUrl,
+        progress: existingProgress,
         cached: true,
         transcript_available: transcriptAvailable,
         transcript_message: cachedTranscriptMessage
@@ -354,13 +403,14 @@ export function useLectureIngestion({
       setCachedVideos((prev) => {
         const updated = {
           ...prev,
-          [vidId]: {
+          [vidId]: sanitizeCachedEntry({
             ...cached,
             course_name: finalCourse,
             course_slug: finalSlug,
+            progress: existingProgress,
             transcript_available: transcriptAvailable,
             transcript_message: cachedTranscriptMessage
-          }
+          })
         };
         try {
           localStorage.setItem('lecturescribe_cached_videos', JSON.stringify(updated));
@@ -398,17 +448,27 @@ export function useLectureIngestion({
             setSelectedCourse(finalCourse);
             const targetSlug = data.course_slug || normalizeCourseSlug(finalCourse);
             if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/lecture/') || window.location.pathname.includes('%20') || window.location.pathname.includes(' '))) {
-              navigateTo(`/course/${targetSlug}/lecture/${data.videoId}`, true);
+              navigateTo(`/course/${targetSlug}/lecture/${data.videoId}${timeParam}`, true);
             }
           }
         }
-        const existingDriveUrl = data.drive_folder_url || data.driveFolderUrl || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(data.videoId))?.drive_folder_url || effectiveCourses?.flatMap(c => c.lectures || []).find(l => String(l.video_id || l.videoId) === String(data.videoId))?.driveFolderUrl;
+        const allKnownLectures = [
+          ...(activeCourseData?.lectures || []),
+          ...(effectiveCourses?.flatMap(c => c.lectures || []) || []),
+          ...(userLibrary || [])
+        ];
+        const existingLecture =
+          allKnownLectures.find(l => String(l.video_id || l.videoId) === String(data.videoId) && l.progress) ||
+          allKnownLectures.find(l => String(l.video_id || l.videoId) === String(data.videoId));
+        const existingDriveUrl = data.drive_folder_url || data.driveFolderUrl || existingLecture?.drive_folder_url || existingLecture?.driveFolderUrl;
+        const existingProgress = data.progress || existingLecture?.progress || null;
         const enrichedData = {
           ...data,
           course_name: finalCourse,
           course_slug: data.course_slug || (finalCourse ? normalizeCourseSlug(finalCourse) : null),
           drive_folder_url: existingDriveUrl || data.drive_folder_url,
-          driveFolderUrl: existingDriveUrl || data.driveFolderUrl
+          driveFolderUrl: existingDriveUrl || data.driveFolderUrl,
+          progress: existingProgress
         };
         
         if (!stayOnCoursePage) {

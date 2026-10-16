@@ -1,7 +1,7 @@
 /**
  * LectureScribe Content Script
  * Cross-browser compatible for Chromium (Chrome, Edge, Brave) and Mozilla Firefox.
- * Detects Vimeo videos across any webpage, LMS, or direct player embed,
+ * Detects videos across any webpage, LMS, or direct player embed,
  * and attaches floating LectureScribe action badges.
  */
 
@@ -13,7 +13,7 @@
   // Cross-browser namespace support
   const ext = typeof browser !== "undefined" ? browser : chrome;
 
-  const VIMEO_REGEX = /(?:vimeo\.com\/(?:channels\/[^\/]+\/|groups\/[^\/]+\/videos\/|manage\/videos\/|video\/)?|player\.vimeo\.com\/video\/)(\d+)/i;
+  const VIDEO_REGEX = /(?:(?:video\/)?|(?:[/?=]))(\d{6,12})(?:[/?&#]|$)|^(\d+)$/i;
 
   let currentSettings = {
     webAppUrl: "http://localhost:5173",
@@ -52,10 +52,10 @@
     }
   });
 
-  function extractVimeoId(url) {
+  function extractVideoId(url) {
     if (!url) return null;
-    const match = String(url).match(VIMEO_REGEX);
-    return match ? match[1] : null;
+    const match = String(url).match(VIDEO_REGEX);
+    return match ? (match[1] || match[2]) : null;
   }
 
   function extractHHash(url) {
@@ -113,7 +113,7 @@
   async function fetchInBrowserConfig(videoId, hHash) {
     try {
       const q = hHash ? `?h=${hHash}` : window.location.search;
-      const res = await fetch(`https://player.vimeo.com/video/${videoId}/config${q}`, {
+      const res = await fetch(`https://video.lecturescribe.local/${videoId}/config${q}`, {
         headers: { "Accept": "application/json" }
       });
       if (res.ok) {
@@ -128,7 +128,7 @@
   function getPageTitle() {
     const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content');
     if (ogTitle && ogTitle.trim()) return ogTitle.trim();
-    return document.title ? document.title.replace(/\s*[-|•]\s*Vimeo.*$/i, '').trim() : null;
+    return document.title ? document.title.replace(/\s*[-|•]\s*(?:Video|Player).*$/i, '').trim() : null;
   }
 
   const KNOWN_LMS_CODE_MAPPINGS = {
@@ -236,7 +236,7 @@
     const parts = docTitle.split(/[:|•\-–]/);
     for (const part of parts) {
       const cleaned = cleanCourseName(part);
-      if (cleaned && !isCourseCode(cleaned) && !['vimeo', 'moodle', 'home', 'lms', 'player'].includes(cleaned.toLowerCase())) {
+      if (cleaned && !isCourseCode(cleaned) && !['moodle', 'home', 'lms', 'player', 'video'].includes(cleaned.toLowerCase())) {
         return cleaned;
       }
     }
@@ -462,14 +462,14 @@
     document.body.appendChild(badge);
   }
 
-  // Scan current frame and DOM for Vimeo videos
+  // Scan current frame and DOM for videos
   function scanForVideos() {
     const newlyDetected = [];
 
-    // 1. Check if the current window URL itself is Vimeo
-    const selfId = extractVimeoId(window.location.href);
+    // 1. Check if the current window URL itself contains a video
+    const selfId = extractVideoId(window.location.href);
     if (selfId && !detectedVideos.has(selfId)) {
-      const isPlayerEmbed = window.location.hostname.includes("player.vimeo.com");
+      const isPlayerEmbed = window.location.hostname.includes("player.") || window.location.pathname.includes("/embed/");
       const hHash = extractHHashFromDOM();
       let playerConfig = null;
 
@@ -483,7 +483,7 @@
                 current.playerConfig = cfg;
                 if (cfg.video?.title) current.title = cfg.video.title;
                 ext.runtime.sendMessage({
-                  type: "VIMEO_VIDEOS_DETECTED",
+                  type: "VIDEOS_DETECTED",
                   videos: [current]
                 }).catch(() => {});
               }
@@ -494,7 +494,7 @@
 
       const lmsCourse = extractLmsCourseContext();
       const lmsPageUrl = isPlayerEmbed ? (document.referrer || null) : window.location.href;
-      const title = (playerConfig?.video?.title) || getPageTitle() || (isPlayerEmbed ? `Vimeo Embed ${selfId}` : `Vimeo Video ${selfId}`);
+      const title = (playerConfig?.video?.title) || getPageTitle() || (isPlayerEmbed ? `Embedded Video ${selfId}` : `Video ${selfId}`);
       const videoInfo = {
         videoId: selfId,
         title: title,
@@ -517,10 +517,10 @@
     }
 
     // 2. Scan for embedded <iframe> elements
-    const iframes = document.querySelectorAll('iframe[src*="vimeo.com"], iframe[src*="player.vimeo.com"], iframe[data-src*="vimeo.com"]');
+    const iframes = document.querySelectorAll('iframe[src*="video"], iframe[data-src*="video"], iframe[data-video-id], iframe[src*="player"], iframe[data-src*="player"]');
     iframes.forEach((iframe) => {
       const src = iframe.getAttribute("src") || iframe.getAttribute("data-src") || "";
-      const vId = extractVimeoId(src) || iframe.getAttribute("data-vimeo-id");
+      const vId = extractVideoId(src) || iframe.getAttribute("data-video-id");
       if (vId) {
         const hHash = extractHHash(src);
         const title = iframe.getAttribute("title") || iframe.getAttribute("aria-label") || `Embedded Lecture ${vId}`;
@@ -530,7 +530,7 @@
           const videoInfo = {
             videoId: vId,
             title: title,
-            url: src || `https://player.vimeo.com/video/${vId}`,
+            url: src || `https://video.lecturescribe.local/${vId}`,
             type: "embedded_iframe",
             hHash: hHash,
             referer: window.location.href,
@@ -546,11 +546,11 @@
       }
     });
 
-    // 3. Scan for Vimeo links on page (e.g. course resources, lecture links)
-    const links = document.querySelectorAll('a[href*="vimeo.com"]');
+    // 3. Scan for video links on page (e.g. course resources, lecture links)
+    const links = document.querySelectorAll('a[href*="/video/"], a[href*="video_id="]');
     links.forEach((a) => {
       const href = a.getAttribute("href") || "";
-      const vId = extractVimeoId(href);
+      const vId = extractVideoId(href);
       if (vId && !detectedVideos.has(vId)) {
         const title = a.textContent?.trim() || `Linked Lecture ${vId}`;
         const videoInfo = {
@@ -568,7 +568,7 @@
     // Notify background worker of any detected videos
     if (detectedVideos.size > 0) {
       ext.runtime.sendMessage({
-        type: "VIMEO_VIDEOS_DETECTED",
+        type: "VIDEOS_DETECTED",
         videos: Array.from(detectedVideos.values())
       }).catch(() => {});
     }

@@ -44,14 +44,14 @@ Today we discuss forward kinematics.
             }
         }
         mock_get_tracks.return_value = [
-            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+            {"url": "https://video.lecturescribe.local/test.vtt", "label": "English", "lang": "en"}
         ]
         mock_fetch_vtt.return_value = self.sample_vtt
         mock_save_transcript.return_value = True
         mock_pinecone.return_value = []
 
         # Calling without course_name parameter triggers extract_course_name(title)
-        response = self.client.get("/api/transcript?url=https://vimeo.com/1229247139")
+        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1229247139")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -86,12 +86,12 @@ Today we discuss forward kinematics.
             }
         }
         mock_get_tracks.return_value = [
-            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+            {"url": "https://video.lecturescribe.local/test.vtt", "label": "English", "lang": "en"}
         ]
         mock_fetch_vtt.return_value = self.sample_vtt
         mock_save_transcript.return_value = True
 
-        response = self.client.get("/api/transcript?url=https://vimeo.com/1229247139&course_name=Artificial%20Intelligence")
+        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1229247139&course_name=Artificial%20Intelligence")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -126,7 +126,7 @@ Today we discuss forward kinematics.
             }
         }
 
-        response = self.client.get("/api/transcript?url=https://vimeo.com/1233458452")
+        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1233458452")
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -146,7 +146,7 @@ Today we discuss forward kinematics.
         mock_ingest_transcript.assert_not_called()
 
     def test_transcript_invalid_url_raises_400(self):
-        response = self.client.get("/api/transcript?url=not-a-valid-vimeo-link")
+        response = self.client.get("/api/transcript?url=not-a-valid-video-link")
         self.assertEqual(response.status_code, 400)
         self.assertIn("detail", response.json())
 
@@ -162,7 +162,7 @@ Today we discuss forward kinematics.
         mock_get_video.return_value = {
             "title": "Introduction to Generative AI",
             "duration": "45m",
-            "sourceUrl": "https://vimeo.com/1233458452",
+            "sourceUrl": "https://video.lecturescribe.local/1233458452",
             "course_name": "Artificial Intelligence",
             "cues": [],
         }
@@ -184,7 +184,7 @@ Today we discuss forward kinematics.
         self.assertEqual(data["cues"], [{"time": "01:05", "text": "Welcome to class."}])
         mock_post.assert_any_call(
             "https://transcription.example/transcribe/url",
-            json={"url": "https://vimeo.com/1233458452"},
+            json={"url": "https://video.lecturescribe.local/1233458452"},
             timeout=(15, 900),
         )
         mock_save.assert_called_once()
@@ -339,7 +339,7 @@ Today we discuss forward kinematics.
             "videoId": "1234158573",
             "title": "Machine Learning Paradigms Live Session -4 ( 8 / 10 / 2026)",
             "duration": 3600,
-            "sourceUrl": "https://vimeo.com/1234158573",
+            "sourceUrl": "https://video.lecturescribe.local/1234158573",
             "captionLabel": "English",
             "cues": [{"time": "00:01", "text": "Welcome to ML"}],
             "summarySections": [],
@@ -347,7 +347,7 @@ Today we discuss forward kinematics.
             "course_slug": "machine-learning-paradigms",
             "cached": True
         }
-        response = self.client.get("/api/transcript?url=https://vimeo.com/1234158573&course_name=machine-learning-paradigms")
+        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1234158573&course_name=machine-learning-paradigms")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["course_name"], "Machine Learning Paradigms")
@@ -372,7 +372,7 @@ Today we discuss forward kinematics.
     ):
         mock_get_saved_video.return_value = None
         mock_get_tracks.return_value = [
-            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+            {"url": "https://video.lecturescribe.local/test.vtt", "label": "English", "lang": "en"}
         ]
         mock_fetch_vtt.return_value = self.sample_vtt
         mock_save_transcript.return_value = True
@@ -409,7 +409,7 @@ Today we discuss forward kinematics.
     @patch("backend.main.algolia_service.ingest_cues")
     @patch("backend.main.pinecone_rag_engine.ingest_transcript")
     @patch("backend.main.db_manager.save_video_transcript")
-    def test_extension_import_without_player_config_fetches_vimeo(
+    def test_extension_import_without_player_config_fetches_video_config(
         self,
         mock_save_transcript,
         mock_pinecone,
@@ -426,7 +426,7 @@ Today we discuss forward kinematics.
             }
         }
         mock_get_tracks.return_value = [
-            {"url": "https://vimeo.com/test.vtt", "label": "English", "lang": "en"}
+            {"url": "https://video.lecturescribe.local/test.vtt", "label": "English", "lang": "en"}
         ]
         mock_fetch_vtt.return_value = self.sample_vtt
         mock_save_transcript.return_value = True
@@ -450,7 +450,7 @@ Today we discuss forward kinematics.
             "videoId": "12345",
             "title": "Cached Lecture",
             "duration": 3600,
-            "sourceUrl": "https://vimeo.com/12345",
+            "sourceUrl": "https://video.lecturescribe.local/12345",
             "captionLabel": "English",
             "cues": [{"time": "00:01", "text": "Cached text"}],
             "summarySections": [],

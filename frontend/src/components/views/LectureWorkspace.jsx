@@ -40,6 +40,9 @@ export default function LectureWorkspace({
   searchError = null,
   handleCueClick,
   activeCueIdx,
+  isPlaying,
+  handleTogglePlayPause,
+  handlePauseVideo,
   webSearchEnabled,
   setWebSearchEnabled,
   clearChatHistory,
@@ -258,6 +261,9 @@ export default function LectureWorkspace({
             setActiveData={setActiveData}
             summaryHook={summaryHook}
             googleUser={googleUser}
+            isPlaying={isPlaying}
+            handleTogglePlayPause={handleTogglePlayPause}
+            handlePauseVideo={handlePauseVideo}
           />
         ) : activeTab === 'quiz' ? (
           <LectureQuiz

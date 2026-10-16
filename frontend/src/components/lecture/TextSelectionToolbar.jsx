@@ -7,7 +7,8 @@ import {
   Check,
   X,
   Loader2,
-  BookmarkPlus
+  BookmarkPlus,
+  Eraser
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 
@@ -20,7 +21,9 @@ export default function TextSelectionToolbar({
   videoId,
   userEmail,
   onClose,
-  onAnnotationCreated
+  onAnnotationCreated,
+  onDeleteAnnotation,
+  overlappingAnnotations = []
 }) {
   const [mode, setMode] = useState('menu'); // 'menu' | 'note' | 'ai'
   const [noteInput, setNoteInput] = useState('');
@@ -103,6 +106,32 @@ export default function TextSelectionToolbar({
     } catch (err) {
       console.error('Error saving note:', err);
       setActionError(err.message || 'Error saving note');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUnhighlight = async () => {
+    setActionError(null);
+    setIsSubmitting(true);
+    try {
+      if (overlappingAnnotations && overlappingAnnotations.length > 0) {
+        for (const ann of overlappingAnnotations) {
+          const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${ann.id}`, {
+            method: 'DELETE'
+          });
+          if (res.ok && typeof onDeleteAnnotation === 'function') {
+            onDeleteAnnotation(ann.id);
+          }
+        }
+      }
+      if (typeof window !== 'undefined') {
+        window.getSelection()?.removeAllRanges();
+      }
+      onClose();
+    } catch (err) {
+      console.error('Error removing highlight/note:', err);
+      setActionError(err.message || 'Error unhighlighting');
     } finally {
       setIsSubmitting(false);
     }
@@ -314,6 +343,31 @@ export default function TextSelectionToolbar({
             <Sparkles size={13} /> Ask AI
           </button>
 
+          {/* Un-highlight Button */}
+          {overlappingAnnotations && overlappingAnnotations.length > 0 && (
+            <button
+              onClick={handleUnhighlight}
+              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              title="Un-highlight / Remove annotation"
+              aria-label="Un-highlight annotation"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 6px',
+                border: 'none',
+                background: 'rgba(239, 68, 68, 0.1)',
+                color: '#ef4444',
+                fontSize: '0.74rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                borderRadius: '4px'
+              }}
+            >
+              <Eraser size={13} /> Un-highlight
+            </button>
+          )}
+
           {/* Copy Quote Button */}
           <button
             onClick={handleCopyQuote}
@@ -373,6 +427,12 @@ export default function TextSelectionToolbar({
             placeholder="Write study notes or key thoughts on this line..."
             value={noteInput}
             onChange={(e) => setNoteInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSaveNote();
+              }
+            }}
             style={{
               width: '100%',
               fontSize: '0.78rem',
@@ -385,7 +445,10 @@ export default function TextSelectionToolbar({
               boxSizing: 'border-box'
             }}
           />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px' }}>
+            <span style={{ fontSize: '0.66rem', color: 'var(--text-secondary)' }}>
+              Press <kbd style={{ padding: '0 4px', background: 'var(--card-bg)', borderRadius: '3px', border: '1px solid var(--border-color)', fontSize: '0.64rem' }}>Enter</kbd> to save
+            </span>
             <button
               onClick={handleSaveNote}
               style={{

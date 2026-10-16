@@ -395,6 +395,9 @@ export default function App() {
             searchError={player.searchError}
             handleCueClick={player.handleCueClick}
             activeCueIdx={player.activeCueIdx}
+            isPlaying={player.isPlaying}
+            handleTogglePlayPause={player.handleTogglePlayPause}
+            handlePauseVideo={player.handlePauseVideo}
             webSearchEnabled={tutor.webSearchEnabled}
             setWebSearchEnabled={tutor.setWebSearchEnabled}
             clearChatHistory={tutor.clearChatHistory}

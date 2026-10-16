@@ -115,12 +115,10 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
     Generate structured summary using an instruction-tuned language model
     (Groq, Gemini, Hugging Face, OpenAI, or local endpoint).
     """
+    from backend.llm_router import llm_router, TaskType
     groq_key = os.getenv("GROQ_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    openai_base = os.getenv("LLAMA_OPENAI_BASE", os.getenv("LLAMA_API_BASE", ""))
-    model_id = 'gemini-3.8-flash'
-    if not (groq_key or gemini_key or openai_key or openai_base):
+    if not (groq_key or gemini_key):
         return None
 
     sentences = reconstruct_sentences(cues)
@@ -149,79 +147,66 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
         "Respond ONLY with a valid JSON array of objects with keys 'title' and 'points'. Do not include markdown codeblocks or extra text."
     )
     user_prompt = f"Video Title: {title}\n\nTranscript Excerpt:\n{sample_text}\n\nJSON output:"
+    est_tokens = (len(system_prompt) + len(user_prompt)) // 4
 
-    # 1. Google Gemini (Native/OpenAI-compat with gemini-3.8-flash)
-    if gemini_key:
-        try:
-            from openai import OpenAI
-            client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
-            resp = client.chat.completions.create(
-                model="gemini-3.8-flash",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=4000,
-                temperature=0.2
-            )
-            raw = (resp.choices[0].message.content or "").strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-            data = json.loads(raw)
-            if isinstance(data, list) and len(data) >= 2:
-                return data
-        except Exception as e:
-            print(f"[LLM Gemini Notice] Skipped: {e}")
-
-    # 2. Groq (High speed, reliable)
-    if groq_key:
-        for groq_model in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+    candidates = llm_router.get_candidate_models(TaskType.SUMMARY_SECTIONS, est_tokens=est_tokens)
+    for model_spec in candidates:
+        model_name = model_spec.name
+        if model_spec.provider == "gemini" and gemini_key:
             try:
-                from openai import OpenAI
-                client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-                resp = client.chat.completions.create(
-                    model=groq_model,
-                    messages=[
+                import requests
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "responseMimeType": "application/json",
+                        "maxOutputTokens": 4096
+                    }
+                }
+                resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
+                if resp.status_code == 200:
+                    cand = (resp.json().get("candidates") or [{}])[0]
+                    parts = (cand.get("content") or {}).get("parts") or []
+                    raw = "".join(p.get("text", "") for p in parts).strip()
+                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw)
+                    data = json.loads(raw)
+                    if isinstance(data, list) and len(data) >= 2:
+                        llm_router.record_success(model_name)
+                        return data
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
+            except Exception as e:
+                llm_router.record_error(model_name, 500, str(e))
+                print(f"[LLM Gemini Notice] ({model_name}) Skipped: {e}")
+
+        elif model_spec.provider == "groq" and groq_key:
+            try:
+                import requests
+                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": model_name,
+                    "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    max_tokens=4000,
-                    temperature=0.2
-                )
-                raw = (resp.choices[0].message.content or "").strip()
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw)
-                data = json.loads(raw)
-                if isinstance(data, list) and len(data) >= 2:
-                    return data
+                    "temperature": 0.2,
+                    "max_tokens": 4000
+                }
+                resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=45)
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"]["content"].strip()
+                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw)
+                    data = json.loads(raw)
+                    if isinstance(data, list) and len(data) >= 2:
+                        llm_router.record_success(model_name)
+                        return data
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
             except Exception as e:
-                print(f"[LLM Groq Notice] ({groq_model}) Skipped: {e}")
-
-    # 3. OpenAI / Ollama compatible endpoint
-    if openai_key or openai_base:
-        try:
-            from openai import OpenAI
-            client = OpenAI(
-                base_url=openai_base if openai_base else None,
-                api_key=openai_key if openai_key else "ollama"
-            )
-            resp = client.chat.completions.create(
-                model=model_id if openai_base else "gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=3500,
-                temperature=0.2
-            )
-            raw = resp.choices[0].message.content.strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-            data = json.loads(raw)
-            if isinstance(data, list) and len(data) >= 2:
-                return data
-        except Exception as e:
-            print(f"[LLM OpenAI Notice] Skipped: {e}")
+                llm_router.record_error(model_name, 500, str(e))
+                print(f"[LLM Groq Notice] ({model_name}) Skipped: {e}")
 
     return None
 

@@ -819,12 +819,17 @@ class Llama3PineconeRAGStore:
                 "display": "Groq GPT-OSS 20B"
             })
         if gemini_key:
-            candidates.append({
-                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-3.8-flash",
-                "display": "Gemini 3.8 Flash (OpenAI API)"
-            })
+            for gem_m, gem_disp in [
+                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
+                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+            ]:
+                candidates.append({
+                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    "auth_header": f"Bearer {gemini_key}",
+                    "model_name": gem_m,
+                    "display": f"{gem_disp} (OpenAI API)"
+                })
 
         if not candidates:
             raise RuntimeError("No active LLM keys (GROQ_API_KEY or GEMINI_API_KEY) found.")
@@ -1102,12 +1107,17 @@ class Llama3PineconeRAGStore:
                 "display": "Groq GPT-OSS 20B"
             })
         if gemini_key:
-            candidates.append({
-                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                "auth_header": f"Bearer {gemini_key}",
-                "model_name": "gemini-3.8-flash",
-                "display": "Gemini 3.8 Flash (OpenAI API)"
-            })
+            for gem_m, gem_disp in [
+                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
+                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+            ]:
+                candidates.append({
+                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    "auth_header": f"Bearer {gemini_key}",
+                    "model_name": gem_m,
+                    "display": f"{gem_disp} (OpenAI API)"
+                })
 
         if not candidates:
             raise RuntimeError("No active LLM keys (GROQ_API_KEY or GEMINI_API_KEY) found.")
@@ -1365,7 +1375,7 @@ class Llama3PineconeRAGStore:
             user_content = (
                 f"Synthesize the following lecture study guide into an authentic, flowing student submission writeup in continuous narrative prose (approx {target_words} words). "
                 f"Write all mathematical expressions and formulas as plain text inline pseudo-math (NO LaTeX delimiters or markup):\n\n"
-                f"{clean_base[:35000]}"
+                f"{clean_base[:12000]}"
             )
             max_tokens_val = 2500
         elif is_concepts:
@@ -1400,18 +1410,19 @@ class Llama3PineconeRAGStore:
         if not (groq_key or gemini_key):
             raise RuntimeError("No LLM keys configured for submission generation.")
 
-        t_sub_start = time.time()
-        # 1. Groq Provider Chain (cascade across candidate models)
-        if groq_key:
-            import requests
-            groq_models = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+        from backend.llm_router import llm_router, TaskType
+        import requests
 
-            for g_model in groq_models:
+        est_tokens = (len(system_prompt) + len(user_content)) // 4
+        candidates = llm_router.get_candidate_models(TaskType.SUBMISSION, est_tokens=est_tokens)
+        t_sub_start = time.time()
+
+        for model_spec in candidates:
+            m_name = model_spec.name
+            if model_spec.provider == "groq" and groq_key:
                 try:
                     payload = {
-                        "model": g_model,
+                        "model": m_name,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_content}
@@ -1419,53 +1430,56 @@ class Llama3PineconeRAGStore:
                         "temperature": 0.25,
                         "max_tokens": max_tokens_val
                     }
-                    print(f"🚀 [Submission Generator] Dispatching to Groq {g_model}...")
-                    r = requests.post(url, headers=headers, json=payload, timeout=60)
+                    headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                    print(f"🚀 [Submission Generator] Dispatching to Groq {m_name}...")
+                    r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=60)
                     if r.status_code == 200:
                         raw_output = r.json()["choices"][0]["message"]["content"].strip()
                         final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
                         sub_elapsed = time.time() - t_sub_start
-                        print(f"✅ [Submission Generator] Completed via Groq {g_model} in {sub_elapsed:.2f}s | Words: {len(final_sub.split())}")
+                        llm_router.record_success(m_name)
+                        print(f"✅ [Submission Generator] Completed via Groq {m_name} in {sub_elapsed:.2f}s | Words: {len(final_sub.split())}")
                         return {
                             "status": "success",
                             "submission_text": final_sub,
                             "word_count": len(final_sub.split()),
-                            "model": f"Groq {g_model}"
+                            "model": f"Groq {m_name}"
                         }
                     else:
-                        print(f"⚠️ [Submission Generator] Groq model {g_model} returned HTTP {r.status_code}: {r.text[:120]}")
+                        print(f"⚠️ [Submission Generator] Groq model {m_name} returned HTTP {r.status_code}: {r.text[:120]}")
+                        llm_router.record_error(m_name, r.status_code, r.text[:150])
                 except Exception as ge:
-                    print(f"⚠️ [Submission Generator] Groq model {g_model} error ({ge}). Cascading...")
+                    print(f"⚠️ [Submission Generator] Groq model {m_name} error ({ge}). Cascading...")
+                    llm_router.record_error(m_name, 500, str(ge))
 
-        # 2. Gemini Provider Chain (cascade across candidate models)
-        if gemini_key:
-            import requests
-            gemini_models = ["gemini-3.8-flash"]
-
-            for gm_model in gemini_models:
+            elif model_spec.provider == "gemini" and gemini_key:
                 try:
-                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{gm_model}:generateContent?key={gemini_key}"
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
                         "generationConfig": {"temperature": 0.25, "maxOutputTokens": max_tokens_val}
                     }
-                    print(f"🚀 [Submission Generator] Dispatching to Google {gm_model}...")
+                    print(f"🚀 [Submission Generator] Dispatching to Google {m_name}...")
                     r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
                     if r.status_code == 200:
-                        raw_output = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
-                        sub_elapsed = time.time() - t_sub_start
-                        print(f"✅ [Submission Generator] Completed via Google {gm_model} in {sub_elapsed:.2f}s | Words: {len(final_sub.split())}")
-                        return {
-                            "status": "success",
-                            "submission_text": final_sub,
-                            "word_count": len(final_sub.split()),
-                            "model": f"Google {gm_model}"
-                        }
-                    else:
-                        print(f"⚠️ [Submission Generator] Gemini {gm_model} returned HTTP {r.status_code}: {r.text[:120]}")
+                        cand = (r.json().get("candidates") or [{}])[0]
+                        parts = (cand.get("content") or {}).get("parts") or []
+                        raw_output = "".join(p.get("text", "") for p in parts).strip()
+                        if raw_output:
+                            final_sub = self._clean_for_submission(raw_output, preserve_paragraphs=True)
+                            sub_elapsed = time.time() - t_sub_start
+                            llm_router.record_success(m_name)
+                            print(f"✅ [Submission Generator] Completed via Google {m_name} in {sub_elapsed:.2f}s | Words: {len(final_sub.split())}")
+                            return {
+                                "status": "success",
+                                "submission_text": final_sub,
+                                "word_count": len(final_sub.split()),
+                                "model": f"Google {m_name}"
+                            }
+                    llm_router.record_error(m_name, r.status_code, r.text[:150])
                 except Exception as gme:
-                    print(f"⚠️ [Submission Generator] Gemini {gm_model} error ({gme}). Cascading...")
+                    print(f"⚠️ [Submission Generator] Google model {m_name} error ({gme}). Cascading...")
+                    llm_router.record_error(m_name, 500, str(gme))
 
         # 3. Clean Local Fallback without mid-sentence slicing or robotic string injection
         print("⚠️ [Submission Generator] All LLM providers failed or rate-limited. Using clean local fallback.")
@@ -1567,33 +1581,71 @@ class Llama3PineconeRAGStore:
         # limits count both. Models whose per-minute limit is below this are skipped up front instead
         # of burning a round trip on a guaranteed HTTP 413.
         est_prompt_tokens = (len(system_prompt) + len(user_prompt)) // 4
-        groq_models = [
-            # (model, per-minute token limit on the on-demand tier; override via GROQ_TPM_LIMIT)
-            ("openai/gpt-oss-120b", int(os.getenv("GROQ_TPM_LIMIT", "8000"))),
-            ("qwen/qwen3.8-27b", int(os.getenv("GROQ_ITPM_LIMIT_QWEN", "7000"))),
-            ("openai/gpt-oss-20b", int(os.getenv("GROQ_TPM_LIMIT", "8000"))),
-        ]
-        groq_completion_budget = 8192
+        from backend.llm_router import llm_router, TaskType
 
-        # 1. Groq - only for models whose limits can actually fit this transcript. For TPM-limited
-        # models input and max_tokens both count, so the completion budget is sized to what is left.
-        if groq_key:
-            for g_model, g_limit in groq_models:
-                if "qwen" in g_model:
-                    # ITPM limit applies to input tokens only.
-                    fits = est_prompt_tokens <= g_limit
-                    completion_budget = groq_completion_budget
-                else:
-                    completion_budget = min(groq_completion_budget, g_limit - est_prompt_tokens - 300)
-                    fits = completion_budget >= 2500
-                if not fits:
-                    print(f"⏭️ [Summary Engine] Skipping Groq {g_model}: ~{est_prompt_tokens} prompt tokens don't fit its {g_limit} tokens/min limit.")
+        candidates = llm_router.get_candidate_models(
+            task_type=TaskType.COMPREHENSIVE_SUMMARY,
+            est_tokens=est_prompt_tokens
+        )
+
+        for model_spec in candidates:
+            m_name = model_spec.name
+            # 1. Google Gemini (1M-token context, high TPM)
+            if model_spec.provider == "gemini" and gemini_key:
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    # Thinking-capable models spend part of this budget on reasoning, so leave headroom.
+                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 16384}
+                }
+                headers = {"Content-Type": "application/json"}
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
+                retry_delays = [2.0, 5.0]
+
+                for attempt in range(len(retry_delays) + 1):
+                    t_gem_start = time.time()
+                    print(f"🚀 [Summary Engine] Dispatching to Google {m_name} (attempt {attempt + 1})...")
+                    try:
+                        resp = requests.post(api_url, headers=headers, json=payload, timeout=120)
+                    except Exception as e:
+                        print(f"⚠️ [Gemini Summary Notice] {m_name} request error ({e})")
+                        llm_router.record_error(m_name, 500, str(e))
+                        break
+
+                    if resp.status_code == 200:
+                        candidate = (resp.json().get("candidates") or [{}])[0]
+                        parts = (candidate.get("content") or {}).get("parts") or []
+                        final_answer = "".join(p.get("text", "") for p in parts).strip()
+                        if final_answer:
+                            if candidate.get("finishReason") == "MAX_TOKENS":
+                                print(f"⚠️ [Gemini Summary Notice] {m_name} hit the output token limit; summary may be cut off.")
+                            gem_dur = time.time() - t_gem_start
+                            llm_router.record_success(m_name)
+                            print(f"✅ [Summary Engine] Google {m_name} completed in {gem_dur:.2f}s")
+                            return self._build_summary_response(final_answer, f"{m_name} (Native REST API)", title, target_video_id)
+                        print(f"⚠️ [Gemini Summary Notice] {m_name} returned an empty answer (finishReason={candidate.get('finishReason')}).")
+                        break
+
+                    print(f"⚠️ [Gemini Summary Notice] Google {m_name} returned HTTP {resp.status_code}: {resp.text[:180]}")
+                    llm_router.record_error(m_name, resp.status_code, resp.text[:150])
+                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < len(retry_delays):
+                        time.sleep(retry_delays[attempt])
+                        continue
+                    break
+
+            # 2. Groq (only for transcripts small enough to fit within on-demand TPM limits)
+            elif model_spec.provider == "groq" and groq_key:
+                g_limit = model_spec.tpm_limit
+                completion_budget = min(8192, g_limit - est_prompt_tokens - 300)
+                if completion_budget < 2500:
+                    print(f"⏭️ [Summary Engine] Skipping Groq {m_name}: ~{est_prompt_tokens} prompt tokens don't fit its {g_limit} tokens/min limit.")
                     continue
-                print(f"🚀 [Summary Engine] Dispatching to Groq {g_model}...")
+
+                print(f"🚀 [Summary Engine] Dispatching to Groq {m_name}...")
                 t_groq_start = time.time()
                 try:
                     groq_payload = {
-                        "model": g_model,
+                        "model": m_name,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt}
@@ -1614,53 +1666,15 @@ class Llama3PineconeRAGStore:
                     if r.status_code == 200:
                         ans = r.json()["choices"][0]["message"]["content"].strip()
                         groq_dur = time.time() - t_groq_start
-                        print(f"✅ [Summary Engine] Groq {g_model} completed in {groq_dur:.2f}s")
-                        return self._build_summary_response(ans, f"Groq {g_model}", title, target_video_id)
+                        llm_router.record_success(m_name)
+                        print(f"✅ [Summary Engine] Groq {m_name} completed in {groq_dur:.2f}s")
+                        return self._build_summary_response(ans, f"Groq {m_name}", title, target_video_id)
                     else:
-                        print(f"⚠️ [Groq Summary Notice] Groq {g_model} returned HTTP {r.status_code}: {r.text[:180]}. Cascading...")
+                        print(f"⚠️ [Groq Summary Notice] Groq {m_name} returned HTTP {r.status_code}: {r.text[:180]}. Cascading...")
+                        llm_router.record_error(m_name, r.status_code, r.text[:150])
                 except Exception as ge:
-                    print(f"⚠️ [Groq Summary Notice] Error with {g_model} ({ge}). Cascading...")
-
-        # 2. Google Gemini (1M-token context). Transient 429/5xx ("high demand") are retried with
-        # backoff, then the next model is tried, before giving up.
-        if gemini_key:
-            candidate_models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash"]
-            payload = {
-                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                # Thinking-capable models spend part of this budget on reasoning, so leave headroom.
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 16384}
-            }
-            headers = {"Content-Type": "application/json"}
-            retry_delays = [2.0, 5.0]
-
-            for model_name in candidate_models:
-                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
-                for attempt in range(len(retry_delays) + 1):
-                    t_gem_start = time.time()
-                    print(f"🚀 [Summary Engine] Dispatching to Google {model_name} (attempt {attempt + 1})...")
-                    try:
-                        resp = requests.post(api_url, headers=headers, json=payload, timeout=120)
-                    except Exception as e:
-                        print(f"⚠️ [Gemini Summary Notice] {model_name} request error ({e})")
-                        break
-                    if resp.status_code == 200:
-                        candidate = (resp.json().get("candidates") or [{}])[0]
-                        parts = (candidate.get("content") or {}).get("parts") or []
-                        final_answer = "".join(p.get("text", "") for p in parts).strip()
-                        if final_answer:
-                            if candidate.get("finishReason") == "MAX_TOKENS":
-                                print(f"⚠️ [Gemini Summary Notice] {model_name} hit the output token limit; summary may be cut off.")
-                            gem_dur = time.time() - t_gem_start
-                            print(f"✅ [Summary Engine] Google {model_name} completed in {gem_dur:.2f}s")
-                            return self._build_summary_response(final_answer, f"{model_name} (Native REST API)", title, target_video_id)
-                        print(f"⚠️ [Gemini Summary Notice] {model_name} returned an empty answer (finishReason={candidate.get('finishReason')}).")
-                        break
-                    print(f"⚠️ [Gemini Summary Notice] Google {model_name} returned HTTP {resp.status_code}: {resp.text[:180]}")
-                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < len(retry_delays):
-                        time.sleep(retry_delays[attempt])
-                        continue
-                    break
+                    print(f"⚠️ [Groq Summary Notice] Error with {m_name} ({ge}). Cascading...")
+                    llm_router.record_error(m_name, 500, str(ge))
 
         # 3. Optional last resort: chapter outline from stored summary sections. Off by default because
         # a short chapter outline must never be stored as if it were the comprehensive study guide.
@@ -2027,7 +2041,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-3.8-flash"]:
+            for model_name in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2262,7 +2276,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-3.8-flash"]:
+            for model_name in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2451,7 +2465,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
 
         # Try Gemini as fallback
         if gemini_key:
-            for model_name in ["gemini-3.8-flash"]:
+            for model_name in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash"]:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],

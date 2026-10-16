@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import Player from '@vimeo/player';
 import { API_BASE } from '../utils/constants';
 import { parseTimestampToSeconds, formatSecondsToTimestamp } from '../utils/formatters';
@@ -59,8 +59,11 @@ function createHtml5VideoAdapter(videoEl) {
       return videoEl.play ? videoEl.play() : Promise.resolve();
     },
     pause() {
-      videoEl.pause();
+      if (typeof videoEl.pause === 'function') videoEl.pause();
       return Promise.resolve();
+    },
+    getPaused() {
+      return Promise.resolve(Boolean(videoEl.paused || videoEl.ended));
     }
   };
 }
@@ -316,6 +319,78 @@ export function useLecturePlayer(activeData, userEmail = null) {
     }
   }, [activeData, userEmail]);
 
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  useEffect(() => {
+    if (!iframeRef?.current) return;
+    const el = iframeRef.current;
+    if (el.tagName === 'VIDEO') {
+      const onPlay = () => setIsPlaying(true);
+      const onPause = () => setIsPlaying(false);
+      el.addEventListener('play', onPlay);
+      el.addEventListener('pause', onPause);
+      return () => {
+        el.removeEventListener('play', onPlay);
+        el.removeEventListener('pause', onPause);
+      };
+    }
+  }, [iframeRef?.current]);
+
+  const handleTogglePlayPause = useCallback(() => {
+    if (playerRef.current && typeof playerRef.current.getPaused === 'function') {
+      playerRef.current.getPaused().then(paused => {
+        if (paused) {
+          playerRef.current.play().catch(() => {});
+          setIsPlaying(true);
+        } else {
+          playerRef.current.pause().catch(() => {});
+          setIsPlaying(false);
+        }
+      }).catch(() => {
+        playerRef.current.pause().catch(() => {});
+        setIsPlaying(false);
+      });
+      return;
+    }
+
+    const video = iframeRef?.current || document.querySelector('video');
+    if (video && typeof video.pause === 'function') {
+      if (video.paused || video.ended) {
+        video.play().then(() => setIsPlaying(true)).catch(() => {});
+      } else {
+        video.pause();
+        setIsPlaying(false);
+      }
+      return;
+    }
+
+    const iframe = iframeRef?.current?.tagName === 'IFRAME' ? iframeRef.current : document.querySelector('iframe');
+    if (iframe && iframe.contentWindow) {
+      const msg = isPlaying ? '{"method":"pause"}' : '{"method":"play"}';
+      iframe.contentWindow.postMessage(msg, '*');
+      setIsPlaying(prev => !prev);
+    }
+  }, [isPlaying, iframeRef]);
+
+  const handlePauseVideo = useCallback(() => {
+    if (playerRef.current && typeof playerRef.current.pause === 'function') {
+      playerRef.current.pause().catch(() => {});
+      setIsPlaying(false);
+      return;
+    }
+    const video = iframeRef?.current || document.querySelector('video');
+    if (video && typeof video.pause === 'function') {
+      video.pause();
+      setIsPlaying(false);
+      return;
+    }
+    const iframe = iframeRef?.current?.tagName === 'IFRAME' ? iframeRef.current : document.querySelector('iframe');
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage('{"method":"pause"}', '*');
+      setIsPlaying(false);
+    }
+  }, [iframeRef]);
+
   // Jump to specific timestamp when cue or citation is clicked
   const handleCueClick = (timestampStr) => {
     const secs = parseTimestampToSeconds(timestampStr);
@@ -408,6 +483,9 @@ export function useLecturePlayer(activeData, userEmail = null) {
     playerRef,
     displayCues,
     handleCueClick,
-    handleCopyTranscript
+    handleCopyTranscript,
+    isPlaying,
+    handleTogglePlayPause,
+    handlePauseVideo
   };
 }

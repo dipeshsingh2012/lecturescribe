@@ -6,7 +6,10 @@ import {
   Trash2,
   Sparkles,
   MessageSquare,
-  Highlighter
+  Highlighter,
+  Eraser,
+  Pencil,
+  Check
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 
@@ -16,10 +19,14 @@ export default function TranscriptAnnotationsDrawer({
   videoId,
   annotations = [],
   onDeleteAnnotation,
+  onUpdateAnnotation,
   handleCueClick
 }) {
   const [filterType, setFilterType] = useState('all'); // 'all' | 'note' | 'highlight' | 'ai_explanation'
   const [deleteError, setDeleteError] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editNoteText, setEditNoteText] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   if (!open) return null;
 
@@ -34,6 +41,37 @@ export default function TranscriptAnnotationsDrawer({
     const m = Math.floor(s / 60);
     const rem = s % 60;
     return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  };
+
+  const handleSaveEdit = async (annotationId) => {
+    const trimmed = (editNoteText || '').trim();
+    if (!trimmed) return;
+    setSavingEdit(true);
+    setDeleteError(null);
+    try {
+      if (typeof onUpdateAnnotation === 'function') {
+        await onUpdateAnnotation(annotationId, trimmed);
+      } else if (videoId) {
+        const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${annotationId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note_text: trimmed })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setDeleteError(err.detail || 'Failed to update note');
+          setSavingEdit(false);
+          return;
+        }
+      }
+      setEditingId(null);
+      setEditNoteText('');
+    } catch (err) {
+      console.error('Error updating annotation:', err);
+      setDeleteError(err.message || 'Error updating note');
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const handleDelete = async (annotationId) => {
@@ -221,6 +259,7 @@ export default function TranscriptAnnotationsDrawer({
             const selectedText = item.selectedText || item.selected_text || '';
             const noteText = item.noteText || item.note_text;
             const aiResponse = item.aiResponse || item.ai_response;
+            const isEditingThis = editingId === item.id;
 
             return (
               <div
@@ -269,9 +308,32 @@ export default function TranscriptAnnotationsDrawer({
                     }}>
                       {isAi ? 'AI Explainer' : isNote ? 'Margin Note' : 'Highlight'}
                     </span>
+                    {!isAi && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(item.id);
+                          setEditNoteText(noteText || '');
+                        }}
+                        title="Edit note"
+                        aria-label="Edit note"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-secondary)',
+                          cursor: 'pointer',
+                          padding: '2px',
+                          display: 'flex',
+                          alignItems: 'center'
+                        }}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDelete(item.id)}
-                      aria-label="Delete annotation"
+                      title={isHighlight ? "Un-highlight" : "Delete annotation"}
+                      aria-label={isHighlight ? "Un-highlight" : "Delete annotation"}
                       style={{
                         background: 'transparent',
                         border: 'none',
@@ -282,7 +344,7 @@ export default function TranscriptAnnotationsDrawer({
                         alignItems: 'center'
                       }}
                     >
-                      <Trash2 size={13} />
+                      {isHighlight ? <Eraser size={13} /> : <Trash2 size={13} />}
                     </button>
                   </div>
                 </div>
@@ -301,11 +363,105 @@ export default function TranscriptAnnotationsDrawer({
                   "{selectedText}"
                 </blockquote>
 
-                {/* Comment / AI Note */}
-                {noteText && (
-                  <p style={{ fontSize: '0.82rem', margin: '2px 0', color: 'var(--text-primary)', fontWeight: 500 }}>
-                    {noteText}
-                  </p>
+                {/* Comment / Edit Mode / AI Note */}
+                {isEditingThis ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                    <textarea
+                      autoFocus
+                      aria-label="Edit note input"
+                      value={editNoteText}
+                      onChange={(e) => setEditNoteText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          if (editNoteText.trim()) {
+                            handleSaveEdit(item.id);
+                          }
+                        } else if (e.key === 'Escape') {
+                          setEditingId(null);
+                          setEditNoteText('');
+                        }
+                      }}
+                      rows={2}
+                      placeholder="Write your note... (Press Enter to save)"
+                      style={{
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        padding: '6px 8px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--panel-bg)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.8rem',
+                        resize: 'none',
+                        outline: 'none'
+                      }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                        Press Enter to save • Shift+Enter for new line
+                      </span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingId(null);
+                            setEditNoteText('');
+                          }}
+                          style={{
+                            padding: '3px 8px',
+                            fontSize: '0.72rem',
+                            borderRadius: '4px',
+                            border: '1px solid var(--border-color)',
+                            background: 'transparent',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!editNoteText.trim() || savingEdit}
+                          onClick={() => handleSaveEdit(item.id)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 10px',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            borderRadius: '4px',
+                            border: 'none',
+                            background: 'var(--theme-primary)',
+                            color: '#fff',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Check size={11} /> Save
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  noteText && (
+                    <p
+                      onClick={() => {
+                        setEditingId(item.id);
+                        setEditNoteText(noteText || '');
+                      }}
+                      title="Click to edit note"
+                      style={{
+                        fontSize: '0.82rem',
+                        margin: '2px 0',
+                        color: 'var(--text-primary)',
+                        fontWeight: 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {noteText}
+                    </p>
+                  )
                 )}
 
                 {aiResponse && (

@@ -72,15 +72,16 @@ def _call_gemini_or_llm(prompt: str, audio_bytes: Optional[bytes] = None, mime_t
     """
     Call Google Gemini API (or fallback LLM) with text and optional multimodal audio.
     """
+    from backend.llm_router import llm_router, TaskType
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
 
-    # 1. Try Gemini Multimodal API if key exists
-    if gemini_key:
-        candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"]
-        for model in candidate_models:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+    candidates = llm_router.get_candidate_models(TaskType.CORRECTION, multimodal=bool(audio_bytes))
+
+    for model_spec in candidates:
+        model_name = model_spec.name
+        if model_spec.provider == "gemini" and gemini_key:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
             parts: List[Dict[str, Any]] = [{"text": prompt}]
 
             if audio_bytes:
@@ -103,48 +104,36 @@ def _call_gemini_or_llm(prompt: str, audio_bytes: Optional[bytes] = None, mime_t
                 resp = requests.post(url, json=payload, timeout=45)
                 if resp.status_code == 200:
                     data = resp.json()
-                    candidates = data.get("candidates") or []
-                    if candidates:
-                        content_parts = candidates[0].get("content", {}).get("parts") or []
+                    candidates_resp = data.get("candidates") or []
+                    if candidates_resp:
+                        content_parts = candidates_resp[0].get("content", {}).get("parts") or []
                         if content_parts:
+                            llm_router.record_success(model_name)
                             return content_parts[0].get("text", "")
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
             except Exception as e:
-                print(f"[TranscriptCorrection] Gemini {model} call warning: {e}")
+                llm_router.record_error(model_name, 500, str(e))
+                print(f"[TranscriptCorrection] Gemini {model_name} call warning: {e}")
 
-    # 2. Fallback to Groq / OpenAI text completions (for text-only proofreading)
-    if groq_key:
-        try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-            payload = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "max_tokens": 2048
-            }
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            print(f"[TranscriptCorrection] Groq fallback notice: {e}")
-
-    if openai_key:
-        try:
-            url = "https://api.openai.com/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
-            payload = {
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "max_tokens": 2048
-            }
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            print(f"[TranscriptCorrection] OpenAI fallback notice: {e}")
+        elif model_spec.provider == "groq" and groq_key and not audio_bytes:
+            try:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                    "max_tokens": 2048
+                }
+                resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    llm_router.record_success(model_name)
+                    return data["choices"][0]["message"]["content"]
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
+            except Exception as e:
+                llm_router.record_error(model_name, 500, str(e))
+                print(f"[TranscriptCorrection] Groq {model_name} fallback notice: {e}")
 
     # Mock / heuristics fallback if no external keys configured
     return json.dumps({"suggestions": []})

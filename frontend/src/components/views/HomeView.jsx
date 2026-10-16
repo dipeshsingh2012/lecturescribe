@@ -36,6 +36,7 @@ import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
 import CourseTutor from '../course/CourseTutor';
 import CalendarAlertCard from '../calendar/CalendarAlertCard';
+import QuizRemindersCard from '../home/QuizRemindersCard';
 import useCourseQuiz from '../../hooks/useCourseQuiz';
 import { useCourseTutor } from '../../hooks/useCourseTutor';
 
@@ -422,7 +423,13 @@ export default function HomeView({
         </Box>
       )}
 
-      {/* LEVEL 1: COURSE CARDS VIEW & ACADEMIC CALENDAR */}
+      {/* LEVEL 1: COURSE CARDS VIEW & ACADEMIC CALENDAR & PREDICTED QUIZZES */}
+      <QuizRemindersCard
+        currentTheme={currentTheme}
+        onSelectLecture={handleCueClick}
+        selectedCourse={selectedCourse}
+      />
+
       {!selectedCourse ? (
         <>
           {googleUser && <CalendarAlertCard currentTheme={currentTheme} googleUser={googleUser} />}

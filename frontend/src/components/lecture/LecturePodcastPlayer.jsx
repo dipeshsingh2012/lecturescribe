@@ -19,6 +19,8 @@ export default function LecturePodcastPlayer({
   title,
   mode = 'study',
   summaryText = '',
+  courseName = '',
+  autoPlay = true,
   onClose
 }) {
   const [podcastData, setPodcastData] = useState(null);
@@ -33,6 +35,30 @@ export default function LecturePodcastPlayer({
 
   const audioRef = useRef(null);
 
+  // Trigger autoplay safely
+  const triggerAutoplay = () => {
+    if (!autoPlay) return;
+    setTimeout(() => {
+      if (audioRef.current && typeof audioRef.current.play === 'function') {
+        try {
+          const p = audioRef.current.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch(() => {});
+          }
+        } catch {}
+      }
+    }, 150);
+  };
+
+  // Reset audio state and podcastData whenever mode changes (study <-> submission)
+  useEffect(() => {
+    setPodcastData(null);
+    setCurrentTime(0);
+    setIsPlaying(false);
+    setShowScript(false);
+    setError(null);
+  }, [mode, videoId]);
+
   // Fetch status of cached podcast audio for this lecture and mode, polling every 5 seconds if generating
   useEffect(() => {
     let isMounted = true;
@@ -45,7 +71,9 @@ export default function LecturePodcastPlayer({
       }
       setError(null);
       try {
-        const res = await fetch(`${API_BASE}/api/lectures/${encodeURIComponent(videoId)}/podcast?mode=${encodeURIComponent(mode)}`);
+        const queryParams = new URLSearchParams({ mode });
+        if (courseName) queryParams.set('course_name', courseName);
+        const res = await fetch(`${API_BASE}/api/lectures/${encodeURIComponent(videoId)}/podcast?${queryParams.toString()}`);
         if (res.ok) {
           const body = await res.json();
           const pod = body?.data;
@@ -53,6 +81,7 @@ export default function LecturePodcastPlayer({
             if (pod?.exists && pod?.status === 'ready') {
               setPodcastData(pod);
               setGenerating(false);
+              triggerAutoplay();
               return true; // Completed
             } else if (pod?.status === 'generating') {
               setGenerating(true);
@@ -184,7 +213,7 @@ export default function LecturePodcastPlayer({
     }
   };
 
-  const audioStreamUrl = `${API_BASE}/api/lectures/${encodeURIComponent(videoId)}/podcast/stream?mode=${encodeURIComponent(mode)}`;
+  const audioStreamUrl = `${API_BASE}/api/lectures/${encodeURIComponent(videoId)}/podcast/stream?mode=${encodeURIComponent(mode)}${courseName ? `&course_name=${encodeURIComponent(courseName)}` : ''}`;
 
   return (
     <div
@@ -218,7 +247,7 @@ export default function LecturePodcastPlayer({
           </div>
           <div>
             <span style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Podcast Audio Recap
+              {mode === 'submission' ? 'Assignment Submission Narration' : 'Podcast Audio Recap'}
             </span>
             <span style={{
               marginLeft: '8px',
@@ -229,7 +258,7 @@ export default function LecturePodcastPlayer({
               borderRadius: '10px',
               fontWeight: 600
             }}>
-              Single Narrator • Google TTS
+              {mode === 'submission' ? 'Student Academic Defense' : 'Single Narrator • Google TTS'}
             </span>
           </div>
         </div>
@@ -407,8 +436,9 @@ export default function LecturePodcastPlayer({
         <div>
           <audio
             ref={audioRef}
-            src={audioStreamUrl}
-            preload="metadata"
+            src={podcastData?.gcs_signed_url || podcastData?.audio_url || audioStreamUrl}
+            preload="auto"
+            autoPlay={autoPlay}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
@@ -416,6 +446,12 @@ export default function LecturePodcastPlayer({
               setDuration(audioRef.current?.duration || 0);
               if (audioRef.current) {
                 audioRef.current.playbackRate = playbackRate;
+              }
+              if (autoPlay) {
+                try {
+                  const p = audioRef.current?.play();
+                  if (p && typeof p.catch === 'function') p.catch(() => {});
+                } catch {}
               }
             }}
             onEnded={() => {
@@ -560,7 +596,7 @@ export default function LecturePodcastPlayer({
               color: 'var(--text-secondary)'
             }}>
               <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)', fontSize: '0.76rem' }}>
-                🎙️ Spoken Narration Script:
+                {mode === 'submission' ? '📝 Spoken Assignment Submission Essay:' : '🎙️ Spoken Study Monologue:'}
               </div>
               {podcastData.script}
             </div>

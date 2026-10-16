@@ -12,7 +12,11 @@ import {
   BookOpen,
   MessageSquare,
   LocateFixed,
-  AlertTriangle
+  AlertTriangle,
+  Eraser,
+  Play,
+  Pause,
+  Pencil
 } from 'lucide-react';
 import katex from 'katex';
 import { API_BASE } from '../../utils/constants';
@@ -29,6 +33,19 @@ const parseTimeToSeconds = (timeStr) => {
   return 0;
 };
 
+const isWordChar = (ch) => {
+  if (!ch) return false;
+  return /[\p{L}\p{N}_]/u.test(ch);
+};
+
+const checkWordBoundary = (fullText, startIdx, endIdx) => {
+  const prevChar = startIdx > 0 ? fullText[startIdx - 1] : '';
+  const nextChar = endIdx < fullText.length ? fullText[endIdx] : '';
+  if (prevChar && isWordChar(prevChar)) return false;
+  if (nextChar && isWordChar(nextChar)) return false;
+  return true;
+};
+
 export default function TranscriptSearch({
   displayCues = [],
   searchQuery,
@@ -43,11 +60,19 @@ export default function TranscriptSearch({
   activeData = null,
   setActiveData = null,
   summaryHook = null,
-  googleUser = null
+  googleUser = null,
+  isPlaying = false,
+  handleTogglePlayPause = null,
+  handlePauseVideo = null
 }) {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(displayCues.length > 6);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [localPlaying, setLocalPlaying] = useState(Boolean(isPlaying));
+
+  useEffect(() => {
+    setLocalPlaying(Boolean(isPlaying));
+  }, [isPlaying]);
 
   // Manual Cue Editing state
   const [editingCueIdx, setEditingCueIdx] = useState(null);
@@ -63,9 +88,14 @@ export default function TranscriptSearch({
   const [reviewError, setReviewError] = useState(null);
   const [reviewJob, setReviewJob] = useState(null);
   const [annotations, setAnnotations] = useState([]);
+  const [predictedQuizzes, setPredictedQuizzes] = useState([]);
 
   // Floating Selection Toolbar state
   const [selectionToolbar, setSelectionToolbar] = useState(null);
+  const [activeMarkAction, setActiveMarkAction] = useState(null); // { annotation, x, y, editing?: boolean }
+  const [hoveredMark, setHoveredMark] = useState(null); // { annotation, x, y }
+  const [editingMarkNoteText, setEditingMarkNoteText] = useState('');
+  const [isSavingMarkNote, setIsSavingMarkNote] = useState(false);
 
   const scrollContainerRef = useRef(null);
   const transcriptStartRef = useRef(null);
@@ -77,8 +107,108 @@ export default function TranscriptSearch({
   const scrollTimeoutRef = useRef(null);
   const justDismissedToolbarRef = useRef(false);
   const mouseDownPosRef = useRef({ x: 0, y: 0 });
+  const hoverCloseTimeoutRef = useRef(null);
 
   const videoId = activeData?.videoId || activeData?.video_id || (typeof window !== 'undefined' ? window.location.pathname.match(/\/lecture\/([^/?#]+)/)?.[1] : null);
+
+  const onToggleVideoPlayback = useCallback(() => {
+    if (typeof handleTogglePlayPause === 'function') {
+      handleTogglePlayPause();
+      setLocalPlaying(prev => !prev);
+      return;
+    }
+    const videoEl = typeof document !== 'undefined' ? document.querySelector('video') : null;
+    if (videoEl && typeof videoEl.pause === 'function') {
+      if (videoEl.paused || videoEl.ended) {
+        videoEl.play().catch(() => {});
+        setLocalPlaying(true);
+      } else {
+        videoEl.pause();
+        setLocalPlaying(false);
+      }
+      return;
+    }
+    const iframeEl = typeof document !== 'undefined' ? document.querySelector('iframe') : null;
+    if (iframeEl && iframeEl.contentWindow) {
+      iframeEl.contentWindow.postMessage(localPlaying ? '{"method":"pause"}' : '{"method":"play"}', '*');
+      setLocalPlaying(prev => !prev);
+    }
+  }, [handleTogglePlayPause, localPlaying]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.code !== 'Space' && e.key !== ' ') return;
+      const activeEl = document.activeElement;
+      const tag = activeEl?.tagName?.toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || activeEl?.isContentEditable) {
+        return;
+      }
+      e.preventDefault();
+      onToggleVideoPlayback();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onToggleVideoPlayback]);
+
+  const handleUpdateAnnotation = async (annId, newNoteText) => {
+    if (!annId) return;
+    const trimmed = (newNoteText || '').trim();
+    if (!trimmed) return;
+    setIsSavingMarkNote(true);
+    try {
+      setAnnotations(prev => prev.map(a =>
+        a.id === annId
+          ? { ...a, noteText: trimmed, note_text: trimmed, annotationType: 'note', annotation_type: 'note' }
+          : a
+      ));
+      if (activeMarkAction && activeMarkAction.annotation?.id === annId) {
+        setActiveMarkAction(prev => prev ? {
+          ...prev,
+          editing: false,
+          annotation: { ...prev.annotation, noteText: trimmed, note_text: trimmed, annotationType: 'note', annotation_type: 'note' }
+        } : null);
+      }
+      if (hoveredMark && hoveredMark.annotation?.id === annId) {
+        setHoveredMark(prev => prev ? {
+          ...prev,
+          editing: false,
+          annotation: { ...prev.annotation, noteText: trimmed, note_text: trimmed, annotationType: 'note', annotation_type: 'note' }
+        } : null);
+      }
+      if (videoId) {
+        await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${annId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note_text: trimmed })
+        });
+      }
+    } catch (err) {
+      console.error('Error updating annotation:', err);
+    } finally {
+      setIsSavingMarkNote(false);
+    }
+  };
+
+  const handleDeleteAnnotation = async (annId, allAnnotations = null) => {
+    if (!videoId || !annId) return;
+    try {
+      const idsToDelete = (allAnnotations && allAnnotations.length > 0)
+        ? allAnnotations.map(a => a.id).filter(Boolean)
+        : [annId];
+
+      for (const id of idsToDelete) {
+        await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${id}`, {
+          method: 'DELETE'
+        });
+      }
+      setAnnotations(prev => prev.filter(a => !idsToDelete.includes(a.id)));
+      if (activeMarkAction && (idsToDelete.includes(activeMarkAction.annotation?.id) || activeMarkAction.annotation?.id === annId)) {
+        setActiveMarkAction(null);
+      }
+    } catch (err) {
+      console.error('Error deleting annotation:', err);
+    }
+  };
 
   // Cleanup polling and scroll timers on unmount
   useEffect(() => {
@@ -115,6 +245,15 @@ export default function TranscriptSearch({
       .then(data => {
         if (data?.annotations) {
           setAnnotations(data.annotations);
+        }
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/predicted-quizzes`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.quizzes) {
+          setPredictedQuizzes(data.quizzes);
         }
       })
       .catch(() => {});
@@ -186,13 +325,16 @@ export default function TranscriptSearch({
       if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
 
       const targetTop = activeEl.offsetTop - (container.clientHeight / 2) + (activeEl.clientHeight / 2);
+      const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+      const clampedTarget = Math.min(maxScroll, Math.max(0, targetTop));
+
       if (typeof container.scrollTo === 'function') {
         container.scrollTo({
-          top: Math.max(0, targetTop),
+          top: clampedTarget,
           behavior: scrollBehavior
         });
       } else {
-        container.scrollTop = Math.max(0, targetTop);
+        container.scrollTop = clampedTarget;
       }
       if (typeof activeEl?.scrollIntoView === 'function') {
         activeEl.scrollIntoView({
@@ -203,7 +345,7 @@ export default function TranscriptSearch({
 
       scrollTimeoutRef.current = setTimeout(() => {
         isProgrammaticScrollRef.current = false;
-      }, 450);
+      }, 500);
     }
   }, [activeCueIdx, autoScroll]);
 
@@ -216,10 +358,13 @@ export default function TranscriptSearch({
       if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
 
       const targetTop = activeEl.offsetTop - (container.clientHeight / 2) + (activeEl.clientHeight / 2);
+      const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+      const clampedTarget = Math.min(maxScroll, Math.max(0, targetTop));
+
       if (typeof container.scrollTo === 'function') {
-        container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+        container.scrollTo({ top: clampedTarget, behavior: 'smooth' });
       } else {
-        container.scrollTop = Math.max(0, targetTop);
+        container.scrollTop = clampedTarget;
       }
       if (typeof activeEl?.scrollIntoView === 'function') {
         activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -287,7 +432,9 @@ export default function TranscriptSearch({
     if (!isProgrammaticScrollRef.current && autoScroll && activeCueIdx >= 0 && cueRefs.current[activeCueIdx]) {
       const activeEl = cueRefs.current[activeCueIdx];
       const targetTop = activeEl.offsetTop - (el.clientHeight / 2) + (activeEl.clientHeight / 2);
-      if (Math.abs(el.scrollTop - targetTop) > 60) {
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      const clampedTarget = Math.min(maxScroll, Math.max(0, targetTop));
+      if (Math.abs(el.scrollTop - clampedTarget) > 80) {
         setAutoScroll(false);
       }
     }
@@ -466,7 +613,9 @@ export default function TranscriptSearch({
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed) return;
 
-    const text = selection.toString().trim();
+    const rawText = selection.toString().trim();
+    // Strip any stray timestamps e.g. [02:15] that may occur when selecting across lines
+    const text = rawText.replace(/\[\s*\d{1,2}:\d{2}(?::\d{2})?\s*\]/g, ' ').replace(/\s+/g, ' ').trim();
     if (text.length < 2) return;
 
     try {
@@ -528,6 +677,18 @@ export default function TranscriptSearch({
         : (nextCue?.time ? parseTimeToSeconds(nextCue.time) : (endCue.seconds !== undefined ? Number(endCue.seconds) + 5 : startSec + 5));
       const endSec = Math.max(startSec + 2, nextSec);
 
+      const targetClean = text.trim().toLowerCase();
+      const overlapping = (annotations || []).filter(a => {
+        const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
+        const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
+        const aStartSec = Number(a.startSeconds ?? a.start_seconds ?? 0);
+        const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
+        if (aCueId === targetCue.id || aCueId === firstIdx) return true;
+        if (aText && (targetClean.includes(aText) || aText.includes(targetClean))) return true;
+        if (aEndSec > 0 && startSec <= aEndSec && endSec >= aStartSec) return true;
+        return false;
+      });
+
       setSelectionToolbar({
         position: {
           x: posX,
@@ -536,12 +697,13 @@ export default function TranscriptSearch({
         selectedText: text,
         cueId: targetCue.id ?? firstIdx,
         startSeconds: startSec,
-        endSeconds: endSec
+        endSeconds: endSec,
+        overlappingAnnotations: overlapping
       });
     } catch {
       // Ignore selection errors
     }
-  }, [displayCues]);
+  }, [displayCues, annotations]);
 
   useEffect(() => {
     const handleDocMouseDown = (e) => {
@@ -551,6 +713,9 @@ export default function TranscriptSearch({
         setTimeout(() => {
           justDismissedToolbarRef.current = false;
         }, 120);
+      }
+      if (activeMarkAction && !e.target.closest?.('.active-mark-action-popover')) {
+        setActiveMarkAction(null);
       }
     };
     const handleDocMouseUp = (e) => {
@@ -618,57 +783,91 @@ export default function TranscriptSearch({
   };
 
   // Helper to find matching spans of an annotation string within cue text
-  const findAnnotationOccurrences = (cueText, searchStr) => {
+  const findAnnotationOccurrences = (cueText, searchStr, isExplicitTimeRange = false) => {
     if (!cueText || !searchStr) return [];
     const cleanCue = cueText.replace(/\u00a0/g, ' ');
     const cleanSearch = searchStr.replace(/\u00a0/g, ' ').trim();
+    if (!cleanSearch) return [];
+
     const lowerCue = cleanCue.toLowerCase();
     const lowerSearch = cleanSearch.toLowerCase();
 
-    // 1. Exact substring match
+    // 1. Exact substring match with strict word boundary checks
+    // If "character" is highlighted, "characters" or "characteristic" will NOT match
     const results = [];
     let startPos = 0;
     while ((startPos = lowerCue.indexOf(lowerSearch, startPos)) !== -1) {
-      results.push({ start: startPos, end: startPos + cleanSearch.length });
-      startPos += cleanSearch.length;
+      const endPos = startPos + cleanSearch.length;
+      if (checkWordBoundary(cleanCue, startPos, endPos)) {
+        results.push({ start: startPos, end: endPos });
+      }
+      startPos += 1;
     }
     if (results.length > 0) return results;
 
-    // 2. Whitespace-collapsed exact match
-    const collapsedCue = lowerCue.replace(/\s+/g, ' ');
-    const collapsedSearch = lowerSearch.replace(/\s+/g, ' ');
-    if (collapsedCue.includes(collapsedSearch)) {
-      const matchPrefix = collapsedSearch.slice(0, Math.min(10, collapsedSearch.length));
-      const startChar = lowerCue.indexOf(matchPrefix);
-      if (startChar !== -1) {
-        const endChar = Math.min(cleanCue.length, startChar + cleanSearch.length);
-        return [{ start: startChar, end: endChar }];
-      }
-    }
-
-    // 3. Cross-cue: Whole cue text contained within multi-cue selection
-    if (collapsedSearch.includes(collapsedCue) && collapsedCue.length >= 2) {
-      return [{ start: 0, end: cueText.length }];
-    }
-
-    // 4. Cross-cue: Suffix of cue matches prefix of search (start cue in multi-cue selection)
-    const cueWords = cleanCue.trim().split(/\s+/);
-    for (let w = 1; w < cueWords.length; w++) {
-      const candidateSuffix = cueWords.slice(w).join(' ').toLowerCase();
-      if (candidateSuffix.length >= 3 && lowerSearch.startsWith(candidateSuffix)) {
-        const startIdx = lowerCue.lastIndexOf(candidateSuffix);
-        if (startIdx !== -1) {
-          return [{ start: startIdx, end: cueText.length }];
+    // 2. Whitespace-collapsed exact match for multi-word phrases/sentences
+    const searchWords = cleanSearch.split(/\s+/).filter(Boolean);
+    if (searchWords.length > 1) {
+      const escapedWords = searchWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      try {
+        const phraseRegex = new RegExp(`(?<![\\p{L}\\p{N}_])${escapedWords.join('\\s+')}(?![\\p{L}\\p{N}_])`, 'gui');
+        let m;
+        while ((m = phraseRegex.exec(cleanCue)) !== null) {
+          results.push({ start: m.index, end: m.index + m[0].length });
+        }
+        if (results.length > 0) return results;
+      } catch {
+        // Fallback
+        const collapsedCue = lowerCue.replace(/\s+/g, ' ');
+        const collapsedSearch = lowerSearch.replace(/\s+/g, ' ');
+        if (collapsedCue.includes(collapsedSearch)) {
+          const matchPrefix = searchWords[0].toLowerCase();
+          const startChar = lowerCue.indexOf(matchPrefix);
+          if (startChar !== -1) {
+            const endChar = Math.min(cleanCue.length, startChar + cleanSearch.length);
+            if (checkWordBoundary(cleanCue, startChar, endChar)) {
+              return [{ start: startChar, end: endChar }];
+            }
+          }
         }
       }
     }
 
-    // 5. Cross-cue: Prefix of cue matches suffix of search (end cue in multi-cue selection)
-    for (let w = cueWords.length; w >= 1; w--) {
-      const candidatePrefix = cueWords.slice(0, w).join(' ').toLowerCase();
-      if (candidatePrefix.length >= 3 && lowerSearch.endsWith(candidatePrefix)) {
-        const endIdx = lowerCue.indexOf(candidatePrefix) + candidatePrefix.length;
-        return [{ start: 0, end: endIdx }];
+    // 3. Multi-cue cross-span: ONLY when this cue is within the explicitly selected time window of the annotation
+    if (isExplicitTimeRange && searchWords.length > 1) {
+      const cueWords = cleanCue.trim().split(/\s+/);
+      const cueTrimmedLower = cleanCue.trim().toLowerCase();
+
+      // Case A: Cue is entirely contained in the multi-cue search
+      if (cueTrimmedLower.length >= 3 && lowerSearch.includes(cueTrimmedLower)) {
+        const idx = lowerCue.indexOf(cueTrimmedLower);
+        if (idx !== -1) {
+          return [{ start: idx, end: idx + cleanCue.trim().length }];
+        }
+      }
+
+      // Case B: Starting cue of multi-cue span (matches suffix to end of cue)
+      for (let w = 0; w < cueWords.length; w++) {
+        const candidateSuffix = cueWords.slice(w).join(' ');
+        const lowerCandidate = candidateSuffix.toLowerCase();
+        if (lowerSearch.startsWith(lowerCandidate) && lowerCandidate.length >= 3) {
+          const idx = lowerCue.lastIndexOf(lowerCandidate);
+          if (idx !== -1 && checkWordBoundary(cleanCue, idx, idx + candidateSuffix.length)) {
+            return [{ start: idx, end: idx + candidateSuffix.length }];
+          }
+        }
+      }
+
+      // Case C: Ending cue of multi-cue span (matches prefix from start of cue)
+      for (let w = cueWords.length; w >= 1; w--) {
+        const candidatePrefix = cueWords.slice(0, w).join(' ');
+        const lowerCandidate = candidatePrefix.toLowerCase();
+        if (lowerSearch.endsWith(lowerCandidate) && lowerCandidate.length >= 3) {
+          const idx = lowerCue.indexOf(lowerCandidate);
+          if (idx !== -1 && checkWordBoundary(cleanCue, idx, idx + candidatePrefix.length)) {
+            return [{ start: idx, end: idx + candidatePrefix.length }];
+          }
+        }
       }
     }
 
@@ -676,7 +875,7 @@ export default function TranscriptSearch({
   };
 
   // Helper to render annotated text (highlights, comments/notes, and AI explanations)
-  const renderAnnotatedCue = (cueText, cueAnnotations, isActive) => {
+  const renderAnnotatedCue = (cueText, cueAnnotations, isActive, cueSec, nextCueSec) => {
     if (!cueText || typeof cueText !== 'string') return cueText;
     if (!cueAnnotations || cueAnnotations.length === 0) {
       return renderMathText(cueText, isActive);
@@ -688,7 +887,11 @@ export default function TranscriptSearch({
       const searchStr = (ann.selectedText || ann.selected_text || '').trim();
       if (!searchStr) return;
 
-      const occurrences = findAnnotationOccurrences(cueText, searchStr);
+      const aStartSec = Number(ann.startSeconds ?? ann.start_seconds ?? 0);
+      const aEndSec = Number(ann.endSeconds ?? ann.end_seconds ?? 0);
+      const isExplicitTimeRange = aEndSec > 0 && cueSec !== undefined && cueSec <= aEndSec && nextCueSec >= aStartSec;
+
+      const occurrences = findAnnotationOccurrences(cueText, searchStr, isExplicitTimeRange);
       occurrences.forEach((occ, oIdx) => {
         matches.push({
           start: occ.start,
@@ -706,13 +909,38 @@ export default function TranscriptSearch({
     // Sort by start position, then by length descending
     matches.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
 
-    // Filter out overlapping matches
+    // Filter out overlapping matches and merge overlapping/same-span annotations
     const nonOverlapping = [];
     let currentEnd = 0;
     for (const m of matches) {
       if (m.start >= currentEnd) {
-        nonOverlapping.push(m);
+        nonOverlapping.push({ ...m });
         currentEnd = m.end;
+      } else {
+        // Overlapping match: if it shares or falls within the existing span, merge note/explanation/color data
+        const prev = nonOverlapping[nonOverlapping.length - 1];
+        if (prev && m.start >= prev.start && m.end <= prev.end) {
+          const prevAnn = prev.annotation || {};
+          const currAnn = m.annotation || {};
+          const noteText = prevAnn.noteText || prevAnn.note_text || currAnn.noteText || currAnn.note_text;
+          const aiResponse = prevAnn.aiResponse || prevAnn.ai_response || currAnn.aiResponse || currAnn.ai_response;
+          const isNote = prevAnn.annotationType === 'note' || prevAnn.annotation_type === 'note' || currAnn.annotationType === 'note' || currAnn.annotation_type === 'note' || !!noteText;
+          const isAi = prevAnn.annotationType === 'ai_explanation' || prevAnn.annotation_type === 'ai_explanation' || currAnn.annotationType === 'ai_explanation' || currAnn.annotation_type === 'ai_explanation' || !!aiResponse;
+          const color = (prevAnn.color && prevAnn.color !== 'yellow') ? prevAnn.color : (currAnn.color || prevAnn.color || 'yellow');
+          const allAnnotations = [...(prevAnn.allAnnotations || [prevAnn]), currAnn];
+
+          prev.annotation = {
+            ...prevAnn,
+            ...currAnn,
+            color,
+            noteText,
+            note_text: noteText,
+            aiResponse,
+            ai_response: aiResponse,
+            annotationType: isNote ? 'note' : (isAi ? 'ai_explanation' : (prevAnn.annotationType || currAnn.annotationType || 'highlight')),
+            allAnnotations
+          };
+        }
       }
     }
 
@@ -767,14 +995,41 @@ export default function TranscriptSearch({
               return;
             }
             e.stopPropagation();
-            setShowAnnotationsDrawer(true);
+            if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+            setHoveredMark(null);
+            setEditingMarkNoteText(ann.noteText || ann.note_text || '');
+            setActiveMarkAction({
+              annotation: ann,
+              x: e.clientX,
+              y: e.clientY,
+              editing: false
+            });
+          }}
+          onMouseEnter={(e) => {
+            if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+            const rect = e.currentTarget.getBoundingClientRect();
+            setHoveredMark(prev => {
+              if (prev?.editing && prev?.annotation?.id === ann.id) return prev;
+              return {
+                annotation: ann,
+                x: rect.left + rect.width / 2,
+                y: rect.top,
+                editing: false
+              };
+            });
+          }}
+          onMouseLeave={() => {
+            if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+            hoverCloseTimeoutRef.current = setTimeout(() => {
+              setHoveredMark(prev => (prev?.editing ? prev : null));
+            }, 180);
           }}
           title={
             isNote
-              ? `Note: "${noteText}" (Click to view)`
+              ? `Note: "${noteText}" (Click to edit, un-highlight or view)`
               : isAi
               ? `AI Explanation: "${aiResponse.slice(0, 100)}"`
-              : `Highlight (${color}) - Click to view in Notes`
+              : `Highlight (${color}) - Click to un-highlight or view in Notes`
           }
           style={{
             backgroundColor: bg,
@@ -819,12 +1074,11 @@ export default function TranscriptSearch({
       const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
 
       if (aCueId !== undefined && aCueId !== null && (aCueId === cue.id || aCueId === idx)) return true;
-      if (aText && cue.text) {
-        if (cue.text.toLowerCase().includes(aText.toLowerCase())) return true;
-        if (aText.toLowerCase().includes(cue.text.trim().toLowerCase())) return true;
-      }
       if (aEndSec > 0 && cueSec <= aEndSec && nextCueSec >= aStartSec) {
         return true;
+      }
+      if (aText && cue.text) {
+        if (findAnnotationOccurrences(cue.text, aText, false).length > 0) return true;
       }
       return false;
     });
@@ -854,7 +1108,7 @@ export default function TranscriptSearch({
           lineHeight: 1.35
         }}
       >
-        {renderAnnotatedCue(cue.text, cueAnnotations, isActive)}
+        {renderAnnotatedCue(cue.text, cueAnnotations, isActive, cueSec, nextCueSec)}
       </span>
     );
   };
@@ -895,6 +1149,32 @@ export default function TranscriptSearch({
               <Search size={15} color="var(--theme-primary)" /> Instant Transcript Search
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {/* Play / Pause Video Directly from Transcript */}
+              <button
+                type="button"
+                data-testid="transcript-play-pause-btn"
+                onClick={onToggleVideoPlayback}
+                title={localPlaying ? "Pause video playback (Space)" : "Play / Pause video playback (Space)"}
+                aria-label={localPlaying ? "Pause video" : "Play or Pause video"}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  background: localPlaying ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                  color: localPlaying ? '#ef4444' : '#10b981',
+                  border: localPlaying ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid rgba(16, 185, 129, 0.35)',
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {localPlaying ? <Pause size={12} /> : <Play size={12} />}
+                <span>{localPlaying ? 'Pause' : 'Play / Pause'}</span>
+              </button>
+
               {/* Review Drawer Button */}
               {videoId && (
                 <button
@@ -1191,7 +1471,7 @@ export default function TranscriptSearch({
             minHeight: 0,
             overflowY: 'auto',
             overflowX: 'hidden',
-            padding: '6px 10px',
+            padding: '6px 10px calc(50vh)',
             position: 'relative',
             WebkitOverflowScrolling: 'touch',
             touchAction: 'pan-y'
@@ -1309,7 +1589,10 @@ export default function TranscriptSearch({
                   gap: '4px',
                   minWidth: '58px',
                   flexShrink: 0,
-                  marginTop: isEditing ? 0 : '1px'
+                  marginTop: isEditing ? 0 : '1px',
+                  userSelect: 'none',
+                  WebkitUserSelect: 'none',
+                  MozUserSelect: 'none'
                 }}>
                   {isActive && (
                     <Volume2
@@ -1325,7 +1608,10 @@ export default function TranscriptSearch({
                     color: isActive ? 'var(--theme-primary)' : 'var(--text-secondary)',
                     fontWeight: 600,
                     whiteSpace: 'nowrap',
-                    lineHeight: 1.3
+                    lineHeight: 1.3,
+                    userSelect: 'none',
+                    WebkitUserSelect: 'none',
+                    MozUserSelect: 'none'
                   }}>[{cue.time}]</span>
                 </div>
 
@@ -1422,47 +1708,7 @@ export default function TranscriptSearch({
                       {renderCueContent(cue, idx, isActive)}
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                      {/* Note / Comment indicator badge if present on this cue */}
-                      {annotations.some(a => {
-                        const aType = a.annotationType || a.annotation_type;
-                        if (aType !== 'note') return false;
-                        const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
-                        const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
-                        const aStartSec = Number(a.startSeconds ?? a.start_seconds ?? 0);
-                        const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
-                        const cueSec = cue.seconds !== undefined ? Number(cue.seconds) : parseTimeToSeconds(cue.time);
-                        const nextCueSec = displayCues[idx + 1]?.seconds !== undefined
-                          ? Number(displayCues[idx + 1].seconds)
-                          : (displayCues[idx + 1]?.time ? parseTimeToSeconds(displayCues[idx + 1].time) : cueSec + 6);
-                        return (aCueId === cue.id || aCueId === idx || (aText && (cue.text?.toLowerCase().includes(aText) || aText.includes(cue.text?.trim().toLowerCase()))) || (aEndSec > 0 && cueSec <= aEndSec && nextCueSec >= aStartSec));
-                      }) && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowAnnotationsDrawer(true);
-                          }}
-                          title="View comment for this cue"
-                          aria-label="View cue comment"
-                          style={{
-                            background: 'rgba(59, 130, 246, 0.1)',
-                            border: '1px solid rgba(59, 130, 246, 0.25)',
-                            color: '#2563eb',
-                            cursor: 'pointer',
-                            padding: '1px 5px',
-                            borderRadius: '10px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            fontSize: '0.68rem',
-                            fontWeight: 600
-                          }}
-                        >
-                          <MessageSquare size={10} />
-                          <span>Note</span>
-                        </button>
-                      )}
-
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, userSelect: 'none' }}>
                       {/* AI Explanation badge if present on this cue */}
                       {annotations.some(a => {
                         const aType = a.annotationType || a.annotation_type;
@@ -1502,6 +1748,37 @@ export default function TranscriptSearch({
                           <span>AI</span>
                         </button>
                       )}
+
+                      {/* Predicted Quiz announcement badge if present on this cue */}
+                      {(() => {
+                        const matchingQuiz = predictedQuizzes.find(pq => {
+                          const pqTime = pq.cue_time || pq.cueTime;
+                          const pqText = (pq.cue_text || pq.cueText || '').toLowerCase();
+                          return pqTime === cue.time || (pqText && cue.text && cue.text.toLowerCase().includes(pqText.slice(0, 30)));
+                        });
+                        if (!matchingQuiz) return null;
+                        return (
+                          <span
+                            data-testid="predicted-quiz-cue-badge"
+                            title={`Predicted Quiz: ${matchingQuiz.quiz_title || matchingQuiz.quizTitle} (${matchingQuiz.predicted_date || matchingQuiz.predictedDate})`}
+                            style={{
+                              background: 'rgba(245, 158, 11, 0.12)',
+                              border: '1px solid rgba(245, 158, 11, 0.35)',
+                              color: '#d97706',
+                              padding: '1px 6px',
+                              borderRadius: '10px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              fontSize: '0.68rem',
+                              fontWeight: 700
+                            }}
+                          >
+                            <Sparkles size={10} />
+                            <span>Quiz: {matchingQuiz.predicted_date || matchingQuiz.predictedDate || 'Upcoming'}</span>
+                          </span>
+                        );
+                      })()}
 
                       {/* Inline edit button (visible on hover or active) */}
                       {(isHovered || isActive) && (
@@ -1544,12 +1821,399 @@ export default function TranscriptSearch({
               endSeconds={selectionToolbar.endSeconds}
               videoId={videoId}
               userEmail={googleUser?.email}
+              overlappingAnnotations={selectionToolbar.overlappingAnnotations}
+              onDeleteAnnotation={handleDeleteAnnotation}
               onClose={() => setSelectionToolbar(null)}
               onAnnotationCreated={(newAnnotation) => {
                 setAnnotations(prev => [newAnnotation, ...prev]);
                 setSelectionToolbar(null);
               }}
             />
+          )}
+
+          {/* Rich Hover Card for Notes / Highlights (supports inline editing) */}
+          {hoveredMark && !activeMarkAction && (
+            <div
+              data-testid="mark-hover-tooltip"
+              onMouseEnter={() => {
+                if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+              }}
+              onMouseLeave={() => {
+                if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+                hoverCloseTimeoutRef.current = setTimeout(() => {
+                  setHoveredMark(prev => (prev?.editing ? prev : null));
+                }, 150);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'fixed',
+                left: Math.max(10, Math.min(typeof window !== 'undefined' ? window.innerWidth - 320 : 300, (hoveredMark.x || 200) - 140)),
+                top: Math.max(10, (hoveredMark.y || 200) > 110 ? (hoveredMark.y || 200) - (hoveredMark.editing ? 120 : 84) : (hoveredMark.y || 200) + 26),
+                zIndex: 1200,
+                background: 'var(--card-bg, #1e293b)',
+                border: '1px solid rgba(129, 140, 248, 0.35)',
+                borderRadius: '8px',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+                padding: '8px 12px',
+                maxWidth: '300px',
+                minWidth: '210px',
+                pointerEvents: 'auto',
+                animation: 'fadeIn 0.12s ease'
+              }}
+            >
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '6px',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                color: (hoveredMark.annotation?.annotationType || hoveredMark.annotation?.annotation_type) === 'note' ? '#3b82f6' : 'var(--theme-primary, #6366f1)',
+                marginBottom: '4px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  {(hoveredMark.annotation?.annotationType || hoveredMark.annotation?.annotation_type) === 'note' ? (
+                    <>
+                      <MessageSquare size={12} />
+                      <span>Margin Note</span>
+                    </>
+                  ) : (hoveredMark.annotation?.annotationType || hoveredMark.annotation?.annotation_type) === 'ai_explanation' ? (
+                    <>
+                      <Sparkles size={12} />
+                      <span>AI Explanation</span>
+                    </>
+                  ) : (
+                    <span>Highlight ({hoveredMark.annotation?.color || 'yellow'})</span>
+                  )}
+                </div>
+                {!hoveredMark.editing && (
+                  <button
+                    type="button"
+                    aria-label="Edit note in tooltip"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingMarkNoteText(hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text || '');
+                      setHoveredMark(prev => prev ? { ...prev, editing: true } : null);
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '3px',
+                      background: 'rgba(59, 130, 246, 0.12)',
+                      color: '#3b82f6',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '2px 6px',
+                      fontSize: '0.68rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Pencil size={10} /> Edit
+                  </button>
+                )}
+              </div>
+
+              {hoveredMark.editing ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
+                  <textarea
+                    autoFocus
+                    aria-label="Edit margin note text"
+                    value={editingMarkNoteText}
+                    onChange={(e) => setEditingMarkNoteText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (editingMarkNoteText.trim()) {
+                          handleUpdateAnnotation(hoveredMark.annotation?.id, editingMarkNoteText);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setHoveredMark(prev => prev ? { ...prev, editing: false } : null);
+                      }
+                    }}
+                    rows={2}
+                    placeholder="Write note... (Press Enter to save)"
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '5px 7px',
+                      borderRadius: '5px',
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--panel-bg)',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.78rem',
+                      resize: 'none',
+                      outline: 'none'
+                    }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)' }}>Enter to save</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setHoveredMark(prev => prev ? { ...prev, editing: false } : null)}
+                        style={{
+                          padding: '2px 6px',
+                          fontSize: '0.68rem',
+                          borderRadius: '4px',
+                          border: '1px solid var(--border-color)',
+                          background: 'transparent',
+                          color: 'var(--text-secondary)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!editingMarkNoteText.trim() || isSavingMarkNote}
+                        onClick={() => handleUpdateAnnotation(hoveredMark.annotation?.id, editingMarkNoteText)}
+                        style={{
+                          padding: '2px 8px',
+                          fontSize: '0.68rem',
+                          fontWeight: 600,
+                          borderRadius: '4px',
+                          border: 'none',
+                          background: 'var(--theme-primary)',
+                          color: '#fff',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text) ? (
+                <div style={{
+                  fontSize: '0.82rem',
+                  color: 'var(--text-primary)',
+                  lineHeight: '1.4',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  maxHeight: '140px',
+                  overflowY: 'auto'
+                }}>
+                  {hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text}
+                </div>
+              ) : (hoveredMark.annotation?.aiResponse || hoveredMark.annotation?.ai_response) ? (
+                <div style={{
+                  fontSize: '0.8rem',
+                  color: 'var(--text-primary)',
+                  lineHeight: '1.4',
+                  maxHeight: '140px',
+                  overflowY: 'auto'
+                }}>
+                  {hoveredMark.annotation?.aiResponse || hoveredMark.annotation?.ai_response}
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.75rem', fontStyle: 'italic', color: 'var(--text-secondary)' }}>
+                  "{hoveredMark.annotation?.selectedText || hoveredMark.annotation?.selected_text}"
+                </div>
+              )}
+              {!hoveredMark.editing && (
+                <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  Click to open in Notes drawer, edit, or un-highlight
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Inline Active Mark Un-highlight / Edit / Notes Popover */}
+          {activeMarkAction && (
+            <div
+              className="active-mark-action-popover"
+              style={{
+                position: 'fixed',
+                left: Math.max(10, Math.min(typeof window !== 'undefined' ? window.innerWidth - 320 : 300, (activeMarkAction.x || 200) - 120)),
+                top: Math.max(10, (activeMarkAction.y || 200) > 80 ? (activeMarkAction.y || 200) - (activeMarkAction.editing ? 110 : 48) : (activeMarkAction.y || 200) + 24),
+                zIndex: 1100,
+                background: 'var(--card-bg)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.25)',
+                padding: '6px 8px',
+                display: 'flex',
+                flexDirection: activeMarkAction.editing ? 'column' : 'row',
+                alignItems: activeMarkAction.editing ? 'stretch' : 'center',
+                gap: '6px',
+                minWidth: activeMarkAction.editing ? '240px' : 'auto',
+                animation: 'fadeIn 0.15s ease'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {activeMarkAction.editing ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <textarea
+                    autoFocus
+                    aria-label="Edit note text"
+                    value={editingMarkNoteText}
+                    onChange={(e) => setEditingMarkNoteText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (editingMarkNoteText.trim()) {
+                          handleUpdateAnnotation(activeMarkAction.annotation?.id, editingMarkNoteText);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setActiveMarkAction(prev => prev ? { ...prev, editing: false } : null);
+                      }
+                    }}
+                    rows={2}
+                    placeholder="Edit note... (Enter to save)"
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '5px 7px',
+                      borderRadius: '5px',
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--panel-bg)',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.78rem',
+                      resize: 'none',
+                      outline: 'none'
+                    }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>Enter to save • Shift+Enter newline</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setActiveMarkAction(prev => prev ? { ...prev, editing: false } : null)}
+                        style={{
+                          padding: '2px 6px',
+                          fontSize: '0.7rem',
+                          borderRadius: '4px',
+                          border: '1px solid var(--border-color)',
+                          background: 'transparent',
+                          color: 'var(--text-secondary)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!editingMarkNoteText.trim() || isSavingMarkNote}
+                        onClick={() => handleUpdateAnnotation(activeMarkAction.annotation?.id, editingMarkNoteText)}
+                        style={{
+                          padding: '2px 8px',
+                          fontSize: '0.7rem',
+                          fontWeight: 600,
+                          borderRadius: '4px',
+                          border: 'none',
+                          background: 'var(--theme-primary)',
+                          color: '#fff',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <span style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    color: 'var(--text-secondary)',
+                    maxWidth: '120px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}>
+                    {activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text
+                      ? `Note: ${activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text}`
+                      : `Highlight (${activeMarkAction.annotation?.color || 'yellow'})`}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingMarkNoteText(activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text || '');
+                      setActiveMarkAction(prev => prev ? { ...prev, editing: true } : null);
+                    }}
+                    title="Edit margin note"
+                    aria-label="Edit note"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '3px',
+                      padding: '3px 6px',
+                      borderRadius: '4px',
+                      background: 'rgba(59, 130, 246, 0.12)',
+                      color: '#3b82f6',
+                      border: 'none',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Pencil size={11} /> Edit
+                  </button>
+
+                  <button
+                    onClick={() => handleDeleteAnnotation(activeMarkAction.annotation?.id, activeMarkAction.annotation?.allAnnotations)}
+                    title="Un-highlight and remove this note/highlight"
+                    aria-label="Un-highlight"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '3px',
+                      padding: '3px 6px',
+                      borderRadius: '4px',
+                      background: 'rgba(239, 68, 68, 0.12)',
+                      color: '#ef4444',
+                      border: 'none',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Eraser size={11} /> Un-highlight
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setActiveMarkAction(null);
+                      setShowAnnotationsDrawer(true);
+                    }}
+                    title="Open all notes and highlights"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '3px 6px',
+                      borderRadius: '4px',
+                      background: 'transparent',
+                      color: 'var(--theme-primary)',
+                      border: '1px solid var(--border-color)',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <BookOpen size={11} /> Notes
+                  </button>
+
+                  <button
+                    onClick={() => setActiveMarkAction(null)}
+                    aria-label="Close action menu"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      padding: '2px',
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </>
+              )}
+            </div>
           )}
         </div>
 
@@ -1700,6 +2364,7 @@ export default function TranscriptSearch({
           onDeleteAnnotation={(deletedId) => {
             setAnnotations(prev => prev.filter(a => a.id !== deletedId));
           }}
+          onUpdateAnnotation={handleUpdateAnnotation}
           handleCueClick={handleCueClick}
         />
       </div>

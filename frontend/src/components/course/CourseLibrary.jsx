@@ -31,12 +31,18 @@ import {
   CheckCircle,
   FileText,
   RotateCw,
-  Plus
+  Plus,
+  ChevronDown,
+  ChevronRight,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/formatters';
 import { normalizeCourseSlug } from '../../utils/routing';
 import BookReaderModal from '../modals/BookReaderModal';
 import ResearchLiteratureModal from '../modals/ResearchLiteratureModal';
+
+const DEFAULT_SECTION_ORDER = ['notes', 'slides', 'books'];
 
 export default function CourseLibrary({
   courseResourcesLoading = false,
@@ -73,6 +79,80 @@ export default function CourseLibrary({
   const [extractSuccessMsg, setExtractSuccessMsg] = useState('');
   const [activeReaderBook, setActiveReaderBook] = useState(null);
   const [refreshingReadingId, setRefreshingReadingId] = useState(null);
+
+  const [collapsedSections, setCollapsedSections] = useState(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem('lecturescribe_library_collapsed') : null;
+      return saved ? JSON.parse(saved) : { notes: false, slides: false, books: false };
+    } catch {
+      return { notes: false, slides: false, books: false };
+    }
+  });
+
+  const [sectionOrder, setSectionOrder] = useState(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem('lecturescribe_library_order') : null;
+      const parsed = saved ? JSON.parse(saved) : null;
+      if (Array.isArray(parsed) && parsed.length === 3) return parsed;
+    } catch {
+      // ignore
+    }
+    return DEFAULT_SECTION_ORDER;
+  });
+
+  const toggleSectionCollapse = (key) => {
+    setCollapsedSections(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        window.localStorage.setItem('lecturescribe_library_collapsed', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const moveSectionOrder = (key, direction) => {
+    setSectionOrder(prev => {
+      const idx = prev.indexOf(key);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      if (direction === 'top') {
+        next.splice(idx, 1);
+        next.unshift(key);
+      } else {
+        const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+        if (targetIdx < 0 || targetIdx >= next.length) return prev;
+        [next[idx], next[targetIdx]] = [next[targetIdx], next[idx]];
+      }
+      try {
+        window.localStorage.setItem('lecturescribe_library_order', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const handleFocusAcademicBooks = () => {
+    const nextCollapsed = { notes: true, slides: true, books: false };
+    setCollapsedSections(nextCollapsed);
+    try {
+      window.localStorage.setItem('lecturescribe_library_collapsed', JSON.stringify(nextCollapsed));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleExpandAllSections = () => {
+    const nextCollapsed = { notes: false, slides: false, books: false };
+    setCollapsedSections(nextCollapsed);
+    try {
+      window.localStorage.setItem('lecturescribe_library_collapsed', JSON.stringify(nextCollapsed));
+    } catch {
+      // ignore
+    }
+  };
 
   const courseDisplayName = activeCourseData?.course_name || selectedCourse || 'Course Library';
   const exactCourseSlug =
@@ -142,15 +222,64 @@ export default function CourseLibrary({
     return { label: 'Reference / Reading', bg: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: 'rgba(16, 185, 129, 0.3)' };
   };
 
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
-      
-      {/* ========================================================================= */}
-      {/* SECTION 0: COURSE NOTES & SCRATCHPADS (MINI DROPBOX) */}
-      {/* ========================================================================= */}
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+  const renderSectionOrderControls = (secKey) => {
+    const idx = sectionOrder.indexOf(secKey);
+    return (
+      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+        <Tooltip title="Move section up">
+          <span>
+            <IconButton
+              size="small"
+              data-testid={`move-up-${secKey}`}
+              aria-label={`Move ${secKey} section up`}
+              disabled={idx <= 0}
+              onClick={(e) => {
+                e.stopPropagation();
+                moveSectionOrder(secKey, 'up');
+              }}
+              sx={{ p: 0.4, color: currentTheme.palette.textSecondary }}
+            >
+              <ArrowUp size={14} />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Move section down">
+          <span>
+            <IconButton
+              size="small"
+              data-testid={`move-down-${secKey}`}
+              aria-label={`Move ${secKey} section down`}
+              disabled={idx === sectionOrder.length - 1}
+              onClick={(e) => {
+                e.stopPropagation();
+                moveSectionOrder(secKey, 'down');
+              }}
+              sx={{ p: 0.4, color: currentTheme.palette.textSecondary }}
+            >
+              <ArrowDown size={14} />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+    );
+  };
+
+  const sectionMap = {
+    notes: (
+      /* ========================================================================= */
+      /* SECTION 0: COURSE NOTES & SCRATCHPADS (MINI DROPBOX) */
+      /* ========================================================================= */
+      <Box key="notes" data-testid="library-section-notes" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box
+            onClick={() => toggleSectionCollapse('notes')}
+            data-testid="toggle-section-notes"
+            role="button"
+            aria-expanded={!collapsedSections.notes}
+            aria-label="Toggle My Notes & Scratchpads section"
+            sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', userSelect: 'none' }}
+          >
+            {collapsedSections.notes ? <ChevronRight size={18} color={currentTheme.palette.textSecondary} /> : <ChevronDown size={18} color={currentTheme.palette.textSecondary} />}
             <FileText size={20} color={currentTheme.palette.primary} />
             <Typography variant="subtitle1" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
               My Notes & Scratchpads
@@ -167,8 +296,18 @@ export default function CourseLibrary({
               }}
             />
           </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {renderSectionOrderControls('notes')}
+            <Button
+              size="small"
+              onClick={() => toggleSectionCollapse('notes')}
+              sx={{ textTransform: 'none', fontSize: '0.74rem', fontWeight: 600, color: currentTheme.palette.textSecondary }}
+            >
+              {collapsedSections.notes ? 'Expand' : 'Collapse'}
+            </Button>
+          </Box>
         </Box>
-        {courseNotesLoading ? (
+        {!collapsedSections.notes && (courseNotesLoading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 3 }}>
             <CircularProgress size={24} sx={{ color: currentTheme.palette.primary, mr: 1.5 }} />
             <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary }}>
@@ -311,15 +450,24 @@ export default function CourseLibrary({
               </Paper>
             ))}
           </Box>
-        )}
+        ))}
       </Box>
-
-      {/* ========================================================================= */}
-      {/* SECTION 1: LECTURE SLIDES & PRESENTATION DECKS */}
-      {/* ========================================================================= */}
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    ),
+    slides: (
+      /* ========================================================================= */
+      /* SECTION 1: LECTURE SLIDES & PRESENTATION DECKS */
+      /* ========================================================================= */
+      <Box key="slides" data-testid="library-section-slides" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+          <Box
+            onClick={() => toggleSectionCollapse('slides')}
+            data-testid="toggle-section-slides"
+            role="button"
+            aria-expanded={!collapsedSections.slides}
+            aria-label="Toggle Lecture Slides & Decks section"
+            sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', userSelect: 'none' }}
+          >
+            {collapsedSections.slides ? <ChevronRight size={18} color={currentTheme.palette.textSecondary} /> : <ChevronDown size={18} color={currentTheme.palette.textSecondary} />}
             <Presentation size={20} color={currentTheme.palette.primary} />
             <Typography variant="subtitle1" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
               Lecture Slides & Decks
@@ -336,12 +484,22 @@ export default function CourseLibrary({
               }}
             />
           </Box>
-          <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
-            PowerPoints and PDFs used by the professor during lectures
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: { xs: 'none', sm: 'inline' } }}>
+              PowerPoints and PDFs used by the professor during lectures
+            </Typography>
+            {renderSectionOrderControls('slides')}
+            <Button
+              size="small"
+              onClick={() => toggleSectionCollapse('slides')}
+              sx={{ textTransform: 'none', fontSize: '0.74rem', fontWeight: 600, color: currentTheme.palette.textSecondary }}
+            >
+              {collapsedSections.slides ? 'Expand' : 'Collapse'}
+            </Button>
+          </Box>
         </Box>
 
-        {courseResourcesLoading ? (
+        {!collapsedSections.slides && (courseResourcesLoading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 4 }}>
             <CircularProgress size={28} sx={{ color: currentTheme.palette.primary, mr: 1.5 }} />
             <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary }}>
@@ -534,116 +692,45 @@ export default function CourseLibrary({
               );
             })}
           </Box>
-        )}
+        ))}
       </Box>
-      
-      {/* ========================================================================= */}
-      {/* TOP HEADER: LIBRARY OVERVIEW & QUICK ACTIONS */}
-      {/* ========================================================================= */}
-      {/* <Paper
-        elevation={0}
-        sx={{
-          p: 3,
-          borderRadius: 3,
-          bgcolor: currentTheme.palette.cardBg,
-          border: `1px solid ${currentTheme.palette.cardBorder}`,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 2
-        }}
-      > */}
-        {/* <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.5 }}>
-            <BookOpen size={24} color={currentTheme.palette.primary} />
-            <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
-              Course Library
-            </Typography>
-          </Box>
-          <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary }}>
-            Lecture slides used in class and AI-extracted supporting textbooks & journals.
-          </Typography>
-        </Box> */}
-
-        {/* <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}> */}
-          {/* <Tooltip title={!googleUser ? "Sign in with Google to upload course slides" : "Upload PPT/PDF slides used during lectures"}>
-            <span>
-              <Button
-                variant="outlined"
-                size="small"
-                disabled={!googleUser}
-                startIcon={<Upload size={14} />}
-                onClick={() => openUploadModal({
-                  courseName: courseDisplayName,
-                  videoId: null
-                })}
-                sx={{
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.82rem',
-                  borderRadius: 2,
-                  color: currentTheme.palette.primary,
-                  borderColor: currentTheme.palette.cardBorder,
-                  bgcolor: currentTheme.palette.cardBg,
-                  '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary }
-                }}
-              >
-                Upload Lecture Slides
-              </Button>
-            </span>
-          </Tooltip> */}
-
-          {/* <Button
-            variant="contained"
-            size="small"
-            disabled={isExtractingReadings}
-            startIcon={isExtractingReadings ? <CircularProgress size={14} color="inherit" /> : <Sparkles size={14} />}
-            onClick={handleExtractClick}
+    ),
+    books: (
+      /* ========================================================================= */
+      /* SECTION 2: RECOMMENDED BOOKS & ACADEMIC READINGS */
+      /* ========================================================================= */
+      <Box key="books" data-testid="library-section-books" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {extractSuccessMsg && (
+          <Paper
+            elevation={0}
             sx={{
-              textTransform: 'none',
-              fontWeight: 700,
-              fontSize: '0.82rem',
-              borderRadius: 2,
-              bgcolor: currentTheme.palette.primary,
-              color: '#fff',
-              '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+              p: 2,
+              borderRadius: 2.5,
+              bgcolor: 'rgba(16, 185, 129, 0.1)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.5,
+              color: '#10b981'
             }}
           >
-            {isExtractingReadings ? "Extracting Readings..." : "Scan & Extract Books"}
-          </Button> */}
-        {/* </Box> */}
-      {/* </Paper> */}
+            <CheckCircle size={18} />
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {extractSuccessMsg}
+            </Typography>
+          </Paper>
+        )}
 
-      {/* SUCCESS / SCAN BANNER */}
-      {extractSuccessMsg && (
-        <Paper
-          elevation={0}
-          sx={{
-            p: 2,
-            borderRadius: 2.5,
-            bgcolor: 'rgba(16, 185, 129, 0.1)',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1.5,
-            color: '#10b981'
-          }}
-        >
-          <CheckCircle size={18} />
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {extractSuccessMsg}
-          </Typography>
-        </Paper>
-      )}
-
-
-      {/* ========================================================================= */}
-      {/* SECTION 2: RECOMMENDED BOOKS & ACADEMIC READINGS */}
-      {/* ========================================================================= */}
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box
+            onClick={() => toggleSectionCollapse('books')}
+            data-testid="toggle-section-books"
+            role="button"
+            aria-expanded={!collapsedSections.books}
+            aria-label="Toggle Recommended Books & Readings section"
+            sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', userSelect: 'none' }}
+          >
+            {collapsedSections.books ? <ChevronRight size={18} color={currentTheme.palette.textSecondary} /> : <ChevronDown size={18} color={currentTheme.palette.textSecondary} />}
             <BookMarked size={20} color={currentTheme.palette.primary} />
             <Typography variant="subtitle1" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
               Recommended Books & Readings
@@ -661,6 +748,14 @@ export default function CourseLibrary({
             />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            {renderSectionOrderControls('books')}
+            <Button
+              size="small"
+              onClick={() => toggleSectionCollapse('books')}
+              sx={{ textTransform: 'none', fontSize: '0.74rem', fontWeight: 600, color: currentTheme.palette.textSecondary }}
+            >
+              {collapsedSections.books ? 'Expand' : 'Collapse'}
+            </Button>
             <Button
               variant="contained"
               size="small"
@@ -705,7 +800,7 @@ export default function CourseLibrary({
           </Box>
         </Box>
 
-        {isExtractingReadings ? (
+        {!collapsedSections.books && (isExtractingReadings ? (
           <Paper
             elevation={0}
             sx={{
@@ -1088,8 +1183,114 @@ export default function CourseLibrary({
               );
             })}
           </Box>
-        )}
+        ))}
       </Box>
+    )
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+      {/* Top Quick-Access & Section Controls Bar */}
+      <Paper
+        elevation={0}
+        data-testid="library-section-control-bar"
+        sx={{
+          p: 1.5,
+          borderRadius: 2.5,
+          bgcolor: currentTheme.palette.cardBg,
+          border: `1px solid ${currentTheme.palette.cardBorder}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 1.5
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, color: currentTheme.palette.textSecondary, mr: 0.5 }}>
+            SECTIONS:
+          </Typography>
+          <Button
+            size="small"
+            variant="contained"
+            data-testid="focus-academic-books-btn"
+            onClick={handleFocusAcademicBooks}
+            startIcon={<BookMarked size={13} />}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.74rem',
+              borderRadius: 1.5,
+              bgcolor: currentTheme.palette.primary,
+              color: '#fff',
+              py: 0.4,
+              px: 1.2,
+              '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+            }}
+          >
+            Focus Academic Books
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            data-testid="move-books-top-btn"
+            onClick={() => moveSectionOrder('books', 'top')}
+            disabled={sectionOrder[0] === 'books'}
+            startIcon={<ArrowUp size={13} />}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 600,
+              fontSize: '0.74rem',
+              borderRadius: 1.5,
+              borderColor: currentTheme.palette.cardBorder,
+              color: currentTheme.palette.textPrimary,
+              py: 0.4,
+              px: 1.2
+            }}
+          >
+            Pin Books to Top
+          </Button>
+          {(collapsedSections.notes || collapsedSections.slides || collapsedSections.books) && (
+            <Button
+              size="small"
+              data-testid="expand-all-sections-btn"
+              onClick={handleExpandAllSections}
+              sx={{
+                textTransform: 'none',
+                fontWeight: 600,
+                fontSize: '0.74rem',
+                color: currentTheme.palette.primary
+              }}
+            >
+              Expand All
+            </Button>
+          )}
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {[
+            { key: 'notes', label: `Notes (${courseNotes.length})` },
+            { key: 'slides', label: `Slides (${courseResources.length})` },
+            { key: 'books', label: `Books (${courseReadings.length})` }
+          ].map(sec => (
+            <Chip
+              key={sec.key}
+              label={`${collapsedSections[sec.key] ? '▸' : '▾'} ${sec.label}`}
+              size="small"
+              onClick={() => toggleSectionCollapse(sec.key)}
+              sx={{
+                fontWeight: 600,
+                fontSize: '0.72rem',
+                cursor: 'pointer',
+                bgcolor: collapsedSections[sec.key] ? 'transparent' : currentTheme.palette.badgeBg,
+                color: collapsedSections[sec.key] ? currentTheme.palette.textSecondary : currentTheme.palette.textPrimary,
+                border: `1px solid ${currentTheme.palette.cardBorder}`
+              }}
+            />
+          ))}
+        </Box>
+      </Paper>
+
+      {sectionOrder.map((secKey) => sectionMap[secKey])}
 
       {/* ========================================================================= */}
       {/* IN-PAGE DIGITAL BOOK READER MODAL */}

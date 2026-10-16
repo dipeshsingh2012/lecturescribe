@@ -41,7 +41,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from contextlib import asynccontextmanager
 
@@ -95,8 +95,8 @@ from backend.podcast_service import (
     get_podcast_metadata,
     create_or_refresh_podcast,
     trigger_background_podcast_generation,
-    PODCASTS_DIR,
 )
+from backend.quiz_predictor import predict_quizzes_from_cues
 
 _TRANSCRIPTION_JOB_ID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -270,6 +270,11 @@ class ExtensionImportRequest(BaseModel):
     lms_page_url: Optional[str] = None
     course_name: Optional[str] = None
     email: Optional[str] = None
+
+
+class UpdateQuizReminderRequest(BaseModel):
+    status: str
+
 
 
 
@@ -957,6 +962,12 @@ def _async_upload_video_to_gcs_worker(
             referer=eff_referer
         )
         logger.info(f"✅ [GCS Background Upload Complete] Video '{video_id}' status: {result.get('status')}")
+        if result and result.get("video_details") and result["video_details"].get("blob_name"):
+            blob_name = result["video_details"]["blob_name"]
+            try:
+                db_manager.update_video_gcs_blob(video_id, blob_name)
+            except Exception as e:
+                logger.warning(f"[GCS Background Upload] Could not update gcs_video_blob in DB: {e}")
 
         with _gcs_upload_lock:
             if video_id in _active_gcs_uploads:
@@ -996,9 +1007,9 @@ def generate_and_store_comprehensive_summary(
     title: str,
     cues: List[Dict[str, Any]],
     user_email: Optional[str] = None
-) -> bool:
+) -> Optional[Dict[str, Any]]:
     """Generate the comprehensive study guide from the FULL transcript, derive the plain-text
-    submission version, and persist both. Returns True if a summary was stored.
+    submission version, and persist both. Returns the saved summary dict if stored, None otherwise.
 
     Deliberately bypasses the chat/RAG path: retrieval only sees a handful of top-k chunks, which
     produces summaries that miss parts of the lecture.
@@ -1020,7 +1031,7 @@ def generate_and_store_comprehensive_summary(
     )
     markdown_text = (res.get("answer") or "").strip()
     if not markdown_text:
-        return False
+        return None
 
     submission_text = ""
     try:
@@ -1038,7 +1049,7 @@ def generate_and_store_comprehensive_summary(
         submission_text or markdown_text, preserve_paragraphs=True
     )
 
-    return db_manager.save_lecture_summary(
+    saved = db_manager.save_lecture_summary(
         video_id=video_id,
         summary_type="comprehensive",
         markdown_text=markdown_text,
@@ -1048,6 +1059,33 @@ def generate_and_store_comprehensive_summary(
         model=res.get("model") or "",
         user_email=user_email,
     )
+    if not saved:
+        return None
+
+    # Predict upcoming quizzes and dates from cues via LLM during summary ingestion
+    try:
+        predict_and_store_quizzes(video_id, title, cues)
+    except Exception as p_err:
+        logger.warning(f"⚠️ [Quiz Predictor Ingestion Notice] {video_id}: {p_err}")
+
+    return db_manager.get_lecture_summary(video_id, "comprehensive", user_email=user_email)
+
+
+def predict_and_store_quizzes(video_id: str, title: str, cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Predict upcoming quizzes and dates from transcript cues using LLM, and persist."""
+    try:
+        course_name = extract_course_name(title)
+        course_slug = to_course_slug(course_name)
+        predictions = predict_quizzes_from_cues(cues, lecture_title=title, video_id=video_id)
+        if predictions:
+            saved = db_manager.save_predicted_quizzes(video_id, course_slug, course_name, predictions)
+            print(f"🎯 [Quiz Predictor] Successfully extracted and saved {len(saved)} predicted quizzes for '{video_id}'.")
+            return saved
+        else:
+            print(f"ℹ️ [Quiz Predictor] No upcoming quizzes mentioned in transcript for '{video_id}'.")
+    except Exception as e:
+        logger.warning(f"⚠️ [Quiz Predictor Error] Failed predicting quizzes for '{video_id}': {e}")
+    return []
 
 
 def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str, str]], user_email: Optional[str] = None):
@@ -1073,6 +1111,10 @@ def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str,
     except Exception as s_err:
         logger.warning(f"[Background Summary Sections Notice] {clean_vid}: {s_err}")
     try:
+        predict_and_store_quizzes(clean_vid, title, cues)
+    except Exception as pq_err:
+        logger.warning(f"[Background Quiz Predictor Notice] {clean_vid}: {pq_err}")
+    try:
         # Pre-synthesize comprehensive study summary if not already created
         existing_summary = db_manager.get_lecture_summary(clean_vid, "comprehensive", user_email=user_email)
         if not existing_summary or not existing_summary.get("markdownText"):
@@ -1083,13 +1125,24 @@ def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str,
                     print(f"⚡ [Background Auto-Summary] Synthesizing comprehensive study guide for video '{clean_vid}'...")
                     summary_record = generate_and_store_comprehensive_summary(clean_vid, title, cues, user_email)
                     print(f"✅ [Background Auto-Summary] Successfully stored comprehensive summary for video '{clean_vid}'.")
-                    if summary_record and summary_record.get("markdownText"):
-                        trigger_background_podcast_generation(
-                            video_id=clean_vid,
-                            title=title,
-                            text=summary_record.get("markdownText"),
-                            mode="study"
-                        )
+                    if summary_record:
+                        course_title = extract_course_name(title)
+                        if summary_record.get("markdownText"):
+                            trigger_background_podcast_generation(
+                                video_id=clean_vid,
+                                title=title,
+                                text=summary_record.get("markdownText"),
+                                mode="study",
+                                course_name=course_title
+                            )
+                        if summary_record.get("submissionText"):
+                            trigger_background_podcast_generation(
+                                video_id=clean_vid,
+                                title=title,
+                                text=summary_record.get("submissionText"),
+                                mode="submission",
+                                course_name=course_title
+                            )
                 finally:
                     lock.release()
     except Exception as sum_err:
@@ -1432,6 +1485,30 @@ def delete_transcript_annotation_endpoint(
     return {"status": "success", "annotation_id": annotation_id}
 
 
+class UpdateAnnotationRequest(BaseModel):
+    note_text: str
+    user_email: Optional[str] = None
+
+
+@app.patch("/api/lecture/{video_id}/annotations/{annotation_id}")
+def update_transcript_annotation_endpoint(
+    video_id: str,
+    annotation_id: str,
+    req: UpdateAnnotationRequest
+):
+    """Update an existing margin note or annotation."""
+    if not req.note_text or not req.note_text.strip():
+        raise HTTPException(status_code=400, detail="Note text cannot be empty.")
+    updated = db_manager.update_annotation(
+        annotation_id=annotation_id,
+        note_text=req.note_text.strip(),
+        user_email=req.user_email
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Annotation not found.")
+    return {"status": "success", "annotation": updated}
+
+
 @app.post("/api/lecture/{video_id}/explain-selection")
 def explain_selection_endpoint(video_id: str, req: ExplainSelectionRequest):
     """Generate a contextual AI explanation, math breakdown, or analogy for selected transcript text."""
@@ -1466,6 +1543,66 @@ def explain_selection_endpoint(video_id: str, req: ExplainSelectionRequest):
         "selected_text": req.selected_text.strip(),
         "prompt_type": req.prompt_type,
         "explanation": explanation
+    }
+
+
+# ==============================================================================
+# Predicted Quizzes & Proactive Reminder Engine
+# ==============================================================================
+
+@app.get("/api/reminders/upcoming-quizzes")
+def get_upcoming_predicted_quizzes_endpoint(
+    status: Optional[str] = Query("active", description="Filter status: 'active', 'pending', 'confirmed', or 'all'")
+):
+    """Retrieve all upcoming predicted quizzes extracted via LLM during summary ingestion."""
+    filter_status = None if status == "all" else status
+    quizzes = db_manager.get_predicted_quizzes(status=filter_status)
+    return {
+        "status": "success",
+        "count": len(quizzes),
+        "quizzes": quizzes
+    }
+
+
+@app.get("/api/lecture/{video_id}/predicted-quizzes")
+def get_lecture_predicted_quizzes_endpoint(video_id: str):
+    """Retrieve predicted quizzes for a specific lecture."""
+    vid = str(video_id).strip()
+    quizzes = db_manager.get_predicted_quizzes(video_id=vid)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "count": len(quizzes),
+        "quizzes": quizzes
+    }
+
+
+@app.patch("/api/reminders/quiz/{quiz_id}")
+def update_predicted_quiz_status_endpoint(quiz_id: str, req: UpdateQuizReminderRequest):
+    """Update predicted quiz status (e.g. 'dismissed', 'confirmed', 'pending')."""
+    qid = str(quiz_id).strip()
+    updated = db_manager.update_predicted_quiz_status(qid, req.status.strip().lower())
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Predicted quiz {qid} not found.")
+    return {
+        "status": "success",
+        "quiz": updated
+    }
+
+
+@app.post("/api/lecture/{video_id}/predict-quizzes")
+def trigger_lecture_quiz_prediction_endpoint(video_id: str):
+    """Trigger on-demand LLM prediction of upcoming quizzes from transcript cues."""
+    vid = str(video_id).strip()
+    saved = db_manager.get_saved_video(vid)
+    if not saved or not saved.get("cues"):
+        raise HTTPException(status_code=404, detail=f"No cues found for lecture {vid}.")
+    quizzes = predict_and_store_quizzes(vid, saved.get("title", f"Lecture {vid}"), saved["cues"])
+    return {
+        "status": "success",
+        "video_id": vid,
+        "count": len(quizzes),
+        "quizzes": quizzes
     }
 
 
@@ -2001,6 +2138,18 @@ def regenerate_summary(req: RegenerateSummaryRequest):
     if redis_cache:
         redis_cache.invalidate_video(video_id)
 
+    # Re-trigger background podcast audio & metadata generation for refreshed summary
+    summary_text = "\n\n".join([f"## {s.get('heading', '')}\n{s.get('content', '')}" for s in new_summary if isinstance(s, dict)])
+    if summary_text:
+        trigger_background_podcast_generation(
+            video_id=video_id,
+            title=title,
+            text=summary_text,
+            mode="study",
+            course_name=saved.get("course_name"),
+            force_refresh=True
+        )
+
     return {
         "status": "success",
         "video_id": video_id,
@@ -2083,23 +2232,115 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
             print(f"❌ [Summary API] Generation failed for '{vid}': {e}")
             raise HTTPException(status_code=502, detail=f"Summary generation failed: {e}")
 
-    if not stored:
+    if not stored or not isinstance(stored, dict):
         raise HTTPException(status_code=502, detail="Summary generation returned no content.")
 
-    if stored and stored.get("markdownText"):
+    if stored.get("markdownText"):
+        course_title = (saved_vid.get("course_name") if saved_vid else None) or "General"
         trigger_background_podcast_generation(
             video_id=vid,
             title=title,
             text=stored.get("markdownText"),
-            mode="study"
+            mode="study",
+            course_name=course_title,
+            force_refresh=bool(req.bypass_cache)
         )
+        if stored.get("submissionText"):
+            trigger_background_podcast_generation(
+                video_id=vid,
+                title=title,
+                text=stored.get("submissionText"),
+                mode="submission",
+                course_name=course_title,
+                force_refresh=bool(req.bypass_cache)
+            )
 
-    saved_record = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
     return {
         "status": "success",
         "video_id": vid,
-        "summary": saved_record,
+        "summary": stored,
         "cached": False
+    }
+
+
+class SaveCustomSummaryRequest(BaseModel):
+    video_id: str
+    summary_type: Optional[str] = "comprehensive"
+    markdown_text: str
+    submission_text: Optional[str] = None
+    user_email: Optional[str] = None
+
+
+@app.post("/api/summary/custom")
+def save_custom_summary_endpoint(req: SaveCustomSummaryRequest):
+    """
+    Save custom or user-edited summary markdown directly into lecturescribe_lecture_summaries.
+    Allows students to paste summaries generated from external AI or manually edit study notes.
+    """
+    clean_vid = str(req.video_id).strip()
+    if not clean_vid or clean_vid == "active":
+        raise HTTPException(status_code=400, detail="Valid video_id is required.")
+
+    md_text = req.markdown_text.strip()
+    if not md_text:
+        raise HTTPException(status_code=400, detail="Markdown summary text cannot be empty.")
+
+    submission_text = req.submission_text
+    if not submission_text or not submission_text.strip():
+        try:
+            submission_text = pinecone_rag_engine._clean_for_submission(md_text, target_words=250)
+        except Exception:
+            submission_text = re.sub(r'#+\s*', '', md_text)[:1500]
+
+    words = len(re.findall(r'\b\w+\b', md_text))
+
+    saved = db_manager.save_lecture_summary(
+        video_id=clean_vid,
+        summary_type=req.summary_type or "comprehensive",
+        markdown_text=md_text,
+        submission_text=submission_text,
+        word_count=words,
+        model="Custom (User Imported)",
+        user_email=req.user_email
+    )
+
+    if not saved:
+        raise HTTPException(status_code=500, detail="Failed to save custom summary to database.")
+
+    try:
+        saved_vid = db_manager.get_saved_video(clean_vid) or db_manager.get_video(clean_vid)
+        course_name = saved_vid.get("course_name") if saved_vid else None
+        title = saved_vid.get("title") if saved_vid else "Lecture Summary"
+        trigger_background_podcast_generation(
+            video_id=clean_vid,
+            title=title,
+            text=md_text,
+            mode="study",
+            course_name=course_name,
+            force_refresh=True
+        )
+        if submission_text:
+            trigger_background_podcast_generation(
+                video_id=clean_vid,
+                title=title,
+                text=submission_text,
+                mode="submission",
+                course_name=course_name,
+                force_refresh=True
+            )
+    except Exception as e:
+        logger.warning(f"Could not trigger background podcast for custom summary: {e}")
+
+    return {
+        "status": "success",
+        "summary": {
+            "videoId": clean_vid,
+            "summaryType": req.summary_type or "comprehensive",
+            "markdownText": md_text,
+            "submissionText": submission_text,
+            "wordCount": words,
+            "model": "Custom (User Imported)"
+        }
     }
 
 
@@ -2119,15 +2360,21 @@ class GeneratePodcastRequest(BaseModel):
 @app.get("/api/lectures/{video_id}/podcast")
 def get_lecture_podcast_endpoint(
     video_id: str,
-    mode: str = Query("study", description="Mode: 'study' for full summary, 'submission' for assignment prose")
+    mode: str = Query("study", description="Mode: 'study' for full summary, 'submission' for assignment prose"),
+    course_name: Optional[str] = Query(None, description="Course name for GCS path resolution")
 ):
     """Retrieve metadata and stream URL for an existing lecture podcast audio recap."""
     clean_vid = str(video_id).strip()
     if not clean_vid or clean_vid == "active":
         raise HTTPException(status_code=400, detail="Valid video_id is required.")
 
-    meta = get_podcast_metadata(clean_vid, mode=mode)
+    meta = get_podcast_metadata(clean_vid, mode=mode, course_name=course_name)
     if not meta or not meta.get("exists"):
+        if meta and meta.get("status") == "generating":
+            return {
+                "status": "success",
+                "data": meta
+            }
         return {
             "status": "success",
             "data": {
@@ -2196,22 +2443,17 @@ def generate_lecture_podcast_endpoint(
 @app.get("/api/lectures/{video_id}/podcast/stream")
 def stream_lecture_podcast_endpoint(
     video_id: str,
-    mode: str = Query("study", description="Mode: 'study' or 'submission'")
+    mode: str = Query("study", description="Mode: 'study' or 'submission'"),
+    course_name: Optional[str] = Query(None, description="Course name for GCS path resolution")
 ):
-    """Stream the generated MP3 audio file for the lecture podcast."""
-    clean_vid = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(video_id).strip())
+    """Stream the generated MP3 audio file for the lecture podcast directly via GCS signed URL."""
+    clean_vid = str(video_id).strip()
     clean_mode = "submission" if mode == "submission" else "study"
-    mp3_path = PODCASTS_DIR / f"{clean_vid}_{clean_mode}.mp3"
+    meta = get_podcast_metadata(clean_vid, mode=clean_mode, course_name=course_name)
+    if not meta or not meta.get("exists") or not meta.get("gcs_signed_url"):
+        raise HTTPException(status_code=404, detail="Podcast audio not found in GCS. Please generate it first.")
 
-    if not mp3_path.exists() or mp3_path.stat().st_size == 0:
-        raise HTTPException(status_code=404, detail="Podcast audio not found. Please generate it first.")
-
-    return FileResponse(
-        path=str(mp3_path),
-        media_type="audio/mpeg",
-        filename=f"{clean_vid}_{clean_mode}_podcast.mp3",
-        headers={"Accept-Ranges": "bytes"}
-    )
+    return RedirectResponse(url=meta["gcs_signed_url"], status_code=307)
 
 
 # ==============================================================================

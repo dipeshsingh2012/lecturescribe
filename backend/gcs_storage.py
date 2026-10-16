@@ -37,7 +37,7 @@ def to_gcs_course_slug(course_name: Optional[str]) -> str:
     Strips leading course codes and numbers (e.g. '1.1 ', '1.4 ', '1-4-', '14-', '11-')
     so all lectures and resources align under the canonical course directory.
     """
-    if not course_name:
+    if not course_name or not str(course_name).strip():
         return "general"
     clean = str(course_name).strip()
 
@@ -266,16 +266,31 @@ class GCSStorageService:
             }
 
         # 0. In-process cache of previously found blobs (signing a fresh URL is local and ~1ms,
-        # whereas each list_blobs round-trip costs hundreds of ms). Only hits are cached so a
-        # finished background upload is discovered on the next lookup.
+        # whereas each list_blobs round-trip costs hundreds of ms).
         found_cache = self.__dict__.setdefault("_video_blob_cache", {})
         cache_key = (self.bucket_name, str(video_id))
         cached = found_cache.get(cache_key)
         if cached and time.monotonic() - cached[2] < 1800:
             return _build(cached[0], cached[1])
 
+        # 0b. Fast-path: check if gcs_video_blob is already persisted in PostgreSQL (0 network round-trips to GCS)
+        try:
+            from backend.database import db_manager
+            v_record = db_manager.get_saved_video(video_id)
+            if v_record and v_record.get("gcs_video_blob"):
+                blob_name = v_record["gcs_video_blob"]
+                found_cache[cache_key] = (blob_name, None, time.monotonic())
+                return _build(blob_name, None)
+        except Exception:
+            pass
+
         def _remember(b) -> Dict[str, Any]:
             found_cache[cache_key] = (b.name, b.size, time.monotonic())
+            try:
+                from backend.database import db_manager
+                db_manager.update_video_gcs_blob(video_id, b.name)
+            except Exception:
+                pass
             return _build(b.name, b.size)
 
         # Build candidate prefixes

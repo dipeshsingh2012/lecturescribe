@@ -154,5 +154,34 @@ describe('CourseLibrary Component', () => {
       screen.getByPlaceholderText(/e\.g\. Singer et al\. \(2016\) Sepsis-3 JAMA/i)
     ).toBeInTheDocument();
   });
+
+  it('allows collapsing sections above Academic Books and pinning Academic Books to the top', () => {
+    window.localStorage.clear();
+    render(
+      <CourseLibrary
+        courseResources={mockSlides}
+        courseReadings={mockBooks}
+        selectedCourse="Machine Learning"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Week 1 Lecture Slides')).toBeInTheDocument();
+    expect(screen.getByText('Pattern Recognition and Machine Learning')).toBeInTheDocument();
+
+    // Click Focus Academic Books to collapse Notes and Slides
+    fireEvent.click(screen.getByTestId('focus-academic-books-btn'));
+    expect(screen.queryByText('Week 1 Lecture Slides')).not.toBeInTheDocument();
+    expect(screen.getByText('Pattern Recognition and Machine Learning')).toBeInTheDocument();
+
+    // Expand All restores Slides
+    fireEvent.click(screen.getByTestId('expand-all-sections-btn'));
+    expect(screen.getByText('Week 1 Lecture Slides')).toBeInTheDocument();
+
+    // Pin Books to Top moves books section to first position
+    fireEvent.click(screen.getByTestId('move-books-top-btn'));
+    const sections = screen.getAllByTestId(/^library-section-(notes|slides|books)$/);
+    expect(sections[0]).toHaveAttribute('data-testid', 'library-section-books');
+  });
 });
 

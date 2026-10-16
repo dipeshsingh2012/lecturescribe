@@ -120,6 +120,7 @@ class RelationalDBManager:
         self._progress_memory_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._annotations_memory_cache: List[Dict[str, Any]] = []
         self._notes_memory_cache: List[Dict[str, Any]] = []
+        self._predicted_quizzes_memory: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -368,6 +369,11 @@ class RelationalDBManager:
                                 WHEN duplicate_column THEN RAISE NOTICE 'column course_name already exists in lecturescribe_videos.';
                             END;
                             BEGIN
+                                ALTER TABLE lecturescribe_videos ADD COLUMN gcs_video_blob VARCHAR(512);
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column gcs_video_blob already exists in lecturescribe_videos.';
+                            END;
+                            BEGIN
                                 ALTER TABLE lecturescribe_lecture_summaries ADD COLUMN is_outdated BOOLEAN NOT NULL DEFAULT FALSE;
                             EXCEPTION
                                 WHEN duplicate_column THEN RAISE NOTICE 'column is_outdated already exists in lecturescribe_lecture_summaries.';
@@ -509,6 +515,26 @@ class RelationalDBManager:
                         ALTER TABLE lecturescribe_course_readings ALTER COLUMN author TYPE TEXT;
                         ALTER TABLE lecturescribe_resources ALTER COLUMN title TYPE TEXT;
                         ALTER TABLE lecturescribe_course_notes ALTER COLUMN title TYPE TEXT;
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_predicted_quizzes (
+                            id VARCHAR(64) PRIMARY KEY,
+                            video_id VARCHAR(128) NOT NULL,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            quiz_title VARCHAR(255) NOT NULL,
+                            predicted_date VARCHAR(64) NOT NULL,
+                            predicted_date_iso VARCHAR(64) DEFAULT '',
+                            confidence FLOAT DEFAULT 0.8,
+                            cue_time VARCHAR(32) NOT NULL,
+                            cue_text TEXT NOT NULL,
+                            status VARCHAR(32) DEFAULT 'pending',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pred_quiz_vid ON lecturescribe_predicted_quizzes(video_id);
+                        CREATE INDEX IF NOT EXISTS idx_pred_quiz_course ON lecturescribe_predicted_quizzes(course_slug);
+                        CREATE INDEX IF NOT EXISTS idx_pred_quiz_status ON lecturescribe_predicted_quizzes(status);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_chat_logs (
                             id SERIAL PRIMARY KEY,
@@ -2220,6 +2246,7 @@ class RelationalDBManager:
                         "course_slug": to_course_slug(course_name),
                         "summary_outdated": summary_is_outdated,
                         "is_outdated": summary_is_outdated,
+                        "gcs_video_blob": v_row.get("gcs_video_blob"),
                         "cached": True
                     }
                     self._memory_cache[video_id] = record
@@ -2227,6 +2254,33 @@ class RelationalDBManager:
         except Exception as e:
             print(f"[PostgreSQL Notice] get_saved_video fallback ({e}).")
             return self._memory_cache.get(video_id)
+        finally:
+            if conn:
+                conn.close()
+
+    def update_video_gcs_blob(self, video_id: str, blob_name: str) -> bool:
+        """Persist the GCS video blob name for instant 1ms local URL signing without GCS scanning."""
+        if not video_id or not blob_name:
+            return False
+        clean_vid = str(video_id).strip()
+        clean_blob = str(blob_name).strip()
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_videos
+                        SET gcs_video_blob = %s
+                        WHERE video_id = %s;
+                    """, (clean_blob, clean_vid))
+                    conn.commit()
+            if clean_vid in self._memory_cache:
+                self._memory_cache[clean_vid]["gcs_video_blob"] = clean_blob
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Error updating gcs_video_blob for {clean_vid}]: {e}")
+            return False
         finally:
             if conn:
                 conn.close()
@@ -2658,15 +2712,6 @@ class RelationalDBManager:
                             last_viewed_at = NOW();
                     """, (clean_email, video_id, title, duration, source_url, drive_folder_url, derived_course))
                     conn.commit()
-            try:
-                # Full-table backfill; throttle per user so repeated lecture opens don't pay for it.
-                last_maps = self.__dict__.setdefault("_auto_map_last_run", {})
-                now_ts = time.monotonic()
-                if now_ts - last_maps.get(clean_email, -1e9) > 600:
-                    last_maps[clean_email] = now_ts
-                    self.auto_map_videos_to_user(clean_email)
-            except Exception as map_err:
-                print(f"[PostgreSQL Notice] Auto-map during write skipped ({map_err}).")
             return True
         finally:
             conn.close()
@@ -4234,6 +4279,77 @@ class RelationalDBManager:
         mem_deleted = len(self._annotations_memory_cache) < mem_before
         return db_deleted or mem_deleted
 
+    def update_annotation(
+        self,
+        annotation_id: str,
+        note_text: str,
+        user_email: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update an existing annotation's note text."""
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        conn = None
+        updated_ann = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            UPDATE lecturescribe_transcript_annotations
+                            SET note_text = %s, updated_at = %s
+                            WHERE id = %s AND user_email = %s
+                            RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
+                                      selected_text, annotation_type, color, note_text,
+                                      ai_prompt, ai_response, created_at, updated_at;
+                        """, (note_text, now_iso, annotation_id, clean_email))
+                    else:
+                        cursor.execute("""
+                            UPDATE lecturescribe_transcript_annotations
+                            SET note_text = %s, updated_at = %s
+                            WHERE id = %s
+                            RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
+                                      selected_text, annotation_type, color, note_text,
+                                      ai_prompt, ai_response, created_at, updated_at;
+                        """, (note_text, now_iso, annotation_id))
+                    row = cursor.fetchone()
+                    if row:
+                        conn.commit()
+                        updated_ann = self._format_annotation_dict(
+                            ann_id=str(row["id"]),
+                            video_id=row["video_id"],
+                            user_email=row["user_email"],
+                            cue_id=row["cue_id"],
+                            start_seconds=row["start_seconds"],
+                            end_seconds=row["end_seconds"],
+                            selected_text=row["selected_text"],
+                            annotation_type=row["annotation_type"],
+                            color=row.get("color"),
+                            note_text=row.get("note_text"),
+                            ai_prompt=row.get("ai_prompt"),
+                            ai_response=row.get("ai_response"),
+                            created_at=row["created_at"].isoformat() if row.get("created_at") else now_iso,
+                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else now_iso
+                        )
+        except Exception as e:
+            print(f"[PostgreSQL Notice] update_annotation error: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+        # Update in-memory cache as well
+        for a in self._annotations_memory_cache:
+            if str(a.get("id")) == str(annotation_id):
+                a["noteText"] = note_text
+                a["note_text"] = note_text
+                a["updatedAt"] = now_iso
+                a["updated_at"] = now_iso
+                if not updated_ann:
+                    updated_ann = a
+                break
+
+        return updated_ann
+
     def create_review_job(self, video_id: str, review_mode: str = "audio_grounded") -> str:
         """Create a new transcript review job and return its UUID."""
         job_id = str(uuid.uuid4())
@@ -4459,6 +4575,229 @@ class RelationalDBManager:
             if conn:
                 conn.close()
         return None
+
+    def save_predicted_quizzes(
+        self,
+        video_id: str,
+        course_slug: str,
+        course_name: str,
+        quizzes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Save predicted quizzes extracted via LLM during summary ingestion."""
+        saved = []
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        
+        # In-memory save/update
+        self._predicted_quizzes_memory = [
+            pq for pq in self._predicted_quizzes_memory if pq.get("video_id") != video_id
+        ]
+        for q in quizzes:
+            q_id = q.get("id") or f"pq_{uuid.uuid4().hex[:12]}"
+            item = {
+                "id": q_id,
+                "video_id": video_id,
+                "videoId": video_id,
+                "course_slug": course_slug,
+                "courseSlug": course_slug,
+                "course_name": course_name,
+                "courseName": course_name,
+                "quiz_title": q.get("quiz_title", "Upcoming Quiz"),
+                "quizTitle": q.get("quiz_title", "Upcoming Quiz"),
+                "predicted_date": q.get("predicted_date", "TBD"),
+                "predictedDate": q.get("predicted_date", "TBD"),
+                "predicted_date_iso": q.get("predicted_date_iso", ""),
+                "predictedDateIso": q.get("predicted_date_iso", ""),
+                "confidence": float(q.get("confidence", 0.8)),
+                "cue_time": q.get("cue_time", ""),
+                "cueTime": q.get("cue_time", ""),
+                "cue_text": q.get("cue_text", ""),
+                "cueText": q.get("cue_text", ""),
+                "status": q.get("status", "pending"),
+                "created_at": now_iso,
+                "createdAt": now_iso,
+                "updated_at": now_iso,
+                "updatedAt": now_iso,
+            }
+            self._predicted_quizzes_memory.append(item)
+            saved.append(item)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM lecturescribe_predicted_quizzes WHERE video_id = %s;", (video_id,))
+                    for item in saved:
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_predicted_quizzes (
+                                id, video_id, course_slug, course_name, quiz_title,
+                                predicted_date, predicted_date_iso, confidence,
+                                cue_time, cue_text, status, created_at, updated_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                            ON CONFLICT (id) DO UPDATE SET
+                                quiz_title = EXCLUDED.quiz_title,
+                                predicted_date = EXCLUDED.predicted_date,
+                                predicted_date_iso = EXCLUDED.predicted_date_iso,
+                                confidence = EXCLUDED.confidence,
+                                cue_time = EXCLUDED.cue_time,
+                                cue_text = EXCLUDED.cue_text,
+                                status = EXCLUDED.status,
+                                updated_at = NOW();
+                        """, (
+                            item["id"], item["video_id"], item["course_slug"], item["course_name"],
+                            item["quiz_title"], item["predicted_date"], item["predicted_date_iso"],
+                            item["confidence"], item["cue_time"], item["cue_text"], item["status"]
+                        ))
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] save_predicted_quizzes error: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+        return saved
+
+    def get_predicted_quizzes(
+        self,
+        video_id: Optional[str] = None,
+        course_slug: Optional[str] = None,
+        status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve predicted quizzes."""
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = """
+                        SELECT id, video_id, course_slug, course_name, quiz_title,
+                               predicted_date, predicted_date_iso, confidence,
+                               cue_time, cue_text, status, created_at, updated_at
+                        FROM lecturescribe_predicted_quizzes
+                        WHERE 1=1
+                    """
+                    params = []
+                    if video_id:
+                        query += " AND video_id = %s"
+                        params.append(video_id)
+                    if course_slug:
+                        query += " AND course_slug = %s"
+                        params.append(course_slug)
+                    if status:
+                        if status == "active":
+                            query += " AND status != 'dismissed'"
+                        else:
+                            query += " AND status = %s"
+                            params.append(status)
+                    query += " ORDER BY created_at DESC;"
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall()
+                    results = []
+                    for row in rows:
+                        results.append({
+                            "id": row["id"],
+                            "video_id": row["video_id"],
+                            "videoId": row["video_id"],
+                            "course_slug": row["course_slug"],
+                            "courseSlug": row["course_slug"],
+                            "course_name": row["course_name"],
+                            "courseName": row["course_name"],
+                            "quiz_title": row["quiz_title"],
+                            "quizTitle": row["quiz_title"],
+                            "predicted_date": row["predicted_date"],
+                            "predictedDate": row["predicted_date"],
+                            "predicted_date_iso": row["predicted_date_iso"],
+                            "predictedDateIso": row["predicted_date_iso"],
+                            "confidence": float(row["confidence"]) if row["confidence"] is not None else 0.8,
+                            "cue_time": row["cue_time"],
+                            "cueTime": row["cue_time"],
+                            "cue_text": row["cue_text"],
+                            "cueText": row["cue_text"],
+                            "status": row["status"],
+                            "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+                            "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+                            "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
+                        })
+                    return results
+        except Exception as e:
+            results = []
+            for pq in self._predicted_quizzes_memory:
+                if video_id and pq.get("video_id") != video_id:
+                    continue
+                if course_slug and pq.get("course_slug") != course_slug:
+                    continue
+                if status:
+                    if status == "active" and pq.get("status") == "dismissed":
+                        continue
+                    elif status != "active" and pq.get("status") != status:
+                        continue
+                results.append(pq)
+            return results
+        finally:
+            if conn:
+                conn.close()
+
+    def update_predicted_quiz_status(self, quiz_id: str, status: str) -> Optional[Dict[str, Any]]:
+        """Update predicted quiz status ('pending', 'confirmed', 'dismissed')."""
+        updated_item = None
+        for pq in self._predicted_quizzes_memory:
+            if pq.get("id") == quiz_id:
+                pq["status"] = status
+                pq["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                pq["updatedAt"] = pq["updated_at"]
+                updated_item = pq
+                break
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_predicted_quizzes
+                        SET status = %s, updated_at = NOW()
+                        WHERE id = %s
+                        RETURNING id, video_id, course_slug, course_name, quiz_title,
+                                  predicted_date, predicted_date_iso, confidence,
+                                  cue_time, cue_text, status, created_at, updated_at;
+                    """, (status, quiz_id))
+                    row = cursor.fetchone()
+                    conn.commit()
+                    if row:
+                        return {
+                            "id": row["id"],
+                            "video_id": row["video_id"],
+                            "videoId": row["video_id"],
+                            "course_slug": row["course_slug"],
+                            "courseSlug": row["course_slug"],
+                            "course_name": row["course_name"],
+                            "courseName": row["course_name"],
+                            "quiz_title": row["quiz_title"],
+                            "quizTitle": row["quiz_title"],
+                            "predicted_date": row["predicted_date"],
+                            "predictedDate": row["predicted_date"],
+                            "predicted_date_iso": row["predicted_date_iso"],
+                            "predictedDateIso": row["predicted_date_iso"],
+                            "confidence": float(row["confidence"]) if row["confidence"] is not None else 0.8,
+                            "cue_time": row["cue_time"],
+                            "cueTime": row["cue_time"],
+                            "cue_text": row["cue_text"],
+                            "cueText": row["cue_text"],
+                            "status": row["status"],
+                            "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+                            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+                            "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+                            "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
+                        }
+        except Exception as e:
+            print(f"[PostgreSQL Notice] update_predicted_quiz_status error: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+        return updated_item
 
     def _ts_to_secs(self, ts: str) -> int:
         """Convert MM:SS or HH:MM:SS to total seconds."""

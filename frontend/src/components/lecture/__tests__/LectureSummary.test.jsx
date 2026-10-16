@@ -193,4 +193,25 @@ describe('LectureSummary component', () => {
     fireEvent.click(podcastButtons[0]);
     expect(screen.queryByTestId('lecture-podcast-player')).not.toBeInTheDocument();
   });
+
+  it('allows pasting or editing custom summary and calls saveCustomSummary', () => {
+    const saveCustomSummary = vi.fn().mockResolvedValue(true);
+    const hook = createHookMock({ saveCustomSummary });
+    render(<LectureSummary summaryHook={hook} activeData={{ videoId: 'vid-custom-1', title: 'Custom AI Summary' }} />);
+
+    const editBtn = screen.getByTestId('edit-paste-summary-btn');
+    fireEvent.click(editBtn);
+
+    const textarea = screen.getByTestId('custom-summary-textarea');
+    fireEvent.change(textarea, { target: { value: '# Pasted From Another AI\n\n- Key insight [01:30]' } });
+
+    const saveBtn = screen.getByTestId('save-custom-summary-btn');
+    fireEvent.click(saveBtn);
+
+    expect(saveCustomSummary).toHaveBeenCalledWith({
+      markdownText: '# Pasted From Another AI\n\n- Key insight [01:30]',
+      submissionText: expect.any(String),
+      summaryType: 'comprehensive'
+    });
+  });
 });

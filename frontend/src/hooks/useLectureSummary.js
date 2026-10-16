@@ -147,6 +147,45 @@ export default function useLectureSummary(activeData, userEmail = null) {
     setIsOutdated(true);
   }, []);
 
+  const saveCustomSummary = useCallback(async ({ markdownText, submissionText, summaryType = activeSummaryType }) => {
+    if (!videoId || videoId === 'active') return;
+    setError(null);
+    setGenerating(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/summary/custom`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: videoId,
+          summary_type: summaryType,
+          markdown_text: markdownText,
+          submission_text: submissionText,
+          user_email: email
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to save custom summary (${res.status})`);
+      }
+      const data = await res.json();
+      if (data?.summary) {
+        setSummaries(prev => ({
+          ...prev,
+          [summaryType]: data.summary
+        }));
+        setIsOutdated(false);
+        setError(null);
+        return data.summary;
+      }
+    } catch (err) {
+      console.error('Error saving custom summary:', err);
+      setError(err.message || 'Failed to save custom summary');
+      throw err;
+    } finally {
+      setGenerating(false);
+    }
+  }, [videoId, email, activeSummaryType]);
+
   return {
     summaries,
     currentSummary,
@@ -161,6 +200,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
     copyText,
     fetchSummaries,
     generateSummary,
+    saveCustomSummary,
     transcriptAvailable,
     isOutdated,
     markOutdated,

@@ -10,7 +10,10 @@ import {
   Maximize2,
   Minimize2,
   ExternalLink,
-  Headphones
+  Headphones,
+  Pencil,
+  Save,
+  X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 import LecturePodcastPlayer from './LecturePodcastPlayer';
@@ -24,6 +27,11 @@ export default function LectureSummary({
   onToggleExpand
 }) {
   const [isPodcastOpen, setIsPodcastOpen] = useState(false);
+  const [isEditingSummary, setIsEditingSummary] = useState(false);
+  const [editMarkdownText, setEditMarkdownText] = useState('');
+  const [editSubmissionText, setEditSubmissionText] = useState('');
+  const [isSavingCustom, setIsSavingCustom] = useState(false);
+
   const {
     currentSummary,
     viewMode,
@@ -34,6 +42,7 @@ export default function LectureSummary({
     copiedField,
     copyText,
     generateSummary,
+    saveCustomSummary,
     transcriptAvailable
   } = summaryHook;
 
@@ -41,6 +50,28 @@ export default function LectureSummary({
   const wordCount = currentSummary?.wordCount || (
     currentSubmissionText ? currentSubmissionText.trim().split(/\s+/).filter(Boolean).length : 0
   );
+
+  const handleOpenEditor = () => {
+    setEditMarkdownText(currentSummary?.markdownText || '');
+    setEditSubmissionText(currentSummary?.submissionText || '');
+    setIsEditingSummary(true);
+  };
+
+  const handleSaveEditor = async () => {
+    setIsSavingCustom(true);
+    try {
+      if (typeof saveCustomSummary === 'function') {
+        await saveCustomSummary({
+          markdownText: editMarkdownText,
+          submissionText: editSubmissionText,
+          summaryType: 'comprehensive'
+        });
+      }
+      setIsEditingSummary(false);
+    } finally {
+      setIsSavingCustom(false);
+    }
+  };
 
   const handlePopOutWindow = () => {
     if (typeof window === 'undefined') return;
@@ -283,6 +314,38 @@ export default function LectureSummary({
             </button>
           )}
 
+          {/* Action: Edit / Paste Custom Summary */}
+          <button
+            type="button"
+            data-testid="edit-paste-summary-btn"
+            onClick={() => {
+              if (isEditingSummary) {
+                setIsEditingSummary(false);
+              } else {
+                handleOpenEditor();
+              }
+            }}
+            title="Edit summary or paste from external AI"
+            aria-label="Edit or Paste summary"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              border: isEditingSummary ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
+              background: isEditingSummary ? 'var(--highlight-bg)' : 'var(--panel-bg)',
+              color: isEditingSummary ? 'var(--theme-primary)' : 'var(--text-secondary)',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <Pencil size={13} />
+            <span>{isEditingSummary ? 'Cancel Edit' : 'Edit / Paste'}</span>
+          </button>
+
           {/* Action: Regenerate */}
           <button
             type="button"
@@ -350,6 +413,47 @@ export default function LectureSummary({
           >
             <RefreshCw size={12} className={generating ? 'loading-pulse' : ''} />
             <span>Regenerate Summary Now</span>
+          </button>
+        </div>
+      )}
+
+      {/* Error Alert Banner with Paste Fallback */}
+      {error && !isEditingSummary && (
+        <div style={{
+          padding: '10px 18px',
+          background: 'rgba(239, 68, 68, 0.1)',
+          borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '10px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertCircle size={16} color="#ef4444" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+              {error}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleOpenEditor}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '4px 10px',
+              borderRadius: '6px',
+              fontSize: '0.74rem',
+              fontWeight: 600,
+              background: 'var(--theme-primary)',
+              color: '#ffffff',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <Pencil size={12} />
+            <span>Paste Custom Summary Instead</span>
           </button>
         </div>
       )}
@@ -452,32 +556,6 @@ export default function LectureSummary({
           {currentSummary && (
             <button
               type="button"
-              onClick={() => setIsPodcastOpen((prev) => !prev)}
-              title={isPodcastOpen ? "Hide podcast audio player" : `Listen to ${viewMode === 'submission' ? 'submission prose' : 'lecture summary'} podcast (Google TTS)`}
-              aria-label={isPodcastOpen ? "Hide podcast player" : "Listen to podcast audio"}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                border: isPodcastOpen ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
-                background: isPodcastOpen ? 'var(--highlight-bg)' : 'var(--card-bg)',
-                color: isPodcastOpen ? 'var(--theme-primary)' : 'var(--text-primary)',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <Headphones size={13} />
-              <span>{isPodcastOpen ? 'Hide Audio' : 'Audio Podcast'}</span>
-            </button>
-          )}
-
-          {currentSummary && (
-            <button
-              type="button"
               onClick={() => {
                 const textToCopy = viewMode === 'submission'
                   ? currentSummary.submissionText
@@ -516,10 +594,123 @@ export default function LectureSummary({
         padding: isExpanded ? '28px 36px 60px' : '20px 24px',
         scrollBehavior: 'smooth'
       }}>
-        {!transcriptAvailable ? (
+        {isEditingSummary ? (
+          <div style={{
+            background: 'var(--card-bg)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '10px',
+            padding: '20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+              <div>
+                <h4 style={{ margin: '0 0 4px', fontSize: '0.94rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {viewMode === 'submission' ? 'Edit / Paste Assignment Submission Prose' : 'Edit / Paste Study Notes Summary'}
+                </h4>
+                <p style={{ margin: 0, fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                  Paste markdown from another AI or customize your summary notes directly. Switch between Study Notes and Submission Prose tabs above to edit both.
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingSummary(false)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border-color)',
+                    background: 'transparent',
+                    color: 'var(--text-secondary)',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <X size={13} /> Cancel
+                </button>
+                <button
+                  type="button"
+                  data-testid="save-custom-summary-btn"
+                  disabled={isSavingCustom || (!editMarkdownText.trim() && !editSubmissionText.trim())}
+                  onClick={handleSaveEditor}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: 'var(--theme-primary)',
+                    color: '#fff',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Save size={13} /> {isSavingCustom ? 'Saving...' : 'Save Summary'}
+                </button>
+              </div>
+            </div>
+
+            {viewMode === 'study' ? (
+              <textarea
+                data-testid="custom-summary-textarea"
+                aria-label="Edit Study Notes Markdown"
+                value={editMarkdownText}
+                onChange={(e) => setEditMarkdownText(e.target.value)}
+                rows={16}
+                placeholder="Paste or edit your Study Notes markdown here (supports # headings, bullet points, [MM:SS] timestamps, and LaTeX math)..."
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  padding: '12px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--panel-bg)',
+                  color: 'var(--text-primary)',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                  fontSize: '0.84rem',
+                  lineHeight: 1.6,
+                  resize: 'vertical',
+                  outline: 'none'
+                }}
+              />
+            ) : (
+              <textarea
+                data-testid="custom-submission-textarea"
+                aria-label="Edit Assignment Submission Prose"
+                value={editSubmissionText}
+                onChange={(e) => setEditSubmissionText(e.target.value)}
+                rows={12}
+                placeholder="Paste or edit your concise Assignment Submission essay here..."
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  padding: '12px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--panel-bg)',
+                  color: 'var(--text-primary)',
+                  fontFamily: 'inherit',
+                  fontSize: '0.88rem',
+                  lineHeight: 1.65,
+                  resize: 'vertical',
+                  outline: 'none'
+                }}
+              />
+            )}
+          </div>
+        ) : !transcriptAvailable ? (
           <div style={{
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
             gap: '10px',
             padding: '16px',
             borderRadius: '8px',
@@ -527,10 +718,31 @@ export default function LectureSummary({
             border: '1px solid rgba(234, 179, 8, 0.3)',
             color: 'var(--text-primary)'
           }}>
-            <AlertCircle size={20} color="#eab308" />
-            <span style={{ fontSize: '0.86rem' }}>
-              This video was imported without a transcript. AI summaries cannot be generated for this lecture.
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <AlertCircle size={20} color="#eab308" />
+              <span style={{ fontSize: '0.86rem' }}>
+                This video was imported without a transcript. AI summaries cannot be generated for this lecture.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenEditor}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                background: 'var(--theme-primary)',
+                color: '#fff',
+                border: 'none',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <Pencil size={13} /> Paste External Summary
+            </button>
           </div>
         ) : loading ? (
           <div style={{
@@ -583,27 +795,49 @@ export default function LectureSummary({
                     Structured chapter breakdown generated during video ingestion. You can also generate an exhaustive academic study guide and assignment prose.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => generateSummary('comprehensive', true)}
-                  disabled={generating}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 14px',
-                    borderRadius: '6px',
-                    background: 'var(--theme-primary)',
-                    color: '#ffffff',
-                    border: 'none',
-                    fontSize: '0.78rem',
-                    fontWeight: 700,
-                    cursor: generating ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  <Sparkles size={14} />
-                  <span>Generate Full Study Notes</span>
-                </button>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={handleOpenEditor}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      background: 'var(--card-bg)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-color)',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Pencil size={13} />
+                    <span>Paste External Summary</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => generateSummary('comprehensive', true)}
+                    disabled={generating}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      background: 'var(--theme-primary)',
+                      color: '#ffffff',
+                      border: 'none',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      cursor: generating ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    <Sparkles size={14} />
+                    <span>Generate Full Study Notes</span>
+                  </button>
+                </div>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -680,29 +914,51 @@ export default function LectureSummary({
                 No Summary Generated Yet
               </h4>
               <p style={{ margin: '0 0 18px', maxWidth: '420px', fontSize: '0.84rem', lineHeight: '1.5' }}>
-                Click below to generate a comprehensive academic summary and submission-ready prose from this lecture.
+                Click below to generate a comprehensive academic summary and submission-ready prose from this lecture, or paste a summary from an external AI.
               </p>
-              <button
-                type="button"
-                onClick={() => generateSummary('comprehensive', true)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '9px 18px',
-                  borderRadius: '8px',
-                  background: 'var(--theme-primary)',
-                  color: '#ffffff',
-                  border: 'none',
-                  fontWeight: 600,
-                  fontSize: '0.86rem',
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(0, 117, 237, 0.25)'
-                }}
-              >
-                <Sparkles size={16} />
-                <span>Generate Full Summary</span>
-              </button>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => generateSummary('comprehensive', true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '9px 18px',
+                    borderRadius: '8px',
+                    background: 'var(--theme-primary)',
+                    color: '#ffffff',
+                    border: 'none',
+                    fontWeight: 600,
+                    fontSize: '0.86rem',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(0, 117, 237, 0.25)'
+                  }}
+                >
+                  <Sparkles size={16} />
+                  <span>Generate Full Summary</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenEditor}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '9px 16px',
+                    borderRadius: '8px',
+                    background: 'var(--card-bg)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)',
+                    fontWeight: 600,
+                    fontSize: '0.86rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Pencil size={15} />
+                  <span>Paste External Summary</span>
+                </button>
+              </div>
             </div>
           )
         ) : (
@@ -716,7 +972,9 @@ export default function LectureSummary({
                 videoId={activeData?.videoId || currentSummary?.videoId || ''}
                 title={activeData?.title || 'Lecture Summary'}
                 mode={viewMode}
-                summaryText={viewMode === 'submission' ? currentSubmissionText : currentSummary.markdownText}
+                summaryText={viewMode === 'submission' ? (currentSubmissionText || currentSummary?.submissionText || currentSummary?.submission_text || '') : (currentSummary?.markdownText || currentSummary?.markdown_text || '')}
+                courseName={activeData?.courseName || activeData?.course_name || currentSummary?.courseName || currentSummary?.course_name || ''}
+                autoPlay={true}
                 onClose={() => setIsPodcastOpen(false)}
               />
             )}

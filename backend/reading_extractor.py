@@ -2066,9 +2066,8 @@ class SLMQueryPlanner:
 
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
-        openai_key = os.getenv("OPENAI_API_KEY", "")
 
-        if not (groq_key or gemini_key or openai_key):
+        if not (groq_key or gemini_key):
             return fallback
 
         system_prompt = (
@@ -2315,9 +2314,8 @@ class SLMReranker:
 
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
-        openai_key = os.getenv("OPENAI_API_KEY", "")
 
-        if not (groq_key or gemini_key or openai_key):
+        if not (groq_key or gemini_key):
             return bounded
 
         candidate_blocks = [cls.format_candidate_context(c, i) for i, c in enumerate(bounded)]
@@ -2829,13 +2827,11 @@ def extract_readings_with_llm(
     """
     groq_key = os.getenv("GROQ_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    openai_base = os.getenv("LLAMA_OPENAI_BASE", os.getenv("LLAMA_API_BASE", ""))
 
     logger.info(
         f"[ReadingExtractor] extract_readings_with_llm invoked for course='{course_name}'. "
         f"Transcripts len={len(transcripts_summary)}, Slides len={len(slides_text)}. "
-        f"Available keys: Groq={bool(groq_key)}, Gemini={bool(gemini_key)}, OpenAI={bool(openai_key)}, OpenAI_Base={bool(openai_base)}"
+        f"Available keys: Groq={bool(groq_key)}, Gemini={bool(gemini_key)}"
     )
 
     system_prompt = (
@@ -2938,34 +2934,6 @@ def extract_readings_with_llm(
                     logger.info(f"[ReadingExtractor] Gemini model '{gem_model}' returned 0 parsed readings.")
             except Exception as e:
                 logger.warning(f"[ReadingExtractor] Gemini candidate '{gem_model}' failed: {e}")
-
-    # 3. Try OpenAI fallback (only if openai_key is provided or custom endpoint that is not a non-chat router)
-    if not items and openai_key:
-        logger.info("[ReadingExtractor] Attempting LLM extraction via OpenAI...")
-        try:
-            from openai import OpenAI
-            client = OpenAI(
-                base_url=openai_base or "https://api.openai.com/v1",
-                api_key=openai_key
-            )
-            fallback_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            logger.info(f"[ReadingExtractor] Invoking fallback model '{fallback_model}' at base '{openai_base or 'https://api.openai.com/v1'}'...")
-            resp = client.chat.completions.create(
-                model=fallback_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=3500,
-                temperature=0.1
-            )
-            raw_out = resp.choices[0].message.content or ""
-            logger.info(f"[ReadingExtractor] Fallback model '{fallback_model}' responded with {len(raw_out)} chars.")
-            items = _parse_readings_json(raw_out)
-            if items:
-                logger.info(f"[ReadingExtractor] Fallback model '{fallback_model}' successfully produced {len(items)} readings.")
-        except Exception as e:
-            logger.warning(f"[ReadingExtractor] Fallback LLM failed: {e}\n{traceback.format_exc()}")
 
     # Deduplicate items by lowercased alphanumeric title
     deduped: List[Dict[str, Any]] = []

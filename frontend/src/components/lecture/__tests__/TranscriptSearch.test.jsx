@@ -486,9 +486,10 @@ describe('TranscriptSearch', () => {
       expect(mark).toHaveTextContent('linear algebra');
     });
 
-    // Verify note badge is rendered on cue row
-    const noteBadge = screen.getByRole('button', { name: /View cue comment/i });
-    expect(noteBadge).toBeInTheDocument();
+    // Verify hovering on the mark shows the note preview tooltip
+    const mark = document.querySelector('mark');
+    fireEvent.mouseEnter(mark);
+    expect(await screen.findByTestId('mark-hover-tooltip')).toHaveTextContent('Remember this definition');
 
     global.fetch = originalFetch;
   });
@@ -547,8 +548,9 @@ describe('TranscriptSearch', () => {
       expect(mark).toHaveStyle({ backgroundColor: 'rgba(187, 247, 208, 0.55)' });
     });
 
-    const noteBadge = screen.getByRole('button', { name: /View cue comment/i });
-    expect(noteBadge).toBeInTheDocument();
+    const mark = document.querySelector('mark');
+    fireEvent.mouseEnter(mark);
+    expect(await screen.findByTestId('mark-hover-tooltip')).toHaveTextContent('Remember this definition');
 
     global.fetch = originalFetch;
   });
@@ -759,12 +761,18 @@ describe('TranscriptSearch', () => {
       );
     });
 
-    const badge = await screen.findByRole('button', { name: /View cue comment/i });
-    expect(badge).toBeInTheDocument();
+    const mark = await screen.findByText('linear algebra');
+    expect(mark).toBeInTheDocument();
 
-    fireEvent.click(badge);
+    const markEl = document.querySelector('mark');
+    fireEvent.mouseEnter(markEl);
+    expect(await screen.findByTestId('mark-hover-tooltip')).toHaveTextContent('Crucial for exams');
+
+    fireEvent.click(markEl);
+    const viewNotesBtn = await screen.findByRole('button', { name: /Notes/i });
+    fireEvent.click(viewNotesBtn);
     expect(await screen.findByText(/Reader Notes & Highlights/i)).toBeInTheDocument();
-    expect(screen.getByText('Crucial for exams')).toBeInTheDocument();
+    expect(screen.getAllByText(/Crucial for exams/).length).toBeGreaterThanOrEqual(1);
 
     vi.unstubAllGlobals();
   });
@@ -1193,5 +1201,304 @@ describe('TranscriptSearch', () => {
 
     expect(screen.getByTestId('search-no-results')).toBeInTheDocument();
     expect(screen.getByText(/No transcript matches found for "nonexistent-query"\./i)).toBeInTheDocument();
+  });
+
+  it('does not highlight substring inside larger words (e.g., character inside characters)', async () => {
+    const originalFetch = global.fetch;
+    const cues = [
+      { id: 'cue_0', time: '01:00', text: 'These characters are fascinating' },
+      { id: 'cue_1', time: '01:10', text: 'A single character is examined' }
+    ];
+    const activeData = { videoId: 'vid_wb_test', cues };
+
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_char_1',
+                videoId: 'vid_wb_test',
+                cueId: 'cue_1',
+                selectedText: 'character',
+                annotationType: 'highlight',
+                color: 'yellow'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    await waitFor(() => {
+      const marks = document.querySelectorAll('mark');
+      // Only "character" in cue 1 should be highlighted, NOT "characters" in cue 0!
+      expect(marks.length).toBe(1);
+      expect(marks[0]).toHaveTextContent('character');
+    });
+
+    global.fetch = originalFetch;
+  });
+
+  it('treats sentence note as block note and only highlights exact repeating sentence without fragmenting words', async () => {
+    const originalFetch = global.fetch;
+    const sentence = 'We define the state space as follows.';
+    const cues = [
+      { id: 'cue_0', time: '01:00', text: sentence },
+      { id: 'cue_1', time: '01:15', text: 'In other words, the state space is huge.' },
+      { id: 'cue_2', time: '01:30', text: sentence } // Exact repetition!
+    ];
+    const activeData = { videoId: 'vid_sentence_test', cues };
+
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_sentence_1',
+                videoId: 'vid_sentence_test',
+                cueId: 'cue_0',
+                selectedText: sentence,
+                annotationType: 'note',
+                noteText: 'Important definition of state space'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    await waitFor(() => {
+      const marks = document.querySelectorAll('mark');
+      // Cue 0 and Cue 2 (exact repeating sentence) should be highlighted as block notes.
+      // Cue 1 contains "state space" and "the", but NOT the whole sentence, so it should NOT be marked!
+      expect(marks.length).toBe(2);
+      expect(marks[0]).toHaveTextContent(sentence);
+      expect(marks[1]).toHaveTextContent(sentence);
+    });
+
+    global.fetch = originalFetch;
+  });
+
+  it('allows un-highlighting notes via the mark action popover', async () => {
+    const originalFetch = global.fetch;
+    const cues = [
+      { id: 'cue_0', time: '01:00', text: 'Important definition in machine learning.' }
+    ];
+    const activeData = { videoId: 'vid_unhighlight_test', cues };
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations/ann_unhighlight_1') && opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'success' }) });
+      }
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_unhighlight_1',
+                videoId: 'vid_unhighlight_test',
+                cueId: 'cue_0',
+                selectedText: 'machine learning',
+                annotationType: 'highlight',
+                color: 'green'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({ isCollapsed: true, toString: () => '' });
+
+    const mark = await screen.findByText('machine learning');
+    expect(mark).toBeInTheDocument();
+
+    // Click mark to trigger un-highlight popover
+    fireEvent.click(mark);
+
+    const unhighlightBtn = await screen.findByRole('button', { name: /Un-highlight/i });
+    expect(unhighlightBtn).toBeInTheDocument();
+
+    fireEvent.click(unhighlightBtn);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/annotations/ann_unhighlight_1'),
+        expect.objectContaining({ method: 'DELETE' })
+      );
+      // Mark should be removed
+      expect(document.querySelector('mark')).toBeNull();
+    });
+
+    global.fetch = originalFetch;
+  });
+
+  it('toggles video play/pause from transcript toolbar button and Space shortcut', async () => {
+    const handleTogglePlayPause = vi.fn();
+    render(
+      <TranscriptSearch
+        displayCues={[{ id: 'c1', time: '00:10', text: 'Sample transcript line' }]}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        isPlaying={true}
+        handleTogglePlayPause={handleTogglePlayPause}
+      />
+    );
+
+    const playPauseBtn = screen.getByTestId('transcript-play-pause-btn');
+    expect(playPauseBtn).toHaveTextContent(/Pause/i);
+    fireEvent.click(playPauseBtn);
+    expect(handleTogglePlayPause).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+    expect(handleTogglePlayPause).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows editing margin notes in the hover tooltip and in the Notes drawer and saving on Enter', async () => {
+    const originalFetch = global.fetch;
+    const cues = [
+      { id: 'cue_0', time: '01:00', text: 'Gradient descent minimizes loss.' }
+    ];
+    const activeData = { videoId: 'vid_edit_note', cues };
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations/ann_note_1') && opts?.method === 'PATCH') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            annotation: {
+              id: 'ann_note_1',
+              videoId: 'vid_edit_note',
+              cueId: 'cue_0',
+              selectedText: 'Gradient descent',
+              annotationType: 'note',
+              noteText: body.note_text
+            }
+          })
+        });
+      }
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_note_1',
+                videoId: 'vid_edit_note',
+                cueId: 'cue_0',
+                selectedText: 'Gradient descent',
+                annotationType: 'note',
+                noteText: 'Initial note text'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const markEl = await screen.findByText('Gradient descent');
+    fireEvent.mouseEnter(markEl);
+
+    const tooltip = await screen.findByTestId('mark-hover-tooltip');
+    expect(tooltip).toHaveTextContent('Initial note text');
+
+    const editTooltipBtn = screen.getByRole('button', { name: /Edit note in tooltip/i });
+    fireEvent.click(editTooltipBtn);
+
+    const tooltipInput = screen.getByRole('textbox', { name: /Edit margin note text/i });
+    fireEvent.change(tooltipInput, { target: { value: 'Updated via tooltip Enter' } });
+    fireEvent.keyDown(tooltipInput, { key: 'Enter', shiftKey: false });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/annotations/ann_note_1'),
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ note_text: 'Updated via tooltip Enter' })
+        })
+      );
+    });
+
+    // Now open Notes drawer and edit there with Enter
+    const notesBtn = screen.getByRole('button', { name: /Notes and Highlights/i });
+    fireEvent.click(notesBtn);
+
+    expect((await screen.findAllByText('Updated via tooltip Enter')).length).toBeGreaterThanOrEqual(1);
+    const drawerEditBtn = screen.getByRole('button', { name: /^Edit note$/i });
+    fireEvent.click(drawerEditBtn);
+
+    const drawerInput = screen.getByRole('textbox', { name: /Edit note input/i });
+    fireEvent.change(drawerInput, { target: { value: 'Updated in drawer via Enter' } });
+    fireEvent.keyDown(drawerInput, { key: 'Enter', shiftKey: false });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/annotations/ann_note_1'),
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ note_text: 'Updated in drawer via Enter' })
+        })
+      );
+      expect(screen.getAllByText('Updated in drawer via Enter').length).toBeGreaterThanOrEqual(1);
+    });
+
+    global.fetch = originalFetch;
   });
 });

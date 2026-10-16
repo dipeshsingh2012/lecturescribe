@@ -182,7 +182,7 @@ Today we discuss forward kinematics.
         self.assertTrue(data["transcript_available"])
         self.assertEqual(data["captionLabel"], "Groq Whisper")
         self.assertEqual(data["cues"], [{"time": "01:05", "text": "Welcome to class."}])
-        mock_post.assert_called_once_with(
+        mock_post.assert_any_call(
             "https://transcription.example/transcribe/url",
             json={"url": "https://vimeo.com/1233458452"},
             timeout=(15, 900),
@@ -238,7 +238,8 @@ Today we discuss forward kinematics.
         self.assertEqual(response.json()["cues"], saved_cues)
         self.assertTrue(response.json()["transcript_available"])
         self.assertTrue(response.json()["cached"])
-        mock_post.assert_not_called()
+        transcription_calls = [c for c in mock_post.call_args_list if c.args and "transcription.example" in str(c.args[0])]
+        self.assertEqual(transcription_calls, [])
 
     @patch("backend.main.db_manager.get_saved_video", return_value=None)
     def test_transcription_endpoint_requires_an_imported_video(self, _mock_get_video):

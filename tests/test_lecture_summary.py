@@ -104,8 +104,9 @@ class TestLectureSummary(unittest.TestCase):
         self.assertEqual(kwargs["submission_text"], "Generated submission prose")
 
     @patch("backend.main.pinecone_rag_engine")
+    @patch("backend.main.db_manager.get_lecture_summary", return_value={"markdownText": "Study guide body"})
     @patch("backend.main.db_manager.save_lecture_summary", return_value=True)
-    def test_submission_failure_falls_back_to_study_guide_text(self, mock_save, mock_engine):
+    def test_submission_failure_falls_back_to_study_guide_text(self, mock_save, mock_get, mock_engine):
         mock_engine.generate_full_transcript_summary.return_value = {"answer": "Study guide body", "model": "m"}
         mock_engine.generate_submission_version.side_effect = RuntimeError("all providers down")
         mock_engine._clean_for_submission.side_effect = lambda t, **kw: t

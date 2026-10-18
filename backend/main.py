@@ -2610,6 +2610,13 @@ class UserLibraryRecordRequest(BaseModel):
     course_name: Optional[str] = None
 
 
+class CoursePinRequest(BaseModel):
+    user_email: Optional[str] = None
+    email: Optional[str] = None
+    course_slug: Optional[str] = None
+    course_name: Optional[str] = None
+
+
 @app.get("/api/user/library")
 def get_user_library(email: str = Query(..., description="User Google email")):
     """Fetch user's saved LMS library of lectures."""
@@ -2641,12 +2648,40 @@ def get_user_courses(
     if redis_cache:
         cached = redis_cache.get_user_courses(target_email)
         if cached is not None:
-            return {"status": "success", "email": target_email, "count": len(cached), "courses": cached, "cached": True}
+            pinned_courses = db_manager.get_pinned_courses(target_email)
+            return {"status": "success", "email": target_email, "count": len(cached), "courses": cached, "pinned_courses": pinned_courses, "cached": True}
 
     courses = db_manager.get_user_courses(target_email)
+    pinned_courses = db_manager.get_pinned_courses(target_email)
     if redis_cache:
         redis_cache.set_user_courses(target_email, courses, ttl_seconds=300)
-    return {"status": "success", "email": target_email, "count": len(courses), "courses": courses}
+    return {"status": "success", "email": target_email, "count": len(courses), "courses": courses, "pinned_courses": pinned_courses}
+
+
+@app.post("/api/user/courses/pin")
+def toggle_user_course_pin(req: CoursePinRequest):
+    """
+    Toggle the pinned state of a course for a user.
+    New pins are appended to the existing pinned courses to preserve FIFO ordering.
+    """
+    target_email = (req.user_email or req.email or "").strip().lower()
+    target_slug = (req.course_slug or req.course_name or "").strip()
+    if not target_email or not target_slug:
+        raise HTTPException(status_code=400, detail="email and course_slug (or course_name) are required.")
+
+    is_pinned_now = db_manager.toggle_course_pin(target_email, target_slug)
+
+    if redis_cache:
+        redis_cache.invalidate_user(target_email)
+
+    pinned_courses = db_manager.get_pinned_courses(target_email)
+    print(f"📌 [API /api/user/courses/pin] '{target_email}' {'pinned' if is_pinned_now else 'unpinned'} '{target_slug}'. Total pinned: {len(pinned_courses)}")
+    return {
+        "status": "success",
+        "is_pinned": is_pinned_now,
+        "course_slug": target_slug,
+        "pinned_courses": pinned_courses
+    }
 
 
 @app.get("/api/course/{course_name}")

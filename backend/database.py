@@ -122,6 +122,7 @@ class RelationalDBManager:
         self._annotations_memory_cache: List[Dict[str, Any]] = []
         self._notes_memory_cache: List[Dict[str, Any]] = []
         self._predicted_quizzes_memory: List[Dict[str, Any]] = []
+        self._user_course_pins_memory: Dict[str, List[str]] = {}
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -681,6 +682,15 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_course_notes_course ON lecturescribe_course_notes(course_name);
                         CREATE INDEX IF NOT EXISTS idx_course_notes_email ON lecturescribe_course_notes(user_email);
                         CREATE INDEX IF NOT EXISTS idx_course_notes_id ON lecturescribe_course_notes(note_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_user_course_pins (
+                            id SERIAL PRIMARY KEY,
+                            user_email VARCHAR(255) NOT NULL,
+                            course_slug VARCHAR(255) NOT NULL,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            UNIQUE (user_email, course_slug)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_course_pins_user ON lecturescribe_user_course_pins(user_email);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -2947,9 +2957,116 @@ class RelationalDBManager:
                             "progress": prog_map.get(r["video_id"])
                         })
 
-                    return list(courses_map.values())
+                    pinned_slugs = self.get_pinned_courses(clean_email)
+                    pinned_slugs_set = set(pinned_slugs)
+
+                    for course_slug_key, course_item in courses_map.items():
+                        course_item["is_pinned"] = course_slug_key in pinned_slugs_set
+
+                    # Partition: preserve FIFO append order for pinned courses, recency for unpinned
+                    pinned_courses_list = [courses_map[slug] for slug in pinned_slugs if slug in courses_map]
+                    unpinned_courses_list = [course_item for slug, course_item in courses_map.items() if slug not in pinned_slugs_set]
+
+                    return pinned_courses_list + unpinned_courses_list
         finally:
             conn.close()
+
+    def get_pinned_courses(self, user_email: str) -> List[str]:
+        """
+        Retrieve pinned course slugs for a user in ascending order of pin time (FIFO append order).
+
+        :param user_email: Email identifier of the student.
+        :return: List of course slugs in order of pinning.
+        """
+        clean_email = (user_email or "").strip().lower()
+        if not clean_email:
+            return []
+
+        if HAS_PSYCOPG2 and self.postgres_url:
+            conn = None
+            try:
+                conn = self._get_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT course_slug FROM lecturescribe_user_course_pins
+                        WHERE user_email = %s
+                        ORDER BY created_at ASC;
+                    """, (clean_email,))
+                    pinned_rows = cursor.fetchall() or []
+                    pinned_slugs = [r["course_slug"] for r in pinned_rows if r.get("course_slug")]
+                    return pinned_slugs
+            except Exception as query_error:
+                print(f"⚠️ [PostgreSQL Warning] Failed to fetch pinned courses for '{clean_email}': {query_error}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # In-memory fallback
+        return list(self._user_course_pins_memory.get(clean_email, []))
+
+    def toggle_course_pin(self, user_email: str, course_identifier: str) -> bool:
+        """
+        Toggle the pinned state of a course for a user.
+        If unpinned, appends the course to the end of the pinned queue and returns True.
+        If already pinned, removes it from the pinned queue and returns False.
+
+        :param user_email: Email identifier of the student.
+        :param course_identifier: Course title or slug to toggle.
+        :return: True if the course is now pinned, False if unpinned.
+        """
+        clean_email = (user_email or "").strip().lower()
+        target_slug = to_course_slug(course_identifier)
+        if not clean_email or not target_slug:
+            return False
+
+        is_pinned_now = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            conn = None
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            SELECT id FROM lecturescribe_user_course_pins
+                            WHERE user_email = %s AND course_slug = %s;
+                        """, (clean_email, target_slug))
+                        existing_pin_row = cursor.fetchone()
+
+                        if existing_pin_row:
+                            cursor.execute("""
+                                DELETE FROM lecturescribe_user_course_pins
+                                WHERE user_email = %s AND course_slug = %s;
+                            """, (clean_email, target_slug))
+                            is_pinned_now = False
+                            print(f"📌 [Database] Unpinned course '{target_slug}' for user '{clean_email}'.")
+                        else:
+                            cursor.execute("""
+                                INSERT INTO lecturescribe_user_course_pins (user_email, course_slug, created_at)
+                                VALUES (%s, %s, NOW())
+                                ON CONFLICT (user_email, course_slug) DO UPDATE SET created_at = NOW();
+                            """, (clean_email, target_slug))
+                            is_pinned_now = True
+                            print(f"📌 [Database] Appended pin for course '{target_slug}' for user '{clean_email}'.")
+            except Exception as db_error:
+                print(f"⚠️ [PostgreSQL Warning] Failed to toggle course pin for '{clean_email}': {db_error}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # Keep in-memory cache synchronized with append semantics
+        current_pins = list(self._user_course_pins_memory.get(clean_email, []))
+        if target_slug in current_pins:
+            current_pins.remove(target_slug)
+            if is_pinned_now is None:
+                is_pinned_now = False
+        else:
+            current_pins.append(target_slug)
+            if is_pinned_now is None:
+                is_pinned_now = True
+
+        self._user_course_pins_memory[clean_email] = current_pins
+        return is_pinned_now
+
 
     def resolve_course_canonical_name(self, course_identifier: str) -> str:
         """
@@ -3459,6 +3576,15 @@ class RelationalDBManager:
 
                     cursor.execute(
                         """
+                        DELETE FROM lecturescribe_user_course_pins
+                        WHERE user_email = %s AND course_slug = ANY(%s);
+                        """,
+                        (clean_email, slug_candidates),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
                         DELETE FROM lecturescribe_course_quizzes
                         WHERE course_slug = ANY(%s)
                            OR LOWER(COALESCE(course_name, '')) = ANY(%s);
@@ -3590,6 +3716,11 @@ class RelationalDBManager:
         for k in list(self._progress_memory_cache.keys()):
             if isinstance(k, tuple) and len(k) == 2 and str(k[1]) in video_ids_set:
                 self._progress_memory_cache.pop(k, None)
+
+        if clean_email in self._user_course_pins_memory:
+            self._user_course_pins_memory[clean_email] = [
+                s for s in self._user_course_pins_memory[clean_email] if s not in slug_candidates
+            ]
 
         return {
             "deleted": bool(deleted_rows_total > 0 or video_ids_set),

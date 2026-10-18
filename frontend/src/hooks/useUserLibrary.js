@@ -5,6 +5,7 @@ import { normalizeCourseSlug } from '../utils/routing';
 export function useUserLibrary(userEmail) {
   const [userLibrary, setUserLibrary] = useState([]);
   const [userCourses, setUserCourses] = useState([]);
+  const [pinnedCourses, setPinnedCourses] = useState([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [librarySearch, setLibrarySearch] = useState('');
   const inFlightFetchRef = useRef(false);
@@ -30,6 +31,9 @@ export function useUserLibrary(userEmail) {
       if (coursesRes.ok) {
         const cData = await coursesRes.json();
         setUserCourses(cData.courses || []);
+        if (Array.isArray(cData.pinned_courses)) {
+          setPinnedCourses(cData.pinned_courses);
+        }
       }
     } catch (err) {
       console.warn("Failed to fetch user library/courses:", err);
@@ -88,10 +92,47 @@ export function useUserLibrary(userEmail) {
             return !deletedVidSet.has(itemVid) && item.course_name !== courseName && itemSlug !== targetSlug;
           })
         );
+        setPinnedCourses(prev => prev.filter(slug => slug !== targetSlug));
         return true;
       }
     } catch (err) {
       console.warn("Failed to delete course:", err);
+    }
+    return false;
+  };
+
+  const handleTogglePin = async (courseIdentifier) => {
+    if (!courseIdentifier) return false;
+    const targetSlug = normalizeCourseSlug(courseIdentifier);
+
+    // Optimistically update pinnedCourses with FIFO append semantics
+    setPinnedCourses((prevPinned) => {
+      if (prevPinned.includes(targetSlug)) {
+        return prevPinned.filter((slug) => slug !== targetSlug);
+      }
+      return [...prevPinned, targetSlug];
+    });
+
+    if (!userEmail) return true;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/user/courses/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: userEmail,
+          course_slug: targetSlug
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.pinned_courses)) {
+          setPinnedCourses(data.pinned_courses);
+        }
+        return data.is_pinned;
+      }
+    } catch (err) {
+      console.warn("Failed to toggle course pin on backend:", err);
     }
     return false;
   };
@@ -102,6 +143,7 @@ export function useUserLibrary(userEmail) {
     } else {
       setUserLibrary([]);
       setUserCourses([]);
+      setPinnedCourses([]);
     }
   }, [userEmail]);
 
@@ -178,17 +220,42 @@ export function useUserLibrary(userEmail) {
   }, [userCourses, userLibrary]);
 
   const filteredCourses = useMemo(() => {
-    if (!librarySearch.trim()) return effectiveCourses;
-    const q = librarySearch.toLowerCase();
-    return effectiveCourses.filter(c => 
-      c.course_name.toLowerCase().includes(q) ||
-      (c.lectures && c.lectures.some(l => 
-        (l.video_title && l.video_title.toLowerCase().includes(q)) ||
-        (l.title && l.title.toLowerCase().includes(q)) ||
-        (l.video_id && String(l.video_id).toLowerCase().includes(q))
-      ))
-    );
-  }, [effectiveCourses, librarySearch]);
+    const list = effectiveCourses;
+    const query = librarySearch.trim().toLowerCase();
+    const matching = !query
+      ? list
+      : list.filter(c => 
+          c.course_name.toLowerCase().includes(query) ||
+          (c.lectures && c.lectures.some(l => 
+            (l.video_title && l.video_title.toLowerCase().includes(query)) ||
+            (l.title && l.title.toLowerCase().includes(query)) ||
+            (l.video_id && String(l.video_id).toLowerCase().includes(query))
+          ))
+        );
+
+    // If pinnedCourses list is tracked, sort pinned courses first in append order
+    if (!pinnedCourses || pinnedCourses.length === 0) {
+      return matching;
+    }
+
+    const pinnedSet = new Set(pinnedCourses);
+    const pinned = [];
+    pinnedCourses.forEach(slug => {
+      const found = matching.find(c => normalizeCourseSlug(c.course_slug || c.course_name) === slug);
+      if (found) {
+        pinned.push({ ...found, is_pinned: true });
+      }
+    });
+
+    const unpinned = matching
+      .filter(c => {
+        const slug = normalizeCourseSlug(c.course_slug || c.course_name);
+        return !pinnedSet.has(slug);
+      })
+      .map(c => ({ ...c, is_pinned: Boolean(c.is_pinned && pinnedSet.has(normalizeCourseSlug(c.course_slug || c.course_name))) }));
+
+    return [...pinned, ...unpinned];
+  }, [effectiveCourses, pinnedCourses, librarySearch]);
 
   const filteredLibrary = useMemo(() => {
     if (!librarySearch.trim()) return userLibrary;
@@ -205,6 +272,9 @@ export function useUserLibrary(userEmail) {
     setUserLibrary,
     userCourses,
     setUserCourses,
+    pinnedCourses,
+    setPinnedCourses,
+    handleTogglePin,
     libraryLoading,
     librarySearch,
     setLibrarySearch,

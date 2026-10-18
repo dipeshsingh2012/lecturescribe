@@ -19,7 +19,8 @@ import {
   Clock,
   Play,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  Pin
 } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/formatters';
 
@@ -27,6 +28,7 @@ export default function CourseGrid({
   filteredCourses = [],
   handleSelectCourse,
   handleDeleteCourse,
+  handleTogglePin,
   librarySearch = '',
   currentTheme
 }) {
@@ -99,7 +101,9 @@ export default function CourseGrid({
               boxSizing: 'border-box',
               cursor: 'pointer',
               bgcolor: currentTheme.palette.cardBg,
-              border: `1px solid ${currentTheme.palette.cardBorder}`,
+              border: course.is_pinned
+                ? `1.5px solid ${currentTheme.palette.primary}`
+                : `1px solid ${currentTheme.palette.cardBorder}`,
               borderRadius: 3,
               boxShadow: currentTheme.palette.cardShadow,
               transition: 'all 0.2s ease-in-out',
@@ -127,6 +131,20 @@ export default function CourseGrid({
                 <BookOpen size={22} color={currentTheme.palette.primary} />
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                {course.is_pinned && (
+                  <Chip
+                    label="Pinned"
+                    size="small"
+                    sx={{
+                      fontWeight: 800,
+                      fontSize: '0.68rem',
+                      height: 24,
+                      bgcolor: 'rgba(0, 117, 237, 0.12)',
+                      color: currentTheme.palette.primary,
+                      border: '1px solid rgba(0, 117, 237, 0.25)'
+                    }}
+                  />
+                )}
                 <Chip
                   label={`${course.lecture_count} ${course.lecture_count === 1 ? 'lecture' : 'lectures'}`}
                   size="small"
@@ -138,6 +156,40 @@ export default function CourseGrid({
                     border: `1px solid ${currentTheme.palette.badgeBorder}`
                   }}
                 />
+                {typeof handleTogglePin === 'function' && (
+                  <Tooltip
+                    title={course.is_pinned ? `Unpin ${course.course_name}` : `Pin ${course.course_name} to top`}
+                    arrow
+                  >
+                    <IconButton
+                      size="small"
+                      aria-label={course.is_pinned ? `Unpin ${course.course_name}` : `Pin ${course.course_name} to top`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleTogglePin(course.course_slug || course.course_name);
+                      }}
+                      sx={{
+                        color: course.is_pinned ? currentTheme.palette.primary : currentTheme.palette.textSecondary,
+                        p: 0.6,
+                        borderRadius: 1.5,
+                        bgcolor: course.is_pinned ? 'rgba(0, 117, 237, 0.08)' : 'transparent',
+                        '&:hover': {
+                          color: currentTheme.palette.primary,
+                          bgcolor: 'rgba(0, 117, 237, 0.15)'
+                        }
+                      }}
+                    >
+                      <Pin
+                        size={15}
+                        style={{
+                          transform: course.is_pinned ? 'rotate(45deg)' : 'none',
+                          transition: 'transform 0.2s ease'
+                        }}
+                        fill={course.is_pinned ? 'currentColor' : 'none'}
+                      />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 {typeof handleDeleteCourse === 'function' && (
                   <Tooltip title="Delete Course" arrow>
                     <IconButton

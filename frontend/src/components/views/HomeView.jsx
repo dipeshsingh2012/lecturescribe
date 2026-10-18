@@ -82,6 +82,7 @@ export default function HomeView({
   courseLoading,
   handleDeleteFromLibrary,
   handleDeleteCourse,
+  handleTogglePin,
   courseNotes = [],
   courseNotesLoading = false,
   onCreateNewNote,
@@ -447,6 +448,7 @@ export default function HomeView({
             filteredCourses={filteredCourses}
             handleSelectCourse={handleSelectCourse}
             handleDeleteCourse={handleDeleteCourse}
+            handleTogglePin={handleTogglePin}
             librarySearch={librarySearch}
             currentTheme={currentTheme}
           />

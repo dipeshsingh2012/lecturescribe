@@ -357,6 +357,7 @@ export default function App() {
             courseLoading={course.courseLoading}
             handleDeleteFromLibrary={library.handleDeleteFromLibrary}
             handleDeleteCourse={library.handleDeleteCourse}
+            handleTogglePin={library.handleTogglePin}
             courseNotes={courseNotes.notes}
             courseNotesLoading={courseNotes.notesLoading}
             onCreateNewNote={handleCreateNewNote}

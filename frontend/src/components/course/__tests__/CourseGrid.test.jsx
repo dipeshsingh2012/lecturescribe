@@ -106,4 +106,61 @@ describe('CourseGrid', () => {
       expect(handleDeleteCourse).toHaveBeenCalledWith('Machine Learning');
     });
   });
+
+  it('renders pin button and calls handleTogglePin without selecting course', () => {
+    const handleSelectCourse = vi.fn();
+    const handleTogglePin = vi.fn();
+    const courses = [
+      {
+        course_name: 'Machine Learning',
+        course_slug: 'machine-learning',
+        lecture_count: 1,
+        is_pinned: false,
+        lectures: [{ video_id: '101', title: 'Intro' }]
+      }
+    ];
+
+    render(
+      <CourseGrid
+        filteredCourses={courses}
+        handleSelectCourse={handleSelectCourse}
+        handleTogglePin={handleTogglePin}
+        librarySearch=""
+        currentTheme={mockTheme}
+      />
+    );
+
+    const pinBtn = screen.getByRole('button', { name: /Pin Machine Learning to top/i });
+    expect(pinBtn).toBeInTheDocument();
+
+    fireEvent.click(pinBtn);
+    expect(handleTogglePin).toHaveBeenCalledWith('machine-learning');
+    expect(handleSelectCourse).not.toHaveBeenCalled();
+  });
+
+  it('renders active pinned state and unpin label when course is pinned', () => {
+    const handleTogglePin = vi.fn();
+    const courses = [
+      {
+        course_name: 'Quantum Physics',
+        course_slug: 'quantum-physics',
+        lecture_count: 2,
+        is_pinned: true,
+        lectures: [{ video_id: '102', title: 'Intro' }]
+      }
+    ];
+
+    render(
+      <CourseGrid
+        filteredCourses={courses}
+        handleTogglePin={handleTogglePin}
+        librarySearch=""
+        currentTheme={mockTheme}
+      />
+    );
+
+    const unpinBtn = screen.getByRole('button', { name: /Unpin Quantum Physics/i });
+    expect(unpinBtn).toBeInTheDocument();
+  });
 });
+

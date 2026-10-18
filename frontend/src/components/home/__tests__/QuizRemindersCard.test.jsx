@@ -87,4 +87,40 @@ describe('QuizRemindersCard', () => {
     });
     expect(container.firstChild).toBeNull();
   });
+
+  it('calls onSelectLecture with video_id, cue_time, and course_name when Jump to Cue is clicked', async () => {
+    const onSelectLecture = vi.fn();
+    const mockQuizzes = [
+      {
+        id: 'quiz_jump_1',
+        video_id: 'vid_jump_99',
+        course_name: '',
+        course_slug: 'data-structures',
+        lecture_title: 'Lecture 4: Heaps',
+        quiz_title: 'Pop Quiz 1',
+        predicted_date: 'This Friday',
+        predicted_date_iso: '2026-10-23',
+        confidence: 0.85,
+        cue_time: '03:10',
+        cue_text: 'We will have our first pop quiz this Friday.'
+      }
+    ];
+
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'success', quizzes: mockQuizzes })
+    });
+
+    render(<QuizRemindersCard onSelectLecture={onSelectLecture} />);
+
+    expect(await screen.findByText('Pop Quiz 1')).toBeInTheDocument();
+    expect(screen.getByText('Data Structures')).toBeInTheDocument();
+    expect(screen.getByText(/Lecture 4: Heaps/i)).toBeInTheDocument();
+
+    const jumpBtn = screen.getByRole('button', { name: /Jump to Cue/i });
+    fireEvent.click(jumpBtn);
+
+    expect(onSelectLecture).toHaveBeenCalledWith('vid_jump_99', '03:10', 'data-structures');
+  });
 });
+

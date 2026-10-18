@@ -183,4 +183,53 @@ describe('HomeView', () => {
     expect(screen.queryByPlaceholderText(/Add video URL or ID to this course/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Add to Course/i })).not.toBeInTheDocument();
   });
+
+  it('navigates to the expected lecture via handleTranscribe when Jump to Cue is clicked in QuizRemindersCard', async () => {
+    const handleTranscribe = vi.fn();
+    const handleCueClick = vi.fn();
+
+    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (String(url).includes('/api/reminders/upcoming-quizzes')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            quizzes: [
+              {
+                id: 'pq_1',
+                video_id: '11223344',
+                course_name: 'Data Structures',
+                course_slug: 'data-structures',
+                quiz_title: 'Pop Quiz 1',
+                predicted_date: 'This Friday',
+                cue_time: '03:10',
+                cue_text: 'We will have our first pop quiz this Friday.'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <HomeView
+        {...baseProps}
+        handleTranscribe={handleTranscribe}
+        handleCueClick={handleCueClick}
+      />
+    );
+
+    const jumpBtn = await screen.findByRole('button', { name: /Jump to Cue/i });
+    fireEvent.click(jumpBtn);
+
+    expect(handleTranscribe).toHaveBeenCalledWith(
+      '11223344',
+      true,
+      'Data Structures',
+      false,
+      '03:10'
+    );
+  });
 });
+

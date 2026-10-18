@@ -1075,14 +1075,27 @@ def generate_and_store_comprehensive_summary(
     return db_manager.get_lecture_summary(video_id, "comprehensive", user_email=user_email)
 
 
-def predict_and_store_quizzes(video_id: str, title: str, cues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def predict_and_store_quizzes(
+    video_id: str,
+    title: str,
+    cues: List[Dict[str, Any]],
+    course_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Predict upcoming quizzes and dates from transcript cues using LLM, and persist."""
     try:
-        course_name = extract_course_name(title)
-        course_slug = to_course_slug(course_name)
+        resolved_course = (course_name or "").strip()
+        if not resolved_course:
+            saved_vid = db_manager.get_saved_video(video_id)
+            if saved_vid and saved_vid.get("course_name"):
+                resolved_course = str(saved_vid["course_name"]).strip()
+        if not resolved_course:
+            resolved_course = extract_course_name(title).strip()
+        if resolved_course:
+            resolved_course = db_manager.resolve_course_canonical_name(resolved_course)
+        course_slug = to_course_slug(resolved_course)
         predictions = predict_quizzes_from_cues(cues, lecture_title=title, video_id=video_id)
         if predictions:
-            saved = db_manager.save_predicted_quizzes(video_id, course_slug, course_name, predictions)
+            saved = db_manager.save_predicted_quizzes(video_id, course_slug, resolved_course, predictions)
             print(f"🎯 [Quiz Predictor] Successfully extracted and saved {len(saved)} predicted quizzes for '{video_id}'.")
             return saved
         else:
@@ -1092,7 +1105,13 @@ def predict_and_store_quizzes(video_id: str, title: str, cues: List[Dict[str, An
     return []
 
 
-def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str, str]], user_email: Optional[str] = None):
+def _async_post_import_indexing(
+    clean_vid: str,
+    title: str,
+    cues: List[Dict[str, str]],
+    user_email: Optional[str] = None,
+    course_name: Optional[str] = None,
+):
     """
     Background worker for offloading Algolia indexing, Pinecone vector upsert,
     chapter summary generation, and full lecture study notes synthesis so raw
@@ -1115,7 +1134,7 @@ def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str,
     except Exception as s_err:
         logger.warning(f"[Background Summary Sections Notice] {clean_vid}: {s_err}")
     try:
-        predict_and_store_quizzes(clean_vid, title, cues)
+        predict_and_store_quizzes(clean_vid, title, cues, course_name=course_name)
     except Exception as pq_err:
         logger.warning(f"[Background Quiz Predictor Notice] {clean_vid}: {pq_err}")
     try:
@@ -1130,7 +1149,7 @@ def _async_post_import_indexing(clean_vid: str, title: str, cues: List[Dict[str,
                     summary_record = generate_and_store_comprehensive_summary(clean_vid, title, cues, user_email)
                     print(f"✅ [Background Auto-Summary] Successfully stored comprehensive summary for video '{clean_vid}'.")
                     if summary_record:
-                        course_title = extract_course_name(title)
+                        course_title = (course_name or extract_course_name(title)).strip()
                         if summary_record.get("markdownText"):
                             trigger_background_podcast_generation(
                                 video_id=clean_vid,
@@ -1316,7 +1335,7 @@ def process_lecture_import(
     if transcript_available:
         threading.Thread(
             target=_async_post_import_indexing,
-            args=(clean_vid, title, cues, email),
+            args=(clean_vid, title, cues, email, derived_course),
             daemon=True
         ).start()
 
@@ -1645,7 +1664,12 @@ def trigger_lecture_quiz_prediction_endpoint(video_id: str):
     saved = db_manager.get_saved_video(vid)
     if not saved or not saved.get("cues"):
         raise HTTPException(status_code=404, detail=f"No cues found for lecture {vid}.")
-    quizzes = predict_and_store_quizzes(vid, saved.get("title", f"Lecture {vid}"), saved["cues"])
+    quizzes = predict_and_store_quizzes(
+        vid,
+        saved.get("title", f"Lecture {vid}"),
+        saved["cues"],
+        course_name=saved.get("course_name"),
+    )
     return {
         "status": "success",
         "video_id": vid,

@@ -426,7 +426,16 @@ export default function HomeView({
       {/* LEVEL 1: COURSE CARDS VIEW & ACADEMIC CALENDAR & PREDICTED QUIZZES */}
       <QuizRemindersCard
         currentTheme={currentTheme}
-        onSelectLecture={handleCueClick}
+        onSelectLecture={(vid, ts, cName) => {
+          if (!vid) return;
+          const targetCourse = cName || activeCourseData?.course_name || selectedCourse || null;
+          if (typeof handleTranscribe === 'function') {
+            handleTranscribe(vid, true, targetCourse, false, ts);
+          }
+          if (typeof handleCueClick === 'function' && ts) {
+            setTimeout(() => handleCueClick(ts), 350);
+          }
+        }}
         selectedCourse={selectedCourse}
       />
 

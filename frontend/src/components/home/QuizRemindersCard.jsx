@@ -183,9 +183,15 @@ export default function QuizRemindersCard({
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         {displayedQuizzes.map((quiz) => {
           const qId = quiz.id;
+          const qVideoId = quiz.video_id || quiz.videoId || '';
           const qTitle = quiz.quiz_title || quiz.quizTitle || 'Upcoming Quiz';
           const qDate = quiz.predicted_date || quiz.predictedDate || 'Date TBD';
-          const qCourse = quiz.course_name || quiz.courseName || 'Course';
+          const rawSlug = quiz.course_slug || quiz.courseSlug || '';
+          const slugLabel = rawSlug
+            ? rawSlug.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+            : '';
+          const qCourse = quiz.course_name || quiz.courseName || slugLabel || 'Course';
+          const qLectureTitle = quiz.lecture_title || quiz.lectureTitle || '';
           const qTime = quiz.cue_time || quiz.cueTime || '';
           const qText = quiz.cue_text || quiz.cueText || '';
           const qConfidence = Math.round((quiz.confidence || 0.8) * 100);
@@ -223,10 +229,16 @@ export default function QuizRemindersCard({
                       height: 20,
                       fontSize: '0.7rem',
                       fontWeight: 600,
-                      bgcolor: 'rgba(255, 255, 255, 0.06)',
-                      color: p.textSecondary
+                      bgcolor: p.badgeBg || 'rgba(56, 189, 248, 0.15)',
+                      color: p.badgeColor || p.primary,
+                      border: `1px solid ${p.badgeBorder || 'rgba(56, 189, 248, 0.3)'}`
                     }}
                   />
+                  {qLectureTitle && qLectureTitle !== qCourse && (
+                    <Typography variant="caption" sx={{ color: p.textSecondary, fontWeight: 500 }}>
+                      • {qLectureTitle}
+                    </Typography>
+                  )}
                   <Chip
                     label={`${qConfidence}% confidence`}
                     size="small"
@@ -306,12 +318,12 @@ export default function QuizRemindersCard({
                   </Button>
                 </Tooltip>
 
-                {onSelectLecture && quiz.video_id && (
+                {onSelectLecture && qVideoId && (
                   <Button
                     size="small"
                     variant="outlined"
                     startIcon={<BookOpen size={13} />}
-                    onClick={() => onSelectLecture(quiz.video_id, qTime)}
+                    onClick={() => onSelectLecture(qVideoId, qTime, quiz.course_name || quiz.courseName || rawSlug)}
                     sx={{
                       textTransform: 'none',
                       fontSize: '0.75rem',

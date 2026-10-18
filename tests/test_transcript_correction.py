@@ -204,32 +204,33 @@ def test_transcript_annotations_camel_and_snake_parity():
 
 def test_db_manager_annotation_methods_direct():
     video_id = "test_vid_direct_db_ann"
-    ann = db_manager.add_annotation(
-        video_id=video_id,
-        user_email="direct_user@example.com",
-        selected_text="matrix rank",
-        annotation_type="highlight",
-        cue_id="42",
-        start_seconds=22.5,
-        end_seconds=27.5,
-        color="pink"
-    )
-    assert ann is not None
-    assert ann["selectedText"] == "matrix rank"
-    assert ann["selected_text"] == "matrix rank"
-    assert ann["annotationType"] == "highlight"
-    assert ann["annotation_type"] == "highlight"
-    assert ann["cueId"] == 42
-    assert ann["cue_id"] == 42
-    assert ann["color"] == "pink"
+    with patch.object(db_manager, "_get_connection", side_effect=Exception("mocked")):
+        ann = db_manager.add_annotation(
+            video_id=video_id,
+            user_email="direct_user@example.com",
+            selected_text="matrix rank",
+            annotation_type="highlight",
+            cue_id="42",
+            start_seconds=22.5,
+            end_seconds=27.5,
+            color="pink"
+        )
+        assert ann is not None
+        assert ann["selectedText"] == "matrix rank"
+        assert ann["selected_text"] == "matrix rank"
+        assert ann["annotationType"] == "highlight"
+        assert ann["annotation_type"] == "highlight"
+        assert ann["cueId"] == 42
+        assert ann["cue_id"] == 42
+        assert ann["color"] == "pink"
 
-    # Query annotations
-    all_ann = db_manager.get_annotations(video_id=video_id)
-    assert any(a["id"] == ann["id"] for a in all_ann)
+        # Query annotations
+        all_ann = db_manager.get_annotations(video_id=video_id)
+        assert any(a["id"] == ann["id"] for a in all_ann)
 
-    # Delete annotation
-    deleted = db_manager.delete_annotation(ann["id"])
-    assert deleted is True
+        # Delete annotation
+        deleted = db_manager.delete_annotation(ann["id"])
+        assert deleted is True
 
 
 def test_explain_selection_endpoint():

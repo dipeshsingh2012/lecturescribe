@@ -537,6 +537,17 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_pred_quiz_course ON lecturescribe_predicted_quizzes(course_slug);
                         CREATE INDEX IF NOT EXISTS idx_pred_quiz_status ON lecturescribe_predicted_quizzes(status);
 
+                        DELETE FROM lecturescribe_predicted_quizzes
+                        WHERE video_id IN ('test_vid_db_999', 'test_api_vid_888');
+
+                        UPDATE lecturescribe_predicted_quizzes pq
+                        SET course_name = v.course_name
+                        FROM lecturescribe_videos v
+                        WHERE pq.video_id = v.video_id
+                          AND v.course_name IS NOT NULL
+                          AND v.course_name != ''
+                          AND pq.course_name != v.course_name;
+
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_chat_logs (
                             id SERIAL PRIMARY KEY,
                             course_slug VARCHAR(255) NOT NULL,
@@ -1109,17 +1120,18 @@ class RelationalDBManager:
                             cue_tuples
                         )
 
-                    # Upsert chapter sections into unified lecturescribe_lecture_summaries
-                    cursor.execute("""
-                        INSERT INTO lecturescribe_lecture_summaries (
-                            video_id, user_email, summary_type, markdown_text, submission_text,
-                            sections_json, is_outdated, created_at, updated_at
-                        )
-                        VALUES (%s, %s, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
-                        ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
-                        SET sections_json = EXCLUDED.sections_json,
-                            updated_at = NOW();
-                    """, (video_id, clean_email, json.dumps(summary_sections)))
+                    # Upsert chapter sections into unified lecturescribe_lecture_summaries only if non-empty
+                    if summary_sections:
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_lecture_summaries (
+                                video_id, user_email, summary_type, markdown_text, submission_text,
+                                sections_json, is_outdated, created_at, updated_at
+                            )
+                            VALUES (%s, %s, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
+                            ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
+                            SET sections_json = EXCLUDED.sections_json,
+                                updated_at = NOW();
+                        """, (video_id, clean_email, json.dumps(summary_sections)))
                     conn.commit()
             print(f"[PostgreSQL] Saved video '{video_id}' with {len(cues)} cues and summary.")
         finally:
@@ -4731,6 +4743,24 @@ class RelationalDBManager:
 
         return saved
 
+    def delete_predicted_quizzes(self, video_id: str) -> None:
+        """Delete predicted quizzes for a given video_id from memory and PostgreSQL."""
+        self._predicted_quizzes_memory = [
+            pq for pq in self._predicted_quizzes_memory if pq.get("video_id") != video_id
+        ]
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM lecturescribe_predicted_quizzes WHERE video_id = %s;", (video_id,))
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Notice] delete_predicted_quizzes error: {e}")
+        finally:
+            if conn:
+                conn.close()
+
     def get_predicted_quizzes(
         self,
         video_id: Optional[str] = None,
@@ -4744,38 +4774,66 @@ class RelationalDBManager:
             with conn:
                 with conn.cursor() as cursor:
                     query = """
-                        SELECT id, video_id, course_slug, course_name, quiz_title,
-                               predicted_date, predicted_date_iso, confidence,
-                               cue_time, cue_text, status, created_at, updated_at
-                        FROM lecturescribe_predicted_quizzes
+                        SELECT pq.id, pq.video_id, pq.course_slug, pq.course_name, pq.quiz_title,
+                               pq.predicted_date, pq.predicted_date_iso, pq.confidence,
+                               pq.cue_time, pq.cue_text, pq.status, pq.created_at, pq.updated_at,
+                               v.course_name AS video_course_name, v.title AS lecture_title,
+                               (
+                                   SELECT ul.course_name
+                                   FROM lecturescribe_user_library ul
+                                   WHERE ul.video_id = pq.video_id
+                                     AND ul.course_name IS NOT NULL
+                                     AND ul.course_name != ''
+                                   ORDER BY ul.last_viewed_at DESC NULLS LAST
+                                   LIMIT 1
+                               ) AS library_course_name
+                        FROM lecturescribe_predicted_quizzes pq
+                        LEFT JOIN lecturescribe_videos v ON pq.video_id = v.video_id
                         WHERE 1=1
                     """
                     params = []
                     if video_id:
-                        query += " AND video_id = %s"
+                        query += " AND pq.video_id = %s"
                         params.append(video_id)
                     if course_slug:
-                        query += " AND course_slug = %s"
-                        params.append(course_slug)
+                        query += " AND (pq.course_slug = %s OR LOWER(COALESCE(v.course_name, '')) = LOWER(%s))"
+                        params.extend([course_slug, course_slug.replace("-", " ")])
                     if status:
                         if status == "active":
-                            query += " AND status != 'dismissed'"
+                            query += " AND pq.status != 'dismissed'"
                         else:
-                            query += " AND status = %s"
+                            query += " AND pq.status = %s"
                             params.append(status)
-                    query += " ORDER BY created_at DESC;"
+                    query += " ORDER BY pq.created_at DESC;"
                     cursor.execute(query, tuple(params))
                     rows = cursor.fetchall()
                     results = []
                     for row in rows:
+                        raw_lib_course = (row.get("library_course_name") or "").strip()
+                        raw_v_course = (row.get("video_course_name") or "").strip()
+                        raw_pq_course = (row.get("course_name") or "").strip()
+                        lecture_title = (row.get("lecture_title") or "").strip()
+                        resolved_course = (
+                            raw_lib_course
+                            or raw_v_course
+                            or raw_pq_course
+                            or (extract_course_name(lecture_title) if lecture_title else "")
+                        ).strip()
+                        resolved_slug = (
+                            to_course_slug(resolved_course)
+                            if resolved_course
+                            else (row.get("course_slug") or "")
+                        )
                         results.append({
                             "id": row["id"],
                             "video_id": row["video_id"],
                             "videoId": row["video_id"],
-                            "course_slug": row["course_slug"],
-                            "courseSlug": row["course_slug"],
-                            "course_name": row["course_name"],
-                            "courseName": row["course_name"],
+                            "course_slug": resolved_slug,
+                            "courseSlug": resolved_slug,
+                            "course_name": resolved_course,
+                            "courseName": resolved_course,
+                            "lecture_title": lecture_title,
+                            "lectureTitle": lecture_title,
                             "quiz_title": row["quiz_title"],
                             "quizTitle": row["quiz_title"],
                             "predicted_date": row["predicted_date"],

@@ -51,7 +51,8 @@ export const extractVideoId = (url) => {
 
   // Match optional path segments ending with the digit ID
   const match = trimmed.match(/(?:^|\/)(?:channels\/[^/]+\/|groups\/[^/]+\/videos\/|manage\/videos\/|video\/)?(\d+)(?:[?/#]|$)/);
-  return match ? match[1] : trimmed;
+  if (match) return match[1];
+  return trimmed.split(/[?#]/)[0].trim();
 };
 
 export const parseTimestampToSeconds = (ts) => {

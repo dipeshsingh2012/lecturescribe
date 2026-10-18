@@ -76,29 +76,32 @@ def test_db_manager_predicted_quizzes():
         }
     ]
 
-    saved = db_manager.save_predicted_quizzes(
-        video_id=video_id,
-        course_slug="cs101-algorithms",
-        course_name="CS101 Algorithms",
-        quizzes=quizzes
-    )
-    assert len(saved) == 1
-    quiz_id = saved[0]["id"]
-    assert saved[0]["quiz_title"] == "Midterm Exam Quiz"
+    try:
+        saved = db_manager.save_predicted_quizzes(
+            video_id=video_id,
+            course_slug="cs101-algorithms",
+            course_name="CS101 Algorithms",
+            quizzes=quizzes
+        )
+        assert len(saved) == 1
+        quiz_id = saved[0]["id"]
+        assert saved[0]["quiz_title"] == "Midterm Exam Quiz"
 
-    # Query by video
-    fetched = db_manager.get_predicted_quizzes(video_id=video_id)
-    assert len(fetched) >= 1
-    assert any(q["id"] == quiz_id for q in fetched)
+        # Query by video
+        fetched = db_manager.get_predicted_quizzes(video_id=video_id)
+        assert len(fetched) >= 1
+        assert any(q["id"] == quiz_id for q in fetched)
 
-    # Update status
-    updated = db_manager.update_predicted_quiz_status(quiz_id, "dismissed")
-    assert updated is not None
-    assert updated["status"] == "dismissed"
+        # Update status
+        updated = db_manager.update_predicted_quiz_status(quiz_id, "dismissed")
+        assert updated is not None
+        assert updated["status"] == "dismissed"
 
-    # Active filter should omit dismissed
-    active = db_manager.get_predicted_quizzes(video_id=video_id, status="active")
-    assert not any(q["id"] == quiz_id for q in active)
+        # Active filter should omit dismissed
+        active = db_manager.get_predicted_quizzes(video_id=video_id, status="active")
+        assert not any(q["id"] == quiz_id for q in active)
+    finally:
+        db_manager.delete_predicted_quizzes(video_id)
 
 
 def test_predicted_quizzes_api_endpoints():
@@ -113,29 +116,32 @@ def test_predicted_quizzes_api_endpoints():
             "cue_text": "We will have our first pop quiz this Friday."
         }
     ]
-    saved = db_manager.save_predicted_quizzes(
-        video_id=video_id,
-        course_slug="data-structures",
-        course_name="Data Structures",
-        quizzes=quizzes
-    )
-    quiz_id = saved[0]["id"]
+    try:
+        saved = db_manager.save_predicted_quizzes(
+            video_id=video_id,
+            course_slug="data-structures",
+            course_name="Data Structures",
+            quizzes=quizzes
+        )
+        quiz_id = saved[0]["id"]
 
-    # 1. GET /api/reminders/upcoming-quizzes
-    res = client.get("/api/reminders/upcoming-quizzes")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "success"
-    assert any(q["id"] == quiz_id for q in data["quizzes"])
+        # 1. GET /api/reminders/upcoming-quizzes
+        res = client.get("/api/reminders/upcoming-quizzes")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert any(q["id"] == quiz_id for q in data["quizzes"])
 
-    # 2. GET /api/lecture/{video_id}/predicted-quizzes
-    res_lecture = client.get(f"/api/lecture/{video_id}/predicted-quizzes")
-    assert res_lecture.status_code == 200
-    data_lecture = res_lecture.json()
-    assert data_lecture["video_id"] == video_id
-    assert len(data_lecture["quizzes"]) >= 1
+        # 2. GET /api/lecture/{video_id}/predicted-quizzes
+        res_lecture = client.get(f"/api/lecture/{video_id}/predicted-quizzes")
+        assert res_lecture.status_code == 200
+        data_lecture = res_lecture.json()
+        assert data_lecture["video_id"] == video_id
+        assert len(data_lecture["quizzes"]) >= 1
 
-    # 3. PATCH /api/reminders/quiz/{quiz_id}
-    res_patch = client.patch(f"/api/reminders/quiz/{quiz_id}", json={"status": "confirmed"})
-    assert res_patch.status_code == 200
-    assert res_patch.json()["quiz"]["status"] == "confirmed"
+        # 3. PATCH /api/reminders/quiz/{quiz_id}
+        res_patch = client.patch(f"/api/reminders/quiz/{quiz_id}", json={"status": "confirmed"})
+        assert res_patch.status_code == 200
+        assert res_patch.json()["quiz"]["status"] == "confirmed"
+    finally:
+        db_manager.delete_predicted_quizzes(video_id)

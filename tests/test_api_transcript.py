@@ -18,6 +18,21 @@ Welcome to Robotics 101.
 00:00:05.000 --> 00:00:09.000
 Today we discuss forward kinematics.
 """
+        for p in (
+            patch("backend.main.db_manager.record_user_lecture", return_value=True),
+            patch("backend.main.db_manager.get_drive_folder_url", return_value=None),
+            patch("backend.main.db_manager.get_lecture_progress", return_value=None),
+            patch(
+                "backend.main.db_manager.resolve_course_canonical_name",
+                side_effect=lambda c: c.replace("-", " ").title() if "-" in str(c) and str(c) == str(c).lower() else str(c),
+            ),
+            patch("backend.main.redis_cache.update_user_course", return_value=True),
+            patch("backend.main._async_post_import_indexing"),
+            patch("backend.main._trigger_background_gcs_upload", return_value=False),
+            patch("backend.main.gcs_storage_service.find_lecture_video", return_value=None),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
 
     @patch("backend.main.db_manager.get_saved_video")
     @patch("backend.main.fetch_player_config")

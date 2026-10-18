@@ -3283,6 +3283,322 @@ class RelationalDBManager:
         finally:
             conn.close()
 
+    def delete_course(self, course_identifier: str, user_email: str) -> Dict[str, Any]:
+        """
+        Full purge of a course for a user: removes the course from lecturescribe_user_library,
+        deletes all course-level notes, resources, readings, quizzes, quiz history, predicted
+        quizzes, tutor chat logs, and deletes the course's videos from lecturescribe_videos
+        (cascading to cues, summaries, lecture quizzes, annotations, and chat logs).
+        Returns metadata including deleted_video_ids and deleted_blobs for cache/GCS cleanup.
+        """
+        clean_id = (course_identifier or "").strip()
+        clean_email = (user_email or "").strip().lower()
+        if not clean_id or not clean_email:
+            raise ValueError("course_name and user_email are required.")
+
+        canonical_name = self.resolve_course_canonical_name(clean_id)
+        canonical_slug = to_course_slug(canonical_name)
+        raw_slug = to_course_slug(clean_id)
+        gcs_slug = to_gcs_course_slug(canonical_name)
+
+        slug_candidates = list({s for s in (canonical_slug, raw_slug, gcs_slug) if s})
+        name_candidates = list({n.lower() for n in (canonical_name, clean_id) if n})
+
+        video_ids_set = set()
+        blobs_set = set()
+        deleted_rows_total = 0
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    # 1. Gather video_ids from lecturescribe_user_library for this user
+                    cursor.execute(
+                        """
+                        SELECT id, video_id, title, course_name
+                        FROM lecturescribe_user_library
+                        WHERE user_email = %s;
+                        """,
+                        (clean_email,),
+                    )
+                    lib_rows = cursor.fetchall() or []
+                    matching_lib_ids = []
+                    for r in lib_rows:
+                        c_raw = (r.get("course_name") or extract_course_name(r.get("title") or "")).strip()
+                        c_slug = to_course_slug(c_raw)
+                        c_gcs = to_gcs_course_slug(c_raw)
+                        if (
+                            c_raw.lower() in name_candidates
+                            or c_slug in slug_candidates
+                            or c_gcs in slug_candidates
+                        ):
+                            matching_lib_ids.append(r["id"])
+                            if r.get("video_id"):
+                                video_ids_set.add(str(r["video_id"]))
+                            if r.get("course_name"):
+                                name_candidates = list(set(name_candidates) | {r["course_name"].strip().lower()})
+                                slug_candidates = list(set(slug_candidates) | {to_course_slug(r["course_name"])})
+
+                    # 2. Gather video_ids and gcs_video_blob from lecturescribe_videos matching course
+                    cursor.execute(
+                        """
+                        SELECT video_id, gcs_video_blob, course_name
+                        FROM lecturescribe_videos
+                        WHERE LOWER(COALESCE(course_name, '')) = ANY(%s)
+                           OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s)
+                           OR video_id = ANY(%s);
+                        """,
+                        (name_candidates, slug_candidates, list(video_ids_set)),
+                    )
+                    for r in cursor.fetchall() or []:
+                        if r.get("video_id"):
+                            video_ids_set.add(str(r["video_id"]))
+                        if r.get("gcs_video_blob"):
+                            blobs_set.add(r["gcs_video_blob"])
+                        if r.get("course_name"):
+                            name_candidates = list(set(name_candidates) | {r["course_name"].strip().lower()})
+                            slug_candidates = list(set(slug_candidates) | {to_course_slug(r["course_name"])})
+
+                    video_ids_list = sorted(video_ids_set)
+
+                    # 3. Gather GCS blob paths from course notes & resources before deleting
+                    cursor.execute(
+                        """
+                        SELECT blob_name FROM lecturescribe_course_notes
+                        WHERE user_email = %s
+                          AND (
+                              LOWER(COALESCE(course_name, '')) = ANY(%s)
+                              OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s)
+                          );
+                        """,
+                        (clean_email, name_candidates, slug_candidates),
+                    )
+                    for r in cursor.fetchall() or []:
+                        if r.get("blob_name"):
+                            blobs_set.add(r["blob_name"])
+
+                    cursor.execute(
+                        """
+                        SELECT blob_name FROM lecturescribe_resources
+                        WHERE LOWER(COALESCE(course_name, '')) = ANY(%s)
+                           OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s)
+                           OR video_id = ANY(%s);
+                        """,
+                        (name_candidates, slug_candidates, video_ids_list),
+                    )
+                    for r in cursor.fetchall() or []:
+                        if r.get("blob_name"):
+                            blobs_set.add(r["blob_name"])
+
+                    # 4. Delete from lecturescribe_user_library
+                    if matching_lib_ids or video_ids_list:
+                        cursor.execute(
+                            """
+                            DELETE FROM lecturescribe_user_library
+                            WHERE id = ANY(%s)
+                               OR (user_email = %s AND video_id = ANY(%s))
+                               OR (
+                                   user_email = %s
+                                   AND (
+                                       LOWER(COALESCE(course_name, '')) = ANY(%s)
+                                       OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s)
+                                   )
+                               );
+                            """,
+                            (matching_lib_ids, clean_email, video_ids_list, clean_email, name_candidates, slug_candidates),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            DELETE FROM lecturescribe_user_library
+                            WHERE user_email = %s
+                              AND (
+                                  LOWER(COALESCE(course_name, '')) = ANY(%s)
+                                  OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s)
+                              );
+                            """,
+                            (clean_email, name_candidates, slug_candidates),
+                        )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    # 5. Delete course notes, resources, readings, quizzes, quiz history, explanations, predicted quizzes, course chat logs
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_course_notes
+                        WHERE user_email = %s
+                          AND (
+                              LOWER(COALESCE(course_name, '')) = ANY(%s)
+                              OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s)
+                          );
+                        """,
+                        (clean_email, name_candidates, slug_candidates),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_resources
+                        WHERE LOWER(COALESCE(course_name, '')) = ANY(%s)
+                           OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s)
+                           OR video_id = ANY(%s);
+                        """,
+                        (name_candidates, slug_candidates, video_ids_list),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_course_readings
+                        WHERE LOWER(COALESCE(course_name, '')) = ANY(%s)
+                           OR TRIM(BOTH '-' FROM regexp_replace(LOWER(COALESCE(course_name, '')), '[^a-z0-9]+', '-', 'g')) = ANY(%s);
+                        """,
+                        (name_candidates, slug_candidates),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_course_quizzes
+                        WHERE course_slug = ANY(%s)
+                           OR LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """,
+                        (slug_candidates, name_candidates),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_course_quiz_history
+                        WHERE course_slug = ANY(%s)
+                           OR LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """,
+                        (slug_candidates, name_candidates),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_course_quiz_explanations
+                        WHERE course_slug = ANY(%s);
+                        """,
+                        (slug_candidates,),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_predicted_quizzes
+                        WHERE course_slug = ANY(%s)
+                           OR LOWER(COALESCE(course_name, '')) = ANY(%s)
+                           OR video_id = ANY(%s);
+                        """,
+                        (slug_candidates, name_candidates, video_ids_list),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_course_chat_logs
+                        WHERE course_slug = ANY(%s)
+                           OR LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """,
+                        (slug_candidates, name_candidates),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
+                        DELETE FROM lecturescribe_quiz_attempts
+                        WHERE (quiz_type = 'course' AND target_id = ANY(%s))
+                           OR (quiz_type = 'lecture' AND target_id = ANY(%s));
+                        """,
+                        (slug_candidates, video_ids_list),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    if video_ids_list:
+                        cursor.execute(
+                            """
+                            DELETE FROM lecturescribe_lecture_progress
+                            WHERE video_id = ANY(%s);
+                            """,
+                            (video_ids_list,),
+                        )
+                        deleted_rows_total += max(0, cursor.rowcount)
+
+                        cursor.execute(
+                            """
+                            DELETE FROM lecturescribe_videos
+                            WHERE video_id = ANY(%s);
+                            """,
+                            (video_ids_list,),
+                        )
+                        deleted_rows_total += max(0, cursor.rowcount)
+
+                    conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+        # Clean up in-memory L1 caches
+        for vid in list(self._memory_cache.keys()):
+            v = self._memory_cache.get(vid) or {}
+            c_name = (v.get("course_name") or "").strip()
+            if vid in video_ids_set or c_name.lower() in name_candidates or to_course_slug(c_name) in slug_candidates:
+                self._memory_cache.pop(vid, None)
+                video_ids_set.add(vid)
+
+        for vid in video_ids_set:
+            self._quiz_memory_cache.pop(vid, None)
+            self._quiz_explanations_memory_cache.pop(vid, None)
+
+        for s in slug_candidates:
+            self._course_quiz_memory_cache.pop(s, None)
+            self._course_quiz_explanations_memory.pop(s, None)
+
+        self._resources_memory_cache = [
+            r for r in self._resources_memory_cache
+            if str(r.get("video_id") or "") not in video_ids_set
+            and (r.get("course_name") or "").strip().lower() not in name_candidates
+            and to_course_slug(r.get("course_name") or "") not in slug_candidates
+        ]
+        self._notes_memory_cache = [
+            n for n in self._notes_memory_cache
+            if (n.get("course_name") or "").strip().lower() not in name_candidates
+            and to_course_slug(n.get("course_name") or "") not in slug_candidates
+        ]
+        self._readings_memory_cache = [
+            r for r in self._readings_memory_cache
+            if (r.get("course_name") or "").strip().lower() not in name_candidates
+            and to_course_slug(r.get("course_name") or "") not in slug_candidates
+        ]
+        self._course_quiz_history_memory = [
+            h for h in self._course_quiz_history_memory
+            if (h.get("course_slug") or "") not in slug_candidates
+            and (h.get("course_name") or "").strip().lower() not in name_candidates
+        ]
+        self._predicted_quizzes_memory = [
+            p for p in self._predicted_quizzes_memory
+            if str(p.get("video_id") or "") not in video_ids_set
+            and (p.get("course_slug") or "") not in slug_candidates
+        ]
+        self._annotations_memory_cache = [
+            a for a in self._annotations_memory_cache
+            if str(a.get("video_id") or a.get("videoId") or "") not in video_ids_set
+        ]
+        for k in list(self._progress_memory_cache.keys()):
+            if isinstance(k, tuple) and len(k) == 2 and str(k[1]) in video_ids_set:
+                self._progress_memory_cache.pop(k, None)
+
+        return {
+            "deleted": bool(deleted_rows_total > 0 or video_ids_set),
+            "course_name": canonical_name,
+            "course_slug": canonical_slug,
+            "deleted_video_ids": sorted(video_ids_set),
+            "deleted_blobs": sorted(blobs_set),
+        }
+
     def create_resource(
         self,
         course_name: str,

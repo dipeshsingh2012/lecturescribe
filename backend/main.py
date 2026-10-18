@@ -2664,6 +2664,41 @@ def get_course_details(
     return {"status": "success", "course": course}
 
 
+@app.delete("/api/course/{course_name}")
+def delete_course_endpoint(
+    course_name: str,
+    email: str = Query(..., description="User Google email")
+):
+    """Full purge of a course and all its associated lectures, notes, resources, quizzes, readings, and chat logs."""
+    clean_name = (course_name or "").strip()
+    clean_email = (email or "").strip().lower()
+    if not clean_name or not clean_email:
+        raise HTTPException(status_code=400, detail="course_name and email are required.")
+
+    result = db_manager.delete_course(clean_name, clean_email)
+
+    # Best-effort delete associated GCS blobs (notes, resources, self-hosted videos)
+    for blob_name in result.get("deleted_blobs") or []:
+        try:
+            gcs_storage_service.delete_blob(blob_name)
+        except Exception as gcs_err:
+            print(f"[GCS Cleanup Notice] Could not delete blob '{blob_name}': {gcs_err}")
+
+    # Invalidate Redis user courses/library, course quiz, and per-video caches
+    if redis_cache:
+        redis_cache.update_user_course(clean_email, result.get("course_name") or clean_name, lecture_entry=None)
+        for vid in result.get("deleted_video_ids") or []:
+            redis_cache.invalidate_video(vid)
+
+    return {
+        "status": "success",
+        "deleted": result.get("deleted", False),
+        "course_name": result.get("course_name", clean_name),
+        "course_slug": result.get("course_slug", to_course_slug(clean_name)),
+        "deleted_video_ids": result.get("deleted_video_ids", []),
+    }
+
+
 @app.get("/api/course/{course_name}/quiz")
 @app.post("/api/course/{course_name}/quiz")
 def get_or_generate_course_quiz(

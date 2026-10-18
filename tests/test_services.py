@@ -337,6 +337,71 @@ class TestServices(unittest.TestCase):
             finally:
                 db_manager._memory_cache.pop("201", None)
 
+    def test_delete_course_endpoint(self):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        client = TestClient(app)
+        mock_result = {
+            "deleted": True,
+            "course_name": "1.2 Machine Learning Paradigms",
+            "course_slug": "1-2-machine-learning-paradigms",
+            "deleted_video_ids": ["101", "102"],
+            "deleted_blobs": ["courses/ml/notes/n1.txt", "courses/ml/resources/slides.pdf"],
+        }
+        with (
+            patch("backend.main.db_manager.delete_course", return_value=mock_result) as mock_del_course,
+            patch("backend.main.gcs_storage_service.delete_blob") as mock_del_blob,
+            patch("backend.main.redis_cache.update_user_course") as mock_redis_course,
+            patch("backend.main.redis_cache.invalidate_video") as mock_redis_vid,
+        ):
+            resp = client.delete("/api/course/1.2%20Machine%20Learning%20Paradigms?email=student@example.com")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["status"], "success")
+            self.assertTrue(data["deleted"])
+            self.assertEqual(data["course_name"], "1.2 Machine Learning Paradigms")
+            self.assertEqual(data["deleted_video_ids"], ["101", "102"])
+            mock_del_course.assert_called_once_with("1.2 Machine Learning Paradigms", "student@example.com")
+            self.assertEqual(mock_del_blob.call_count, 2)
+            mock_redis_course.assert_called_once_with(
+                "student@example.com", "1.2 Machine Learning Paradigms", lecture_entry=None
+            )
+            self.assertEqual(mock_redis_vid.call_count, 2)
+
+    def test_db_manager_delete_course_full_purge(self):
+        from unittest.mock import MagicMock, patch
+        from backend.database import db_manager
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchall.side_effect = [
+            [{"id": 10, "video_id": "v1", "title": "ML Session 1", "course_name": "Machine Learning"}],
+            [{"video_id": "v1", "gcs_video_blob": "courses/ml/videos/v1.mp4", "course_name": "Machine Learning"}],
+            [{"blob_name": "courses/ml/notes/note_1.txt"}],
+            [{"blob_name": "courses/ml/resources/doc.pdf"}],
+        ]
+
+        db_manager._memory_cache["v1"] = {"title": "ML Session 1", "course_name": "Machine Learning"}
+        with (
+            patch.object(db_manager, "resolve_course_canonical_name", return_value="Machine Learning"),
+            patch.object(db_manager, "_get_connection", return_value=mock_conn),
+        ):
+            res = db_manager.delete_course("Machine Learning", "student@example.com")
+
+        self.assertTrue(res["deleted"])
+        self.assertEqual(res["course_name"], "Machine Learning")
+        self.assertEqual(res["course_slug"], "machine-learning")
+        self.assertEqual(res["deleted_video_ids"], ["v1"])
+        self.assertIn("courses/ml/videos/v1.mp4", res["deleted_blobs"])
+        self.assertIn("courses/ml/notes/note_1.txt", res["deleted_blobs"])
+        self.assertIn("courses/ml/resources/doc.pdf", res["deleted_blobs"])
+        self.assertNotIn("v1", db_manager._memory_cache)
+
 if __name__ == "__main__":
     unittest.main()
 

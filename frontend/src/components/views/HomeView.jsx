@@ -81,6 +81,7 @@ export default function HomeView({
   handleDeleteResource,
   courseLoading,
   handleDeleteFromLibrary,
+  handleDeleteCourse,
   courseNotes = [],
   courseNotesLoading = false,
   onCreateNewNote,
@@ -445,6 +446,7 @@ export default function HomeView({
           <CourseGrid
             filteredCourses={filteredCourses}
             handleSelectCourse={handleSelectCourse}
+            handleDeleteCourse={handleDeleteCourse}
             librarySearch={librarySearch}
             currentTheme={currentTheme}
           />

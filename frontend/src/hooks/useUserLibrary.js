@@ -48,10 +48,52 @@ export function useUserLibrary(userEmail) {
       });
       if (res.ok) {
         setUserLibrary(prev => prev.filter(item => item.video_id !== videoId));
+        setUserCourses(prev =>
+          prev
+            .map(c => {
+              const filteredLectures = (c.lectures || []).filter(
+                l => String(l.video_id || l.videoId || '') !== String(videoId)
+              );
+              return { ...c, lectures: filteredLectures, lecture_count: filteredLectures.length };
+            })
+            .filter(c => c.lecture_count > 0)
+        );
       }
     } catch (err) {
       console.warn("Failed to delete from user library:", err);
     }
+  };
+
+  const handleDeleteCourse = async (courseName) => {
+    if (!courseName) return false;
+    try {
+      const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
+      const targetSlug = normalizeCourseSlug(courseName);
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseName)}${emailParam}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const deletedVidSet = new Set((data.deleted_video_ids || []).map(String));
+        setUserCourses(prev =>
+          prev.filter(c => {
+            const cSlug = normalizeCourseSlug(c.course_slug || c.course_name || '');
+            return c.course_name !== courseName && cSlug !== targetSlug;
+          })
+        );
+        setUserLibrary(prev =>
+          prev.filter(item => {
+            const itemVid = String(item.video_id || item.videoId || '');
+            const itemSlug = normalizeCourseSlug(item.course_slug || item.course_name || '');
+            return !deletedVidSet.has(itemVid) && item.course_name !== courseName && itemSlug !== targetSlug;
+          })
+        );
+        return true;
+      }
+    } catch (err) {
+      console.warn("Failed to delete course:", err);
+    }
+    return false;
   };
 
   useEffect(() => {
@@ -168,6 +210,7 @@ export function useUserLibrary(userEmail) {
     setLibrarySearch,
     fetchUserLibrary,
     handleDeleteFromLibrary,
+    handleDeleteCourse,
     effectiveCourses,
     filteredCourses,
     filteredLibrary

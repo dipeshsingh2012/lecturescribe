@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import CourseGrid from '../CourseGrid';
 import { LMS_THEMES } from '../../../store/themeStore';
 
@@ -64,5 +64,46 @@ describe('CourseGrid', () => {
     const openCourseBtn = screen.getByRole('button', { name: /View Lectures/i });
     fireEvent.click(openCourseBtn);
     expect(handleSelectCourse).toHaveBeenCalledWith('Machine Learning');
+  });
+
+  it('opens confirmation dialog and calls handleDeleteCourse when confirmed', async () => {
+    const handleSelectCourse = vi.fn();
+    const handleDeleteCourse = vi.fn().mockResolvedValue(true);
+    const courses = [
+      {
+        course_name: 'Machine Learning',
+        lecture_count: 2,
+        lectures: [
+          { video_id: '101', title: 'Intro to ML' },
+          { video_id: '102', title: 'Neural Networks' }
+        ]
+      }
+    ];
+
+    render(
+      <CourseGrid
+        filteredCourses={courses}
+        handleSelectCourse={handleSelectCourse}
+        handleDeleteCourse={handleDeleteCourse}
+        librarySearch=""
+        currentTheme={mockTheme}
+      />
+    );
+
+    const deleteBtn = screen.getByRole('button', { name: /Delete Machine Learning/i });
+    fireEvent.click(deleteBtn);
+
+    // Should not navigate into course when clicking trash icon
+    expect(handleSelectCourse).not.toHaveBeenCalled();
+
+    // Confirmation dialog should appear
+    expect(screen.getByText('Delete Course?')).toBeInTheDocument();
+
+    const confirmBtn = screen.getByRole('button', { name: /^Delete Course$/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(handleDeleteCourse).toHaveBeenCalledWith('Machine Learning');
+    });
   });
 });

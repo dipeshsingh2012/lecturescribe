@@ -27,8 +27,9 @@ export default function useLectureSummary(activeData, userEmail = null) {
       return;
     }
 
-    if (inFlightFetchRef.current === vid) return;
-    inFlightFetchRef.current = vid;
+    const inFlightKey = `${vid}:${forceEmail || ''}`;
+    if (inFlightFetchRef.current === inFlightKey) return;
+    inFlightFetchRef.current = inFlightKey;
     setLoading(true);
     setError(null);
 
@@ -44,7 +45,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
       console.warn('Could not fetch lecture summaries:', err);
       setError(err.message || 'Failed to load summaries');
     } finally {
-      if (inFlightFetchRef.current === vid) {
+      if (inFlightFetchRef.current === inFlightKey) {
         inFlightFetchRef.current = null;
       }
       setLoading(false);
@@ -105,14 +106,16 @@ export default function useLectureSummary(activeData, userEmail = null) {
     }
   }, [videoId, activeSummaryType, transcriptAvailable, activeData, email]);
 
-  // Synchronize on video change
+  // Synchronize on video or email change
   useEffect(() => {
     if (videoId) {
-      if (currentVideoIdRef.current !== videoId) {
-        currentVideoIdRef.current = videoId;
+      const fetchKey = `${videoId}:${email || ''}`;
+      if (currentVideoIdRef.current !== fetchKey) {
+        currentVideoIdRef.current = fetchKey;
         fetchSummaries(videoId, email);
       }
     } else {
+      currentVideoIdRef.current = null;
       setSummaries({});
       setError(null);
     }
@@ -135,7 +138,10 @@ export default function useLectureSummary(activeData, userEmail = null) {
 
   const [isOutdated, setIsOutdated] = useState(false);
 
-  const currentSummary = summaries[activeSummaryType] || summaries['comprehensive'] || summaries['15_min'] || null;
+  const rawSummary = summaries[activeSummaryType] || summaries['comprehensive'] || summaries['15_min'] || null;
+  const currentSummary = (rawSummary && (rawSummary.markdownText?.trim() || rawSummary.submissionText?.trim()))
+    ? rawSummary
+    : null;
 
   useEffect(() => {
     if (activeData?.is_outdated || activeData?.summary_outdated || currentSummary?.isOutdated) {

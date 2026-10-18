@@ -1156,15 +1156,22 @@ class RelationalDBManager:
             with conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO lecturescribe_lecture_summaries (
-                            video_id, user_email, summary_type, markdown_text, submission_text,
-                            sections_json, is_outdated, created_at, updated_at
-                        )
-                        VALUES (%s, NULL, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
-                        ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
-                        SET sections_json = EXCLUDED.sections_json,
-                            updated_at = NOW();
-                    """, (video_id, json.dumps(summary_sections)))
+                        UPDATE lecturescribe_lecture_summaries
+                        SET sections_json = %s::jsonb,
+                            updated_at = NOW()
+                        WHERE video_id = %s AND summary_type = 'comprehensive';
+                    """, (json.dumps(summary_sections), video_id))
+                    if cursor.rowcount == 0:
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_lecture_summaries (
+                                video_id, user_email, summary_type, markdown_text, submission_text,
+                                sections_json, is_outdated, created_at, updated_at
+                            )
+                            VALUES (%s, NULL, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
+                            ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
+                            SET sections_json = EXCLUDED.sections_json,
+                                updated_at = NOW();
+                        """, (video_id, json.dumps(summary_sections)))
                     conn.commit()
             print(f"[PostgreSQL] Updated summary for video '{video_id}'.")
         finally:
@@ -1260,9 +1267,10 @@ class RelationalDBManager:
                                    COALESCE(is_outdated, FALSE) as is_outdated,
                                    created_at, updated_at
                             FROM lecturescribe_lecture_summaries
-                            WHERE video_id = %s AND (user_email = %s OR user_email IS NULL)
-                            ORDER BY (user_email = %s) DESC, updated_at DESC;
-                        """, (video_id, clean_email, clean_email))
+                            WHERE video_id = %s
+                              AND LENGTH(TRIM(COALESCE(markdown_text, ''))) > 0
+                            ORDER BY (user_email = %s) DESC, (user_email IS NULL) DESC, updated_at DESC;
+                        """, (video_id, clean_email))
                     else:
                         cursor.execute("""
                             SELECT id, video_id, user_email, summary_type, markdown_text,
@@ -1271,6 +1279,7 @@ class RelationalDBManager:
                                    created_at, updated_at
                             FROM lecturescribe_lecture_summaries
                             WHERE video_id = %s
+                              AND LENGTH(TRIM(COALESCE(markdown_text, ''))) > 0
                             ORDER BY updated_at DESC;
                         """, (video_id,))
 

@@ -18,6 +18,7 @@
   let currentSettings = {
     webAppUrl: "http://localhost:5173",
     apiUrl: "http://localhost:8000",
+    userEmail: "dipesh.singh2012@gmail.com",
     showFloatingBadge: true,
     badgePosition: "top-right"
   };
@@ -28,9 +29,9 @@
   // Load initial settings using async/await
   (async () => {
     try {
-      const data = await ext.storage.sync.get(["webAppUrl", "apiUrl", "showFloatingBadge", "badgePosition"]);
+      const data = await ext.storage.sync.get(["webAppUrl", "apiUrl", "userEmail", "showFloatingBadge", "badgePosition"]);
       if (data) {
-        currentSettings = { ...currentSettings, ...data };
+        currentSettings = { ...currentSettings, ...data, userEmail: data.userEmail || currentSettings.userEmail };
       }
     } catch (e) {
       console.debug("Could not read settings from storage:", e);
@@ -391,7 +392,8 @@
           title: videoTitle || currentVideo?.title || null,
           courseName: lmsCourse,
           lmsPageUrl: lmsUrl,
-          playerConfig: currentVideo?.playerConfig || null
+          playerConfig: currentVideo?.playerConfig || null,
+          email: currentSettings.userEmail || "dipesh.singh2012@gmail.com"
         });
 
         if (res && res.success) {

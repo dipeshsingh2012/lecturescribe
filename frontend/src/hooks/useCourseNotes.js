@@ -10,7 +10,6 @@ export function useCourseNotes(selectedCourse, googleUser, activeNoteId = null) 
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved' | 'saving' | 'unsaved' | 'error'
 
   const userEmail = googleUser?.email || '';
-  const saveTimeoutRef = useRef(null);
   const lastFetchedNotesCourseRef = useRef('');
 
   // Fetch all notes for course
@@ -94,8 +93,8 @@ export function useCourseNotes(selectedCourse, googleUser, activeNoteId = null) 
     return null;
   }, [selectedCourse, userEmail]);
 
-  // Save/update note (auto-save endpoint)
-  const saveNote = useCallback(async (courseName, noteId, email, { title, content, allow_empty = false }) => {
+  // Save/update note
+  const saveNote = useCallback(async (courseName, noteId, email, { title, content }) => {
     const e = email || userEmail;
     const c = courseName || selectedCourse;
     if (!c || !noteId || !e) return null;
@@ -108,25 +107,20 @@ export function useCourseNotes(selectedCourse, googleUser, activeNoteId = null) 
         body: JSON.stringify({
           user_email: e,
           title,
-          content,
-          allow_empty
+          content
         })
       });
       if (res.ok) {
         const data = await res.json();
         const updated = data.note;
-        setActiveNote((prev) => {
-          if (!prev || prev.note_id !== noteId) return updated;
-          return {
-            ...prev,
-            ...updated,
-            content: prev.content !== undefined ? prev.content : updated.content,
-            title: prev.title !== undefined ? prev.title : updated.title
-          };
+        setActiveNote(updated);
+        setNotes((prev) => {
+          const exists = prev.some((n) => n.note_id === noteId);
+          if (exists) {
+            return prev.map((n) => (n.note_id === noteId ? { ...n, ...updated } : n));
+          }
+          return [updated, ...prev];
         });
-        setNotes((prev) =>
-          prev.map((n) => (n.note_id === noteId ? { ...n, title: updated.title, updated_at: updated.updated_at } : n))
-        );
         setSaveStatus('saved');
         return updated;
       } else {

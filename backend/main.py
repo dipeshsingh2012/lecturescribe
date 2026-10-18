@@ -41,7 +41,11 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+import socket
+import ipaddress
+from urllib.parse import urlparse
+import httpx
 
 from contextlib import asynccontextmanager
 
@@ -1172,27 +1176,48 @@ def process_lecture_import(
             None if saved_cues else
             "This video was imported, but no transcript or captions are available."
         )
-        course_title = saved.get("course_name") or (course_name and course_name.strip()) or extract_course_name(saved.get("title", ""))
+        raw_course = saved.get("course_name") or (course_name and course_name.strip()) or extract_course_name(saved.get("title", ""))
+        if not raw_course:
+            raise HTTPException(status_code=400, detail="course_name is required.")
+        course_title = db_manager.resolve_course_canonical_name(raw_course)
         saved["course_name"] = course_title
         saved["course_slug"] = to_course_slug(course_title)
         clean_email = email.strip() if isinstance(email, str) else None
 
         def _db_work():
-            # Drive URL lookup -> progress lookup -> user library upsert -> Redis invalidation (order matters).
+            # Drive URL lookup -> progress lookup -> user library upsert -> targeted Redis course update (order matters).
             d_url = db_manager.get_drive_folder_url(clean_vid, clean_email)
             prog = db_manager.get_lecture_progress(clean_vid, user_email=clean_email)
             if clean_email:
+                src_url = saved.get("sourceUrl", f"https://video.lecturescribe.local/{clean_vid}")
+                dur_val = saved.get("duration", "Unknown")
                 db_manager.record_user_lecture(
                     user_email=clean_email,
                     video_id=clean_vid,
                     title=saved["title"],
-                    duration=saved.get("duration", "Unknown"),
-                    source_url=saved.get("sourceUrl", f"https://video.lecturescribe.local/{clean_vid}"),
+                    duration=str(dur_val),
+                    source_url=src_url,
                     course_name=course_title,
                     drive_folder_url=d_url
                 )
                 if redis_cache:
-                    redis_cache.invalidate_user(clean_email)
+                    redis_cache.update_user_course(
+                        clean_email,
+                        course_title,
+                        lecture_entry={
+                            "videoId": clean_vid,
+                            "video_id": clean_vid,
+                            "title": saved["title"],
+                            "video_title": saved["title"],
+                            "duration": str(dur_val),
+                            "sourceUrl": src_url,
+                            "video_url": src_url,
+                            "driveFolderUrl": d_url,
+                            "drive_folder_url": d_url,
+                            "course_name": course_title,
+                            "progress": prog
+                        }
+                    )
             return d_url, prog
 
         # Postgres and GCS are independent network round-trips: run them concurrently.
@@ -1279,7 +1304,9 @@ def process_lecture_import(
     caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
     raw_course = course_name if isinstance(course_name, str) else None
     candidate_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
-    derived_course = db_manager.resolve_course_canonical_name(candidate_course) if candidate_course else "General Lectures"
+    if not candidate_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    derived_course = db_manager.resolve_course_canonical_name(candidate_course)
 
     # 3. Save to Relational DB (PostgreSQL)
     db_manager.save_video_transcript(clean_vid, title, duration, source_url, caption_label, cues, summary_sections, user_email=email, course_name=derived_course)
@@ -1295,8 +1322,9 @@ def process_lecture_import(
 
     # 6. Record into user LMS library if authenticated
     if email and email.strip():
+        clean_user_email = email.strip()
         db_manager.record_user_lecture(
-            user_email=email,
+            user_email=clean_user_email,
             video_id=clean_vid,
             title=title,
             duration=duration,
@@ -1304,7 +1332,23 @@ def process_lecture_import(
             course_name=derived_course
         )
         if redis_cache:
-            redis_cache.invalidate_user(email.strip())
+            redis_cache.update_user_course(
+                clean_user_email,
+                derived_course,
+                lecture_entry={
+                    "videoId": clean_vid,
+                    "video_id": clean_vid,
+                    "title": title,
+                    "video_title": title,
+                    "duration": duration,
+                    "sourceUrl": source_url,
+                    "video_url": source_url,
+                    "driveFolderUrl": None,
+                    "drive_folder_url": None,
+                    "course_name": derived_course,
+                    "progress": None
+                }
+            )
 
     drive_future = _lecture_io_executor.submit(db_manager.get_drive_folder_url, clean_vid, email)
     gcs_video = gcs_storage_service.find_lecture_video(video_id=clean_vid, course_name=derived_course)
@@ -1369,9 +1413,10 @@ def extension_import(req: ExtensionImportRequest):
             raise HTTPException(status_code=400, detail="Missing video_id in import request")
 
         video_id = extract_video_id(str(req.video_id).strip())
+        target_email = (req.email and req.email.strip()) or "dipesh.singh2012@gmail.com"
         return process_lecture_import(
             video_id=video_id,
-            email=req.email,
+            email=target_email,
             course_name=req.course_name,
             player_config=req.player_config,
             video_details=req.video_details,
@@ -2239,7 +2284,9 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
         raise HTTPException(status_code=502, detail="Summary generation returned no content.")
 
     if stored.get("markdownText"):
-        course_title = (saved_vid.get("course_name") if saved_vid else None) or "General"
+        course_title = ((saved_vid.get("course_name") if saved_vid else None) or extract_course_name(title)).strip()
+        if not course_title:
+            raise HTTPException(status_code=400, detail="course_name is required.")
         trigger_background_podcast_generation(
             video_id=vid,
             title=title,
@@ -2604,10 +2651,10 @@ def get_or_generate_course_quiz(
 ):
     """Retrieve or generate course-wide practice quiz covering all lectures in the course."""
     clean_course = str(course_name).strip()
-    if not clean_course:
+    course_slug = to_course_slug(clean_course)
+    if not clean_course or not course_slug:
         raise HTTPException(status_code=400, detail="course_name parameter is required.")
 
-    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
     is_regenerate = regenerate or (body.regenerate if body else False)
     req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
 
@@ -2726,7 +2773,9 @@ def get_or_generate_course_quiz(
 def save_course_quiz_answers(course_name: str, req: QuizAnswersRequest):
     """Persist user course quiz responses directly into PostgreSQL and quiz history."""
     clean_course = str(course_name).strip()
-    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+    course_slug = to_course_slug(clean_course)
+    if not clean_course or not course_slug:
+        raise HTTPException(status_code=400, detail="course_name parameter is required.")
     email = req.user_email or "anonymous"
     db_manager.save_quiz_attempt("course", course_slug, email, req.answers, req.score or 0, req.completed or False)
 
@@ -2757,7 +2806,9 @@ def save_course_quiz_answers(course_name: str, req: QuizAnswersRequest):
 def reset_course_quiz_answers(course_name: str, email: Optional[str] = Query(None)):
     """Reset user course quiz response state in PostgreSQL."""
     clean_course = str(course_name).strip()
-    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+    course_slug = to_course_slug(clean_course)
+    if not clean_course or not course_slug:
+        raise HTTPException(status_code=400, detail="course_name parameter is required.")
     db_manager.delete_quiz_attempt("course", course_slug, email or "anonymous")
     return {"status": "success", "success": True}
 
@@ -2766,7 +2817,9 @@ def reset_course_quiz_answers(course_name: str, email: Optional[str] = Query(Non
 def get_detailed_course_quiz_explanation(course_name: str, req: CourseQuizExplanationRequest):
     """Generate or retrieve detailed explanation for a course quiz question using RAG."""
     clean_course = str(course_name or "").strip()
-    course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+    course_slug = to_course_slug(clean_course)
+    if not clean_course or not course_slug:
+        raise HTTPException(status_code=400, detail="course_name parameter is required.")
     q_id = str(req.question_id)
 
     # 1. Check cache first if not regenerating
@@ -2940,6 +2993,11 @@ def record_user_lecture(req: UserLibraryRecordRequest):
     if not target_email or not req.video_id.strip():
         raise HTTPException(status_code=400, detail="user_email (or email) and video_id are required.")
 
+    raw_course = (req.course_name and req.course_name.strip()) or extract_course_name(target_title)
+    if not raw_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    canonical_course = db_manager.resolve_course_canonical_name(raw_course)
+
     success = db_manager.record_user_lecture(
         user_email=target_email,
         video_id=req.video_id,
@@ -2947,10 +3005,26 @@ def record_user_lecture(req: UserLibraryRecordRequest):
         duration=target_duration,
         source_url=target_url,
         drive_folder_url=req.drive_folder_url,
-        course_name=req.course_name
+        course_name=canonical_course
     )
     if success and redis_cache:
-        redis_cache.invalidate_user(target_email)
+        redis_cache.update_user_course(
+            target_email,
+            canonical_course,
+            lecture_entry={
+                "videoId": req.video_id,
+                "video_id": req.video_id,
+                "title": target_title,
+                "video_title": target_title,
+                "duration": target_duration or "Unknown",
+                "sourceUrl": target_url or f"https://video.lecturescribe.local/{req.video_id}",
+                "video_url": target_url or f"https://video.lecturescribe.local/{req.video_id}",
+                "driveFolderUrl": req.drive_folder_url,
+                "drive_folder_url": req.drive_folder_url,
+                "course_name": canonical_course,
+                "progress": None
+            }
+        )
     return {"status": "success" if success else "failed"}
 
 
@@ -2973,7 +3047,7 @@ def delete_user_lecture(video_id: str, email: str = Query(..., description="User
 class PresignUploadRequest(BaseModel):
     filename: str
     content_type: Optional[str] = "application/octet-stream"
-    course_name: Optional[str] = "General Lectures"
+    course_name: str
     video_id: Optional[str] = None
     user_email: str
 
@@ -2982,7 +3056,7 @@ class ConfirmUploadRequest(BaseModel):
     blob_name: str
     file_type: str
     file_size_bytes: Optional[int] = 0
-    course_name: Optional[str] = "General Lectures"
+    course_name: str
     video_id: Optional[str] = None
     title: Optional[str] = None
     user_email: str
@@ -2990,7 +3064,7 @@ class ConfirmUploadRequest(BaseModel):
 class CreateLinkResourceRequest(BaseModel):
     title: str
     url: str
-    course_name: Optional[str] = "General Lectures"
+    course_name: str
     video_id: Optional[str] = None
     user_email: str
 
@@ -3004,7 +3078,6 @@ class UpdateCourseNoteRequest(BaseModel):
     user_email: str
     title: Optional[str] = None
     content: Optional[str] = None
-    allow_empty: Optional[bool] = False
 
 
 @app.post("/api/resources/presign-upload")
@@ -3018,9 +3091,12 @@ def presign_resource_upload(req: PresignUploadRequest):
         )
     if not req.filename or not req.filename.strip():
         raise HTTPException(status_code=400, detail="Filename cannot be empty.")
+    clean_course = (req.course_name or "").strip()
+    if not clean_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
 
     blob_name = gcs_storage_service.get_resource_blob_path(
-        course_slug=req.course_name, # type: ignore
+        course_slug=clean_course,
         video_id=req.video_id,
         filename=req.filename.strip()
     )
@@ -3042,9 +3118,12 @@ def confirm_resource_upload(req: ConfirmUploadRequest):
         )
     if not req.blob_name or not req.filename:
         raise HTTPException(status_code=400, detail="blob_name and filename are required.")
+    clean_course = (req.course_name or "").strip()
+    if not clean_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
 
     record = db_manager.create_resource(
-        course_name=req.course_name or "General Lectures",
+        course_name=clean_course,
         user_email=user_email,
         title=req.title or req.filename,
         filename=req.filename,
@@ -3071,13 +3150,16 @@ def create_link_resource(req: CreateLinkResourceRequest):
     url = (req.url or "").strip()
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(status_code=400, detail="A valid HTTP or HTTPS URL is required.")
+    clean_course = (req.course_name or "").strip()
+    if not clean_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
 
     ft = "link"
     if "drive.google.com" in url or "docs.google.com" in url:
         ft = "gdrive"
 
     record = db_manager.create_resource(
-        course_name=req.course_name or "General Lectures",
+        course_name=clean_course,
         user_email=user_email,
         title=req.title.strip() or url,
         filename=url,
@@ -3226,29 +3308,46 @@ def get_course_note(course_name: str, note_id: str, user_email: str = Query(...,
 
 @app.put("/api/course/{course_name}/notes/{note_id}")
 def update_course_note(course_name: str, note_id: str, req: UpdateCourseNoteRequest):
-    """Auto-save note: updates text blob in GCS and metadata in PG."""
+    """Save/update note: updates text blob in GCS and metadata in PG. Upserts if not existing."""
     clean_email = (req.user_email or "").strip().lower()
     if not clean_email:
         raise HTTPException(status_code=401, detail="Authentication required: user_email is required.")
 
-    note = db_manager.get_course_note(note_id, clean_email)
-    if not note:
+    raw_course = course_name.strip()
+    if not raw_course:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+    clean_course = db_manager.resolve_course_canonical_name(raw_course)
+    course_slug = to_course_slug(clean_course)
+
+    # Check if note exists under any user to prevent cross-user overwrite
+    existing_any_user = db_manager.get_course_note(note_id)
+    if existing_any_user and existing_any_user.get("user_email") != clean_email:
         raise HTTPException(status_code=404, detail="Note not found.")
+
+    note = existing_any_user if (existing_any_user and existing_any_user.get("user_email") == clean_email) else None
+    if not note:
+        # UPSERT: Note was created optimistically on client or was not yet persisted
+        blob_name = gcs_storage_service.get_course_note_blob_path(course_slug, clean_email, note_id)
+        content_to_save = req.content or ""
+        try:
+            gcs_storage_service.upload_blob_text(blob_name, content_to_save, content_type="text/plain; charset=utf-8")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to store note in cloud storage: {e}")
+
+        file_size_bytes = len(content_to_save.encode("utf-8"))
+        record = db_manager.create_course_note(
+            course_name=clean_course,
+            user_email=clean_email,
+            title=req.title or "Untitled Note",
+            blob_name=blob_name,
+            file_size_bytes=file_size_bytes,
+            note_id=note_id
+        )
+        record["content"] = content_to_save
+        return {"status": "success", "note": record}
 
     file_size_bytes = None
     if req.content is not None:
-        # Anti-data loss safeguard:
-        # If the existing note has substantial content (> 30 bytes) and the new payload is completely blank,
-        # reject the update unless explicit allow_empty=True is set.
-        new_text_stripped = re.sub(r"<[^>]+>", "", req.content).strip().replace("&nbsp;", "").strip()
-        existing_size = note.get("file_size_bytes") or 0
-        if existing_size > 30 and not new_text_stripped and not getattr(req, "allow_empty", False):
-            # Do not overwrite cloud storage with empty content
-            raise HTTPException(
-                status_code=400,
-                detail="Anti-data-loss protection: Cannot overwrite non-empty note with empty content. Provide allow_empty=true if this was intentional."
-            )
-
         try:
             gcs_storage_service.upload_blob_text(note["blob_name"], req.content, content_type="text/plain; charset=utf-8")
             file_size_bytes = len(req.content.encode("utf-8"))
@@ -3263,12 +3362,20 @@ def update_course_note(course_name: str, note_id: str, req: UpdateCourseNoteRequ
             file_size_bytes=file_size_bytes
         )
         if not updated:
-            raise HTTPException(status_code=404, detail="Note not found.")
+            updated = dict(note)
+            if req.title:
+                updated["title"] = req.title
+            if file_size_bytes is not None:
+                updated["file_size_bytes"] = file_size_bytes
         if req.content is not None:
             updated["content"] = req.content
+        else:
+            updated["content"] = gcs_storage_service.get_blob_text(note["blob_name"]) or ""
         return {"status": "success", "note": updated}
     except PermissionError as pe:
         raise HTTPException(status_code=403, detail=str(pe))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update note metadata: {e}")
 
 
 @app.delete("/api/course/{course_name}/notes/{note_id}")
@@ -3722,6 +3829,132 @@ def add_course_reading(course_name: str, payload: AddCourseReadingRequest):
         "readings": all_readings,
         "count": len(all_readings)
     }
+
+
+# ==============================================================================
+# Open-Access Academic PDF Proxy Endpoint (SSRF Guarded)
+# ==============================================================================
+
+ALLOWED_PDF_DOMAINS = [
+    "europepmc.org",
+    "arxiv.org",
+    "ncbi.nlm.nih.gov",
+    "pmc.ncbi.nlm.nih.gov",
+    "biorxiv.org",
+    "medrxiv.org",
+    "openalex.org",
+    "archive.org",
+    "storage.googleapis.com"
+]
+
+RESTRICTED_PUBLISHER_DOMAINS = [
+    "jamanetwork.com",
+    "sciencedirect.com",
+    "elsevier.com",
+    "springer.com",
+    "nature.com",
+    "wiley.com",
+    "nejm.org",
+    "academic.oup.com",
+    "tandfonline.com",
+    "bmj.com",
+    "thelancet.com",
+    "cell.com",
+    "ahajournals.org",
+    "pnas.org",
+    "ieee.org",
+    "acm.org",
+    "frontiersin.org",
+    "doi.org"
+]
+
+
+def validate_proxy_url(target_url: str) -> str:
+    """
+    Validate target URL against SSRF vulnerabilities and publisher framing restrictions.
+    """
+    if not target_url or not isinstance(target_url, str):
+        raise HTTPException(status_code=400, detail="Target URL is required.")
+
+    parsed = urlparse(target_url)
+    if parsed.scheme.lower() != "https":
+        raise HTTPException(status_code=400, detail="Only secure HTTPS URLs are permitted.")
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Invalid hostname in URL.")
+
+    # Check if domain is a commercial publisher that prohibits framing/proxying
+    for restricted in RESTRICTED_PUBLISHER_DOMAINS:
+        if hostname == restricted or hostname.endswith("." + restricted):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Direct proxying of '{hostname}' is not supported due to publisher security restrictions. Please use the official article link."
+            )
+
+    # Check if domain is in allowed list
+    is_allowed = any(hostname == d or hostname.endswith("." + d) for d in ALLOWED_PDF_DOMAINS)
+    if not is_allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Domain '{hostname}' is not in the allowed list of open-access repositories."
+        )
+
+    # SSRF Protection: Resolve hostname and check IP address against private/internal ranges
+    try:
+        addr_info = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
+        for _, _, _, _, sockaddr in addr_info:
+            ip_str = sockaddr[0]
+            ip_obj = ipaddress.ip_address(ip_str)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved:
+                raise HTTPException(status_code=403, detail="Requests to private or internal network addresses are forbidden.")
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail=f"Unable to resolve hostname: {hostname}")
+
+    return target_url
+
+
+@app.get("/api/literature/pdf-proxy")
+async def proxy_literature_pdf(url: str = Query(..., description="HTTPS URL of the open-access PDF to proxy")):
+    """
+    Secure streaming proxy for verified open-access academic PDFs (Europe PMC, arXiv, etc.).
+    Protects against SSRF and strips frame-blocking headers for safe inline preview.
+    """
+    valid_url = validate_proxy_url(url)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/pdf,application/octet-stream,*/*"
+    }
+
+    MAX_BYTES = 25 * 1024 * 1024  # 25 MB cap
+
+    async def stream_pdf():
+        total_bytes = 0
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            try:
+                async with client.stream("GET", valid_url, headers=headers) as resp:
+                    if resp.status_code >= 400:
+                        yield json.dumps({"error": f"Upstream error {resp.status_code}"}).encode("utf-8")
+                        return
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_BYTES:
+                            break
+                        yield chunk
+            except Exception as e:
+                logger.error(f"[PDFProxy] Streaming error for {valid_url}: {e}")
+                return
+
+    return StreamingResponse(
+        stream_pdf(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff"
+        }
+    )
 
 
 
@@ -4178,8 +4411,10 @@ def trigger_video_gcs_sync(
     if not saved:
         raise HTTPException(status_code=404, detail=f"Video '{vid}' not found in database.")
 
-    course_title = saved.get("course_name") or "General Lectures"
     title = saved.get("title", f"Lecture {vid}")
+    course_title = (saved.get("course_name") or extract_course_name(title)).strip()
+    if not course_title:
+        raise HTTPException(status_code=400, detail="course_name is required.")
     cues = saved.get("cues", [])
 
     # Check if already synced in GCS

@@ -577,7 +577,7 @@ export default function LecturePlayer({
             activeCourseData?.course_name ||
             activeData.course_name ||
             selectedCourse ||
-            'General Lectures'
+            ''
           );
           const courseSlug = (
             activeCourseData?.course_slug ||

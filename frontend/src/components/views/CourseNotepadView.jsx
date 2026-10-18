@@ -22,7 +22,8 @@ import {
   Download,
   Trash2,
   FileText,
-  AlertCircle
+  AlertCircle,
+  Save
 } from 'lucide-react';
 
 const QUILL_MODULES = {
@@ -69,129 +70,70 @@ export default function CourseNotepadView({
   const [content, setContent] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const quillRef = useRef(null);
-  const debounceTimerRef = useRef(null);
   const initialLoadedRef = useRef(false);
   const currentNoteIdRef = useRef(null);
-  const latestDataRef = useRef({ title: '', content: '' });
 
-  // Helper to get local draft backup key
-  const getDraftStorageKey = useCallback(
-    (id) => `lecturescribe_draft_${googleUser?.email || 'anon'}_${id}`,
-    [googleUser?.email]
-  );
-
-  // Sync state when activeNote loads for a new/different noteId
+  // Sync state when activeNote loads for a new/different noteId or when fetched content arrives
   useEffect(() => {
     if (activeNote && activeNote.note_id === noteId) {
-      if (currentNoteIdRef.current !== noteId) {
-        let initialTitle = activeNote.title || 'Untitled Note';
-        let initialContent = activeNote.content || '';
+      const isNewNote = currentNoteIdRef.current !== noteId;
+      const contentArrived =
+        typeof activeNote.content === 'string' &&
+        activeNote.content !== '' &&
+        (!content || content === '<p><br></p>');
 
-        // Check local storage draft backup
-        try {
-          const draftKey = getDraftStorageKey(noteId);
-          const savedDraftRaw = localStorage.getItem(draftKey);
-          if (savedDraftRaw) {
-            const savedDraft = JSON.parse(savedDraftRaw);
-            const serverClean = (initialContent || '').replace(/<[^>]+>/g, '').trim();
-            const draftClean = (savedDraft.content || '').replace(/<[^>]+>/g, '').trim();
-            // If local draft has content while server snapshot is blank, restore local draft!
-            if (!serverClean && draftClean) {
-              console.info('[CourseNotepadView] Restoring local backup draft for note', noteId);
-              initialContent = savedDraft.content;
-              if (savedDraft.title) initialTitle = savedDraft.title;
-            }
-          }
-        } catch (e) {
-          console.warn('[CourseNotepadView] Error reading local draft backup:', e);
+      if (isNewNote || contentArrived) {
+        const initialTitle = activeNote.title || 'Untitled Note';
+        const initialContent = activeNote.content || '';
+
+        if (isNewNote || !title || title === 'Untitled Note') {
+          setTitle(initialTitle);
         }
-
-        setTitle(initialTitle);
         setContent(initialContent);
-        latestDataRef.current = { title: initialTitle, content: initialContent };
         setLastSavedTime(activeNote.updated_at ? new Date(activeNote.updated_at) : new Date());
         currentNoteIdRef.current = noteId;
         initialLoadedRef.current = true;
+        setHasUnsavedChanges(false);
       } else if (activeNote.updated_at) {
         setLastSavedTime(new Date(activeNote.updated_at));
       }
     }
-  }, [activeNote, noteId, getDraftStorageKey]);
+  }, [activeNote, noteId, content, title]);
 
-  // Clean up debounce timer on unmount
+  // Manual explicit save action (triggered by Save button or Ctrl+S)
+  const handleManualSave = useCallback(async () => {
+    if (!noteId || !saveNote || !googleUser?.email) return;
+
+    const res = await saveNote(courseName, noteId, googleUser.email, {
+      title: title || 'Untitled Note',
+      content
+    });
+    if (res) {
+      setHasUnsavedChanges(false);
+      setLastSavedTime(new Date());
+    }
+  }, [courseName, noteId, googleUser, saveNote, title, content]);
+
+  // Keyboard shortcut Ctrl+S / Cmd+S for instant manual save
   useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        handleManualSave();
       }
     };
-  }, []);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleManualSave]);
 
-  // Save local draft to localStorage immediately on keystroke
-  const saveLocalDraft = useCallback(
-    (draftTitle, draftContent) => {
-      if (!noteId) return;
-      try {
-        const draftKey = getDraftStorageKey(noteId);
-        localStorage.setItem(
-          draftKey,
-          JSON.stringify({
-            title: draftTitle,
-            content: draftContent,
-            timestamp: Date.now()
-          })
-        );
-      } catch (e) {
-        console.warn('[CourseNotepadView] Error saving local draft:', e);
-      }
-    },
-    [noteId, getDraftStorageKey]
-  );
-
-  // Handle debounced auto-save
-  const triggerAutoSave = useCallback(
-    (newTitle, newContent) => {
-      if (!noteId || !googleUser?.email) return;
-
-      // Always backup locally before triggering debounce
-      saveLocalDraft(newTitle, newContent);
-
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-
-      debounceTimerRef.current = setTimeout(async () => {
-        // Safeguard: Never send empty overwrite if active note previously had substantial content
-        const cleanText = (newContent || '').replace(/<[^>]+>/g, '').trim();
-        const prevContentClean = (activeNote?.content || '').replace(/<[^>]+>/g, '').trim();
-        if (prevContentClean.length > 20 && !cleanText) {
-          console.warn('[CourseNotepadView] Blocked accidental empty auto-save payload.');
-          return;
-        }
-
-        if (saveNote) {
-          const res = await saveNote(courseName, noteId, googleUser.email, {
-            title: newTitle || 'Untitled Note',
-            content: newContent
-          });
-          if (res) {
-            setLastSavedTime(new Date());
-          }
-        }
-      }, 1200);
-    },
-    [courseName, noteId, googleUser, saveNote, saveLocalDraft, activeNote]
-  );
-
-  // Content change handler from ReactQuill
+  // Content change handler from ReactQuill (handles both user typing and paste)
   const handleContentChange = (newContent, delta, source) => {
     setContent(newContent);
-    latestDataRef.current.content = newContent;
-    if (source === 'user') {
-      saveLocalDraft(title, newContent);
-      triggerAutoSave(title, newContent);
+    if (initialLoadedRef.current && source === 'user') {
+      setHasUnsavedChanges(true);
     }
   };
 
@@ -199,34 +141,11 @@ export default function CourseNotepadView({
   const handleTitleChange = (e) => {
     const newTitle = e.target.value;
     setTitle(newTitle);
-    latestDataRef.current.title = newTitle;
-    saveLocalDraft(newTitle, content);
-    triggerAutoSave(newTitle, content);
+    setHasUnsavedChanges(true);
   };
 
-  // Handle back navigation with immediate flush if auto-save is pending
+  // Handle back navigation
   const handleBack = () => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-      if (saveNote && noteId && googleUser?.email) {
-        const cleanText = (latestDataRef.current.content || '').replace(/<[^>]+>/g, '').trim();
-        const prevContentClean = (activeNote?.content || '').replace(/<[^>]+>/g, '').trim();
-        if (!(prevContentClean.length > 20 && !cleanText)) {
-          try {
-            const p = saveNote(courseName, noteId, googleUser.email, {
-              title: latestDataRef.current.title || 'Untitled Note',
-              content: latestDataRef.current.content
-            });
-            if (p && typeof p.catch === 'function') {
-              p.catch((e) => console.warn('Error saving note before navigating back:', e));
-            }
-          } catch (e) {
-            console.warn('Error saving note before navigating back:', e);
-          }
-        }
-      }
-    }
     if (onNavigateBack) onNavigateBack();
   };
 
@@ -357,7 +276,7 @@ export default function CourseNotepadView({
 
         {/* STATUS & ACTIONS */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          {/* AUTO-SAVE STATUS INDICATOR */}
+          {/* SAVE STATUS INDICATOR */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
             {saveStatus === 'saving' ? (
               <Chip
@@ -374,19 +293,40 @@ export default function CourseNotepadView({
                 }}
               />
             ) : saveStatus === 'error' ? (
-              <Chip
-                icon={<AlertCircle size={12} color="#ef4444" />}
-                label="Save error"
-                size="small"
-                variant="outlined"
-                sx={{
-                  height: 24,
-                  fontSize: '0.72rem',
-                  fontWeight: 600,
-                  borderColor: 'rgba(239, 68, 68, 0.3)',
-                  color: '#ef4444'
-                }}
-              />
+              <Tooltip title="Save failed. Click to retry saving now.">
+                <Chip
+                  icon={<AlertCircle size={12} color="#ef4444" />}
+                  label="Save error (Retry)"
+                  size="small"
+                  variant="outlined"
+                  onClick={handleManualSave}
+                  sx={{
+                    height: 24,
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    borderColor: 'rgba(239, 68, 68, 0.4)',
+                    color: '#ef4444',
+                    cursor: 'pointer',
+                    '&:hover': { bgcolor: 'rgba(239, 68, 68, 0.08)' }
+                  }}
+                />
+              </Tooltip>
+            ) : hasUnsavedChanges ? (
+              <Tooltip title="You have unsaved changes. Press Save or Ctrl+S to save.">
+                <Chip
+                  label="Unsaved changes"
+                  size="small"
+                  variant="outlined"
+                  sx={{
+                    height: 24,
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    borderColor: 'rgba(234, 179, 8, 0.4)',
+                    color: '#eab308',
+                    bgcolor: 'rgba(234, 179, 8, 0.08)'
+                  }}
+                />
+              </Tooltip>
             ) : (
               <Tooltip title={lastSavedTime ? `Saved to cloud at ${lastSavedTime.toLocaleTimeString()}` : 'Saved'}>
                 <Chip
@@ -405,6 +345,27 @@ export default function CourseNotepadView({
               </Tooltip>
             )}
           </Box>
+
+          {/* EXPLICIT SAVE BUTTON */}
+          <Button
+            size="small"
+            variant={saveStatus === 'error' ? 'contained' : hasUnsavedChanges ? 'contained' : 'outlined'}
+            color={saveStatus === 'error' ? 'error' : 'primary'}
+            startIcon={<Save size={14} />}
+            onClick={handleManualSave}
+            disabled={saveStatus === 'saving' || (!hasUnsavedChanges && saveStatus !== 'error')}
+            sx={{
+              height: 28,
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              borderRadius: 2,
+              px: 1.5,
+              borderColor: currentTheme?.palette?.cardBorder
+            }}
+          >
+            {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'error' ? 'Retry Save' : 'Save'}
+          </Button>
 
           {/* STATS CHIP */}
           <Chip

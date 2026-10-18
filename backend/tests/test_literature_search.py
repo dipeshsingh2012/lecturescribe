@@ -1352,7 +1352,7 @@ async def test_s2_circuit_breaker_bypasses_network_call():
     assert not _S2_RATE_LIMITER.is_circuit_open()
 
 
-def test_reranker_system_prompt_contains_generalized_academic_criteria():
+def test_reranker_system_prompt_contains_academic_criteria():
     """
     Validates Requirement 1: SLMReranker system prompt guides the judge with strict 4-tier rubric:
     0.90-1.00 (Core Architectural Breakthrough), 0.70-0.89 (Substantial Application),
@@ -1462,9 +1462,9 @@ async def test_openalex_preserves_verbatim_quoted_phrase():
 
 
 @pytest.mark.anyio
-async def test_generalized_multidomain_query_planning_and_dual_pass():
+async def test_multidomain_query_planning_and_dual_pass():
     """
-    Validates generalized query expansion and dual-track candidate retrieval across
+    Validates dynamic query expansion and dual-track candidate retrieval across
     four distinct academic domains without any hardcoded synonym dictionaries:
       1. Deep Learning: "cross attention" -> "encoder-decoder attention"
       2. NLP: "flash attention" -> "fast attention IO-awareness"
@@ -1607,7 +1607,7 @@ async def test_reranker_scoring_distribution_and_variance():
             "title": "High-Resolution Image Synthesis with Latent Diffusion Models",
             "authors": "Rombach et al.",
             "publication_year": 2022,
-            "abstract": "We integrate cross-attention layers into the model architecture for general conditioning inputs...",
+            "abstract": "We integrate cross-attention layers into the model architecture for multimodal conditioning inputs...",
             "citation_count": 12000,
             "doi": "10.5555/rombach2022"
         },

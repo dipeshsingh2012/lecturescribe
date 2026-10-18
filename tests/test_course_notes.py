@@ -49,7 +49,7 @@ class TestCourseNotesBackend(unittest.TestCase):
         self.assertEqual(get_data["note"]["title"], "Thesis Literature Review Scratchpad")
         self.assertEqual(get_data["note"]["content"], "Initial notes on Transformer self-attention complexity.")
 
-        # 4. Auto-save / Update note content and title
+        # 4. Save / Update note content and title
         update_res = self.client.put(
             f"/api/course/{self.course_name}/notes/{note_id}",
             json={
@@ -70,29 +70,20 @@ class TestCourseNotesBackend(unittest.TestCase):
         self.assertEqual(verify_res.status_code, 200)
         self.assertEqual(verify_res.json()["note"]["content"], "Updated notes: Linear attention mechanisms review.")
 
-        # 4b. Anti-data loss safeguard: Attempting to overwrite non-empty note with blank content should be rejected (400)
-        blank_overwrite_res = self.client.put(
-            f"/api/course/{self.course_name}/notes/{note_id}",
+        # 4b. Verify PUT upsert creates note if client-generated note_id does not yet exist
+        upsert_id = "note_client_optimistic_1"
+        upsert_res = self.client.put(
+            f"/api/course/{self.course_name}/notes/{upsert_id}",
             json={
                 "user_email": self.user_email,
-                "title": "Thesis Literature Review (Updated)",
-                "content": "<p></p>"
+                "title": "EARLY SEPSIS DETECTION",
+                "content": "<p>Cross-Attention Multimodal Fusion for Early Sepsis Detection</p>"
             }
         )
-        self.assertEqual(blank_overwrite_res.status_code, 400)
-        self.assertIn("Anti-data-loss protection", blank_overwrite_res.json()["detail"])
-
-        # But if allow_empty=True is explicitly passed, it should succeed
-        explicit_empty_res = self.client.put(
-            f"/api/course/{self.course_name}/notes/{note_id}",
-            json={
-                "user_email": self.user_email,
-                "title": "Thesis Literature Review (Updated)",
-                "content": "<p></p>",
-                "allow_empty": True
-            }
-        )
-        self.assertEqual(explicit_empty_res.status_code, 200)
+        self.assertEqual(upsert_res.status_code, 200)
+        self.assertEqual(upsert_res.json()["note"]["note_id"], upsert_id)
+        self.assertEqual(upsert_res.json()["note"]["title"], "EARLY SEPSIS DETECTION")
+        self.client.delete(f"/api/course/{self.course_name}/notes/{upsert_id}?user_email={self.user_email}")
 
         # 5. Unauthorized access check (different user)
         other_user = "intruder@mtech.edu"

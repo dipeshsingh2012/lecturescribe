@@ -10,6 +10,7 @@ const ext = typeof browser !== "undefined" ? browser : chrome;
 const DEFAULT_SETTINGS = {
   webAppUrl: "http://localhost:5173",
   apiUrl: "http://localhost:8000",
+  userEmail: "dipesh.singh2012@gmail.com",
   showFloatingBadge: true,
   badgePosition: "top-right",
   defaultTab: "transcript",
@@ -79,7 +80,7 @@ ext.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // Get merged settings
 async function getSettings() {
   const stored = await ext.storage.sync.get(null);
-  return { ...DEFAULT_SETTINGS, ...stored };
+  return { ...DEFAULT_SETTINGS, ...stored, userEmail: stored?.userEmail || DEFAULT_SETTINGS.userEmail };
 }
 
 // Update extension icon badge
@@ -185,6 +186,7 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const videoDetails = message.videoDetails || (targetVideo?.title ? { title: targetVideo.title } : null);
       const courseName = message.courseName || targetVideo?.courseName || null;
       const lmsPageUrl = message.lmsPageUrl || targetVideo?.referer || null;
+      const userEmail = message.email || settings.userEmail || "dipesh.singh2012@gmail.com";
 
       try {
         const resp = await fetch(`${apiBase}/api/extension/import`, {
@@ -196,7 +198,7 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
             video_details: videoDetails,
             course_name: courseName,
             lms_page_url: lmsPageUrl,
-            email: settings.userEmail || null
+            email: userEmail
           })
         });
 

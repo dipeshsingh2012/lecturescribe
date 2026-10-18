@@ -2081,8 +2081,10 @@ class Llama3PineconeRAGStore:
         """
         import requests
 
-        clean_course = str(course_name or "Course").strip()
-        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-') or "general"
+        clean_course = str(course_name or "").strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-')
+        if not clean_course or not course_slug:
+            raise ValueError("course_name is required.")
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
 

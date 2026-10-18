@@ -11,7 +11,8 @@ const VIDEO_REGEX = /(?:(?:video\/)?|(?:[/?=]))(\d{6,12})(?:[/?&#]|$)|^(\d+)$/i;
 
 let currentSettings = {
   webAppUrl: "http://localhost:5173",
-  apiUrl: "http://localhost:8000"
+  apiUrl: "http://localhost:8000",
+  userEmail: "dipesh.singh2012@gmail.com"
 };
 
 // DOM Elements
@@ -199,7 +200,8 @@ function renderVideosList(videos) {
           title: video.title,
           courseName: video.courseName || null,
           lmsPageUrl: video.lmsPageUrl || video.referer || null,
-          playerConfig: video.playerConfig || null
+          playerConfig: video.playerConfig || null,
+          email: currentSettings.userEmail || "dipesh.singh2012@gmail.com"
         });
 
         if (res && res.success) {

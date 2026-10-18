@@ -70,7 +70,7 @@ class TestCalendarAlerts(unittest.TestCase):
         self.assertEqual(categorize_event("Homework 3 submission"), "assignment")
         self.assertEqual(categorize_event("Computer Networks Lab 4"), "lab")
         self.assertEqual(categorize_event("Applied AI Lecture Session"), "lecture")
-        self.assertEqual(categorize_event("General Orientation"), "general")
+        self.assertEqual(categorize_event("Campus Orientation"), "schedule")
 
     def test_parse_ical_content(self):
         events = parse_ical_content(SAMPLE_ICS_CONTENT)

@@ -291,7 +291,7 @@ class TestServices(unittest.TestCase):
 
         # First query: lecturescribe_videos -> 3 existing lectures
         # Second query: lecturescribe_user_library -> 1 newly added lecture + 1 existing with drive_folder_url
-        general_videos = [
+        catalog_videos = [
             {"video_id": "101", "title": "Calculus 1", "duration": "45m", "source_url": "https://video.lecturescribe.local/101", "course_name": "Applied Mathematics", "created_at": None},
             {"video_id": "102", "title": "Linear Algebra", "duration": "50m", "source_url": "https://video.lecturescribe.local/102", "course_name": "Applied Mathematics", "created_at": None},
             {"video_id": "103", "title": "Probability", "duration": "60m", "source_url": "https://video.lecturescribe.local/103", "course_name": "Applied Mathematics", "created_at": None}
@@ -301,7 +301,7 @@ class TestServices(unittest.TestCase):
             {"video_id": "104", "title": "Optimization (Newly Added)", "duration": "55m", "source_url": "https://video.lecturescribe.local/104", "drive_folder_url": None, "last_viewed_at": None, "course_name": "Applied Mathematics"}
         ]
 
-        mock_cursor.fetchall.side_effect = [general_videos, user_lib_videos]
+        mock_cursor.fetchall.side_effect = [catalog_videos, user_lib_videos]
 
         with patch.object(db_manager, "_get_connection", return_value=mock_conn):
             course = db_manager.get_course_details("Applied Mathematics", user_email="student@example.com")

@@ -38,7 +38,7 @@ def to_gcs_course_slug(course_name: Optional[str]) -> str:
     so all lectures and resources align under the canonical course directory.
     """
     if not course_name or not str(course_name).strip():
-        return "general"
+        raise ValueError("course_name is required.")
     clean = str(course_name).strip()
 
     # Strip leading path wrapper if present (e.g. 'courses/...')
@@ -60,7 +60,9 @@ def to_gcs_course_slug(course_name: Optional[str]) -> str:
     if slug in ("applied-mathematics-for-data-science-and-ai", "applied-mathemartics-for-data-science-and-ai"):
         slug = "applied-mathemartics-for-data-science-and-ai"
 
-    return slug or "general"
+    if not slug:
+        raise ValueError("course_name is required.")
+    return slug
 
 
 class GCSStorageService:
@@ -122,7 +124,7 @@ class GCSStorageService:
             safe_vid = str(video_id).strip()
             return f"courses/{safe_course}/lectures/{safe_vid}/{unique_prefix}_{safe_name}"
         else:
-            return f"courses/{safe_course}/general/{unique_prefix}_{safe_name}"
+            return f"courses/{safe_course}/resources/{unique_prefix}_{safe_name}"
 
     @staticmethod
     def get_course_note_blob_path(course_slug: str, user_email: str, note_id: str) -> str:

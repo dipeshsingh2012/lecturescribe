@@ -90,14 +90,15 @@ export function useUserLibrary(userEmail) {
     (userLibrary || []).forEach(item => {
       let cName = item.course_name;
       if (!cName) {
-        const raw = (item.title || item.video_title || "General Lectures").trim();
+        const raw = (item.title || item.video_title || "").trim();
         const withoutDate = raw.replace(/[\(\[\{]\s*\d{1,2}[\s/.\-]+\d{1,2}[\s/.\-]+\d{2,4}\s*[\)\]\}]/g, '');
         cName = withoutDate.replace(/\b(?:Live\s+Session|Session|Lecture|Module|Class|Week|Part|Episode)\b.*$/i, '').trim();
         cName = cName.replace(/[\s\-_:\|\/]+$/, '').trim();
         if (!cName || cName.length < 3) cName = raw;
       }
 
-      const slug = normalizeCourseSlug(cName) || 'general';
+      const slug = normalizeCourseSlug(cName);
+      if (!cName || !slug) return;
       const isSlugFormat = cName === slug || (cName.includes('-') && cName === cName.toLowerCase());
 
       if (!map[slug]) {

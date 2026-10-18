@@ -40,6 +40,7 @@ if REPO_ROOT not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
+from backend.database import extract_course_name
 from backend.gcs_storage import gcs_storage_service, to_gcs_course_slug
 from backend.video_client import (
     fetch_player_config,
@@ -217,9 +218,11 @@ def sync_single_video(
 ) -> Dict[str, Any]:
     """Sync a single video into GCS and record tracking state."""
     vid = str(video["video_id"]).strip()
-    raw_course = video.get("course_name") or "General Lectures"
-    course_slug = slugify_course(raw_course)
     title = video.get("title") or f"Lecture {vid}"
+    raw_course = (video.get("course_name") or extract_course_name(title)).strip()
+    if not raw_course:
+        raise ValueError(f"course_name is required for video {vid}")
+    course_slug = slugify_course(raw_course)
 
     record = state.setdefault("videos", {}).get(vid, {
         "video_id": vid,
@@ -431,11 +434,15 @@ def main():
     for v in all_videos:
         vid = str(v["video_id"]).strip()
         if vid not in state.setdefault("videos", {}):
+            v_title = v.get("title") or f"Lecture {vid}"
+            v_course = (v.get("course_name") or extract_course_name(v_title)).strip()
+            if not v_course:
+                raise ValueError(f"course_name is required for video {vid}")
             state["videos"][vid] = {
                 "video_id": vid,
-                "title": v.get("title") or f"Lecture {vid}",
-                "course_name": v.get("course_name") or "General Lectures",
-                "course_slug": slugify_course(v.get("course_name")),
+                "title": v_title,
+                "course_name": v_course,
+                "course_slug": slugify_course(v_course),
                 "status": "PENDING",
                 "attempts": 0
             }

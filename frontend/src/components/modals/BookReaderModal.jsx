@@ -9,9 +9,14 @@ import {
   AlertCircle,
   Loader2,
   Globe,
-  Sparkles
+  Sparkles,
+  Copy,
+  Check,
+  ShieldAlert,
+  Newspaper
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import { isRestrictedPublisherUrl, getPublisherInfo } from '../../utils/publisherDetect';
 
 export default function BookReaderModal({ open, onClose, book, currentTheme }) {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -20,6 +25,8 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [isLending, setIsLending] = useState(Boolean(book?.is_lending));
+  const [copiedCitation, setCopiedCitation] = useState(false);
+  const [copiedDoi, setCopiedDoi] = useState(false);
 
   useEffect(() => {
     if (!open || !book) {
@@ -34,10 +41,26 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
     setHasError(false);
     setIsLending(Boolean(book.is_lending));
 
+    const checkUrl = book.embed_url || book.preview_url || (book.doi ? `https://doi.org/${book.doi}` : '');
+    const pub = getPublisherInfo(checkUrl);
+
+    // If it is known to be from a restricted publisher, route directly to abstract preview
+    if (pub.isRestricted) {
+      setResolvedEmbedUrl(checkUrl);
+      setResolvedReaderType('abstract_preview');
+      setIsLoading(false);
+      return;
+    }
+
     // 1. If book already has a valid embed_url (not an un-embeddable preprint), use it directly
     if (book.embed_url && !book.embed_url.includes('arxiv-')) {
-      setResolvedEmbedUrl(book.embed_url);
-      setResolvedReaderType(book.reader_type || 'embed');
+      if (isRestrictedPublisherUrl(book.embed_url)) {
+        setResolvedEmbedUrl(book.embed_url);
+        setResolvedReaderType('abstract_preview');
+      } else {
+        setResolvedEmbedUrl(book.embed_url);
+        setResolvedReaderType(book.reader_type || 'embed');
+      }
       setIsLoading(false);
       return;
     }
@@ -62,14 +85,24 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
         })
         .then((data) => {
           if (data && data.embed_url) {
-            setResolvedEmbedUrl(data.embed_url);
-            setResolvedReaderType(data.reader_type || 'embed');
+            if (isRestrictedPublisherUrl(data.embed_url)) {
+              setResolvedEmbedUrl(data.embed_url);
+              setResolvedReaderType('abstract_preview');
+            } else {
+              setResolvedEmbedUrl(data.embed_url);
+              setResolvedReaderType(data.reader_type || 'embed');
+            }
             if (data.is_lending !== undefined) {
               setIsLending(Boolean(data.is_lending));
             }
           } else if (book.preview_url) {
-            setResolvedEmbedUrl(book.preview_url);
-            setResolvedReaderType('web');
+            if (isRestrictedPublisherUrl(book.preview_url)) {
+              setResolvedEmbedUrl(book.preview_url);
+              setResolvedReaderType('abstract_preview');
+            } else {
+              setResolvedEmbedUrl(book.preview_url);
+              setResolvedReaderType('web');
+            }
           } else {
             setHasError(true);
           }
@@ -77,8 +110,13 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
         .catch((err) => {
           console.warn("Could not dynamically resolve book reader:", err);
           if (book.preview_url) {
-            setResolvedEmbedUrl(book.preview_url);
-            setResolvedReaderType('web');
+            if (isRestrictedPublisherUrl(book.preview_url)) {
+              setResolvedEmbedUrl(book.preview_url);
+              setResolvedReaderType('abstract_preview');
+            } else {
+              setResolvedEmbedUrl(book.preview_url);
+              setResolvedReaderType('web');
+            }
           } else {
             setHasError(true);
           }
@@ -87,8 +125,13 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
           setIsLoading(false);
         });
     } else if (book.preview_url) {
-      setResolvedEmbedUrl(book.preview_url);
-      setResolvedReaderType('web');
+      if (isRestrictedPublisherUrl(book.preview_url)) {
+        setResolvedEmbedUrl(book.preview_url);
+        setResolvedReaderType('abstract_preview');
+      } else {
+        setResolvedEmbedUrl(book.preview_url);
+        setResolvedReaderType('web');
+      }
       setIsLoading(false);
     } else {
       setHasError(true);
@@ -108,7 +151,18 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
 
   if (!open || !book) return null;
 
+  const targetUrl = book.preview_url || resolvedEmbedUrl || (book.doi ? `https://doi.org/${book.doi}` : '');
+  const pubInfo = getPublisherInfo(targetUrl);
+  const isAbstractPreview = resolvedReaderType === 'abstract_preview' || pubInfo.isRestricted;
+
   const getReaderBadge = () => {
+    if (isAbstractPreview) {
+      return {
+        label: `${pubInfo.name ? pubInfo.name.toUpperCase() : 'JOURNAL'} • ABSTRACT & CITATION`,
+        bg: 'rgba(168, 85, 247, 0.15)',
+        color: '#c084fc'
+      };
+    }
     if (isLending) {
       return { label: 'LENDING COPY (BORROW FOR 1 HR)', bg: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' };
     }
@@ -125,8 +179,25 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
   };
 
   const badge = getReaderBadge();
-  const directOpenUrl = book.preview_url || resolvedEmbedUrl || '';
+  const directOpenUrl = targetUrl;
   const iaLoginUrl = 'https://archive.org/account/login';
+
+  const handleCopyCitation = () => {
+    const citation = `${book.author ? book.author + '. ' : ''}"${book.title}." ${book.journal || book.publisher || ''} ${book.edition || book.publication_year ? `(${book.edition || book.publication_year})` : ''}.${book.doi ? ` https://doi.org/${book.doi}` : ''}`.trim();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(citation);
+      setCopiedCitation(true);
+      setTimeout(() => setCopiedCitation(false), 2000);
+    }
+  };
+
+  const handleCopyDoi = () => {
+    if (book.doi && navigator.clipboard) {
+      navigator.clipboard.writeText(`https://doi.org/${book.doi}`);
+      setCopiedDoi(true);
+      setTimeout(() => setCopiedDoi(false), 2000);
+    }
+  };
 
   return (
     <div
@@ -225,7 +296,7 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
                   textOverflow: 'ellipsis'
                 }}
               >
-                {book.author ? `by ${book.author}` : ''} {book.edition ? `• ${book.edition}` : ''}
+                {book.author ? `by ${book.author}` : ''} {book.edition || book.publication_year ? `• ${book.edition || book.publication_year}` : ''} {book.journal ? `• ${book.journal}` : ''}
               </p>
             </div>
           </div>
@@ -270,17 +341,17 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
                   gap: '6px',
                   padding: '6px 12px',
                   borderRadius: '8px',
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  color: 'var(--text-primary, #ffffff)',
+                  background: isAbstractPreview ? '#3b82f6' : 'rgba(255, 255, 255, 0.08)',
+                  color: '#ffffff',
                   fontSize: '0.78rem',
-                  fontWeight: 600,
+                  fontWeight: 700,
                   textDecoration: 'none',
-                  border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-                  transition: 'background 0.15s'
+                  border: isAbstractPreview ? '1px solid #2563eb' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+                  transition: 'all 0.15s'
                 }}
               >
                 <ExternalLink size={14} />
-                <span>External View</span>
+                <span>{pubInfo.name ? `Open on ${pubInfo.name}` : 'External View'}</span>
               </a>
             )}
 
@@ -405,11 +476,262 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
               }}
             >
               <Loader2 size={32} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
-              <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Loading digital book reader...</span>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Loading digital reader...</span>
             </div>
           )}
 
-          {!isLoading && hasError && (
+          {/* DEDICATED ACADEMIC ARTICLE ABSTRACT & METADATA PREVIEW */}
+          {!isLoading && isAbstractPreview && (
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                overflowY: 'auto',
+                padding: '32px 24px',
+                display: 'flex',
+                justifyContent: 'center',
+                background: 'var(--bg-primary, #0d0f14)'
+              }}
+            >
+              <div
+                style={{
+                  maxWidth: '860px',
+                  width: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '20px'
+                }}
+              >
+                {/* Security / Framing Policy Advisory Banner */}
+                <div
+                  style={{
+                    background: 'rgba(59, 130, 246, 0.08)',
+                    border: '1px solid rgba(59, 130, 246, 0.25)',
+                    borderRadius: '12px',
+                    padding: '14px 18px',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '12px'
+                  }}
+                >
+                  <ShieldAlert size={20} color="#60a5fa" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#93c5fd', marginBottom: '4px' }}>
+                      Publisher Embed Protection ({pubInfo.name || 'Academic Publisher'})
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.5 }}>
+                      Commercial academic publishers enforce security policies (<code>X-Frame-Options: SAMEORIGIN</code>) that prevent rendering full papers inside third-party iframes. You can inspect the verified publication metadata and abstract below, or open the official full text in a secure browser tab.
+                    </div>
+                  </div>
+                </div>
+
+                {/* Article Header Card */}
+                <div
+                  style={{
+                    background: 'var(--card-bg, #161820)',
+                    border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                    borderRadius: '14px',
+                    padding: '24px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '14px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        background: 'rgba(168, 85, 247, 0.15)',
+                        color: '#c084fc',
+                        fontSize: '0.72rem',
+                        fontWeight: 700
+                      }}
+                    >
+                      {book.journal || pubInfo.name || 'Journal Article'}
+                    </span>
+                    {(book.edition || book.publication_year) && (
+                      <span
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          background: 'rgba(255, 255, 255, 0.06)',
+                          color: 'var(--text-secondary, #9ca3af)',
+                          fontSize: '0.72rem',
+                          fontWeight: 600
+                        }}
+                      >
+                        {book.edition || book.publication_year}
+                      </span>
+                    )}
+                    {book.is_open_access && (
+                      <span
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          background: 'rgba(16, 185, 129, 0.15)',
+                          color: '#34d399',
+                          fontSize: '0.72rem',
+                          fontWeight: 700
+                        }}
+                      >
+                        Open Access
+                      </span>
+                    )}
+                  </div>
+
+                  <h1
+                    style={{
+                      margin: 0,
+                      fontSize: '1.35rem',
+                      fontWeight: 800,
+                      color: 'var(--text-primary, #ffffff)',
+                      lineHeight: 1.35
+                    }}
+                  >
+                    {book.title}
+                  </h1>
+
+                  {book.author && (
+                    <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary, #9ca3af)', fontWeight: 500 }}>
+                      <strong style={{ color: 'var(--text-primary, #ffffff)' }}>Authors:</strong> {book.author}
+                    </div>
+                  )}
+
+                  {book.doi && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem' }}>
+                      <span style={{ color: 'var(--text-secondary, #9ca3af)' }}>DOI:</span>
+                      <a
+                        href={`https://doi.org/${book.doi}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#60a5fa', textDecoration: 'none', fontWeight: 600 }}
+                      >
+                        {book.doi}
+                      </a>
+                    </div>
+                  )}
+
+                  {/* Quick Action Toolbar */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      flexWrap: 'wrap',
+                      paddingTop: '12px',
+                      borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))'
+                    }}
+                  >
+                    {directOpenUrl && (
+                      <a
+                        href={directOpenUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '8px 16px',
+                          borderRadius: '8px',
+                          background: '#3b82f6',
+                          color: '#ffffff',
+                          fontWeight: 700,
+                          fontSize: '0.85rem',
+                          textDecoration: 'none',
+                          transition: 'background 0.15s'
+                        }}
+                      >
+                        <ExternalLink size={15} />
+                        <span>Open Full Article on {pubInfo.name || 'Publisher'} ↗</span>
+                      </a>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleCopyCitation}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '8px 14px',
+                        borderRadius: '8px',
+                        background: 'rgba(255, 255, 255, 0.08)',
+                        color: 'var(--text-primary, #ffffff)',
+                        border: '1px solid var(--border-color, rgba(255,255,255,0.12))',
+                        fontWeight: 600,
+                        fontSize: '0.82rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {copiedCitation ? <Check size={14} color="#34d399" /> : <Copy size={14} />}
+                      <span>{copiedCitation ? 'Citation Copied!' : 'Copy Citation'}</span>
+                    </button>
+
+                    {book.doi && (
+                      <button
+                        type="button"
+                        onClick={handleCopyDoi}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '8px 14px',
+                          borderRadius: '8px',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          color: 'var(--text-primary, #ffffff)',
+                          border: '1px solid var(--border-color, rgba(255,255,255,0.12))',
+                          fontWeight: 600,
+                          fontSize: '0.82rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {copiedDoi ? <Check size={14} color="#34d399" /> : <Globe size={14} />}
+                        <span>{copiedDoi ? 'DOI Copied!' : 'Copy DOI Link'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Abstract Section */}
+                <div
+                  style={{
+                    background: 'var(--card-bg, #161820)',
+                    border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                    borderRadius: '14px',
+                    padding: '24px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+                    <FileText size={18} color="#60a5fa" />
+                    <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary, #ffffff)' }}>
+                      Abstract & Summary
+                    </h2>
+                  </div>
+
+                  {book.abstract ? (
+                    <div
+                      style={{
+                        fontSize: '0.92rem',
+                        lineHeight: 1.7,
+                        color: 'var(--text-secondary, #cbd5e1)',
+                        whiteSpace: 'pre-line'
+                      }}
+                    >
+                      {book.abstract}
+                    </div>
+                  ) : (
+                    <div style={{ color: 'var(--text-secondary, #9ca3af)', fontSize: '0.85rem', fontStyle: 'italic' }}>
+                      No full abstract text was indexed for this entry. Click the button above to view the publication and full text directly on the publisher platform.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ERROR FALLBACK */}
+          {!isLoading && !isAbstractPreview && hasError && (
             <div
               style={{
                 display: 'flex',
@@ -447,13 +769,14 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
                   }}
                 >
                   <ExternalLink size={15} />
-                  <span>Open Book on Web</span>
+                  <span>Open on Web</span>
                 </a>
               )}
             </div>
           )}
 
-          {!isLoading && !hasError && resolvedEmbedUrl && (
+          {/* STANDARD IFRAME EMBED (Archive.org, Google Books, Open-Access) */}
+          {!isLoading && !isAbstractPreview && !hasError && resolvedEmbedUrl && (
             <iframe
               src={resolvedEmbedUrl}
               title={book.title}
@@ -499,4 +822,3 @@ export default function BookReaderModal({ open, onClose, book, currentTheme }) {
     </div>
   );
 }
-

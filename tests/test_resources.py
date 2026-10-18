@@ -21,7 +21,8 @@ class TestGCSStorageService(unittest.TestCase):
         self.assertEqual(to_gcs_course_slug("1.7 Introduction to AI in Healthcare"), "introduction-to-ai-in-healthcare")
         self.assertEqual(to_gcs_course_slug("1.9 Data Science Lab"), "data-science-lab")
         self.assertEqual(to_gcs_course_slug("Machine-Learning-101"), "machine-learning-101")
-        self.assertEqual(to_gcs_course_slug(None), "general")
+        with self.assertRaises(ValueError):
+            to_gcs_course_slug(None)
 
     def test_get_resource_blob_path(self):
         path = GCSStorageService.get_resource_blob_path("Machine-Learning-101", "123456", "slides.pdf")
@@ -32,9 +33,9 @@ class TestGCSStorageService(unittest.TestCase):
         self.assertTrue(numbered_path.startswith("courses/introduction-to-computer-vision/lectures/999888/"))
         self.assertTrue(numbered_path.endswith("_notes.pdf"))
 
-        general_path = GCSStorageService.get_resource_blob_path("General", None, "syllabus.docx")
-        self.assertTrue(general_path.startswith("courses/general/general/"))
-        self.assertTrue(general_path.endswith("_syllabus.docx"))
+        course_wide_path = GCSStorageService.get_resource_blob_path("AI 101", None, "syllabus.docx")
+        self.assertTrue(course_wide_path.startswith("courses/ai-101/resources/"))
+        self.assertTrue(course_wide_path.endswith("_syllabus.docx"))
 
     def test_signed_urls_emulated(self):
         # In test sandbox without ADC credentials, it returns valid emulated URLs
@@ -136,7 +137,7 @@ class TestResourceEndpoints(unittest.TestCase):
         # 1. Upload a course-wide resource with video_id=None or empty
         confirm_res = self.client.post("/api/resources/confirm-upload", json={
             "filename": "Course_Syllabus.pdf",
-            "blob_name": "courses/ai-101/general/syllabus.pdf",
+            "blob_name": "courses/ai-101/resources/syllabus.pdf",
             "file_type": "pdf",
             "file_size_bytes": 20480,
             "course_name": "AI 101",

@@ -60,7 +60,7 @@ export default function LectureResourcesShelf({
                 onClick={() => {
                   if (!googleUser) return;
                   openUploadModal({
-                    courseName: activeCourseData?.course_name || selectedCourse || activeData?.course_name || 'General Lectures',
+                    courseName: activeCourseData?.course_name || selectedCourse || activeData?.course_name || '',
                     videoId: activeData?.videoId
                   });
                 }}
@@ -129,7 +129,7 @@ export default function LectureResourcesShelf({
                   }}>
                     {badge.label}
                   </span>
-                  {(!res.video_id || res.video_id === 'general' || res.video_id === 'null') && (
+                  {(!res.video_id || res.video_id === 'null') && (
                     <span style={{
                       padding: '2px 6px',
                       borderRadius: '4px',

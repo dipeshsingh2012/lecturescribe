@@ -9,6 +9,7 @@ const ext = typeof browser !== "undefined" ? browser : chrome;
 const DEFAULT_SETTINGS = {
   webAppUrl: "http://localhost:5173",
   apiUrl: "http://localhost:8000",
+  userEmail: "dipesh.singh2012@gmail.com",
   showFloatingBadge: true,
   badgePosition: "top-right",
   defaultTab: "transcript",

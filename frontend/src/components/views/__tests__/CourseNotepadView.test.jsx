@@ -73,7 +73,7 @@ describe('CourseNotepadView', () => {
     expect(onNavigateBack).toHaveBeenCalled();
   });
 
-  it('triggers auto-save on title change', async () => {
+  it('does not auto-save on edit, but saves when Save button is clicked', async () => {
     vi.useFakeTimers();
     const saveNote = vi.fn().mockResolvedValue({ status: 'success' });
 
@@ -95,8 +95,16 @@ describe('CourseNotepadView', () => {
     const titleInput = screen.getByPlaceholderText('Untitled Note');
     fireEvent.change(titleInput, { target: { value: 'Updated Thesis Notes Title' } });
 
-    // Advance debounce timer (1200ms)
-    vi.advanceTimersByTime(1300);
+    // Advance time - verify NO auto-save was triggered
+    vi.advanceTimersByTime(3000);
+    expect(saveNote).not.toHaveBeenCalled();
+
+    // Verify unsaved changes indicator is shown
+    expect(screen.getByText(/Unsaved changes/i)).toBeInTheDocument();
+
+    // Click explicit Save button
+    const saveBtn = screen.getByRole('button', { name: /^save$/i });
+    fireEvent.click(saveBtn);
 
     expect(saveNote).toHaveBeenCalledWith(
       'Master of Technology',
@@ -133,15 +141,17 @@ describe('CourseNotepadView', () => {
     expect(screen.getByText(/Delete Notepad Note\?/i)).toBeInTheDocument();
   });
 
-  it('does not overwrite user input when activeNote updates with older saved snapshot', () => {
-    const { rerender } = render(
+  it('saves when Ctrl+S shortcut is pressed', () => {
+    const saveNote = vi.fn().mockResolvedValue({ status: 'success' });
+
+    render(
       <CourseNotepadView
         courseName="Master of Technology"
         noteId={mockNote.note_id}
         activeNote={mockNote}
         activeNoteLoading={false}
         saveStatus="saved"
-        saveNote={vi.fn()}
+        saveNote={saveNote}
         deleteNote={vi.fn()}
         onNavigateBack={vi.fn()}
         googleUser={mockUser}
@@ -150,70 +160,17 @@ describe('CourseNotepadView', () => {
     );
 
     const titleInput = screen.getByPlaceholderText('Untitled Note');
-    // User edits title
-    fireEvent.change(titleInput, { target: { value: 'New Unsaved Title' } });
-    expect(titleInput.value).toBe('New Unsaved Title');
+    fireEvent.change(titleInput, { target: { value: 'Shortcut Saved Title' } });
 
-    // Auto-save finishes with older snapshot
-    rerender(
-      <CourseNotepadView
-        courseName="Master of Technology"
-        noteId={mockNote.note_id}
-        activeNote={{
-          ...mockNote,
-          title: 'Older saved snapshot title',
-          updated_at: '2026-10-11T12:01:00Z'
-        }}
-        activeNoteLoading={false}
-        saveStatus="saved"
-        saveNote={vi.fn()}
-        deleteNote={vi.fn()}
-        onNavigateBack={vi.fn()}
-        googleUser={mockUser}
-        currentTheme={mockTheme}
-      />
-    );
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
 
-    // Verify user's text was NOT reverted to 'Older saved snapshot title'
-    expect(titleInput.value).toBe('New Unsaved Title');
-  });
-
-  it('restores content from localStorage backup when server activeNote is empty', () => {
-    const backupKey = `lecturescribe_draft_${mockUser.email}_${mockNote.note_id}`;
-    localStorage.setItem(
-      backupKey,
-      JSON.stringify({
-        title: 'Draft Recovered Title',
-        content: '<p>Recovered offline paragraph</p>',
-        timestamp: Date.now()
+    expect(saveNote).toHaveBeenCalledWith(
+      'Master of Technology',
+      mockNote.note_id,
+      mockUser.email,
+      expect.objectContaining({
+        title: 'Shortcut Saved Title'
       })
     );
-
-    const emptyServerNote = {
-      note_id: mockNote.note_id,
-      title: 'Untitled Note',
-      content: '<p><br></p>',
-      updated_at: '2026-10-11T12:00:00Z'
-    };
-
-    const { container } = render(
-      <CourseNotepadView
-        courseName="Master of Technology"
-        noteId={mockNote.note_id}
-        activeNote={emptyServerNote}
-        activeNoteLoading={false}
-        saveStatus="saved"
-        saveNote={vi.fn()}
-        deleteNote={vi.fn()}
-        onNavigateBack={vi.fn()}
-        googleUser={mockUser}
-        currentTheme={mockTheme}
-      />
-    );
-
-    expect(screen.getByDisplayValue('Draft Recovered Title')).toBeInTheDocument();
-    expect(container.querySelector('.ql-editor')).toHaveTextContent(/Recovered offline paragraph/);
-
-    localStorage.removeItem(backupKey);
   });
 });

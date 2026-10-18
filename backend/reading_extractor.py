@@ -754,7 +754,7 @@ class DomainRouter:
         if re.search(r'\b(transformer|neural network|algorithm|compiler|deep learning|arxiv|gpu|attention)\b', q_lower):
             return "STEM_CS"
 
-        return "GENERAL"
+        return "INTERDISCIPLINARY"
 
     @classmethod
     def get_providers_for_domain(cls, domain: str, query: str = "") -> Tuple[List[str], List[str]]:
@@ -772,11 +772,11 @@ class DomainRouter:
             excluded = ["europe_pmc"]
         elif domain == "BIOMEDICAL":
             dispatched = ["openalex", "europe_pmc", "semantic_scholar", "crossref"]
-            if intent in ("monograph", "general"):
+            if intent in ("monograph", "topic"):
                 dispatched.append("google_books")
             excluded = []
         else:
-            # General / Unconstrained
+            # Interdisciplinary / Unconstrained
             dispatched = ["openalex", "semantic_scholar", "crossref", "google_books"]
             excluded = []
 
@@ -785,13 +785,13 @@ class DomainRouter:
 
 
 def _classify_query_intent(query: str) -> str:
-    """Classifies user query intent into 'monograph', 'paper', or 'general'."""
+    """Classifies user query intent into 'monograph', 'paper', or 'topic'."""
     q_lower = query.lower()
     if re.search(r'\b(textbook|handbook|monograph|guide|introduction to|principles of|volume|edition|concepts)\b', q_lower):
         return "monograph"
     if re.search(r'\b(et al|jama|nejm|nature|ieee|arxiv|doi|proceedings|trial|paper|conference)\b', q_lower):
         return "paper"
-    return "general"
+    return "topic"
 
 
 def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
@@ -1503,7 +1503,7 @@ def _fetch_openalex_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.debug(f"[ReadingExtractor] Sync OpenAlex Title citation lookup failed: {e}")
 
-    # Pass 3: General search for broader topics
+    # Pass 3: Broad search for topic exploration
     search_q = f"{clean_title} {author}".strip() if author else clean_title
     try:
         resp = requests.get(
@@ -1523,7 +1523,7 @@ def _fetch_openalex_candidates(query: str, limit: int) -> List[Dict[str, Any]]:
                     seen_ids.add(w_id)
                     combined_raw.append(item)
     except Exception as e:
-        logger.debug(f"[ReadingExtractor] Sync OpenAlex General search failed: {e}")
+        logger.debug(f"[ReadingExtractor] Sync OpenAlex Topic search failed: {e}")
 
     return _parse_openalex_items(combined_raw) if combined_raw else []
 
@@ -1593,7 +1593,7 @@ async def _fetch_openalex_candidates_async(
     OpenAlex fetcher supporting both exact titles, landmark citations, and broad topics:
       - Pass 1: Author surname filter + title search sorted by citations (if author supplied)
       - Pass 2: Direct title filter (`title.search`) sorted by `cited_by_count:desc` to surface landmark papers
-      - Pass 3: General BM25 search across full text & abstracts for topic exploration
+      - Pass 3: BM25 search across full text & abstracts for topic exploration
     """
     headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
     clean_title, author, _ = extract_citation_components(query)
@@ -2017,7 +2017,7 @@ class SLMQueryPlanner:
       - Canonical domain classification ('cs_ai', 'biomedical', 'physics_math', 'humanities_social')
       - Up to 3 prioritized primary query variations
       - Filtered provider selection
-      - Intent ('paper', 'monograph', 'general')
+      - Intent ('paper', 'monograph', 'topic')
       - Excluded concepts
     Enforces strict query budgets:
       - Semantic Scholar & arXiv: Only first/primary query string. Never multi-query fan-out.
@@ -2072,7 +2072,7 @@ class SLMQueryPlanner:
 
         system_prompt = (
             "You are a strict Stage 1 Academic Query Planner & Intent Router for university research.\n"
-            f"Course context: '{course_name or 'General Academic'}'\n\n"
+            f"Course context: '{course_name or 'University Academic'}'\n\n"
             "Given the user query, identify whether it is a topic, specific book title, or research paper citation. "
             "Output ONLY a valid JSON object conforming to:\n"
             "{\n"
@@ -2083,7 +2083,7 @@ class SLMQueryPlanner:
             '  "negative_disambiguation": ["<false collision 1>", "<false collision 2>"],\n'
             '  "domain": "cs_ai" | "biomedical" | "physics_math" | "humanities_social",\n'
             '  "providers": ["openalex", "crossref", "semantic_scholar", "google_books"],\n'
-            '  "intent": "paper" | "monograph" | "general"\n'
+            '  "intent": "paper" | "monograph" | "topic"\n'
             "}\n"
             "Rules:\n"
             "1. Strip citation markers like 'Vaswani et al.', 'He et al. 2016', or 'by Martin Kleppmann' from verbatim_query.\n"
@@ -2198,7 +2198,7 @@ class SLMQueryPlanner:
                             providers = fallback["providers"]
 
                     intent = data.get("intent")
-                    if intent not in ("paper", "monograph", "general"):
+                    if intent not in ("paper", "monograph", "topic"):
                         intent = fallback["intent"]
 
                     return {
@@ -2328,7 +2328,7 @@ class SLMReranker:
             disambig_note = "\n- < 0.40 (Irrelevant / Token Collision): Drop threshold. Superficially matches keywords or affixes but represents an unrelated mechanism."
 
         system_msg = (
-            f"You are a strict academic literature relevance evaluator for the course '{course_name or 'General Academic'}'.\n"
+            f"You are a strict academic literature relevance evaluator for the course '{course_name or 'University Academic'}'.\n"
             f"User Query: '{query}' (Target Title/Topic: '{clean_title}', Target Author: '{author_filter}')\n\n"
             "Evaluate each numbered candidate against the following strict academic scoring rubric strictly between 0.0 and 1.0:\n"
             "- 0.95 – 1.00 (Core Architectural Breakthrough / Direct Focus / Exact Work): The exact paper or textbook requested by the user, or seminal work defining the queried topic.\n"
@@ -2561,7 +2561,7 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
     """
     Asynchronous federated literature discovery across OpenAlex (Tier 1),
     Crossref, Europe PMC, Google Books, and Semantic Scholar (rate-limited).
-    Handles exact paper citations, specific book titles, and general topics.
+    Handles exact paper citations, specific book titles, and academic topics.
     """
     if not query or len(query.strip()) < 2:
         return []

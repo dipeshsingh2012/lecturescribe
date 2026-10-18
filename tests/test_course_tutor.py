@@ -15,7 +15,7 @@ class TestCourseTutor(unittest.TestCase):
     def test_to_course_slug(self):
         self.assertEqual(to_course_slug("Applied Mathematics for Data Science"), "applied-mathematics-for-data-science")
         self.assertEqual(to_course_slug("Machine Learning Paradigms! 2026"), "machine-learning-paradigms-2026")
-        self.assertEqual(to_course_slug(""), "general")
+        self.assertEqual(to_course_slug(""), "")
 
     def test_database_course_chat_lifecycle(self):
         course = "Test Mathematics Course"

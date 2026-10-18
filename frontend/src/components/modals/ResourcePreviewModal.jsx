@@ -12,6 +12,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { formatBytes } from '../../utils/formatters';
+import { getPublisherInfo, isRestrictedPublisherUrl } from '../../utils/publisherDetect';
 
 export default function ResourcePreviewModal({ open, onClose, resource }) {
   const [isLoading, setIsLoading] = useState(true);
@@ -30,13 +31,21 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
     setLoadError(null);
     setTextContent(null);
 
+    const vUrl = resource.view_url || resource.download_url || resource.file_url || '';
+    const pubInfo = getPublisherInfo(vUrl);
+
+    if (pubInfo.isRestricted) {
+      setIsLoading(false);
+      setLoadError(`Publisher Embed Restriction (${pubInfo.name || 'Academic Publisher'}): This publication prohibits inline framing (X-Frame-Options: SAMEORIGIN). Click below to view the official publication in a new tab.`);
+      return;
+    }
+
     const ext = (resource.filename?.split('.').pop() || resource.file_type || '').toLowerCase();
     const isText = ['txt', 'md', 'json', 'py', 'js', 'jsx', 'ts', 'tsx', 'html', 'css', 'csv'].includes(ext);
 
     // If it's a small text/code file, fetch and display cleanly
-    if (isText && (resource.view_url || resource.download_url || resource.file_url)) {
-      const url = resource.view_url || resource.download_url || resource.file_url;
-      fetch(url)
+    if (isText && vUrl) {
+      fetch(vUrl)
         .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.text();
@@ -288,7 +297,7 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
           )}
 
           {/* PDF Viewer */}
-          {isPdf && viewUrl && (
+          {isPdf && viewUrl && !loadError && (
             <iframe
               src={viewUrl}
               title={resource.title || resource.filename}
@@ -407,11 +416,11 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
 
               <div>
                 <h4 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', color: 'var(--text-primary)' }}>
-                  {loadError || 'In-Browser Preview Not Available'}
+                  {loadError ? (loadError.startsWith('Publisher Embed Restriction') ? 'Publisher Embed Restriction' : 'In-Browser Preview Not Available') : 'In-Browser Preview Not Available'}
                 </h4>
-                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)', maxWidth: '420px' }}>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)', maxWidth: '480px', lineHeight: 1.5 }}>
                   {loadError
-                    ? 'The file could not be rendered directly inside this modal.'
+                    ? loadError
                     : `This file type (.${ext || 'file'}) cannot be rendered inline. You can open it in a new browser tab or download it directly to your device.`}
                 </p>
               </div>

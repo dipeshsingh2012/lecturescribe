@@ -417,6 +417,97 @@ class RedisCacheService:
             print(f"[Redis Cache Warning] Invalidation error for user '{clean_email}': {e}")
             return 0
 
+    def update_user_course(
+        self,
+        user_email: str,
+        course_name: str,
+        lecture_entry: Optional[Dict[str, Any]] = None,
+        ttl_seconds: int = 300
+    ) -> bool:
+        """Update only the user's target course cache entry in Redis upon lecture ingestion."""
+        if not self.client or not self.enabled or not user_email or not course_name:
+            return False
+
+        clean_email = user_email.strip().lower()
+        clean_course = course_name.strip()
+        c_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-')
+        if not c_slug:
+            return False
+        from backend.gcs_storage import to_gcs_course_slug
+        target_base_slug = to_gcs_course_slug(clean_course)
+
+        try:
+            # Invalidate cached course quiz for this specific course slug
+            self.client.delete(f"ls:course_quiz:{c_slug}")
+            if target_base_slug != c_slug:
+                self.client.delete(f"ls:course_quiz:{target_base_slug}")
+
+            if not lecture_entry:
+                self.invalidate_user(clean_email)
+                return True
+
+            vid = str(lecture_entry.get("video_id") or lecture_entry.get("videoId") or "").strip()
+            if not vid:
+                self.invalidate_user(clean_email)
+                return True
+
+            # 1. Surgical update of the specific course inside ls:user_courses:{clean_email}
+            cached_courses = self.get_user_courses(clean_email)
+            if isinstance(cached_courses, list):
+                target_idx = None
+                for idx, c in enumerate(cached_courses):
+                    existing_slug = str(c.get("course_slug") or "").strip().lower()
+                    existing_name = str(c.get("course_name") or "").strip()
+                    if (
+                        existing_slug == c_slug
+                        or existing_name.lower() == clean_course.lower()
+                        or to_gcs_course_slug(existing_name) == target_base_slug
+                        or to_gcs_course_slug(existing_slug) == target_base_slug
+                    ):
+                        target_idx = idx
+                        break
+
+                if target_idx is not None:
+                    target_course = dict(cached_courses[target_idx])
+                    existing_lectures = [
+                        l for l in (target_course.get("lectures") or [])
+                        if str(l.get("video_id") or l.get("videoId") or "") != vid
+                    ]
+                    updated_lectures = [lecture_entry] + existing_lectures
+                    target_course["course_name"] = target_course.get("course_name") or clean_course
+                    target_course["course_slug"] = target_course.get("course_slug") or c_slug
+                    target_course["lecture_count"] = len(updated_lectures)
+                    target_course["latest_viewed_at"] = lecture_entry.get("last_viewed_at") or target_course.get("latest_viewed_at")
+                    target_course["thumbnail_video_id"] = vid
+                    target_course["lectures"] = updated_lectures
+                    remaining_courses = [c for i, c in enumerate(cached_courses) if i != target_idx]
+                    self.set_user_courses(clean_email, [target_course] + remaining_courses, ttl_seconds=ttl_seconds)
+                else:
+                    new_course = {
+                        "course_name": clean_course,
+                        "course_slug": c_slug,
+                        "lecture_count": 1,
+                        "latest_viewed_at": lecture_entry.get("last_viewed_at"),
+                        "thumbnail_video_id": vid,
+                        "lectures": [lecture_entry]
+                    }
+                    self.set_user_courses(clean_email, [new_course] + cached_courses, ttl_seconds=ttl_seconds)
+
+            # 2. Surgical update of ls:user_library:{clean_email} if cached
+            cached_lib = self.get_user_library(clean_email)
+            if isinstance(cached_lib, list):
+                filtered_lib = [
+                    item for item in cached_lib
+                    if str(item.get("video_id") or item.get("videoId") or "") != vid
+                ]
+                self.set_user_library(clean_email, [lecture_entry] + filtered_lib, ttl_seconds=ttl_seconds)
+
+            print(f"⚡ [Redis Cache] Updated course '{clean_course}' cache for '{clean_email}' (video '{vid}').")
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] Course cache update error for '{clean_email}' / '{clean_course}': {e}")
+            return False
+
     def invalidate_video(self, video_id: str) -> int:
         """Purge all cached queries, quizzes, and tool results for a specific lecture."""
         if not self.client or not self.enabled or not video_id:

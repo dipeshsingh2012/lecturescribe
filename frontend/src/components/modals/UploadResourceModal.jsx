@@ -142,7 +142,7 @@ export default function UploadResourceModal({
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
                 {uploadTarget.videoId
                   ? `Attaching to lecture in ${uploadTarget.courseName || 'Course'}`
-                  : `Attaching to course: ${uploadTarget.courseName || 'General Lectures'}`}
+                  : `Attaching to course: ${uploadTarget.courseName || 'Course'}`}
               </div>
             </div>
           </div>

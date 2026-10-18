@@ -8,7 +8,7 @@
 
 ## 1. Executive Summary
 
-This document details the analysis of the current Google Cloud Storage bucket (`gs://lecturescribe-resources`), explains why each entry exists, establishes the ideal storage hierarchy that matches LectureScribe's course/lecture data model, and outlines the architectural roadmap for playing videos directly from Cloud Storage rather than relying on Vimeo iframes.
+This document details the analysis of the current Google Cloud Storage bucket (`gs://lecturescribe-resources`), explains why each entry exists, establishes the ideal storage hierarchy that matches LectureScribe's course/lecture data model, and outlines the architectural roadmap for playing videos directly from Cloud Storage rather than relying on external iframes.
 
 ---
 
@@ -51,7 +51,7 @@ lectures/1234158181/transcript.md
 **Why they are here:**
 1. Produced by the **Browser Extension Bundle Uploader** (`POST /api/cloud/gcs/upload-bundle`).
 2. In `backend/main.py`, the bundle uploader defaulted to `folder_prefix: "lectures"`.
-3. When video `1234158181` (*"Introduction to AI in Healthcare Live session -3"*) was uploaded from the LMS, the extension only knew the Vimeo `videoId` (and not yet the parent course name), leading to an isolated root folder (`lectures/1234158181/`).
+3. When video `1234158181` (*"Introduction to AI in Healthcare Live session -3"*) was uploaded from the LMS, the extension only knew the `videoId` (and not yet the parent course name), leading to an isolated root folder (`lectures/1234158181/`).
 4. In reality, this lecture belongs directly to the course **"Introduction to AI in Healthcare"**, where lecture `1227770906` is already indexed.
 
 ---

@@ -34,7 +34,7 @@ CATEGORY_ICONS = {
     "assignment": "📝",
     "lab": "🔬",
     "lecture": "📚",
-    "general": "📌"
+    "schedule": "📌"
 }
 
 CATEGORY_LABELS = {
@@ -43,7 +43,7 @@ CATEGORY_LABELS = {
     "assignment": "ASSIGNMENT DUE",
     "lab": "LAB SESSION",
     "lecture": "LECTURE",
-    "general": "EVENT"
+    "schedule": "EVENT"
 }
 
 
@@ -100,7 +100,7 @@ def format_whatsapp_message(
         lines.append("Enjoy your focus time or revision. 🎓")
     else:
         for idx, evt in enumerate(events, 1):
-            category = evt.get("category", "general")
+            category = evt.get("category", "schedule")
             icon = CATEGORY_ICONS.get(category, "📌")
             cat_label = CATEGORY_LABELS.get(category, "EVENT")
             title = evt.get("title", "Untitled Event")
@@ -157,7 +157,7 @@ def format_whatsapp_message(
         lines.append("───────────────────────")
         lines.append(f"🌅 *Schedule for Tomorrow ({tomorrow_date}):*")
         for t_evt in tomorrow_preview:
-            t_cat = t_evt.get("category", "general")
+            t_cat = t_evt.get("category", "schedule")
             t_icon = CATEGORY_ICONS.get(t_cat, "📌")
             t_title = t_evt.get("title", "Event")
             t_start = t_evt.get("start_time_formatted", "")

@@ -196,7 +196,7 @@ const CATEGORY_STYLES = {
     color: '#0369a1',
     border: '#bae6fd'
   },
-  general: {
+  schedule: {
     label: 'Schedule',
     icon: <CalendarIcon size={13} />,
     bg: '#f1f5f9',
@@ -266,7 +266,7 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
   }
 
   const renderEventItem = (evt) => {
-    const style = CATEGORY_STYLES[evt.category] || CATEGORY_STYLES.general;
+    const style = CATEGORY_STYLES[evt.category] || CATEGORY_STYLES.schedule;
     const meetingInfo = getMeetingInfo(evt);
     const isExpanded = expandedIds.has(evt.id);
     const isLongDesc = evt.description && (evt.description.length > 110 || evt.description.includes('\n'));

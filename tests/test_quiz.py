@@ -790,7 +790,7 @@ class TestCourseQuizImprovements(unittest.TestCase):
             "question": "In 'Applied Mathematics for Data Science and AI Live session -5 (30 / 9 / 2026)' at 00:00, which concept or statement is emphasized regarding Applied Mathematics?",
             "options": [
                 "Namaste,...",
-                "A counterexample showing the condition fails in general vector spaces.",
+                "A counterexample showing the condition fails in arbitrary vector spaces.",
                 "An introductory greeting with no mathematical bearing.",
                 "A proof relying on an unverified physical assumption."
             ],

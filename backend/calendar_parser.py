@@ -54,7 +54,7 @@ def get_moodle_feed_url() -> str:
 
 
 def categorize_event(summary: str, description: str = "") -> str:
-    """Classify event into assignment, quiz, exam, lecture, lab, or general."""
+    """Classify event into assignment, quiz, exam, lecture, lab, or schedule."""
     text = f"{summary} {description}".lower()
 
     if any(k in text for k in ["midsem", "endsem", "exam", "examination", "viva", "eval", "evaluation"]):
@@ -67,7 +67,7 @@ def categorize_event(summary: str, description: str = "") -> str:
         return "lab"
     if any(k in text for k in ["lecture", "session", "class", "tutorial", "sync", "meet"]):
         return "lecture"
-    return "general"
+    return "schedule"
 
 
 def _normalize_dt(dt_val: Any) -> Tuple[datetime.datetime, bool]:

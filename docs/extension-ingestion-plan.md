@@ -14,7 +14,7 @@ details.
    so both the current URL input and the extension use the same code path,
    keeping existing URL behavior intact.
 
-2. **Add an extension import request.** Accept the captured Vimeo player config
+2. **Add an extension import request.** Accept the captured video player config
    plus video details, LMS page URL, and course name. Run the same save,
    summary, search-index, and course-association steps as URL import. Return
    import errors explicitly.

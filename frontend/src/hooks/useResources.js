@@ -61,7 +61,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   }, []);
 
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
-  const [uploadTarget, setUploadTarget] = useState({ courseName: 'General Lectures', videoId: null });
+  const [uploadTarget, setUploadTarget] = useState({ courseName: '', videoId: null });
   const [uploadMode, setUploadMode] = useState('file'); // 'file' | 'link'
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadFiles, setUploadFiles] = useState([]);
@@ -136,7 +136,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     (courseResources || []).forEach(r => {
       if (r && r.id) {
         const vid = r.video_id;
-        const isCourseWide = !vid || vid === 'general' || vid === 'null' || String(vid).trim() === '';
+        const isCourseWide = !vid || vid === 'null' || String(vid).trim() === '';
         if (isCourseWide && !map.has(r.id)) {
           map.set(r.id, r);
         }
@@ -283,7 +283,8 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const searchLiterature = async (query, courseName = '', limit = 6) => {
     if (!query || !query.trim()) return [];
     try {
-      const cname = courseName || selectedCourse || 'General Lectures';
+      const cname = (courseName || selectedCourse || '').trim();
+      if (!cname) return [];
       const slug = normalizeCourseSlug(cname) || cname;
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/search-literature`, {
         method: 'POST',
@@ -303,7 +304,8 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const addCourseReading = async (courseName, readingItem) => {
     if (!readingItem || !readingItem.title) return null;
     try {
-      const cname = courseName || selectedCourse || 'General Lectures';
+      const cname = (courseName || selectedCourse || '').trim();
+      if (!cname) return null;
       const slug = normalizeCourseSlug(cname) || cname;
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(slug)}/add-reading`, {
         method: 'POST',
@@ -342,7 +344,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     }
   }, [selectedCourse]);
 
-  const openUploadModal = (target = { courseName: selectedCourse || 'General Lectures', videoId: activeVideoId || null }) => {
+  const openUploadModal = (target = { courseName: selectedCourse || '', videoId: activeVideoId || null }) => {
     setUploadTarget(target);
     setUploadFile(null);
     setUploadFiles([]);
@@ -366,6 +368,11 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     setUploadProgress('');
 
     try {
+      const targetCourseName = (uploadTarget.courseName || selectedCourse || '').trim();
+      if (!targetCourseName) {
+        throw new Error("A course name is required to upload resources.");
+      }
+
       if (uploadMode === 'file') {
         const filesToUpload = (uploadFiles && uploadFiles.length > 0)
           ? uploadFiles
@@ -388,7 +395,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              course_name: uploadTarget.courseName || selectedCourse || 'General Lectures',
+              course_name: targetCourseName,
               video_id: uploadTarget.videoId || null,
               filename: file.name,
               content_type: file.type || 'application/octet-stream',
@@ -423,7 +430,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              course_name: uploadTarget.courseName || selectedCourse || 'General Lectures',
+              course_name: targetCourseName,
               video_id: uploadTarget.videoId || null,
               title: resourceTitle,
               filename: file.name,
@@ -458,7 +465,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            course_name: uploadTarget.courseName || selectedCourse || 'General Lectures',
+            course_name: targetCourseName,
             video_id: uploadTarget.videoId || null,
             title: uploadTitle.trim() || uploadLinkUrl,
             link_url: uploadLinkUrl.trim(),

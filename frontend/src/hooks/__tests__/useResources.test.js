@@ -161,7 +161,7 @@ describe('useResources hook functionality', () => {
           ok: true,
           json: async () => ({
             signed_url: `https://storage.googleapis.com/test-bucket/${body.filename}?sig=xyz`,
-            blob_name: `courses/cs101/general/${body.filename}`
+            blob_name: `courses/cs101/resources/${body.filename}`
           })
         });
       }

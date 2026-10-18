@@ -224,7 +224,7 @@ export default function AITutor({
           }}
         >
           <span>
-            This video was imported without a transcript. The tutor can still answer general questions, but lecture-grounded answers and transcript summaries are unavailable.
+            This video was imported without a transcript. The tutor can still answer conceptual questions, but lecture-grounded answers and transcript summaries are unavailable.
           </span>
           <button
             type="button"

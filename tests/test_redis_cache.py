@@ -136,6 +136,49 @@ class TestRedisCache(unittest.TestCase):
         self.assertEqual(deleted, 2)
         mock_redis.delete.assert_called_with("ls:user_courses:test@domain.com", "ls:user_library:test@domain.com")
 
+    def test_update_user_course_updates_only_target_course(self):
+        """Test that update_user_course surgically updates only the target course in user's cached courses."""
+        mock_redis = MagicMock()
+        service = RedisCacheService(redis_url="redis://localhost:6379")
+        service.client = mock_redis
+        service.enabled = True
+
+        existing_courses = [
+            {
+                "course_name": "1.2 Machine Learning Paradigms",
+                "course_slug": "1-2-machine-learning-paradigms",
+                "lecture_count": 1,
+                "lectures": [{"video_id": "1236295740", "title": "Session 6"}]
+            },
+            {
+                "course_name": "1.5 Introduction to Generative AI",
+                "course_slug": "1-5-introduction-to-generative-ai",
+                "lecture_count": 3,
+                "lectures": [{"video_id": "999", "title": "GenAI 1"}]
+            }
+        ]
+        mock_redis.get.side_effect = [json.dumps(existing_courses), None]
+
+        new_lecture = {
+            "video_id": "1236796056",
+            "videoId": "1236796056",
+            "title": "Machine Learning Paradigms Live Session -7 ( 17 / 10 / 2026)",
+            "course_name": "1.2 Machine Learning Paradigms"
+        }
+        ok = service.update_user_course("dipesh.singh2012@gmail.com", "Machine Learning Paradigms", new_lecture)
+        self.assertTrue(ok)
+        self.assertTrue(mock_redis.setex.called)
+        saved_key, saved_ttl, saved_json = mock_redis.setex.call_args.args
+        self.assertEqual(saved_key, "ls:user_courses:dipesh.singh2012@gmail.com")
+        updated_courses = json.loads(saved_json)
+        self.assertEqual(len(updated_courses), 2)
+        mlp_course = next(c for c in updated_courses if "Machine Learning Paradigms" in c["course_name"])
+        self.assertEqual(mlp_course["lecture_count"], 2)
+        self.assertEqual(mlp_course["lectures"][0]["video_id"], "1236796056")
+        genai_course = next(c for c in updated_courses if "Generative AI" in c["course_name"])
+        self.assertEqual(genai_course["lecture_count"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -84,5 +84,38 @@ describe('ResourcePreviewModal', () => {
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute('src', 'https://storage.googleapis.com/test/nn_diagram.png');
   });
+
+  it('renders graceful fallback when resource is a restricted academic publisher URL (e.g. JAMA Network)', () => {
+    const jamaPaper = {
+      id: 3,
+      title: 'Singer et al. Sepsis-3',
+      filename: 'sepsis3.pdf',
+      file_type: 'pdf',
+      file_size_bytes: 1048576,
+      view_url: 'https://jamanetwork.com/journals/jama/fullarticle/2492881',
+      download_url: 'https://jamanetwork.com/journals/jama/fullarticle/2492881'
+    };
+
+    const { container } = render(
+      <ResourcePreviewModal
+        open={true}
+        onClose={vi.fn()}
+        resource={jamaPaper}
+      />
+    );
+
+    // Verify no broken iframe is mounted
+    const iframe = container.querySelector('iframe');
+    expect(iframe).toBeNull();
+
+    // Verify publisher restriction warning is displayed
+    expect(screen.getByText('Publisher Embed Restriction')).toBeInTheDocument();
+    expect(screen.getByText(/Publisher Embed Restriction \(JAMA Network\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/X-Frame-Options: SAMEORIGIN/i)).toBeInTheDocument();
+
+    // Verify action buttons
+    const newTabLinks = screen.getAllByRole('link', { name: /Open in New Tab|New Tab/i });
+    expect(newTabLinks.length).toBeGreaterThan(0);
+  });
 });
 

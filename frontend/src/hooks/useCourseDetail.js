@@ -155,7 +155,8 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
   const addLectureToCourse = (lecture, courseTarget = null) => {
     if (!lecture) return;
     const vidId = String(lecture.video_id || lecture.videoId);
-    const resolvedName = (courseTarget || selectedCourse || lecture.course_name || 'General Lectures').trim();
+    const resolvedName = (courseTarget || selectedCourse || lecture.course_name || '').trim();
+    if (!resolvedName) return;
     setDirectCourseData(prev => {
       if (!prev) {
         return {

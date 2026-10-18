@@ -245,6 +245,7 @@ class TestLectureQuiz(unittest.TestCase):
         executed_sql = mock_cursor.execute.call_args[0][0]
         self.assertIn("INSERT INTO lecturescribe_quizzes", executed_sql)
 
+    @patch("backend.main.redis_cache", None)
     @patch("backend.database.db_manager.get_saved_video")
     @patch("backend.database.db_manager.get_saved_quiz")
     @patch("backend.rag_engine.pinecone_rag_engine.generate_lecture_quiz")
@@ -267,6 +268,7 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertEqual(data["questions"][0]["question"], "What is $O(n)$?")
         mock_gen.assert_not_called()
 
+    @patch("backend.main.redis_cache", None)
     @patch("backend.database.db_manager.get_saved_video")
     @patch("backend.database.db_manager.get_saved_quiz")
     @patch("backend.rag_engine.pinecone_rag_engine.generate_lecture_quiz")

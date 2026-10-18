@@ -38,6 +38,7 @@ class TestChatMessageProcessing(unittest.TestCase):
         self.assertTrue(res.get("cached"))
         self.assertEqual(res["reply"], "Cached answer text")
 
+    @patch("backend.main.redis_cache", None)
     @patch("backend.main.db_manager.get_saved_video")
     @patch("backend.main.db_manager.save_chat_log")
     @patch("backend.main.pinecone_rag_engine.query_rag")

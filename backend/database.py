@@ -3029,6 +3029,9 @@ class RelationalDBManager:
                         """, (user_email.strip().lower(), clean_name, f"%{clean_name}%", slug_as_space, f"%{slug_as_wildcard}%", f"%{base_course_space}%", f"%{slug_as_space}%", f"%{slug_as_wildcard}%", f"%{base_course_space}%"))
                         user_lib_rows = cursor.fetchall() or []
 
+                    if not vid_rows and not user_lib_rows:
+                        raise ValueError("No course lectures found in database")
+
                     numbered_row = next(
                         (r for r in (vid_rows + user_lib_rows) if r.get("course_name") and re.match(r'^\d+\.\d+\s+', r["course_name"])),
                         None
@@ -3117,7 +3120,9 @@ class RelationalDBManager:
         # In-memory cache fallback (used when DB is down or in mock test mode)
         mem_lectures = []
         for vid_id, v in self._memory_cache.items():
-            c_name = v.get("course_name") or extract_course_name(v.get("title", ""))
+            c_name = (v.get("course_name") or extract_course_name(v.get("title", ""))).strip()
+            if not c_name:
+                continue
             c_slug = re.sub(r'[^a-z0-9]+', '-', c_name.lower()).strip('-')
             if (clean_lower in (c_name.lower(), c_slug)
                 or slug_as_space.lower() == c_name.lower()

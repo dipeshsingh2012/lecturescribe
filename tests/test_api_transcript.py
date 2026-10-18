@@ -333,8 +333,9 @@ Today we discuss forward kinematics.
         self.assertEqual(allowed.status_code, 200)
         self.assertEqual(allowed.json()["stage"], "transcribing")
 
+    @patch("backend.database.RelationalDBManager._get_connection", side_effect=Exception("mocked"))
     @patch("backend.main.db_manager.get_saved_video")
-    def test_transcript_provides_course_slug_and_canonical_name(self, mock_get_saved):
+    def test_transcript_provides_course_slug_and_canonical_name(self, mock_get_saved, _mock_conn):
         mock_get_saved.return_value = {
             "videoId": "1234158573",
             "title": "Machine Learning Paradigms Live Session -4 ( 8 / 10 / 2026)",

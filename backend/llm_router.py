@@ -27,7 +27,6 @@ class TaskType(str, Enum):
     SUMMARY_SECTIONS = "summary_sections"            # 2k - 5k tokens: structured JSON breakdown
     QUIZ = "quiz"                                    # 2k - 4k tokens: multiple choice JSON
     CORRECTION = "correction"                        # multimodal audio + transcript text proofreading
-    QA = "qa"                                        # QA and agentic search
 
 
 @dataclass
@@ -259,7 +258,7 @@ class LLMRouter:
 
     def get_candidate_models(
         self,
-        task_type: TaskType = TaskType.QA,
+        task_type: TaskType,
         est_tokens: int = 0,
         multimodal: bool = False
     ) -> List[ModelSpec]:

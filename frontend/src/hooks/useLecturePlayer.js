@@ -176,6 +176,24 @@ export function createIframeVideoAdapter(iframeEl) {
 }
 
 export function useLecturePlayer(activeData, userEmail = null) {
+  const effectiveUserEmail = useMemo(() => {
+    if (userEmail && typeof userEmail === 'string' && userEmail.trim()) {
+      return userEmail.trim();
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('lecturescribe_google_user');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed?.email && parsed.email !== 'Google User') {
+            return parsed.email.trim();
+          }
+        }
+      } catch {}
+    }
+    return null;
+  }, [userEmail]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searchAvailable, setSearchAvailable] = useState(true);
@@ -382,7 +400,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 video_id: activeData.videoId,
-                user_email: userEmail || 'anonymous',
+                user_email: effectiveUserEmail || 'anonymous',
                 last_timestamp: timestampStr,
                 last_seconds: safeSec,
                 duration_seconds: dur,
@@ -477,7 +495,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
             // Silent auto-resume from database if not explicitly set via URL
             if (!restored && activeData?.videoId) {
               try {
-                const emailParam = userEmail ? `&user_email=${encodeURIComponent(userEmail)}` : '';
+                const emailParam = effectiveUserEmail ? `&user_email=${encodeURIComponent(effectiveUserEmail)}` : '';
                 const res = await fetch(`${API_BASE}/api/progress/lecture?video_id=${encodeURIComponent(activeData.videoId)}${emailParam}`);
                 if (res.ok) {
                   const resData = await res.json();
@@ -526,7 +544,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
         console.warn("Video Player SDK init warning:", err);
       }
     }
-  }, [activeData, userEmail]);
+  }, [activeData, effectiveUserEmail]);
 
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -650,7 +668,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             video_id: activeData.videoId,
-            user_email: userEmail || 'anonymous',
+            user_email: effectiveUserEmail || 'anonymous',
             last_timestamp: timestampStr,
             last_seconds: secs,
             duration_seconds: durationRef.current || 0,

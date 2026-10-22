@@ -215,12 +215,14 @@ class GenerateLectureSummaryRequest(BaseModel):
 
 
 class SaveLectureProgressRequest(BaseModel):
-    video_id: str
-    user_email: Optional[str] = None
-    last_timestamp: str = "00:00"
-    last_seconds: float = 0.0
-    duration_seconds: float = 0.0
-    active_cue_idx: int = 0
+    model_config = ConfigDict(populate_by_name=True)
+
+    video_id: str = Field(validation_alias=AliasChoices("video_id", "videoId"))
+    user_email: Optional[str] = Field(default=None, validation_alias=AliasChoices("user_email", "userEmail", "email"))
+    last_timestamp: str = Field(default="00:00", validation_alias=AliasChoices("last_timestamp", "lastTimestamp"))
+    last_seconds: float = Field(default=0.0, validation_alias=AliasChoices("last_seconds", "lastSeconds"))
+    duration_seconds: float = Field(default=0.0, validation_alias=AliasChoices("duration_seconds", "durationSeconds"))
+    active_cue_idx: int = Field(default=0, validation_alias=AliasChoices("active_cue_idx", "activeCueIdx"))
 
 
 class TranscriptionDispatchRequest(BaseModel):
@@ -2581,8 +2583,6 @@ def save_lecture_progress_endpoint(req: SaveLectureProgressRequest):
     if redis_cache:
         target_email = req.user_email.strip().lower() if req.user_email and req.user_email.strip() else "anonymous"
         redis_cache.invalidate_user(target_email)
-        if target_email != "anonymous":
-            redis_cache.invalidate_user("anonymous")
     return {
         "status": "success",
         "video_id": vid,

@@ -953,6 +953,11 @@ def _async_upload_video_to_gcs_worker(
             if video_id in _active_gcs_uploads:
                 _active_gcs_uploads[video_id]["stage"] = "Transferring video to Google Cloud Storage..."
 
+        def _on_stage_change(msg: str):
+            with _gcs_upload_lock:
+                if video_id in _active_gcs_uploads:
+                    _active_gcs_uploads[video_id]["stage"] = msg
+
         logger.info(f"🚀 [GCS Background Upload] Starting video upload for '{video_id}' ({title})...")
         result = gcs_storage_service.upload_lecture_bundle(
             video_id=video_id,
@@ -963,13 +968,18 @@ def _async_upload_video_to_gcs_worker(
             streams_info=streams_info,
             prefix=effective_prefix,
             upload_video=True,
-            referer=eff_referer
+            referer=eff_referer,
+            progress_callback=_on_stage_change
         )
         logger.info(f"✅ [GCS Background Upload Complete] Video '{video_id}' status: {result.get('status')}")
-        if result and result.get("video_details") and result["video_details"].get("blob_name"):
-            blob_name = result["video_details"]["blob_name"]
+        video_details = result.get("video_details") or {}
+        blob_name = video_details.get("blob_name")
+        view_url = video_details.get("view_url")
+        size_mb = video_details.get("size_mb")
+
+        if blob_name:
             try:
-                db_manager.update_video_gcs_blob(video_id, blob_name)
+                db_manager.update_video_gcs_blob(video_id, blob_name, title=title, course_name=course_name)
             except Exception as e:
                 logger.warning(f"[GCS Background Upload] Could not update gcs_video_blob in DB: {e}")
 
@@ -977,6 +987,9 @@ def _async_upload_video_to_gcs_worker(
             if video_id in _active_gcs_uploads:
                 _active_gcs_uploads[video_id]["status"] = "SUCCESS"
                 _active_gcs_uploads[video_id]["stage"] = "Uploaded successfully"
+                _active_gcs_uploads[video_id]["blob_name"] = blob_name
+                _active_gcs_uploads[video_id]["view_url"] = view_url
+                _active_gcs_uploads[video_id]["size_mb"] = size_mb
     except Exception as exc:
         logger.error(f"❌ [GCS Background Upload Error] Video '{video_id}': {exc}")
         with _gcs_upload_lock:
@@ -985,7 +998,7 @@ def _async_upload_video_to_gcs_worker(
                 _active_gcs_uploads[video_id]["stage"] = f"Error: {exc}"
     finally:
         def _cleanup():
-            time.sleep(15)
+            time.sleep(300)
             with _gcs_upload_lock:
                 _active_gcs_uploads.pop(video_id, None)
         threading.Thread(target=_cleanup, daemon=True).start()
@@ -4440,12 +4453,13 @@ def get_single_video_status(video_id: str):
     """Fast, lightweight endpoint to query database and GCS sync status for a single video."""
     vid = str(video_id).strip()
     saved = db_manager.get_saved_video(vid)
-    effective_course = saved.get("course_name") if saved else None
 
-    # Check GCS storage
-    gcs_video = gcs_storage_service.find_lecture_video(video_id=vid, course_name=effective_course)
+    # 1. Retrieve in-memory background upload status
+    active_upload = None
+    with _gcs_upload_lock:
+        active_upload = _active_gcs_uploads.get(vid)
 
-    # Check tracking manifest if exists
+    # 2. Check tracking manifest if exists
     tracking_info = {}
     tracking_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "sync_tracking.json"))
     if os.path.exists(tracking_path):
@@ -4456,38 +4470,76 @@ def get_single_video_status(video_id: str):
         except Exception as e:
             print(f"⚠️ [Sync Status Tracking Read Notice]: {e}")
 
-    active_upload = None
-    with _gcs_upload_lock:
-        active_upload = _active_gcs_uploads.get(vid)
+    # 3. Determine course name from all available sources
+    effective_course = (
+        (saved.get("course_name") if saved else None)
+        or (active_upload.get("course_name") if active_upload else None)
+        or tracking_info.get("course_name")
+    )
 
+    # 4. Check GCS storage with resolved course name
+    gcs_video = gcs_storage_service.find_lecture_video(video_id=vid, course_name=effective_course)
+
+    is_upload_success = bool(active_upload and active_upload.get("status") == "SUCCESS")
     is_uploading = bool(active_upload and active_upload.get("status") == "UPLOADING")
-    is_gcs_synced = bool(gcs_video or tracking_info.get("status") in ("SUCCESS", "ALREADY_CACHED"))
+    is_gcs_synced = bool(
+        gcs_video
+        or is_upload_success
+        or bool(saved and saved.get("gcs_video_blob"))
+        or tracking_info.get("status") in ("SUCCESS", "ALREADY_CACHED")
+    )
+
+    blob_name = (
+        (gcs_video.get("blob_name") if gcs_video else None)
+        or (active_upload.get("blob_name") if active_upload else None)
+        or (saved.get("gcs_video_blob") if saved else None)
+        or tracking_info.get("blob_name")
+    )
+
+    view_url = (
+        (gcs_video.get("view_url") if gcs_video else None)
+        or (active_upload.get("view_url") if active_upload else None)
+    )
+    if not view_url and blob_name:
+        try:
+            view_url = gcs_storage_service.generate_download_signed_url(blob_name, expires_minutes=180, disposition="inline")
+        except Exception:
+            pass
+
     size_mb = None
     if gcs_video and gcs_video.get("size_bytes"):
         size_mb = round(gcs_video["size_bytes"] / (1024 * 1024), 2)
+    elif active_upload and active_upload.get("size_mb"):
+        size_mb = active_upload["size_mb"]
     elif tracking_info.get("size_mb"):
         size_mb = tracking_info["size_mb"]
 
-    blob_name = gcs_video.get("blob_name") if gcs_video else tracking_info.get("blob_name")
-    gcs_uri = gcs_video.get("gcs_uri") if gcs_video else tracking_info.get("gcs_uri")
-    title = (saved.get("title") if saved else None) or tracking_info.get("title")
+    gcs_uri = (
+        (gcs_video.get("gcs_uri") if gcs_video else None)
+        or (f"gs://{gcs_storage_service.bucket_name}/{blob_name}" if blob_name else None)
+        or tracking_info.get("gcs_uri")
+    )
+    title = (saved.get("title") if saved else None) or (active_upload.get("title") if active_upload else None) or tracking_info.get("title")
     course_name = effective_course or tracking_info.get("course_name")
+
+    upload_status = active_upload.get("status") if active_upload else ("COMPLETED" if is_gcs_synced else "IDLE")
+    upload_stage = active_upload.get("stage") if active_upload else ("Uploaded successfully" if is_gcs_synced else None)
 
     return {
         "videoId": vid,
         "cached_in_db": bool(saved),
         "synced_to_gcs": is_gcs_synced,
         "is_uploading": is_uploading,
-        "upload_status": active_upload.get("status") if active_upload else ("COMPLETED" if is_gcs_synced else "IDLE"),
-        "upload_stage": active_upload.get("stage") if active_upload else None,
+        "upload_status": upload_status,
+        "upload_stage": upload_stage,
         "video_source": "gcs",
         "blob_name": blob_name,
         "gcs_uri": gcs_uri,
-        "view_url": gcs_video.get("view_url") if gcs_video else None,
+        "view_url": view_url,
         "size_mb": size_mb,
         "title": title,
         "course_name": course_name,
-        "tracking_status": (active_upload.get("status") if is_uploading else None) or tracking_info.get("status") or ("ALREADY_CACHED" if gcs_video else "UNKNOWN")
+        "tracking_status": (active_upload.get("status") if is_uploading else None) or tracking_info.get("status") or ("ALREADY_CACHED" if is_gcs_synced else "UNKNOWN")
     }
 
 
@@ -4551,11 +4603,27 @@ def stream_video_direct(video_id: str):
     from fastapi.responses import RedirectResponse
     vid = str(video_id).strip()
     saved = db_manager.get_saved_video(vid)
-    effective_course = saved.get("course_name") if saved else None
+
+    active_upload = None
+    with _gcs_upload_lock:
+        active_upload = _active_gcs_uploads.get(vid)
+
+    effective_course = (
+        (saved.get("course_name") if saved else None)
+        or (active_upload.get("course_name") if active_upload else None)
+    )
 
     gcs_video = gcs_storage_service.find_lecture_video(video_id=vid, course_name=effective_course)
     if gcs_video and gcs_video.get("view_url"):
         return RedirectResponse(url=gcs_video["view_url"], status_code=307)
+    if active_upload and active_upload.get("view_url"):
+        return RedirectResponse(url=active_upload["view_url"], status_code=307)
+
+    blob_name = (saved.get("gcs_video_blob") if saved else None) or (active_upload.get("blob_name") if active_upload else None)
+    if blob_name:
+        url = gcs_storage_service.generate_download_signed_url(blob_name, expires_minutes=180, disposition="inline")
+        if url:
+            return RedirectResponse(url=url, status_code=307)
 
     # If not found immediately, raise 404
     raise HTTPException(status_code=404, detail=f"GCS video stream for '{vid}' not yet available.")

@@ -2302,7 +2302,13 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
-    def update_video_gcs_blob(self, video_id: str, blob_name: str) -> bool:
+    def update_video_gcs_blob(
+        self,
+        video_id: str,
+        blob_name: str,
+        title: Optional[str] = None,
+        course_name: Optional[str] = None
+    ) -> bool:
         """Persist the GCS video blob name for instant 1ms local URL signing without GCS scanning."""
         if not video_id or not blob_name:
             return False
@@ -2318,9 +2324,18 @@ class RelationalDBManager:
                         SET gcs_video_blob = %s
                         WHERE video_id = %s;
                     """, (clean_blob, clean_vid))
+                    if cursor.rowcount == 0:
+                        clean_title = (title or f"Video {clean_vid}").strip()
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_videos (video_id, title, course_name, gcs_video_blob)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (video_id) DO UPDATE SET gcs_video_blob = EXCLUDED.gcs_video_blob;
+                        """, (clean_vid, clean_title, course_name, clean_blob))
                     conn.commit()
             if clean_vid in self._memory_cache:
                 self._memory_cache[clean_vid]["gcs_video_blob"] = clean_blob
+                if course_name and not self._memory_cache[clean_vid].get("course_name"):
+                    self._memory_cache[clean_vid]["course_name"] = course_name
             return True
         except Exception as e:
             print(f"[PostgreSQL Error updating gcs_video_blob for {clean_vid}]: {e}")

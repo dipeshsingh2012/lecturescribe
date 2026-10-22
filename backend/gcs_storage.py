@@ -12,7 +12,7 @@ import re
 import uuid
 import time
 import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -484,7 +484,8 @@ class GCSStorageService:
         bucket_name: Optional[str] = None,
         referer: Optional[str] = None,
         video_id: str = "",
-        max_height: int = 720
+        max_height: int = 720,
+        progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
         """Download adaptive HLS stream (video+audio) via yt-dlp, mux into MP4, and upload directly to GCS."""
         target_bucket_name = bucket_name or self.bucket_name
@@ -539,9 +540,13 @@ class GCSStorageService:
                     frag_count = d.get("fragment_count")
                     frag_str = f" [Frag {frag_idx}/{frag_count}]" if frag_idx and frag_count else ""
                     print(f"⏳ [GCS HLS Download Progress]{frag_str} {mb_down:.1f}/{mb_total:.1f} MB ({pct:.1f}%) at {speed_mb:.2f} MB/s -> gs://{target_bucket_name}/{blob_name}", flush=True)
+                    if progress_callback:
+                        progress_callback(f"Downloading stream: {mb_down:.1f}/{mb_total:.1f} MB ({pct:.0f}%)")
                     last_log_time[0] = now
             elif d.get("status") == "finished":
                 print("🔄 [GCS HLS Notice] Media fragments downloaded. Muxing video & audio container...", flush=True)
+                if progress_callback:
+                    progress_callback("Muxing video & audio container...")
 
         ydl_opts = {
             "http_headers": {
@@ -595,12 +600,16 @@ class GCSStorageService:
             blob.chunk_size = 1024 * 1024 * 8  # 8MB chunked uploads
 
             print(f"☁️ [GCS Video Upload Starting] Uploading {total_mb:.2f} MB to gs://{target_bucket_name}/{blob_name}...")
+            if progress_callback:
+                progress_callback(f"Uploading {total_mb:.1f} MB to Cloud Storage (in progress)...")
             up_start = time.time()
             blob.upload_from_filename(actual_mp4, content_type="video/mp4")
             up_duration = time.time() - up_start
             total_duration = time.time() - start_time
 
             print(f"✅ [GCS Video Upload Complete] gs://{target_bucket_name}/{blob_name} ({total_mb:.2f} MB uploaded in {up_duration:.1f}s)")
+            if progress_callback:
+                progress_callback("Uploaded successfully")
             signed_url = self.generate_download_signed_url(blob_name)
             return {
                 "status": "success",
@@ -637,7 +646,8 @@ class GCSStorageService:
         bucket_name: Optional[str] = None,
         prefix: str = "lectures",
         upload_video: bool = True,
-        referer: Optional[str] = None
+        referer: Optional[str] = None,
+        progress_callback: Optional[Callable[[str], None]] = None
     ) -> Dict[str, Any]:
         """Upload full lecture materials (summary, transcript, captions, metadata, and video MP4) to GCS bucket."""
         target_bucket = bucket_name or self.bucket_name
@@ -747,7 +757,8 @@ class GCSStorageService:
                         bucket_name=target_bucket,
                         referer=referer,
                         video_id=video_id,
-                        max_height=720
+                        max_height=720,
+                        progress_callback=progress_callback
                     )
                     if video_result.get("status") in ("success", "emulated"):
                         uploaded.append(video_result)

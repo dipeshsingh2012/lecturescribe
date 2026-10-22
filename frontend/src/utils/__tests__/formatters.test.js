@@ -4,6 +4,7 @@ import {
   formatBytes,
   getFileTypeBadge,
   extractVideoId,
+  normalizeTimestamp,
   parseTimestampToSeconds,
   formatSecondsToTimestamp,
   cleanSubmissionFallback,
@@ -109,6 +110,30 @@ describe('formatters utility functions', () => {
     });
   });
 
+  describe('normalizeTimestamp', () => {
+    it('normalizes merged 3-digit hour/minutes like 108:04 to 1:08:04', () => {
+      expect(normalizeTimestamp('108:04')).toBe('1:08:04');
+      expect(normalizeTimestamp('115:00')).toBe('1:15:00');
+      expect(normalizeTimestamp('205:30')).toBe('2:05:30');
+    });
+
+    it('normalizes standard HH:MM:SS to H:MM:SS', () => {
+      expect(normalizeTimestamp('01:08:04')).toBe('1:08:04');
+      expect(normalizeTimestamp('1:08:04')).toBe('1:08:04');
+    });
+
+    it('preserves MM:SS timestamps', () => {
+      expect(normalizeTimestamp('14:20')).toBe('14:20');
+      expect(normalizeTimestamp('00:45')).toBe('00:45');
+    });
+
+    it('handles falsy, empty, or whitespace inputs', () => {
+      expect(normalizeTimestamp('')).toBe('');
+      expect(normalizeTimestamp(null)).toBe('');
+      expect(normalizeTimestamp(undefined)).toBe('');
+    });
+  });
+
   describe('parseTimestampToSeconds', () => {
     it('parses MM:SS to seconds', () => {
       expect(parseTimestampToSeconds('01:30')).toBe(90);
@@ -117,6 +142,11 @@ describe('formatters utility functions', () => {
 
     it('parses HH:MM:SS to seconds', () => {
       expect(parseTimestampToSeconds('01:02:03')).toBe(3723);
+    });
+
+    it('parses merged 3-digit HMM:SS (e.g. 108:04) to seconds', () => {
+      expect(parseTimestampToSeconds('108:04')).toBe(4084); // 1h 08m 04s = 3600 + 480 + 4
+      expect(parseTimestampToSeconds('115:00')).toBe(4500); // 1h 15m 00s = 3600 + 900
     });
 
     it('handles falsy or empty values', () => {
@@ -132,6 +162,13 @@ describe('formatters utility functions', () => {
       expect(cleaned).not.toContain("Based on the professor's lecture");
       expect(cleaned).not.toContain("[01:23]");
       expect(cleaned).toContain("Machine learning is a field of study.");
+    });
+
+    it('strips 3-digit timestamp ranges like [108:04 - 115:00]', () => {
+      const raw = "6. Prediction-Based Word Embeddings & Neural Networks [108:04 - 115:00]";
+      const cleaned = cleanSubmissionFallback(raw);
+      expect(cleaned).not.toContain("[108:04 - 115:00]");
+      expect(cleaned).toContain("Prediction-Based Word Embeddings & Neural Networks");
     });
 
     it('strips markdown formatting symbols', () => {

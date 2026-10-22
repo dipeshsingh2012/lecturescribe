@@ -288,4 +288,26 @@ These four subspaces are paired as two for the matrix \\(A\\) (column space and 
     expect(clipboardData.data['text/plain']).toContain('$\\mathbb{R}^{2}$');
     expect(clipboardData.data['text/plain']).not.toContain('R2R2');
   });
+
+  it('normalizes merged 3-digit hour/minutes timestamps like [108:04 - 115:00] to [1:08:04 – 1:15:00]', () => {
+    const handleCueClick = vi.fn();
+    render(
+      <MarkdownWithTimestamps
+        content="6. Prediction-Based Word Embeddings & Neural Networks [108:04 - 115:00]"
+        onCueClick={handleCueClick}
+      />
+    );
+
+    const btn1 = screen.getByRole('button', { name: /1:08:04/i });
+    const btn2 = screen.getByRole('button', { name: /1:15:00/i });
+
+    expect(btn1).toBeInTheDocument();
+    expect(btn2).toBeInTheDocument();
+
+    fireEvent.click(btn1);
+    expect(handleCueClick).toHaveBeenCalledWith('1:08:04');
+
+    fireEvent.click(btn2);
+    expect(handleCueClick).toHaveBeenCalledWith('1:15:00');
+  });
 });

@@ -185,12 +185,14 @@ describe('LectureSummary component', () => {
 
     // Click the podcast button to open the audio player
     fireEvent.click(podcastButtons[0]);
+    expect(screen.getByTestId('lecture-podcast-dock')).toBeInTheDocument();
     expect(screen.getByTestId('lecture-podcast-player')).toBeInTheDocument();
     expect(screen.getByText(/Podcast Audio Recap/i)).toBeInTheDocument();
     expect(screen.getByText(/Single Narrator • Google TTS/i)).toBeInTheDocument();
 
     // Click again to close / hide the player
     fireEvent.click(podcastButtons[0]);
+    expect(screen.queryByTestId('lecture-podcast-dock')).not.toBeInTheDocument();
     expect(screen.queryByTestId('lecture-podcast-player')).not.toBeInTheDocument();
   });
 

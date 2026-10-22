@@ -4,6 +4,7 @@ import { gfmTable } from 'micromark-extension-gfm-table';
 import { gfmTableFromMarkdown, gfmTableToMarkdown } from 'mdast-util-gfm-table';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { normalizeTimestamp } from '../../utils/formatters';
 
 function remarkGfmTable() {
   const data = this.data();
@@ -21,8 +22,9 @@ export default function MarkdownWithTimestamps({
 }) {
   const effectiveText = content ?? text ?? '';
 
-  const renderTimestampButton = (ts, key) => {
-    const crossCite = (citations || []).find(c => c.cross_lecture && c.timestamp === ts);
+  const renderTimestampButton = (rawTs, key) => {
+    const ts = normalizeTimestamp(rawTs);
+    const crossCite = (citations || []).find(c => c.cross_lecture && (c.timestamp === ts || c.timestamp === rawTs));
     if (crossCite && typeof onCrossLectureClick === 'function') {
       return (
         <button
@@ -31,7 +33,7 @@ export default function MarkdownWithTimestamps({
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            onCrossLectureClick(crossCite.video_id, crossCite.timestamp, crossCite.video_title);
+            onCrossLectureClick(crossCite.video_id, crossCite.timestamp || ts, crossCite.video_title);
           }}
           title={`Open ${crossCite.video_title || 'lecture'} at ${ts}`}
           style={{
@@ -93,12 +95,12 @@ export default function MarkdownWithTimestamps({
   // Parse inline timestamps and tool citations in bot messages and make them clickable
   const renderMessageWithTimestamps = (text) => {
     if (!text) return null;
-    const parts = text.split(/(\[(?:\d{1,2}:\d{2}(?::\d{2})?(?:[\s,\-–—]+)?)+\]|【[^】]+】)/g);
+    const parts = text.split(/(\[(?:\d{1,3}:\d{2}(?::\d{2})?(?:[\s,\-–—]+)?)+\]|【[^】]+】)/g);
     if (parts.length === 1) return text;
     return parts.map((part, pIdx) => {
-      const match = part.match(/^\[((?:\d{1,2}:\d{2}(?::\d{2})?(?:[\s,\-–—]+)?)+)\]$/);
+      const match = part.match(/^\[((?:\d{1,3}:\d{2}(?::\d{2})?(?:[\s,\-–—]+)?)+)\]$/);
       if (match) {
-        const tsList = match[1].match(/\d{1,2}:\d{2}(?::\d{2})?/g);
+        const tsList = match[1].match(/\d{1,3}:\d{2}(?::\d{2})?/g);
         if (tsList && tsList.length > 0) {
           if (tsList.length === 1) {
             return renderTimestampButton(tsList[0], pIdx);
@@ -253,12 +255,12 @@ export default function MarkdownWithTimestamps({
     if (!effectiveText) return '';
     return effectiveText
       // Repair corrupted timestamp delimiters like [14:52$$ or $$22:23]
-      .replace(/\[((?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+)\$\$/g, '[$1]')
-      .replace(/\$\$((?:\d{1,2}:\d{2}(?::\d{2})?(?:,\s*)?)+)\]/g, '[$1]')
+      .replace(/\[((?:\d{1,3}:\d{2}(?::\d{2})?(?:,\s*)?)+)\$\$/g, '[$1]')
+      .replace(/\$\$((?:\d{1,3}:\d{2}(?::\d{2})?(?:,\s*)?)+)\]/g, '[$1]')
       // Repair common bare, bracketed equations emitted without Markdown math delimiters.
       // Must NOT match across timestamps [MM:SS], tool citations 【...】, markdown bold/headers, or list markers.
       .replace(/(?<!\\)\[\s*([\s\S]*?\\(?:hat|bar|vec|tilde|mathcal|mathbb|frac|sum|prod|sigma|beta|alpha|left|right)[\s\S]*?)\s*(?<!\\)\]/g, (match, equation) => {
-        if (/\[\d{1,2}:\d{2}|\d{1,2}:\d{2}\]|【|\*\*|##|^\d+\.\s/m.test(match) || /\d{1,2}:\d{2}/.test(equation)) {
+        if (/\[\d{1,3}:\d{2}|\d{1,3}:\d{2}\]|【|\*\*|##|^\d+\.\s/m.test(match) || /\d{1,3}:\d{2}/.test(equation)) {
           return match;
         }
         if (equation.includes('\n') || /\\(?:hat|mathcal|frac|sum|left|right)/.test(equation)) {

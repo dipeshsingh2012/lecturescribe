@@ -585,6 +585,36 @@ export default function LectureSummary({
         </div>
       </div>
 
+      {/* Pinned Podcast Audio Player Dock (Visible when scrolling summary) */}
+      {isPodcastOpen && (
+        <div
+          data-testid="lecture-podcast-dock"
+          style={{
+            borderBottom: '1px solid var(--border-color)',
+            background: 'var(--panel-bg)',
+            padding: isExpanded ? '12px 36px' : '10px 18px',
+            flexShrink: 0,
+            zIndex: 10
+          }}
+        >
+          <div style={{
+            maxWidth: isExpanded ? '920px' : '100%',
+            margin: isExpanded ? '0 auto' : '0',
+            width: '100%'
+          }}>
+            <LecturePodcastPlayer
+              videoId={activeData?.videoId || currentSummary?.videoId || ''}
+              title={activeData?.title || 'Lecture Summary'}
+              mode={viewMode}
+              summaryText={viewMode === 'submission' ? (currentSubmissionText || currentSummary?.submissionText || currentSummary?.submission_text || '') : (currentSummary?.markdownText || currentSummary?.markdown_text || '')}
+              courseName={activeData?.courseName || activeData?.course_name || currentSummary?.courseName || currentSummary?.course_name || ''}
+              autoPlay={true}
+              onClose={() => setIsPodcastOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <div style={{
         flex: '1 1 0%',
@@ -967,18 +997,6 @@ export default function LectureSummary({
             margin: isExpanded ? '0 auto' : '0',
             width: '100%'
           }}>
-            {isPodcastOpen && (
-              <LecturePodcastPlayer
-                videoId={activeData?.videoId || currentSummary?.videoId || ''}
-                title={activeData?.title || 'Lecture Summary'}
-                mode={viewMode}
-                summaryText={viewMode === 'submission' ? (currentSubmissionText || currentSummary?.submissionText || currentSummary?.submission_text || '') : (currentSummary?.markdownText || currentSummary?.markdown_text || '')}
-                courseName={activeData?.courseName || activeData?.course_name || currentSummary?.courseName || currentSummary?.course_name || ''}
-                autoPlay={true}
-                onClose={() => setIsPodcastOpen(false)}
-              />
-            )}
-
             {viewMode === 'study' ? (
               <div
                 className={`summary-markdown-container ${isExpanded ? 'expanded-reader' : ''}`}

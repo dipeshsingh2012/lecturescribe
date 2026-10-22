@@ -55,12 +55,40 @@ export const extractVideoId = (url) => {
   return trimmed.split(/[?#]/)[0].trim();
 };
 
+export const normalizeTimestamp = (ts) => {
+  if (!ts) return '';
+  const str = String(ts).trim();
+  if (!str) return '';
+
+  // Pattern 1: 3-digit hour/minutes merged like 108:04 or 115:00 (HMM:SS)
+  const hmmMatch = str.match(/^(\d)(\d{2}):(\d{2})$/);
+  if (hmmMatch) {
+    const [, h, mm, ss] = hmmMatch;
+    return `${parseInt(h, 10)}:${mm}:${ss}`;
+  }
+
+  // Pattern 2: Standard H:MM:SS or HH:MM:SS (e.g. 01:08:04 -> 1:08:04)
+  const hmsMatch = str.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (hmsMatch) {
+    return `${parseInt(hmsMatch[1], 10)}:${hmsMatch[2]}:${hmsMatch[3]}`;
+  }
+
+  // Pattern 3: Standard MM:SS (e.g. 14:20 or 05:30)
+  return str;
+};
+
 export const parseTimestampToSeconds = (ts) => {
   if (!ts) return 0;
   if (typeof ts === 'number') return isNaN(ts) ? 0 : ts;
   const str = String(ts).trim();
   if (!str) return 0;
   if (str.includes(':')) {
+    // Check if 3-digit hour/minutes merged like 108:04 -> 1h 08m 04s
+    const hmmMatch = str.match(/^(\d)(\d{2}):(\d{2})$/);
+    if (hmmMatch) {
+      const [, h, mm, ss] = hmmMatch;
+      return parseInt(h, 10) * 3600 + parseInt(mm, 10) * 60 + parseInt(ss, 10);
+    }
     const parts = str.split(':').map(Number);
     if (parts.some(isNaN)) return 0;
     if (parts.length === 3) {
@@ -127,7 +155,7 @@ export const cleanSubmissionFallback = (text, targetWords = 120, query = '') => 
   let cleaned = text
     .replace(/^(based on (the )?(professor's )?(lecture|transcript|video|explanation|sources)[^:.\n]*?[,.:]+\s*)/i, '')
     .replace(/^(here('s| is) (what|a summary|my takeaway|the answer)[^:.,\n]*[:.,\n]+)/i, '')
-    .replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g, '')
+    .replace(/\[\d{1,3}:\d{2}(?::\d{2})?(?:[\s,\-–—]+\d{1,3}:\d{2}(?::\d{2})?)*\]/g, '')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')

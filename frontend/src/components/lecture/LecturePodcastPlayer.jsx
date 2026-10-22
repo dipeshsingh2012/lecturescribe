@@ -9,7 +9,9 @@ import {
   Sparkles,
   AlertCircle,
   FileText,
-  Volume2
+  Volume2,
+  Minimize2,
+  Maximize2
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
@@ -32,6 +34,7 @@ export default function LecturePodcastPlayer({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [showScript, setShowScript] = useState(false);
+  const [isCompact, setIsCompact] = useState(false);
 
   const audioRef = useRef(null);
 
@@ -217,20 +220,222 @@ export default function LecturePodcastPlayer({
 
   return (
     <div
-      className="lecture-podcast-player-card"
+      className={`lecture-podcast-player-card ${isCompact ? 'compact' : ''}`}
       data-testid="lecture-podcast-player"
       style={{
         background: 'linear-gradient(135deg, rgba(31, 111, 235, 0.08) 0%, rgba(139, 92, 246, 0.08) 100%)',
         border: '1px solid rgba(0, 117, 237, 0.35)',
-        borderRadius: '12px',
-        padding: '14px 18px',
-        marginBottom: '16px',
-        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.08)',
+        borderRadius: isCompact ? '10px' : '12px',
+        padding: isCompact ? '8px 14px' : '12px 18px',
+        marginBottom: '0',
+        boxShadow: isCompact ? '0 2px 10px rgba(0, 0, 0, 0.06)' : '0 4px 16px rgba(0, 0, 0, 0.08)',
         position: 'relative',
         transition: 'all 0.2s ease'
       }}
     >
-      {/* Top Header Bar */}
+      {/* Persistent Audio Element */}
+      {podcastData && (
+        <audio
+          ref={audioRef}
+          src={podcastData?.gcs_signed_url || podcastData?.audio_url || audioStreamUrl}
+          preload="auto"
+          autoPlay={autoPlay}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+          onLoadedMetadata={() => {
+            setDuration(audioRef.current?.duration || 0);
+            if (audioRef.current) {
+              audioRef.current.playbackRate = playbackRate;
+            }
+            if (autoPlay) {
+              try {
+                const p = audioRef.current?.play();
+                if (p && typeof p.catch === 'function') p.catch(() => {});
+              } catch {}
+            }
+          }}
+          onEnded={() => {
+            setIsPlaying(false);
+            setCurrentTime(0);
+          }}
+        />
+      )}
+
+      {isCompact && podcastData ? (
+        /* Compact Docked Row: Keeps controls accessible while preserving reading space */
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          flexWrap: 'wrap'
+        }}>
+          {/* Play / Pause Button */}
+          <button
+            type="button"
+            onClick={togglePlayPause}
+            title={isPlaying ? 'Pause' : 'Play podcast'}
+            aria-label={isPlaying ? 'Pause podcast' : 'Play podcast'}
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              background: 'var(--theme-primary)',
+              border: 'none',
+              color: '#ffffff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0
+            }}
+          >
+            {isPlaying ? <Pause size={15} /> : <Play size={15} style={{ marginLeft: '2px' }} />}
+          </button>
+
+          {/* Mode Badge & Label */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+            <Volume2 size={13} color="var(--theme-primary)" />
+            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {mode === 'submission' ? 'Defense Narration' : 'Podcast Recap'}
+            </span>
+          </div>
+
+          {/* Quick Skip Buttons */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => handleSkip(-10)}
+              title="Skip back 10 seconds"
+              aria-label="Skip back 10 seconds"
+              style={{
+                background: 'var(--card-bg)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '5px',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                padding: '4px 6px',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+            >
+              <RotateCcw size={12} />
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSkip(10)}
+              title="Skip forward 10 seconds"
+              aria-label="Skip forward 10 seconds"
+              style={{
+                background: 'var(--card-bg)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '5px',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                padding: '4px 6px',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+            >
+              <RotateCw size={12} />
+            </button>
+          </div>
+
+          {/* Timeline Progress Slider */}
+          <div style={{ flex: '1 1 140px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="range"
+              min="0"
+              max={duration || 100}
+              step="0.1"
+              value={currentTime}
+              onChange={handleSeek}
+              aria-label="Podcast audio scrubber"
+              style={{
+                width: '100%',
+                accentColor: 'var(--theme-primary)',
+                cursor: 'pointer'
+              }}
+            />
+            <span style={{
+              fontSize: '0.72rem',
+              color: 'var(--text-secondary)',
+              fontFamily: 'monospace',
+              whiteSpace: 'nowrap'
+            }}>
+              {formatSecondsToTimestamp(currentTime)} / {formatSecondsToTimestamp(duration)}
+            </span>
+          </div>
+
+          {/* Speed Toggle */}
+          <button
+            type="button"
+            onClick={cyclePlaybackRate}
+            title="Cycle playback speed"
+            aria-label={`Playback speed ${playbackRate}x`}
+            style={{
+              background: 'var(--card-bg)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '5px',
+              padding: '3px 7px',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              flexShrink: 0
+            }}
+          >
+            {playbackRate}x
+          </button>
+
+          {/* Expand to Full & Close */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => setIsCompact(false)}
+              title="Expand player"
+              aria-label="Expand player to full view"
+              style={{
+                background: 'var(--card-bg)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '5px',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                padding: '4px 6px',
+                fontSize: '0.72rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px'
+              }}
+            >
+              <Maximize2 size={12} />
+              <span>Expand</span>
+            </button>
+
+            {typeof onClose === 'function' && (
+              <button
+                type="button"
+                onClick={onClose}
+                title="Close audio player"
+                aria-label="Close audio player"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center'
+                }}
+              >
+                <X size={15} />
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Top Header Bar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{
@@ -310,6 +515,30 @@ export default function LecturePodcastPlayer({
               <Download size={12} />
               <span>MP3</span>
             </a>
+          )}
+
+          {podcastData && (
+            <button
+              type="button"
+              onClick={() => setIsCompact(true)}
+              title="Minimize to compact bar"
+              aria-label="Minimize player to compact bar"
+              style={{
+                background: 'none',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                padding: '4px 8px',
+                fontSize: '0.72rem',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              <Minimize2 size={12} />
+              <span>Compact</span>
+            </button>
           )}
 
           {typeof onClose === 'function' && (
@@ -434,32 +663,6 @@ export default function LecturePodcastPlayer({
       ) : (
         /* State D: Audio Player Ready */
         <div>
-          <audio
-            ref={audioRef}
-            src={podcastData?.gcs_signed_url || podcastData?.audio_url || audioStreamUrl}
-            preload="auto"
-            autoPlay={autoPlay}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
-            onLoadedMetadata={() => {
-              setDuration(audioRef.current?.duration || 0);
-              if (audioRef.current) {
-                audioRef.current.playbackRate = playbackRate;
-              }
-              if (autoPlay) {
-                try {
-                  const p = audioRef.current?.play();
-                  if (p && typeof p.catch === 'function') p.catch(() => {});
-                } catch {}
-              }
-            }}
-            onEnded={() => {
-              setIsPlaying(false);
-              setCurrentTime(0);
-            }}
-          />
-
           {/* Player Controls Bar */}
           <div style={{
             display: 'flex',
@@ -602,6 +805,8 @@ export default function LecturePodcastPlayer({
             </div>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   );

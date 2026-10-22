@@ -209,6 +209,12 @@ class Llama3PineconeRAGStore:
         if len(parts) == 3:
             return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
         elif len(parts) == 2:
+            p0 = parts[0].strip()
+            # Handle 3-digit HMM:SS format like 108:04 -> 1h 08m 04s
+            if len(p0) == 3 and p0.isdigit():
+                h = float(p0[0])
+                m = float(p0[1:])
+                return h * 3600 + m * 60 + float(parts[1])
             return float(parts[0]) * 60 + float(parts[1])
         return 0.0
 
@@ -258,7 +264,7 @@ class Llama3PineconeRAGStore:
                 unique_citations.append(c)
 
         # Extract all timestamps referenced in the answer
-        raw_ts_in_answer = re.findall(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", answer)
+        raw_ts_in_answer = re.findall(r"\b\d{1,3}:\d{2}(?::\d{2})?\b", answer)
         if raw_ts_in_answer:
             cited_seconds = {self._parse_timestamp(t) for t in raw_ts_in_answer}
             matched_citations = [
@@ -2368,7 +2374,7 @@ class Llama3PineconeRAGStore:
             key_terms = re.findall(r'\b[a-zA-Z]{3,}\b', question)
             if key_terms:
                 search_query = " ".join(key_terms[:5])
-                course_res, _ = self.execute_tool(
+                course_res, _, _ = self.execute_tool(
                     "search_course_lectures",
                     {"query": search_query, "top_k": 3},
                     clean_vid,

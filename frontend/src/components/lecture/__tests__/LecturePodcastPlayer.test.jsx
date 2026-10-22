@@ -178,5 +178,44 @@ describe('LecturePodcastPlayer Component', () => {
 
     vi.useRealTimers();
   });
+
+  it('toggles between full card and compact mode when podcast is ready', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        data: {
+          exists: true,
+          status: 'ready',
+          video_id: 'test-vid-123',
+          audio_url: '/api/lectures/test-vid-123/podcast/stream?mode=study'
+        }
+      })
+    });
+
+    render(
+      <LecturePodcastPlayer
+        videoId="test-vid-123"
+        title="Intro to AI"
+        mode="study"
+        summaryText="Sample text."
+        onClose={vi.fn()}
+      />
+    );
+
+    const compactBtn = await screen.findByRole('button', { name: /Minimize player to compact bar/i });
+    expect(compactBtn).toBeInTheDocument();
+
+    // Click to compact
+    fireEvent.click(compactBtn);
+
+    // Now expand button should be visible
+    const expandBtn = screen.getByRole('button', { name: /Expand player to full view/i });
+    expect(expandBtn).toBeInTheDocument();
+
+    // Click expand
+    fireEvent.click(expandBtn);
+    expect(screen.getByRole('button', { name: /Minimize player to compact bar/i })).toBeInTheDocument();
+  });
 });
 

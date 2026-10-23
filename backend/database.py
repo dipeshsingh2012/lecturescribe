@@ -121,6 +121,7 @@ class RelationalDBManager:
         self._progress_memory_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._annotations_memory_cache: List[Dict[str, Any]] = []
         self._notes_memory_cache: List[Dict[str, Any]] = []
+        self._assignments_memory_cache: List[Dict[str, Any]] = []
         self._predicted_quizzes_memory: List[Dict[str, Any]] = []
         self._user_course_pins_memory: Dict[str, List[str]] = {}
         self._schema_initialized: bool = False
@@ -691,6 +692,29 @@ class RelationalDBManager:
                             UNIQUE (user_email, course_slug)
                         );
                         CREATE INDEX IF NOT EXISTS idx_course_pins_user ON lecturescribe_user_course_pins(user_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_assignments (
+                            id SERIAL PRIMARY KEY,
+                            assignment_id VARCHAR(64) UNIQUE NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            user_email VARCHAR(255),
+                            title TEXT NOT NULL,
+                            source_filename TEXT,
+                            source_blob_name TEXT,
+                            notebook_blob_name TEXT,
+                            pdf_blob_name TEXT,
+                            status VARCHAR(32) DEFAULT 'pending',
+                            questions_summary JSONB DEFAULT '[]'::jsonb,
+                            required_files JSONB DEFAULT '[]'::jsonb,
+                            dataset_files JSONB DEFAULT '[]'::jsonb,
+                            error_message TEXT,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_assignments_course ON lecturescribe_course_assignments(course_name);
+                        CREATE INDEX IF NOT EXISTS idx_assignments_id ON lecturescribe_course_assignments(assignment_id);
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS required_files JSONB DEFAULT '[]'::jsonb;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS dataset_files JSONB DEFAULT '[]'::jsonb;
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -5391,6 +5415,280 @@ class RelationalDBManager:
                 conn.close()
 
         return updated_item
+
+    def create_assignment(
+        self,
+        assignment_id: str,
+        course_name: str,
+        user_email: Optional[str],
+        title: str,
+        source_filename: str,
+        source_blob_name: str,
+        status: str = "pending",
+        questions_summary: Optional[List[Dict[str, Any]]] = None,
+        required_files: Optional[List[str]] = None,
+        dataset_files: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Create a new course assignment solution tracking record."""
+        clean_id = (assignment_id or "").strip()
+        clean_course = (course_name or "").strip()
+        clean_email = (user_email or "").strip().lower() if user_email else None
+        clean_title = (title or "Assignment").strip()
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        questions_json = json.dumps(questions_summary or [])
+        req_files_json = json.dumps(required_files or [])
+        data_files_json = json.dumps(dataset_files or [])
+
+        record = {
+            "assignment_id": clean_id,
+            "course_name": clean_course,
+            "user_email": clean_email,
+            "title": clean_title,
+            "source_filename": source_filename,
+            "source_blob_name": source_blob_name,
+            "notebook_blob_name": None,
+            "pdf_blob_name": None,
+            "status": status,
+            "questions_summary": questions_summary or [],
+            "required_files": required_files or [],
+            "dataset_files": dataset_files or [],
+            "error_message": None,
+            "created_at": now_iso,
+            "updated_at": now_iso
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_assignments
+                        (assignment_id, course_name, user_email, title, source_filename, source_blob_name, status, questions_summary, required_files, dataset_files, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NOW(), NOW())
+                        RETURNING id, assignment_id, course_name, user_email, title, source_filename,
+                                  source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                  questions_summary, required_files, dataset_files, error_message, created_at, updated_at;
+                    """, (clean_id, clean_course, clean_email, clean_title, source_filename, source_blob_name, status, questions_json, req_files_json, data_files_json))
+                    row = cursor.fetchone()
+                    if row:
+                        db_record = dict(row)
+                        if hasattr(db_record.get("created_at"), "isoformat"):
+                            db_record["created_at"] = db_record["created_at"].isoformat()
+                        if hasattr(db_record.get("updated_at"), "isoformat"):
+                            db_record["updated_at"] = db_record["updated_at"].isoformat()
+                        record = db_record
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Notice] Could not insert assignment to DB ({e}). Using in-memory fallback.")
+        finally:
+            if conn:
+                conn.close()
+
+        self._assignments_memory_cache.append(record)
+        return record
+
+    def update_assignment(
+        self,
+        assignment_id: str,
+        status: Optional[str] = None,
+        notebook_blob_name: Optional[str] = None,
+        pdf_blob_name: Optional[str] = None,
+        questions_summary: Optional[List[Dict[str, Any]]] = None,
+        required_files: Optional[List[str]] = None,
+        dataset_files: Optional[List[str]] = None,
+        error_message: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update assignment status, output blob paths, questions summary, required files, datasets, or error messages."""
+        clean_id = (assignment_id or "").strip()
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        updated_record = None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_course_assignments
+                        SET status = COALESCE(%s, status),
+                            notebook_blob_name = COALESCE(%s, notebook_blob_name),
+                            pdf_blob_name = COALESCE(%s, pdf_blob_name),
+                            questions_summary = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE questions_summary END,
+                            required_files = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE required_files END,
+                            dataset_files = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE dataset_files END,
+                            error_message = %s,
+                            updated_at = NOW()
+                        WHERE assignment_id = %s
+                        RETURNING id, assignment_id, course_name, user_email, title, source_filename,
+                                  source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                  questions_summary, required_files, dataset_files, error_message, created_at, updated_at;
+                    """, (
+                        status,
+                        notebook_blob_name,
+                        pdf_blob_name,
+                        json.dumps(questions_summary) if questions_summary is not None else None,
+                        json.dumps(questions_summary) if questions_summary is not None else None,
+                        json.dumps(required_files) if required_files is not None else None,
+                        json.dumps(required_files) if required_files is not None else None,
+                        json.dumps(dataset_files) if dataset_files is not None else None,
+                        json.dumps(dataset_files) if dataset_files is not None else None,
+                        error_message,
+                        clean_id
+                    ))
+                    row = cursor.fetchone()
+                    if row:
+                        db_record = dict(row)
+                        if hasattr(db_record.get("created_at"), "isoformat"):
+                            db_record["created_at"] = db_record["created_at"].isoformat()
+                        if hasattr(db_record.get("updated_at"), "isoformat"):
+                            db_record["updated_at"] = db_record["updated_at"].isoformat()
+                        updated_record = db_record
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Notice] update_assignment DB error ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        # Update in memory cache
+        for item in self._assignments_memory_cache:
+            if item.get("assignment_id") == clean_id:
+                if status is not None:
+                    item["status"] = status
+                if notebook_blob_name is not None:
+                    item["notebook_blob_name"] = notebook_blob_name
+                if pdf_blob_name is not None:
+                    item["pdf_blob_name"] = pdf_blob_name
+                if questions_summary is not None:
+                    item["questions_summary"] = questions_summary
+                if required_files is not None:
+                    item["required_files"] = required_files
+                if dataset_files is not None:
+                    item["dataset_files"] = dataset_files
+                if error_message is not None:
+                    item["error_message"] = error_message
+                item["updated_at"] = now_iso
+                if not updated_record:
+                    updated_record = item
+                break
+
+        return updated_record
+
+    def get_course_assignments(self, course_name: str, user_email: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieve all assignments for a course, optionally filtered by user email."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        clean_email = (user_email or "").strip().lower() if user_email else None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            SELECT id, assignment_id, course_name, user_email, title, source_filename,
+                                   source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                   questions_summary, required_files, dataset_files, error_message, created_at, updated_at
+                            FROM lecturescribe_course_assignments
+                            WHERE (user_email = %s OR user_email IS NULL) AND (
+                                LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
+                                OR regexp_replace(lower(trim(course_name)), '[^a-z0-9]+', '-', 'g') = %s
+                            )
+                            ORDER BY updated_at DESC, id DESC;
+                        """, (clean_email, clean_course, clean_slug))
+                    else:
+                        cursor.execute("""
+                            SELECT id, assignment_id, course_name, user_email, title, source_filename,
+                                   source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                   questions_summary, required_files, dataset_files, error_message, created_at, updated_at
+                            FROM lecturescribe_course_assignments
+                            WHERE (
+                                LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
+                                OR regexp_replace(lower(trim(course_name)), '[^a-z0-9]+', '-', 'g') = %s
+                            )
+                            ORDER BY updated_at DESC, id DESC;
+                        """, (clean_course, clean_slug))
+                    rows = cursor.fetchall()
+                    result = []
+                    for row in rows:
+                        item = dict(row)
+                        if hasattr(item.get("created_at"), "isoformat"):
+                            item["created_at"] = item["created_at"].isoformat()
+                        if hasattr(item.get("updated_at"), "isoformat"):
+                            item["updated_at"] = item["updated_at"].isoformat()
+                        result.append(item)
+                    return result
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Notice] get_course_assignments error ({e}). Using memory cache.")
+        finally:
+            if conn:
+                conn.close()
+
+        # In-memory filter
+        filtered = []
+        for item in self._assignments_memory_cache:
+            item_course = (item.get("course_name") or "").strip().lower()
+            if item_course == clean_course.lower() or to_course_slug(item_course) == clean_slug:
+                if not clean_email or item.get("user_email") == clean_email:
+                    filtered.append(item)
+        return sorted(filtered, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def get_assignment_by_id(self, assignment_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve single assignment record by assignment_id."""
+        clean_id = (assignment_id or "").strip()
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id, assignment_id, course_name, user_email, title, source_filename,
+                               source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                               questions_summary, required_files, dataset_files, error_message, created_at, updated_at
+                        FROM lecturescribe_course_assignments
+                        WHERE assignment_id = %s;
+                    """, (clean_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        item = dict(row)
+                        if hasattr(item.get("created_at"), "isoformat"):
+                            item["created_at"] = item["created_at"].isoformat()
+                        if hasattr(item.get("updated_at"), "isoformat"):
+                            item["updated_at"] = item["updated_at"].isoformat()
+                        return item
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Notice] get_assignment_by_id error ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        for item in self._assignments_memory_cache:
+            if item.get("assignment_id") == clean_id:
+                return item
+        return None
+
+    def delete_assignment(self, assignment_id: str) -> bool:
+        """Delete an assignment record by assignment_id."""
+        clean_id = (assignment_id or "").strip()
+        deleted = False
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM lecturescribe_course_assignments WHERE assignment_id = %s;", (clean_id,))
+                    deleted = cursor.rowcount > 0
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Notice] delete_assignment error ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        before_len = len(self._assignments_memory_cache)
+        self._assignments_memory_cache = [x for x in self._assignments_memory_cache if x.get("assignment_id") != clean_id]
+        if len(self._assignments_memory_cache) < before_len:
+            deleted = True
+        return deleted
 
     def _ts_to_secs(self, ts: str) -> int:
         """Convert MM:SS or HH:MM:SS to total seconds."""

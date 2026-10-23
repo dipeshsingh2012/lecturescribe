@@ -191,4 +191,64 @@ describe('useCourseDetail hook functionality', () => {
 
     expect(result.current.activeCourseData.lectures.length).toBe(2);
   });
+
+  it('sorts lectures by title by default and allows changing sort and status filters', () => {
+    const effectiveCourses = [
+      {
+        course_name: 'Computer Networks',
+        lectures: [
+          { video_id: 'cn-3', video_title: 'Lecture 10: Routing Protocols', progress: { progress_percent: 100 } },
+          { video_id: 'cn-1', video_title: 'Lecture 2: Physical Layer', progress: { progress_percent: 30 } },
+          { video_id: 'cn-2', video_title: 'Lecture 1: Intro', progress: null }
+        ]
+      }
+    ];
+
+    const { result } = renderHook(() =>
+      useCourseDetail(effectiveCourses, 'user@example.com', '', null)
+    );
+
+    act(() => {
+      result.current.setSelectedCourse('Computer Networks');
+    });
+
+    // Default sorting must be by title (A-Z) with natural numeric ordering: 1, 2, 10
+    expect(result.current.filteredCourseLectures.map(l => l.video_title)).toEqual([
+      'Lecture 1: Intro',
+      'Lecture 2: Physical Layer',
+      'Lecture 10: Routing Protocols'
+    ]);
+
+    // Switch sort filter to title_desc
+    act(() => {
+      result.current.setLectureSortBy('title_desc');
+    });
+    expect(result.current.filteredCourseLectures.map(l => l.video_title)).toEqual([
+      'Lecture 10: Routing Protocols',
+      'Lecture 2: Physical Layer',
+      'Lecture 1: Intro'
+    ]);
+
+    // Switch sort filter to progress_desc
+    act(() => {
+      result.current.setLectureSortBy('progress_desc');
+    });
+    expect(result.current.filteredCourseLectures[0].video_id).toBe('cn-3'); // 100%
+    expect(result.current.filteredCourseLectures[1].video_id).toBe('cn-1'); // 30%
+    expect(result.current.filteredCourseLectures[2].video_id).toBe('cn-2'); // 0%
+
+    // Switch status filter to in_progress
+    act(() => {
+      result.current.setLectureStatusFilter('in_progress');
+    });
+    expect(result.current.filteredCourseLectures.length).toBe(1);
+    expect(result.current.filteredCourseLectures[0].video_id).toBe('cn-1');
+
+    // Switch status filter to completed
+    act(() => {
+      result.current.setLectureStatusFilter('completed');
+    });
+    expect(result.current.filteredCourseLectures.length).toBe(1);
+    expect(result.current.filteredCourseLectures[0].video_id).toBe('cn-3');
+  });
 });

@@ -13,9 +13,11 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 REDIS_MODELS_METADATA_KEY = "ls:llm_router:models_metadata"
 REDIS_MODELS_CACHE_TTL = 86400  # 24 hours retention
@@ -27,6 +29,7 @@ class TaskType(str, Enum):
     SUMMARY_SECTIONS = "summary_sections"            # 2k - 5k tokens: structured JSON breakdown
     QUIZ = "quiz"                                    # 2k - 4k tokens: multiple choice JSON
     CORRECTION = "correction"                        # multimodal audio + transcript text proofreading
+    ASSIGNMENT = "assignment"                        # code + markdown generation with RAG context
 
 
 @dataclass

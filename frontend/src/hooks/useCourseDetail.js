@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
 import { normalizeCourseSlug, getCourseNameFromPath } from '../utils/routing';
+import { filterAndSortLectures } from '../utils/lectureSort';
 
 export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '', activeData = null) {
   const [selectedCourse, setSelectedCourse] = useState(() => {
@@ -246,16 +247,17 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     }
   }, [activeCourseData, selectedCourse]);
 
+  const [lectureSortBy, setLectureSortBy] = useState('title_asc');
+  const [lectureStatusFilter, setLectureStatusFilter] = useState('all');
+
   const filteredCourseLectures = useMemo(() => {
     if (!activeCourseData || !Array.isArray(activeCourseData.lectures)) return [];
-    if (!librarySearch.trim()) return activeCourseData.lectures;
-    const q = librarySearch.toLowerCase();
-    return activeCourseData.lectures.filter(item => 
-      (item.video_title && item.video_title.toLowerCase().includes(q)) ||
-      (item.title && item.title.toLowerCase().includes(q)) ||
-      (item.video_id && String(item.video_id).toLowerCase().includes(q))
-    );
-  }, [activeCourseData, librarySearch]);
+    return filterAndSortLectures(activeCourseData.lectures, {
+      search: librarySearch,
+      status: lectureStatusFilter,
+      sortBy: lectureSortBy
+    });
+  }, [activeCourseData, librarySearch, lectureStatusFilter, lectureSortBy]);
 
   // Synchronize document title with currently active lecture or course route
   useEffect(() => {
@@ -278,6 +280,14 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     activeCourseData,
     filteredCourseLectures,
     refetchCourse,
-    addLectureToCourse
+    addLectureToCourse,
+    lectureSortBy,
+    setLectureSortBy,
+    lectureStatusFilter,
+    setLectureStatusFilter,
+    sortBy: lectureSortBy,
+    setSortBy: setLectureSortBy,
+    statusFilter: lectureStatusFilter,
+    setStatusFilter: setLectureStatusFilter
   };
 }

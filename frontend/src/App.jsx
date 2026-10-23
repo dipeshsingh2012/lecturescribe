@@ -332,6 +332,10 @@ export default function App() {
             handleClearCourse={handleClearCourse}
             activeCourseData={course.activeCourseData}
             filteredCourseLectures={course.filteredCourseLectures}
+            lectureSortBy={course.lectureSortBy}
+            setLectureSortBy={course.setLectureSortBy}
+            lectureStatusFilter={course.lectureStatusFilter}
+            setLectureStatusFilter={course.setLectureStatusFilter}
             filteredCourses={library.filteredCourses}
             fetchUserLibrary={library.fetchUserLibrary}
             libraryLoading={library.libraryLoading}

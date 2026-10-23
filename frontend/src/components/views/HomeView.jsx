@@ -25,7 +25,8 @@ import {
   Check,
   Plus,
   ChevronDown,
-  FileText
+  FileText,
+  FileCode
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -35,10 +36,12 @@ import CourseLibrary from '../course/CourseLibrary';
 import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
 import CourseTutor from '../course/CourseTutor';
+import CourseAssignments from '../course/CourseAssignments';
 import CalendarAlertCard from '../calendar/CalendarAlertCard';
 import QuizRemindersCard from '../home/QuizRemindersCard';
 import useCourseQuiz from '../../hooks/useCourseQuiz';
 import { useCourseTutor } from '../../hooks/useCourseTutor';
+import { useCourseAssignments } from '../../hooks/useCourseAssignments';
 
 export default function HomeView({
   selectedCourse,
@@ -57,6 +60,14 @@ export default function HomeView({
   handleClearCourse,
   activeCourseData,
   filteredCourseLectures,
+  lectureSortBy,
+  setLectureSortBy,
+  lectureStatusFilter,
+  setLectureStatusFilter,
+  sortBy,
+  onSortChange,
+  statusFilter,
+  onStatusFilterChange,
   filteredCourses,
   fetchUserLibrary,
   libraryLoading,
@@ -98,6 +109,11 @@ export default function HomeView({
   );
 
   const courseTutor = useCourseTutor(
+    activeCourseData?.course_name || selectedCourse,
+    googleUser?.email
+  );
+
+  const courseAssignments = useCourseAssignments(
     activeCourseData?.course_name || selectedCourse,
     googleUser?.email
   );
@@ -339,6 +355,24 @@ export default function HomeView({
             >
               Library ({courseResources.length + (courseReadings?.length || 0) + (courseNotes?.length || 0)})
             </Button>
+            <Button
+              variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<FileCode size={15} />}
+              onClick={() => setCourseViewTab('assignments')}
+              aria-label="Course Assignments"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'assignments'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Assignments ({courseAssignments.assignments.length})
+            </Button>
           </Box>
 
           {/* "+ NEW" MINI DROPBOX ACTION BUTTON & MENU */}
@@ -539,6 +573,21 @@ export default function HomeView({
           onDeleteNote={onDeleteNote}
           currentTheme={currentTheme}
         />
+      ) : courseViewTab === 'assignments' ? (
+        /* LEVEL 2E: COURSE ASSIGNMENT PLANNER & SOLVER */
+        <CourseAssignments
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          assignments={courseAssignments.assignments}
+          loading={courseAssignments.loading}
+          error={courseAssignments.error}
+          uploading={courseAssignments.uploading}
+          uploadError={courseAssignments.uploadError}
+          onUploadAssignment={courseAssignments.uploadAssignment}
+          onProvideDataset={courseAssignments.provideDataset}
+          onRegenerateAssignment={courseAssignments.regenerateAssignment}
+          onDeleteAssignment={courseAssignments.deleteAssignment}
+          currentTheme={currentTheme}
+        />
       ) : (
         /* LEVEL 2A: INDIVIDUAL LECTURES IN SELECTED COURSE */
         <CourseLectures
@@ -550,6 +599,10 @@ export default function HomeView({
           selectedCourse={selectedCourse}
           librarySearch={librarySearch}
           currentTheme={currentTheme}
+          sortBy={lectureSortBy !== undefined ? lectureSortBy : sortBy}
+          onSortChange={setLectureSortBy || onSortChange}
+          statusFilter={lectureStatusFilter !== undefined ? lectureStatusFilter : statusFilter}
+          onStatusFilterChange={setLectureStatusFilter || onStatusFilterChange}
         />
       )}
     </Box>

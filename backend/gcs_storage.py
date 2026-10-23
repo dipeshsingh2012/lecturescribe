@@ -14,12 +14,19 @@ import time
 import datetime
 from typing import Optional, Dict, Any, List, Callable
 
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 import requests
-import google.auth
-from google.auth.transport import requests as auth_requests
+try:
+    import google.auth
+    from google.auth.transport import requests as auth_requests
+except ImportError:
+    google = None
+    auth_requests = None
 
 try:
     from google.cloud import storage
@@ -133,6 +140,13 @@ class GCSStorageService:
         safe_email = re.sub(r'[^a-zA-Z0-9_\-@.]', '_', (user_email or "user").strip().lower())
         safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '', str(note_id))
         return f"courses/{safe_course}/notes/{safe_email}/{safe_id}.txt"
+
+    @staticmethod
+    def get_assignment_blob_path(course_slug: str, assignment_id: str, filename: str) -> str:
+        """Generate GCS blob path for assignment source PDFs, notebooks, or rendered PDFs."""
+        safe_course = to_gcs_course_slug(course_slug)
+        safe_name = GCSStorageService.clean_filename(filename)
+        return f"courses/{safe_course}/assignments/{assignment_id}/{safe_name}"
 
     def generate_upload_signed_url(
         self,
@@ -400,6 +414,28 @@ class GCSStorageService:
                 return f"gs://{target_bucket_name}/{blob_name}"
         # Emulated test environment support
         self._mock_blobs[blob_name] = text_content.encode("utf-8")
+        return f"gs://{target_bucket_name}/{blob_name}"
+
+    def upload_blob_bytes(
+        self,
+        blob_name: str,
+        bytes_content: bytes,
+        content_type: str = "application/octet-stream",
+        bucket_name: Optional[str] = None
+    ) -> str:
+        """Upload raw bytes directly to GCS."""
+        target_bucket_name = bucket_name or self.bucket_name
+        bucket = self._get_bucket(target_bucket_name)
+        if bucket:
+            try:
+                blob = bucket.blob(blob_name)
+                blob.upload_from_string(bytes_content, content_type=content_type)
+                return f"gs://{target_bucket_name}/{blob_name}"
+            except Exception as e:
+                print(f"[GCS Upload Notice] Could not upload bytes blob to {target_bucket_name}/{blob_name}: {e}")
+                self._mock_blobs[blob_name] = bytes_content
+                return f"gs://{target_bucket_name}/{blob_name}"
+        self._mock_blobs[blob_name] = bytes_content
         return f"gs://{target_bucket_name}/{blob_name}"
 
     def stream_video_to_gcs(

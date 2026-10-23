@@ -7,6 +7,7 @@ Triad Architecture:
 3. Pinecone Vector Store -> 768-dim Dense Vector Embeddings for Semantic RAG Chatbot.
 """
 import os
+import io
 import re
 import sys
 import json
@@ -38,7 +39,7 @@ else:
 
 import datetime
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -4627,6 +4628,319 @@ def stream_video_direct(video_id: str):
 
     # If not found immediately, raise 404
     raise HTTPException(status_code=404, detail=f"GCS video stream for '{vid}' not yet available.")
+
+
+# ==============================================================================
+# Course Assignment Planner & Solution Generator Endpoints
+# ==============================================================================
+
+@app.post("/api/course/{course_name}/assignments/upload")
+async def upload_course_assignment(
+    course_name: str,
+    file: UploadFile = File(...),
+    dataset_file: Optional[UploadFile] = File(None),
+    user_email: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """Upload assignment PDF, extract problems, enrich with Course RAG, and generate executed notebook & PDF."""
+    from backend.assignment_service import process_assignment_pipeline, get_assignment_workspace
+
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    course_slug = to_course_slug(clean_course)
+    clean_email = (user_email or "").strip().lower() if user_email else None
+
+    # Validate filename and PDF extension
+    fname = file.filename or "assignment.pdf"
+    if not fname.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF assignment documents (.pdf) are supported.")
+
+    pdf_bytes = await file.read()
+    if not pdf_bytes or len(pdf_bytes) < 10:
+        raise HTTPException(status_code=400, detail="Uploaded PDF file is empty or unreadable.")
+
+    # Generate assignment tracking ID
+    assignment_id = f"asgn_{uuid.uuid4().hex[:12]}"
+    display_title = (title or "").strip() or fname.rsplit(".", 1)[0].replace("_", " ").title()
+
+    # Upload original assignment PDF to GCS
+    source_blob = gcs_storage_service.get_assignment_blob_path(course_slug, assignment_id, fname)
+    try:
+        gcs_storage_service.upload_blob_bytes(source_blob, pdf_bytes, content_type="application/pdf")
+    except Exception as gcs_err:
+        logger.warning(f"[Assignment Upload Notice] Could not persist source PDF to GCS: {gcs_err}")
+
+    # Optional dataset file attached during initial upload
+    dataset_files_list = []
+    if dataset_file and dataset_file.filename:
+        ds_name = dataset_file.filename
+        try:
+            ds_bytes = await dataset_file.read()
+            if ds_bytes:
+                ws = get_assignment_workspace(assignment_id)
+                with open(os.path.join(ws, ds_name), "wb") as f:
+                    f.write(ds_bytes)
+                ds_blob = gcs_storage_service.get_assignment_blob_path(course_slug, assignment_id, ds_name)
+                gcs_storage_service.upload_blob_bytes(ds_blob, ds_bytes, content_type="application/octet-stream")
+                dataset_files_list.append(ds_name)
+        except Exception as ds_err:
+            logger.warning(f"[Assignment Upload Notice] Error saving initial dataset file: {ds_err}")
+
+    # Record in database as pending
+    record = db_manager.create_assignment(
+        assignment_id=assignment_id,
+        course_name=clean_course,
+        user_email=clean_email,
+        title=display_title,
+        source_filename=fname,
+        source_blob_name=source_blob,
+        status="pending",
+        dataset_files=dataset_files_list
+    )
+
+    # Launch pipeline in background task so UI receives instant response
+    background_tasks.add_task(
+        process_assignment_pipeline,
+        assignment_id=assignment_id,
+        course_name=clean_course,
+        user_email=clean_email,
+        pdf_bytes=pdf_bytes,
+        filename=fname
+    )
+
+    return {
+        "status": "success",
+        "assignment_id": assignment_id,
+        "course_name": clean_course,
+        "title": display_title,
+        "message": "Assignment uploaded. Generation pipeline is running in background.",
+        "record": record
+    }
+
+
+@app.post("/api/course/{course_name}/assignments/{assignment_id}/provide-dataset")
+async def provide_assignment_dataset(
+    course_name: str,
+    assignment_id: str,
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """Provide a missing dataset file for a paused assignment and resume code execution."""
+    from backend.assignment_service import resume_assignment_pipeline, get_assignment_workspace
+
+    clean_id = assignment_id.strip()
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    course_slug = to_course_slug(clean_course)
+    fname = file.filename or "dataset.csv"
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded dataset file is empty.")
+
+    # 1. Save locally in assignment workspace
+    ws = get_assignment_workspace(clean_id)
+    local_path = os.path.join(ws, fname)
+    with open(local_path, "wb") as f:
+        f.write(file_bytes)
+
+    # 2. Upload to GCS
+    blob_name = gcs_storage_service.get_assignment_blob_path(course_slug, clean_id, fname)
+    try:
+        gcs_storage_service.upload_blob_bytes(blob_name, file_bytes, content_type="application/octet-stream")
+    except Exception as gcs_err:
+        logger.warning(f"[Dataset Upload Notice] Could not persist dataset to GCS: {gcs_err}")
+
+    # 3. Update DB record dataset_files
+    existing_datasets = list(record.get("dataset_files") or [])
+    if fname not in existing_datasets:
+        existing_datasets.append(fname)
+
+    db_manager.update_assignment(
+        clean_id,
+        status="processing",
+        dataset_files=existing_datasets,
+        error_message=None
+    )
+
+    # 4. Resume execution in background
+    background_tasks.add_task(
+        resume_assignment_pipeline,
+        assignment_id=clean_id,
+        course_name=clean_course
+    )
+
+    return {
+        "status": "success",
+        "message": f"Dataset '{fname}' uploaded. Resuming assignment code execution.",
+        "assignment_id": clean_id,
+        "filename": fname
+    }
+
+
+@app.get("/api/course/{course_name}/assignments")
+def list_course_assignments(
+    course_name: str,
+    user_email: Optional[str] = Query(None, description="Optional filter by student Google email")
+):
+    """List all assignment solutions for the specified course."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    clean_email = (user_email or "").strip().lower() if user_email else None
+
+    assignments = db_manager.get_course_assignments(clean_course, clean_email)
+    
+    # Decorate with download endpoints
+    decorated = []
+    for asgn in assignments:
+        item = dict(asgn)
+        aid = item.get("assignment_id")
+        if aid:
+            item["download_ipynb_url"] = f"/api/course/assignment/{aid}/download/ipynb"
+            item["download_pdf_url"] = f"/api/course/assignment/{aid}/download/pdf"
+        decorated.append(item)
+
+    return {
+        "status": "success",
+        "course_name": clean_course,
+        "count": len(decorated),
+        "assignments": decorated
+    }
+
+
+@app.get("/api/course/{course_name}/assignments/{assignment_id}")
+def get_course_assignment_status(course_name: str, assignment_id: str):
+    """Check the real-time processing status of a specific assignment."""
+    clean_id = assignment_id.strip()
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    res = dict(record)
+    res["download_ipynb_url"] = f"/api/course/assignment/{clean_id}/download/ipynb"
+    res["download_pdf_url"] = f"/api/course/assignment/{clean_id}/download/pdf"
+    return {
+        "status": "success",
+        "assignment": res
+    }
+
+
+@app.get("/api/course/assignment/{assignment_id}/download/{file_type}")
+def download_assignment_file(assignment_id: str, file_type: str):
+    """Directly stream the generated .ipynb or .pdf deliverable to the client."""
+    clean_id = assignment_id.strip()
+    ft = file_type.lower().strip()
+    if ft not in ("ipynb", "pdf"):
+        raise HTTPException(status_code=400, detail="file_type must be 'ipynb' or 'pdf'.")
+
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    if record.get("status") != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Assignment solution is still {record.get('status', 'processing')}. Please wait."
+        )
+
+    blob_name = record.get("notebook_blob_name") if ft == "ipynb" else record.get("pdf_blob_name")
+    if not blob_name:
+        raise HTTPException(status_code=404, detail=f"File deliverable for '{ft}' is not available.")
+
+    # Retrieve blob content from GCS (or mock storage)
+    if ft == "ipynb":
+        text_content = gcs_storage_service.get_blob_text(blob_name)
+        if not text_content:
+            raw = gcs_storage_service.get_blob_bytes(blob_name)
+            text_content = raw.decode("utf-8", errors="replace") if raw else ""
+        if not text_content:
+            raise HTTPException(status_code=404, detail="Notebook content could not be retrieved.")
+
+        safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.get('title', 'solution'))
+        filename = f"{safe_title}.ipynb"
+        return StreamingResponse(
+            io.BytesIO(text_content.encode("utf-8")),
+            media_type="application/x-ipynb+json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    else:
+        pdf_bytes = gcs_storage_service.get_blob_bytes(blob_name)
+        if not pdf_bytes:
+            raise HTTPException(status_code=404, detail="PDF deliverable could not be retrieved.")
+
+        safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', record.get('title', 'solution'))
+        filename = f"{safe_title}_Solution.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+
+@app.post("/api/course/{course_name}/assignments/{assignment_id}/regenerate")
+async def regenerate_course_assignment_endpoint(
+    course_name: str,
+    assignment_id: str,
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """Re-run generation and code execution for an existing assignment."""
+    from backend.assignment_service import process_assignment_pipeline
+
+    clean_id = assignment_id.strip()
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    source_blob = record.get("source_blob_name")
+    if not source_blob:
+        raise HTTPException(status_code=400, detail="Original assignment PDF source blob not found.")
+
+    pdf_bytes = gcs_storage_service.get_blob_bytes(source_blob)
+    if not pdf_bytes:
+        raise HTTPException(status_code=404, detail="Could not read original assignment PDF from cloud storage.")
+
+    # Update DB to pending
+    db_manager.update_assignment(clean_id, status="pending", error_message=None)
+
+    background_tasks.add_task(
+        process_assignment_pipeline,
+        assignment_id=clean_id,
+        course_name=record.get("course_name") or course_name,
+        user_email=record.get("user_email"),
+        pdf_bytes=pdf_bytes,
+        filename=record.get("source_filename") or "assignment.pdf"
+    )
+
+    return {
+        "status": "success",
+        "message": "Assignment regeneration started in background.",
+        "assignment_id": clean_id
+    }
+
+
+@app.delete("/api/course/{course_name}/assignments/{assignment_id}")
+def delete_course_assignment_route(
+    course_name: str,
+    assignment_id: str
+):
+    """Delete an assignment and its generated files."""
+    clean_id = assignment_id.strip()
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    # Delete blobs if any
+    for b in (record.get("source_blob_name"), record.get("notebook_blob_name"), record.get("pdf_blob_name")):
+        if b:
+            try:
+                gcs_storage_service.delete_blob(b)
+            except Exception:
+                pass
+
+    db_manager.delete_assignment(clean_id)
+    return {"status": "success", "message": f"Assignment '{clean_id}' deleted."}
 
 
 # -------------------------------------------------------------

@@ -34,7 +34,8 @@ import {
   AlertTriangle,
   Check,
   Play,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
@@ -86,6 +87,11 @@ export default function CourseQuiz({
   const [localExamStarted, setLocalExamStarted] = useState(false);
   const [pastQuizzesOpen, setPastQuizzesOpen] = useState(false);
   const [deletingQuizId, setDeletingQuizId] = useState(null);
+  const [replayBannerDismissed, setReplayBannerDismissed] = useState(false);
+
+  React.useEffect(() => {
+    setReplayBannerDismissed(false);
+  }, [replayingQuizId]);
 
   const isStarted = examStarted || localExamStarted || Boolean(answeredCount > 0) || isCompleted || reviewMode || Boolean(replayingQuizId) || autoSubmitted;
 
@@ -110,8 +116,10 @@ export default function CourseQuiz({
     }
   };
 
-  const isGradedReview = isCompleted || reviewMode || Boolean(replayingQuizId) || autoSubmitted;
+  // Replay mode is an active quiz session, NOT a frozen review. Graded review applies only to completed/past reviews or auto-submission.
+  const isGradedReview = !replayingQuizId && (isCompleted || reviewMode || autoSubmitted);
   const isExamActive = !isGradedReview;
+  const canSelectOption = (!reviewMode || Boolean(replayingQuizId)) && !autoSubmitted;
 
   const calcTotalMarks = totalMarks !== undefined ? totalMarks : Number((totalQuestions * marksPerQuestion).toFixed(1));
   const calcEarnedMarks = earnedMarks !== undefined ? earnedMarks : Number((score * marksPerQuestion).toFixed(1));
@@ -793,7 +801,7 @@ export default function CourseQuiz({
       {renderPastQuizzes()}
 
       {/* Replay Mode Banner */}
-      {replayingQuizId && (
+      {replayingQuizId && !replayBannerDismissed && (
         <Alert
           severity="warning"
           sx={{
@@ -804,18 +812,33 @@ export default function CourseQuiz({
             border: `1px solid ${cardBorder}`
           }}
           action={
-            <Button
-              color="inherit"
-              size="small"
-              onClick={() => {
-                if (typeof exitReplay === 'function') {
-                  exitReplay();
-                }
-              }}
-              sx={{ textTransform: 'none', fontWeight: 700 }}
-            >
-              Return to Current Quiz
-            </Button>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => {
+                  if (typeof exitReplay === 'function') {
+                    exitReplay();
+                  }
+                }}
+                sx={{ textTransform: 'none', fontWeight: 700 }}
+              >
+                Return to Current Quiz
+              </Button>
+              <IconButton
+                size="small"
+                aria-label="Close replay banner"
+                title="Dismiss banner"
+                onClick={() => setReplayBannerDismissed(true)}
+                sx={{
+                  color: 'inherit',
+                  p: 0.5,
+                  '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.1)' }
+                }}
+              >
+                <X size={16} />
+              </IconButton>
+            </Box>
           }
         >
           Replaying past quiz attempt. Your score is tracked as a replay attempt without overwriting your active course quiz.
@@ -1210,7 +1233,7 @@ export default function CourseQuiz({
                   <Box
                     key={optIdx}
                     onClick={() => {
-                      if (!isGradedReview && typeof selectAnswer === 'function') {
+                      if (canSelectOption && typeof selectAnswer === 'function') {
                         selectAnswer(currentQ.id, optIdx);
                       }
                     }}
@@ -1220,14 +1243,14 @@ export default function CourseQuiz({
                       bgcolor: optBg,
                       border: `1.5px solid ${optBorder}`,
                       color: optColor,
-                      cursor: isGradedReview ? 'default' : 'pointer',
+                      cursor: canSelectOption ? 'pointer' : 'default',
                       display: 'flex',
                       alignItems: 'center',
                       gap: 2,
                       transition: 'all 0.15s ease',
                       '&:hover': {
-                        bgcolor: isGradedReview ? optBg : 'rgba(99, 102, 241, 0.12)',
-                        borderColor: isGradedReview ? optBorder : primaryColor
+                        bgcolor: canSelectOption ? 'rgba(99, 102, 241, 0.12)' : optBg,
+                        borderColor: canSelectOption ? primaryColor : optBorder
                       }
                     }}
                   >

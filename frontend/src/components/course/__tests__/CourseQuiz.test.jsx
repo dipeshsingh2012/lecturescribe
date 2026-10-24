@@ -249,10 +249,10 @@ describe('CourseQuiz Component', () => {
     expect(deleteQuizHistory).toHaveBeenCalledWith('cquiz_123');
   });
 
-  it('renders replay mode banner and triggers exitReplay', () => {
+  it('renders replay mode banner with cross dismiss button and triggers exitReplay', () => {
     const exitReplay = vi.fn();
 
-    render(
+    const { rerender } = render(
       <CourseQuiz
         courseName="Machine Learning"
         quizData={mockQuizData}
@@ -268,8 +268,51 @@ describe('CourseQuiz Component', () => {
     expect(screen.getByText(/Replaying past quiz attempt/i)).toBeInTheDocument();
     const returnBtn = screen.getByRole('button', { name: /Return to Current Quiz/i });
     expect(returnBtn).toBeInTheDocument();
-    fireEvent.click(returnBtn);
+
+    const closeBtn = screen.getByLabelText(/Close replay banner/i);
+    expect(closeBtn).toBeInTheDocument();
+    fireEvent.click(closeBtn);
+    expect(screen.queryByText(/Replaying past quiz attempt/i)).not.toBeInTheDocument();
+
+    // Re-render without dismissed state to test exitReplay
+    rerender(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        quizLoading={false}
+        selectedAnswers={{}}
+        examStarted={true}
+        replayingQuizId="cquiz_456"
+        exitReplay={exitReplay}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const newReturnBtn = screen.getByRole('button', { name: /Return to Current Quiz/i });
+    fireEvent.click(newReturnBtn);
     expect(exitReplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows clicking and selecting options during replay mode', () => {
+    const selectAnswer = vi.fn();
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        quizLoading={false}
+        selectedAnswers={{}}
+        examStarted={true}
+        replayingQuizId="cquiz_123"
+        selectAnswer={selectAnswer}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const firstOption = screen.getByText(mockQuizData.questions[0].options[0]);
+    expect(firstOption).toBeInTheDocument();
+    fireEvent.click(firstOption);
+    expect(selectAnswer).toHaveBeenCalledWith(1, 0);
   });
 
   it('renders fill in the blank question badge and correct term on answer', () => {

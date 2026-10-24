@@ -36,12 +36,14 @@ import CourseLibrary from '../course/CourseLibrary';
 import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
 import CourseTutor from '../course/CourseTutor';
+import CourseSummary from '../course/CourseSummary';
 import CourseAssignments from '../course/CourseAssignments';
 import CalendarAlertCard from '../calendar/CalendarAlertCard';
 import QuizRemindersCard from '../home/QuizRemindersCard';
 import useCourseQuiz from '../../hooks/useCourseQuiz';
 import { useCourseTutor } from '../../hooks/useCourseTutor';
 import { useCourseAssignments } from '../../hooks/useCourseAssignments';
+import useCourseSummary from '../../hooks/useCourseSummary';
 
 export default function HomeView({
   selectedCourse,
@@ -118,12 +120,23 @@ export default function HomeView({
     googleUser?.email
   );
 
+  const courseSummary = useCourseSummary(
+    activeCourseData?.course_name || selectedCourse
+  );
+
   // Automatically fetch course quiz if user is on the Course Quiz tab and no quiz is loaded yet
   useEffect(() => {
     if (courseViewTab === 'quiz' && selectedCourse && !courseQuiz.quizData && !courseQuiz.quizLoading) {
       courseQuiz.fetchOrGenerateQuiz(false);
     }
   }, [courseViewTab, selectedCourse, courseQuiz.quizData, courseQuiz.quizLoading, courseQuiz.fetchOrGenerateQuiz]);
+
+  // Automatically fetch course summary if user is on Course Summary tab and no summary loaded yet
+  useEffect(() => {
+    if (courseViewTab === 'summary' && selectedCourse && !courseSummary.summaryData && !courseSummary.loading) {
+      courseSummary.fetchSummary(false);
+    }
+  }, [courseViewTab, selectedCourse, courseSummary.summaryData, courseSummary.loading, courseSummary.fetchSummary]);
 
   return (
     <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>
@@ -300,6 +313,24 @@ export default function HomeView({
               }}
             >
               Lectures ({filteredCourseLectures.length})
+            </Button>
+            <Button
+              variant={courseViewTab === 'summary' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<BookOpen size={15} />}
+              onClick={() => setCourseViewTab('summary')}
+              aria-label="Course Summary"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'summary'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Course Summary
             </Button>
             <Button
               variant={courseViewTab === 'quiz' ? 'contained' : 'outlined'}
@@ -487,6 +518,27 @@ export default function HomeView({
             currentTheme={currentTheme}
           />
         </>
+      ) : courseViewTab === 'summary' ? (
+        /* LEVEL 2E: COURSE EXECUTIVE SUMMARY */
+        <CourseSummary
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          lectureCount={filteredCourseLectures.length || activeCourseData?.lecture_count || 0}
+          summaryData={courseSummary.summaryData}
+          loading={courseSummary.loading}
+          error={courseSummary.error}
+          fetchSummary={courseSummary.fetchSummary}
+          regenerateSummary={courseSummary.regenerateSummary}
+          handleSelectLecture={(vid, cName, ts) => {
+            if (vid) {
+              const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';
+              handleTranscribe(`${vid}${tParam}`, false, cName, false, ts);
+              if (typeof handleCueClick === 'function' && ts) {
+                setTimeout(() => handleCueClick(ts), 350);
+              }
+            }
+          }}
+          currentTheme={currentTheme}
+        />
       ) : courseViewTab === 'quiz' ? (
         /* LEVEL 2C: COURSE COMPREHENSIVE PRACTICE EXAM */
         <CourseQuiz
@@ -515,6 +567,8 @@ export default function HomeView({
           fetchQuizHistory={courseQuiz.fetchQuizHistory}
           loadPastQuiz={courseQuiz.loadPastQuiz}
           reviewMode={courseQuiz.reviewMode}
+          replayingQuizId={courseQuiz.replayingQuizId}
+          exitReplay={courseQuiz.exitReplay}
           handleSelectLecture={(vid, cName, ts) => {
             const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';
             handleTranscribe(`${vid}${tParam}`, false, cName, false, ts);

@@ -213,4 +213,62 @@ describe('CourseQuiz Component', () => {
     fireEvent.click(replayBtn);
     expect(loadPastQuiz).toHaveBeenCalledWith('cquiz_123', true);
   });
+
+  it('renders replay mode banner and triggers exitReplay', () => {
+    const exitReplay = vi.fn();
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        quizLoading={false}
+        selectedAnswers={{}}
+        replayingQuizId="cquiz_123"
+        exitReplay={exitReplay}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Replaying past quiz attempt/i)).toBeInTheDocument();
+    const returnBtn = screen.getByRole('button', { name: /Return to Current Quiz/i });
+    expect(returnBtn).toBeInTheDocument();
+    fireEvent.click(returnBtn);
+    expect(exitReplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders fill in the blank question badge and correct term on answer', () => {
+    const mockFitbQuiz = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      questions: [
+        {
+          id: 10,
+          type: 'fill_in_the_blank',
+          question: 'In deep learning, the gradient of the loss is propagated via _____.',
+          blank_answer: 'backpropagation',
+          options: ['backpropagation', 'feedforward', 'dropout', 'pooling'],
+          correct_index: 0,
+          explanation: 'Backpropagation computes gradients using the chain rule.',
+          lecture_id: 'vid_ml_2',
+          difficulty: 'medium'
+        }
+      ]
+    };
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockFitbQuiz}
+        quizLoading={false}
+        selectedAnswers={{ 10: 0 }}
+        score={1}
+        totalQuestions={1}
+        answeredCount={1}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/fill in the blank/i)).toBeInTheDocument();
+    expect(screen.getAllByText('backpropagation').length).toBeGreaterThan(0);
+  });
 });

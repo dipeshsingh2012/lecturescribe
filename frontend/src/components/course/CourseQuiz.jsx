@@ -59,7 +59,9 @@ export default function CourseQuiz({
   historyLoading = false,
   fetchQuizHistory,
   loadPastQuiz,
-  reviewMode = false
+  reviewMode = false,
+  replayingQuizId = null,
+  exitReplay
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showSummaryView, setShowSummaryView] = useState(false);
@@ -529,8 +531,38 @@ export default function CourseQuiz({
 
   return (
     <Box sx={{ width: '100%', py: 3, px: { xs: 1, sm: 2 }, maxWidth: 900, mx: 'auto' }}>
+      {/* Replay Mode Banner */}
+      {replayingQuizId && (
+        <Alert
+          severity="warning"
+          sx={{
+            mb: 2.5,
+            borderRadius: 2,
+            bgcolor: 'rgba(245, 158, 11, 0.12)',
+            color: textPrimary,
+            border: `1px solid ${cardBorder}`
+          }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                if (typeof exitReplay === 'function') {
+                  exitReplay();
+                }
+              }}
+              sx={{ textTransform: 'none', fontWeight: 700 }}
+            >
+              Return to Current Quiz
+            </Button>
+          }
+        >
+          Replaying past quiz attempt. Your score is tracked as a replay attempt without overwriting your active course quiz.
+        </Alert>
+      )}
+
       {/* Review Mode Banner */}
-      {reviewMode && (
+      {reviewMode && !replayingQuizId && (
         <Alert
           severity="info"
           sx={{
@@ -541,20 +573,32 @@ export default function CourseQuiz({
             border: `1px solid ${cardBorder}`
           }}
           action={
-            <Button
-              color="inherit"
-              size="small"
-              onClick={() => {
-                if (quizData?.quiz_id && typeof loadPastQuiz === 'function') {
-                  loadPastQuiz(quizData.quiz_id, true);
-                } else {
-                  resetQuiz();
-                }
-              }}
-              sx={{ textTransform: 'none', fontWeight: 700 }}
-            >
-              Replay this Quiz
-            </Button>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              {typeof exitReplay === 'function' && (
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => exitReplay()}
+                  sx={{ textTransform: 'none', fontWeight: 700 }}
+                >
+                  Active Quiz
+                </Button>
+              )}
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => {
+                  if (quizData?.quiz_id && typeof loadPastQuiz === 'function') {
+                    loadPastQuiz(quizData.quiz_id, true);
+                  } else {
+                    resetQuiz();
+                  }
+                }}
+                sx={{ textTransform: 'none', fontWeight: 700 }}
+              >
+                Replay this Quiz
+              </Button>
+            </Box>
           }
         >
           Viewing past quiz attempt in review mode.
@@ -762,28 +806,43 @@ export default function CourseQuiz({
             )}
           </Box>
 
-          <Chip
-            label={currentQ.difficulty || 'medium'}
-            size="small"
-            sx={{
-              textTransform: 'uppercase',
-              fontSize: '0.65rem',
-              fontWeight: 800,
-              letterSpacing: '0.5px',
-              bgcolor:
-                currentQ.difficulty === 'easy'
-                  ? 'rgba(34, 197, 94, 0.15)'
-                  : currentQ.difficulty === 'hard'
-                  ? 'rgba(239, 68, 68, 0.15)'
-                  : 'rgba(245, 158, 11, 0.15)',
-              color:
-                currentQ.difficulty === 'easy'
-                  ? '#22c55e'
-                  : currentQ.difficulty === 'hard'
-                  ? '#ef4444'
-                  : '#f59e0b'
-            }}
-          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {currentQ.type === 'fill_in_the_blank' && (
+              <Chip
+                label="Fill in the Blank"
+                size="small"
+                sx={{
+                  textTransform: 'uppercase',
+                  fontSize: '0.65rem',
+                  fontWeight: 800,
+                  bgcolor: 'rgba(168, 85, 247, 0.15)',
+                  color: '#a855f7'
+                }}
+              />
+            )}
+            <Chip
+              label={currentQ.difficulty || 'medium'}
+              size="small"
+              sx={{
+                textTransform: 'uppercase',
+                fontSize: '0.65rem',
+                fontWeight: 800,
+                letterSpacing: '0.5px',
+                bgcolor:
+                  currentQ.difficulty === 'easy'
+                    ? 'rgba(34, 197, 94, 0.15)'
+                    : currentQ.difficulty === 'hard'
+                    ? 'rgba(239, 68, 68, 0.15)'
+                    : 'rgba(245, 158, 11, 0.15)',
+                color:
+                  currentQ.difficulty === 'easy'
+                    ? '#22c55e'
+                    : currentQ.difficulty === 'hard'
+                    ? '#ef4444'
+                    : '#f59e0b'
+              }}
+            />
+          </Box>
         </Box>
 
         {/* Question Text with LaTeX rendering */}
@@ -913,6 +972,19 @@ export default function CourseQuiz({
                 {isCorrect ? 'Correct!' : 'Incorrect'}
               </Typography>
             </Box>
+
+            {currentQ.type === 'fill_in_the_blank' && currentQ.blank_answer && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: textSecondary }}>
+                  Correct Term:
+                </Typography>
+                <Chip
+                  label={currentQ.blank_answer}
+                  size="small"
+                  sx={{ bgcolor: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', fontWeight: 700, fontSize: '0.75rem' }}
+                />
+              </Box>
+            )}
 
             <Typography component="div" sx={{ color: textPrimary, fontSize: '0.88rem', lineHeight: 1.6 }}>
               <MarkdownWithTimestamps

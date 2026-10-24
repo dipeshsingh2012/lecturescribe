@@ -20,6 +20,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const [quizHistory, setQuizHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [reviewMode, setReviewMode] = useState(false);
+  const [replayingQuizId, setReplayingQuizId] = useState(null);
 
   const lastSlugRef = useRef(courseSlug);
 
@@ -45,6 +46,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setQuizLoading(true);
     setQuizError(null);
     setReviewMode(false);
+    setReplayingQuizId(null);
     try {
       const payload = { regenerate };
       if (numQuestions) {
@@ -95,6 +97,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       setDetailedExplanations({});
       setQuizError(null);
       setReviewMode(false);
+      setReplayingQuizId(null);
       if (courseSlug) {
         fetchOrGenerateQuiz(false);
         fetchQuizHistory();
@@ -166,7 +169,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
             answers: next,
             score: currentScore,
             completed: isDone,
-            quiz_id: quizData?.quiz_id
+            quiz_id: quizData?.quiz_id || replayingQuizId
           })
         }).then(() => {
           if (isDone) fetchQuizHistory();
@@ -175,7 +178,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
       return next;
     });
-  }, [courseSlug, quizData, userEmail, fetchQuizHistory]);
+  }, [courseSlug, quizData, replayingQuizId, userEmail, fetchQuizHistory]);
 
   const finishQuiz = useCallback(() => {
     if (!courseSlug || !quizData) return;
@@ -192,10 +195,10 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         answers: selectedAnswers,
         score: currentScore,
         completed: true,
-        quiz_id: quizData?.quiz_id
+        quiz_id: quizData?.quiz_id || replayingQuizId
       })
     }).then(() => fetchQuizHistory()).catch(() => {});
-  }, [courseSlug, quizData, selectedAnswers, userEmail, fetchQuizHistory]);
+  }, [courseSlug, quizData, replayingQuizId, selectedAnswers, userEmail, fetchQuizHistory]);
 
   const resetQuiz = useCallback(() => {
     setSelectedAnswers({});
@@ -207,6 +210,12 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       }).catch(() => {});
     }
   }, [courseSlug, userEmail]);
+
+  const exitReplay = useCallback(() => {
+    setReplayingQuizId(null);
+    setReviewMode(false);
+    fetchOrGenerateQuiz(false);
+  }, [fetchOrGenerateQuiz]);
 
   const loadPastQuiz = useCallback(async (quizId, forReplay = false) => {
     if (!courseSlug || !quizId) return;
@@ -221,9 +230,11 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         quiz_id: quizId
       });
       if (forReplay) {
+        setReplayingQuizId(quizId);
         setSelectedAnswers({});
         setReviewMode(false);
       } else {
+        setReplayingQuizId(null);
         setSelectedAnswers(data.answers || {});
         setReviewMode(true);
       }
@@ -281,6 +292,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     fetchQuizHistory,
     loadPastQuiz,
     reviewMode,
-    setReviewMode
+    setReviewMode,
+    replayingQuizId,
+    isReplaying: Boolean(replayingQuizId),
+    exitReplay
   };
 }

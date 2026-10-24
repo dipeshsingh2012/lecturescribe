@@ -53,7 +53,7 @@ export default function CourseLectures({
   statusFilter: externalStatusFilter,
   onStatusFilterChange: externalOnStatusFilterChange
 }) {
-  const [internalSortBy, setInternalSortBy] = React.useState('title_asc');
+  const [internalSortBy, setInternalSortBy] = React.useState('title_desc');
   const [internalStatusFilter, setInternalStatusFilter] = React.useState('all');
 
   const sortBy = externalSortBy !== undefined ? externalSortBy : internalSortBy;
@@ -92,24 +92,24 @@ export default function CourseLectures({
     });
   }, [filteredCourseLectures, statusFilter, sortBy]);
 
-  const isAscending = sortBy.endsWith('_asc') || sortBy === 'title';
+  const isAscending = sortBy.endsWith('_asc');
 
   const toggleSortDirection = () => {
-    if (sortBy === 'title' || sortBy === 'title_asc') setSortBy('title_desc');
-    else if (sortBy === 'title_desc') setSortBy('title_asc');
+    if (sortBy === 'title_desc' || sortBy === 'title') setSortBy('title_asc');
+    else if (sortBy === 'title_asc') setSortBy('title_desc');
     else if (sortBy === 'date_desc') setSortBy('date_asc');
     else if (sortBy === 'date_asc') setSortBy('date_desc');
     else if (sortBy === 'progress_desc') setSortBy('progress_asc');
     else if (sortBy === 'progress_asc') setSortBy('progress_desc');
     else if (sortBy === 'duration_desc') setSortBy('duration_asc');
     else if (sortBy === 'duration_asc') setSortBy('duration_desc');
-    else setSortBy('title_asc');
+    else setSortBy('title_desc');
   };
 
   const handleQuickSort = (baseField) => {
     if (baseField === 'title') {
-      if (sortBy === 'title_asc' || sortBy === 'title') setSortBy('title_desc');
-      else setSortBy('title_asc');
+      if (sortBy === 'title_desc' || sortBy === 'title') setSortBy('title_asc');
+      else setSortBy('title_desc');
     } else if (baseField === 'date') {
       if (sortBy === 'date_desc') setSortBy('date_asc');
       else setSortBy('date_desc');

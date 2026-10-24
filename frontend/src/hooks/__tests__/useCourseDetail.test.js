@@ -212,21 +212,21 @@ describe('useCourseDetail hook functionality', () => {
       result.current.setSelectedCourse('Computer Networks');
     });
 
-    // Default sorting must be by title (A-Z) with natural numeric ordering: 1, 2, 10
-    expect(result.current.filteredCourseLectures.map(l => l.video_title)).toEqual([
-      'Lecture 1: Intro',
-      'Lecture 2: Physical Layer',
-      'Lecture 10: Routing Protocols'
-    ]);
-
-    // Switch sort filter to title_desc
-    act(() => {
-      result.current.setLectureSortBy('title_desc');
-    });
+    // Default sorting must be by title (Z-A) with natural numeric ordering: 10, 2, 1
     expect(result.current.filteredCourseLectures.map(l => l.video_title)).toEqual([
       'Lecture 10: Routing Protocols',
       'Lecture 2: Physical Layer',
       'Lecture 1: Intro'
+    ]);
+
+    // Switch sort filter to title_asc
+    act(() => {
+      result.current.setLectureSortBy('title_asc');
+    });
+    expect(result.current.filteredCourseLectures.map(l => l.video_title)).toEqual([
+      'Lecture 1: Intro',
+      'Lecture 2: Physical Layer',
+      'Lecture 10: Routing Protocols'
     ]);
 
     // Switch sort filter to progress_desc

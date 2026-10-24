@@ -191,23 +191,23 @@ describe('CourseLectures', () => {
     expect(screen.getByText(/Filter:/i)).toBeInTheDocument();
     expect(screen.getByText(/Sort by:/i)).toBeInTheDocument();
 
-    // Default sorting must be Title A-Z (Lecture 1, Lecture 2, Lecture 10)
+    // Default sorting must be Title Z-A (Lecture 10, Lecture 2, Lecture 1)
     const titles = screen.getAllByRole('heading', { level: 6 }).map(h => h.textContent);
     expect(titles).toEqual([
-      'Lecture 1: Course Overview',
+      'Lecture 10: Advanced Kinematics',
       'Lecture 2: Vectors & Motion',
-      'Lecture 10: Advanced Kinematics'
+      'Lecture 1: Course Overview'
     ]);
 
-    // Click quick sort chip "Title" to toggle direction to Z-A
+    // Click quick sort chip "Title" to toggle direction to A-Z
     const titleSortChip = screen.getByRole('button', { name: /^Sort by Title$/i });
     fireEvent.click(titleSortChip);
 
     const reversedTitles = screen.getAllByRole('heading', { level: 6 }).map(h => h.textContent);
     expect(reversedTitles).toEqual([
-      'Lecture 10: Advanced Kinematics',
+      'Lecture 1: Course Overview',
       'Lecture 2: Vectors & Motion',
-      'Lecture 1: Course Overview'
+      'Lecture 10: Advanced Kinematics'
     ]);
 
     // Click quick sort chip "Progress"

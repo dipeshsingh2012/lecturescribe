@@ -591,6 +591,11 @@ class QuizGenerateRequest(BaseModel):
     num_questions: Optional[int] = None
 
 
+class CourseSummaryRequest(BaseModel):
+    regenerate: bool = False
+    user_email: Optional[str] = None
+
+
 class QuizAnswersRequest(BaseModel):
     user_email: Optional[str] = None
     answers: Dict[str, int] = {}
@@ -2813,27 +2818,46 @@ def get_or_generate_course_quiz(
     canonical_title = course_info.get("course_name") or clean_course
     lectures = course_info.get("lectures", [])
 
-    # 4. Fetch transcript cues for each lecture in the course
-    lectures_with_cues = []
+    # 4. Fetch saved lecture summaries, existing quiz items, and cues fallback (avoiding token exhaustion)
+    lectures_with_materials = []
     for lect in lectures:
         vid = lect.get("video_id") or lect.get("videoId")
         if not vid:
             continue
         saved_vid = db_manager.get_saved_video(vid)
+        ltitle = lect.get("title") or lect.get("video_title") or (saved_vid.get("title") if saved_vid else None) or f"Lecture {vid}"
+
+        # Fetch saved lecture summaries
+        sums = db_manager.get_lecture_summaries(vid)
+        summary_text = ""
+        for stype in ("comprehensive", "key_points", "brief", "study_guide"):
+            if sums.get(stype) and sums[stype].get("markdownText"):
+                summary_text = sums[stype]["markdownText"]
+                break
+        if not summary_text and sums:
+            first_sum = next(iter(sums.values()), None)
+            if first_sum and first_sum.get("markdownText"):
+                summary_text = first_sum["markdownText"]
+
+        # Fetch existing lecture quiz items
+        saved_q = db_manager.get_saved_quiz(vid)
+        lecture_qs = (saved_q.get("questions") if isinstance(saved_q, dict) else []) or []
+
+        # Minimal cues only as fallback if no summary is saved
         cues = (saved_vid.get("cues") if saved_vid else None) or []
-        lectures_with_cues.append({
+        lectures_with_materials.append({
             "video_id": vid,
-            "title": lect.get("title") or lect.get("video_title") or (saved_vid.get("title") if saved_vid else None) or f"Lecture {vid}",
-            "cues": cues
+            "title": ltitle,
+            "summary": summary_text,
+            "existing_questions": lecture_qs,
+            "cues": cues[:25] if not summary_text else []
         })
 
-    valid_lectures = [l for l in lectures_with_cues if l.get("cues")]
-    if not valid_lectures:
-        valid_lectures = lectures_with_cues
+    valid_lectures = lectures_with_materials
     if not valid_lectures:
         raise HTTPException(
             status_code=400,
-            detail=f"No lectures in course '{canonical_title}' have transcripts available to generate a quiz."
+            detail=f"No lectures in course '{canonical_title}' have materials or summaries available to generate a quiz."
         )
 
     # 5. Generate Course Quiz (No Fallbacks)
@@ -2885,7 +2909,6 @@ def save_course_quiz_answers(course_name: str, req: QuizAnswersRequest):
     if not clean_course or not course_slug:
         raise HTTPException(status_code=400, detail="course_name parameter is required.")
     email = req.user_email or "anonymous"
-    db_manager.save_quiz_attempt("course", course_slug, email, req.answers, req.score or 0, req.completed or False)
 
     target_quiz_id = req.quiz_id
     if not target_quiz_id:
@@ -2893,9 +2916,19 @@ def save_course_quiz_answers(course_name: str, req: QuizAnswersRequest):
         if hist and hist[0].get("quiz_id"):
             target_quiz_id = hist[0]["quiz_id"]
 
+    # Protect current active quiz attempt from being clobbered when replaying a historical quiz
+    current_quiz = db_manager.get_saved_course_quiz(clean_course)
+    current_quiz_id = current_quiz.get("quiz_id") if isinstance(current_quiz, dict) else None
+    is_replaying_past_quiz = bool(target_quiz_id and current_quiz_id and target_quiz_id != current_quiz_id)
+
+    if not is_replaying_past_quiz:
+        db_manager.save_quiz_attempt("course", course_slug, email, req.answers, req.score or 0, req.completed or False)
+    else:
+        db_manager.save_quiz_attempt("course_replay", f"{course_slug}:{target_quiz_id}", email, req.answers, req.score or 0, req.completed or False)
+
     if target_quiz_id:
         existing_item = db_manager.get_course_quiz_history_by_id(target_quiz_id)
-        quiz_json = (existing_item.get("quiz_json") if existing_item else None) or db_manager.get_saved_course_quiz(clean_course) or {}
+        quiz_json = (existing_item.get("quiz_json") if existing_item else None) or current_quiz or {}
         tot_q = len(quiz_json.get("questions") or [])
         db_manager.save_course_quiz_history(
             course_name=clean_course,
@@ -2908,6 +2941,109 @@ def save_course_quiz_answers(course_name: str, req: QuizAnswersRequest):
             completed=req.completed or False
         )
     return {"status": "success", "success": True}
+
+
+@app.get("/api/course/{course_name}/summary")
+@app.post("/api/course/{course_name}/summary")
+def get_or_generate_course_summary(
+    course_name: str,
+    regenerate: bool = Query(False, description="Force regenerate course summary"),
+    email: Optional[str] = Query(None, description="User email"),
+    body: Optional[CourseSummaryRequest] = None
+):
+    """Retrieve or generate course-level executive summary across all lectures using saved lecture summaries."""
+    clean_course = str(course_name).strip()
+    course_slug = to_course_slug(clean_course)
+    if not clean_course or not course_slug:
+        raise HTTPException(status_code=400, detail="course_name parameter is required.")
+
+    is_regenerate = regenerate or (body.regenerate if body else False)
+    user_email = (body.user_email if body and body.user_email else None) or email
+
+    # 1. Check Redis Cache
+    if not is_regenerate and redis_cache:
+        cached_summary = redis_cache.get(f"course_summary:{course_slug}")
+        if cached_summary:
+            try:
+                data = json.loads(cached_summary) if isinstance(cached_summary, str) else cached_summary
+                if data and data.get("executive_summary"):
+                    print(f"⚡ [Redis Hit] Returning cached course summary for '{course_slug}'.")
+                    return data
+            except Exception:
+                pass
+
+    # 2. Check Database Persistence
+    if not is_regenerate:
+        db_summary = db_manager.get_saved_course_summary(clean_course)
+        if db_summary and db_summary.get("executive_summary"):
+            print(f"💾 [PostgreSQL Hit] Returning persisted course summary for '{course_slug}'.")
+            if redis_cache:
+                redis_cache.set(f"course_summary:{course_slug}", json.dumps(db_summary), ex=86400)
+            return db_summary
+
+    # 3. Retrieve Course & Lecture list from DB
+    course_info = db_manager.get_course_details(clean_course, user_email=user_email)
+    if not course_info or not course_info.get("lectures"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Course '{clean_course}' not found or has no recorded lectures."
+        )
+
+    canonical_title = course_info.get("course_name") or clean_course
+    lectures = course_info.get("lectures", [])
+
+    # 4. Fetch saved summaries for each lecture (token-efficient input)
+    lectures_with_summaries = []
+    for lect in lectures:
+        vid = lect.get("video_id") or lect.get("videoId")
+        if not vid:
+            continue
+        saved_vid = db_manager.get_saved_video(vid)
+        ltitle = lect.get("title") or lect.get("video_title") or (saved_vid.get("title") if saved_vid else None) or f"Lecture {vid}"
+
+        sums = db_manager.get_lecture_summaries(vid)
+        summary_text = ""
+        for stype in ("comprehensive", "key_points", "brief", "study_guide"):
+            if sums.get(stype) and sums[stype].get("markdownText"):
+                summary_text = sums[stype]["markdownText"]
+                break
+        if not summary_text and sums:
+            first_sum = next(iter(sums.values()), None)
+            if first_sum and first_sum.get("markdownText"):
+                summary_text = first_sum["markdownText"]
+
+        cues = (saved_vid.get("cues") if saved_vid else None) or []
+        lectures_with_summaries.append({
+            "video_id": vid,
+            "title": ltitle,
+            "summary": summary_text,
+            "cues": cues[:25] if not summary_text else []
+        })
+
+    if not lectures_with_summaries:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No lectures in course '{canonical_title}' are available to generate a course summary."
+        )
+
+    # 5. Generate Course Summary
+    try:
+        summary_data = pinecone_rag_engine.generate_course_summary(
+            course_name=canonical_title,
+            lectures_data=lectures_with_summaries
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to generate course summary via AI model: {str(e)}"
+        )
+
+    # 6. Persist to Database & Cache
+    db_manager.save_course_summary(canonical_title, summary_data)
+    if redis_cache:
+        redis_cache.set(f"course_summary:{course_slug}", json.dumps(summary_data), ex=86400)
+
+    return summary_data
 
 
 @app.delete("/api/course/{course_name}/quiz/answers")

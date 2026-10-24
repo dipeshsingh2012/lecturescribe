@@ -1,8 +1,8 @@
 import { parseTimestampToSeconds } from './formatters';
 
 export const SORT_OPTIONS = [
-  { value: 'title_asc', label: 'Title (A → Z)', field: 'title', order: 'asc' },
   { value: 'title_desc', label: 'Title (Z → A)', field: 'title', order: 'desc' },
+  { value: 'title_asc', label: 'Title (A → Z)', field: 'title', order: 'asc' },
   { value: 'date_desc', label: 'Newest Added', field: 'date', order: 'desc' },
   { value: 'date_asc', label: 'Oldest Added', field: 'date', order: 'asc' },
   { value: 'progress_desc', label: 'Highest Progress', field: 'progress', order: 'desc' },
@@ -80,20 +80,20 @@ export const filterLecturesByStatus = (lectures, statusFilter = 'all') => {
   return lectures;
 };
 
-export const sortLectures = (lectures, sortBy = 'title_asc') => {
+export const sortLectures = (lectures, sortBy = 'title_desc') => {
   if (!Array.isArray(lectures)) return [];
   const list = [...lectures];
 
-  // Normalize 'title' to 'title_asc'
-  const normalizedSort = sortBy === 'title' ? 'title_asc' : sortBy;
+  // Normalize 'title' to 'title_desc'
+  const normalizedSort = sortBy === 'title' ? 'title_desc' : sortBy;
 
   return list.sort((a, b) => {
     switch (normalizedSort) {
-      case 'title_desc': {
+      case 'title_asc': {
         const titleA = getLectureTitle(a);
         const titleB = getLectureTitle(b);
-        return titleB.localeCompare(titleA, undefined, { numeric: true, sensitivity: 'base' }) ||
-          String(b.video_id || '').localeCompare(String(a.video_id || ''));
+        return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' }) ||
+          String(a.video_id || '').localeCompare(String(b.video_id || ''));
       }
       case 'date_desc': {
         const diff = getLectureDate(b) - getLectureDate(a);
@@ -125,18 +125,18 @@ export const sortLectures = (lectures, sortBy = 'title_asc') => {
         if (diff !== 0) return diff;
         return getLectureTitle(a).localeCompare(getLectureTitle(b), undefined, { numeric: true, sensitivity: 'base' });
       }
-      case 'title_asc':
+      case 'title_desc':
       default: {
         const titleA = getLectureTitle(a);
         const titleB = getLectureTitle(b);
-        return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' }) ||
-          String(a.video_id || '').localeCompare(String(b.video_id || ''));
+        return titleB.localeCompare(titleA, undefined, { numeric: true, sensitivity: 'base' }) ||
+          String(b.video_id || '').localeCompare(String(a.video_id || ''));
       }
     }
   });
 };
 
-export const filterAndSortLectures = (lectures, { search = '', status = 'all', sortBy = 'title_asc' } = {}) => {
+export const filterAndSortLectures = (lectures, { search = '', status = 'all', sortBy = 'title_desc' } = {}) => {
   if (!Array.isArray(lectures)) return [];
   let result = lectures;
 

@@ -41,7 +41,7 @@ describe('lectureSort utilities', () => {
 
   it('provides SORT_OPTIONS and STATUS_FILTERS definitions', () => {
     expect(SORT_OPTIONS.length).toBeGreaterThan(0);
-    expect(SORT_OPTIONS[0].value).toBe('title_asc');
+    expect(SORT_OPTIONS[0].value).toBe('title_desc');
     expect(STATUS_FILTERS.length).toBeGreaterThan(0);
   });
 
@@ -79,21 +79,21 @@ describe('lectureSort utilities', () => {
   });
 
   describe('sortLectures', () => {
-    it('defaults to sorting by title ascending with natural alphanumeric comparison (1, 2, 10)', () => {
+    it('defaults to sorting by title descending (Z-A) with natural alphanumeric comparison (10, 2, 1)', () => {
       const sorted = sortLectures(lectures);
-      expect(sorted.map(l => l.video_title)).toEqual([
-        'Lecture 1: Introduction',
-        'Lecture 2: Graphs',
-        'Lecture 10: Dynamic Programming'
-      ]);
-    });
-
-    it('sorts by title descending (Z-A)', () => {
-      const sorted = sortLectures(lectures, 'title_desc');
       expect(sorted.map(l => l.video_title)).toEqual([
         'Lecture 10: Dynamic Programming',
         'Lecture 2: Graphs',
         'Lecture 1: Introduction'
+      ]);
+    });
+
+    it('sorts by title ascending (A-Z)', () => {
+      const sorted = sortLectures(lectures, 'title_asc');
+      expect(sorted.map(l => l.video_title)).toEqual([
+        'Lecture 1: Introduction',
+        'Lecture 2: Graphs',
+        'Lecture 10: Dynamic Programming'
       ]);
     });
 
@@ -138,11 +138,10 @@ describe('lectureSort utilities', () => {
 
     it('filters by search keyword and applies default title sort', () => {
       const filtered = filterAndSortLectures(lectures, {
-        search: 'Lecture',
-        sortBy: 'title_asc'
+        search: 'Lecture'
       });
       expect(filtered.length).toBe(3);
-      expect(filtered[0].video_title).toBe('Lecture 1: Introduction');
+      expect(filtered[0].video_title).toBe('Lecture 10: Dynamic Programming');
     });
   });
 });

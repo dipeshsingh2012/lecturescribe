@@ -247,7 +247,7 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     }
   }, [activeCourseData, selectedCourse]);
 
-  const [lectureSortBy, setLectureSortBy] = useState('title_asc');
+  const [lectureSortBy, setLectureSortBy] = useState('title_desc');
   const [lectureStatusFilter, setLectureStatusFilter] = useState('all');
 
   const filteredCourseLectures = useMemo(() => {

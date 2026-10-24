@@ -113,6 +113,7 @@ class RelationalDBManager:
         self._resources_memory_cache: List[Dict[str, Any]] = []
         self._quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._course_quiz_memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._course_summaries_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_attempts_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_explanations_memory_cache: Dict[str, Dict[int, str]] = {}
         self._course_quiz_history_memory: List[Dict[str, Any]] = []
@@ -436,6 +437,18 @@ class RelationalDBManager:
 
                         CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_slug ON lecturescribe_course_quizzes(course_slug);
 
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_summaries (
+                            id SERIAL PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            summary_json JSONB NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_course_summaries_course_slug UNIQUE (course_slug)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_course_summary_slug ON lecturescribe_course_summaries(course_slug);
+
                         CREATE TABLE IF NOT EXISTS lecturescribe_quiz_attempts (
                             id SERIAL PRIMARY KEY,
                             quiz_type VARCHAR(32) NOT NULL,
@@ -464,7 +477,7 @@ class RelationalDBManager:
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_quiz_history (
                             id SERIAL PRIMARY KEY,
-                            quiz_id VARCHAR(64) UNIQUE NOT NULL,
+                            quiz_id VARCHAR(255) UNIQUE NOT NULL,
                             course_slug VARCHAR(255) NOT NULL,
                             course_name VARCHAR(255) NOT NULL,
                             user_email VARCHAR(255) NOT NULL DEFAULT '',
@@ -518,6 +531,7 @@ class RelationalDBManager:
                         ALTER TABLE lecturescribe_course_readings ALTER COLUMN author TYPE TEXT;
                         ALTER TABLE lecturescribe_resources ALTER COLUMN title TYPE TEXT;
                         ALTER TABLE lecturescribe_course_notes ALTER COLUMN title TYPE TEXT;
+                        ALTER TABLE lecturescribe_course_quiz_history ALTER COLUMN quiz_id TYPE VARCHAR(255);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_predicted_quizzes (
                             id VARCHAR(64) PRIMARY KEY,
@@ -1727,6 +1741,89 @@ class RelationalDBManager:
                         return data
         except Exception as e:
             print(f"[PostgreSQL Warning] get_saved_course_quiz error for '{course_slug}': {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def save_course_summary(self, course_name: str, summary_data: Dict[str, Any]) -> bool:
+        """Persist synthesized course-wide summary into PostgreSQL and in-memory cache."""
+        if not course_name or not summary_data:
+            return False
+
+        clean_name = str(course_name).strip()
+        course_slug = to_course_slug(clean_name)
+        if not course_slug:
+            return False
+
+        self._course_summaries_memory_cache[course_slug] = summary_data
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    summary_json_str = json.dumps(summary_data)
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_summaries (course_slug, course_name, summary_json, updated_at)
+                        VALUES (%s, %s, %s::jsonb, CURRENT_TIMESTAMP)
+                        ON CONFLICT (course_slug)
+                        DO UPDATE SET
+                            course_name = EXCLUDED.course_name,
+                            summary_json = EXCLUDED.summary_json,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (course_slug, clean_name, summary_json_str))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_course_summary error for '{course_slug}': {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_saved_course_summary(self, course_name: str) -> Optional[Dict[str, Any]]:
+        """Retrieve persisted course summary from In-Memory cache or PostgreSQL."""
+        if not course_name:
+            return None
+
+        clean_name = str(course_name).strip()
+        course_slug = to_course_slug(clean_name)
+        if not course_slug:
+            return None
+
+        if course_slug in self._course_summaries_memory_cache:
+            data = self._course_summaries_memory_cache[course_slug]
+            if isinstance(data, dict):
+                data["persisted"] = True
+            return data
+
+        if not self.postgres_url:
+            return None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT summary_json 
+                        FROM lecturescribe_course_summaries 
+                        WHERE course_slug = %s 
+                        LIMIT 1;
+                    """, (course_slug,))
+                    row = cursor.fetchone()
+                    if row and row.get("summary_json"):
+                        raw = row["summary_json"]
+                        data = raw if isinstance(raw, dict) else json.loads(raw)
+                        data["persisted"] = True
+                        self._course_summaries_memory_cache[course_slug] = data
+                        return data
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_saved_course_summary error for '{course_slug}': {e}")
             return None
         finally:
             if conn:
@@ -3634,6 +3731,16 @@ class RelationalDBManager:
 
                     cursor.execute(
                         """
+                        DELETE FROM lecturescribe_course_summaries
+                        WHERE course_slug = ANY(%s)
+                           OR LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """,
+                        (slug_candidates, name_candidates),
+                    )
+                    deleted_rows_total += max(0, cursor.rowcount)
+
+                    cursor.execute(
+                        """
                         DELETE FROM lecturescribe_course_quiz_history
                         WHERE course_slug = ANY(%s)
                            OR LOWER(COALESCE(course_name, '')) = ANY(%s);
@@ -3720,6 +3827,7 @@ class RelationalDBManager:
 
         for s in slug_candidates:
             self._course_quiz_memory_cache.pop(s, None)
+            self._course_summaries_memory_cache.pop(s, None)
             self._course_quiz_explanations_memory.pop(s, None)
 
         self._resources_memory_cache = [

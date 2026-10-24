@@ -2086,7 +2086,8 @@ class Llama3PineconeRAGStore:
     ) -> Dict[str, Any]:
         """
         Generate comprehensive, multi-lecture practice quiz testing concepts
-        across all lectures in the course with LaTeX formulas and lecture attribution.
+        across all lectures in the course using saved summaries and lecture-specific quizzes.
+        Generates 10-15 questions mixing Multiple Choice (MCQ) and Fill in the Blanks.
         """
         import requests
 
@@ -2101,12 +2102,14 @@ class Llama3PineconeRAGStore:
         for l in (lectures_data or []):
             vid = str(l.get("video_id") or l.get("videoId") or "").strip()
             ltitle = str(l.get("title") or l.get("video_title") or f"Lecture {vid}").strip()
+            lsum = str(l.get("summary") or "").strip()
+            l_qs = l.get("existing_questions") or []
             cues = [c for c in (l.get("cues") or []) if (c.get("text") or "").strip()]
-            if not cues:
-                cues = [{"time": "00:00", "text": f"Overview of {ltitle}."}]
             valid_lectures.append({
                 "video_id": vid,
                 "title": ltitle,
+                "summary": lsum,
+                "existing_questions": l_qs,
                 "cues": cues
             })
 
@@ -2114,70 +2117,113 @@ class Llama3PineconeRAGStore:
             valid_lectures = [{
                 "video_id": "overview",
                 "title": f"{clean_course} Overview",
-                "cues": [{"time": "00:00", "text": f"Foundations of {clean_course}."}]
+                "summary": f"Foundations, key theorems, and core syllabus of {clean_course}.",
+                "existing_questions": [],
+                "cues": []
             }]
+
+        # Sort lectures chronologically / naturally (Lecture 1 -> Lecture 2 -> Lecture 10)
+        valid_lectures.sort(
+            key=lambda item: [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)', item.get("title", ""))]
+        )
 
         num_lectures = len(valid_lectures)
         if num_questions is not None and int(num_questions) > 0:
-            target_count = max(3, min(25, int(num_questions)))
+            target_count = int(num_questions)
         else:
-            # Dynamically scale: 1 lecture -> 6, 2 -> 8, 3 -> 10, 4 -> 12, etc., up to 20 max
-            target_count = max(5, min(20, max(6, num_lectures * 3)))
+            # Exactly 20 questions for comprehensive course-level exam
+            target_count = 20
 
-        # Build chronological multi-lecture transcript sample using substantive cues
-        lecture_summaries = []
+        # Build token-efficient chronological context using saved summaries and lecture questions (avoiding raw cue exhaustion)
+        lecture_materials = []
         for l_idx, lect in enumerate(valid_lectures):
-            raw_cues = lect["cues"]
-            substantive_cues = self._filter_substantive_cues(raw_cues)
-            step = max(1, len(substantive_cues) // 25)
-            sampled = substantive_cues[::step][:25]
-            cue_lines = [f"  [{c.get('time', '00:00')}] {c.get('text', '').strip()}" for c in sampled]
-            lecture_summaries.append(
-                f"=== LECTURE {l_idx + 1}: {lect['title']} (Video ID: {lect['video_id']}) ===\n" + "\n".join(cue_lines)
+            ltitle = lect["title"]
+            vid = lect["video_id"]
+            lsum = lect.get("summary") or ""
+            if not lsum and lect.get("cues"):
+                substantive = self._filter_substantive_cues(lect["cues"])
+                lsum = " ".join([c.get("text", "").strip() for c in substantive[:20]])
+            if not lsum:
+                lsum = f"Core topics, definitions, and applications introduced in {ltitle}."
+
+            existing_qs = lect.get("existing_questions") or []
+            sample_qs = []
+            for q in existing_qs[:4]:
+                if isinstance(q, dict) and q.get("question"):
+                    q_text = str(q.get("question") or "")[:120]
+                    opts = q.get("options") or []
+                    c_idx = q.get("correct_index", 0)
+                    correct_ans = opts[c_idx] if isinstance(opts, list) and 0 <= c_idx < len(opts) else ""
+                    sample_qs.append(f"  * Topic/Concept: {q_text} (Key Concept: {correct_ans})")
+
+            qs_block = ("\nKey Tested Concepts:\n" + "\n".join(sample_qs)) if sample_qs else ""
+            lecture_materials.append(
+                f"=== LECTURE {l_idx + 1}: {ltitle} (Video ID: {vid}) ===\n"
+                f"SUMMARY & CORE THEORIES:\n{lsum[:2500]}\n"
+                f"{qs_block}"
             )
 
-        transcript_sample = "\n\n".join(lecture_summaries)[:32000]
+        course_context = "\n\n".join(lecture_materials)[:22000]
+        per_lecture_min = max(1, target_count // num_lectures)
 
         system_prompt = (
             "You are an expert university professor and comprehensive exam creator.\n"
-            f"Your task is to generate a challenging, educational {target_count}-question multiple-choice course exam testing core concepts across ALL {num_lectures} lectures in the course '{clean_course}'.\n\n"
+            f"Your task is to generate an educational, balanced {target_count}-question course exam testing concepts across ALL {num_lectures} lectures in '{clean_course}'.\n\n"
             "Strict Guidelines:\n"
-            f"1. Coverage & Balance: The questions MUST be distributed across all the lectures in this course so far. Ensure every lecture is represented.\n"
-            "2. Concept-First Framing: Each question must directly test an underlying concept, theorem, definition, mechanism, proof, or practical trade-off. "
-            "STRICTLY FORBIDDEN: NEVER use episodic phrasing, mention timestamps, or reference lecture titles/numbers in the question stem (e.g. 'In Lecture 2...', 'When the lecturer mentions...', 'At 41:32...', 'In session 5...', 'According to the lecture...'). "
-            "The question must be completely self-contained and conceptual.\n"
-            "3. STRICTLY PROHIBITED TOPICS: NEVER test introductory greetings, welcome remarks, pleasantries, attendance, audio/mic checks, screen sharing checks, or administrative chatter (e.g. 'Namaste', 'Good morning', 'Can you hear me', 'Welcome'). NEVER create questions where an option is a greeting or 'An introductory greeting with no mathematical bearing'. Only test substantive academic theory, equations, algorithms, and practical applications.\n"
-            "4. Timestamp as Validation: The 'timestamp', 'lecture_id', and 'lecture_title' fields serve strictly for factual citation/verification so students can review the exact lecture moment. Timestamps and lecture titles must NEVER appear inside the 'question' text itself.\n"
-            "5. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$, $x$, $y$). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
-            "6. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D) — do NOT bias towards option A.\n"
-            "7. Question format:\n"
-            "   - 'id': integer (1, 2, 3...)\n"
-            "   - 'question': clear, conceptually self-contained question text with LaTeX math where applicable\n"
-            "   - 'options': array of exactly 4 strings (A, B, C, D)\n"
-            "   - 'correct_index': integer (0, 1, 2, or 3) indicating the single correct option\n"
-            "   - 'explanation': thorough pedagogical explanation citing the lecture title and timestamp, with LaTeX math\n"
+            f"1. Equal Representation Across All Lectures: Distribute questions evenly from Lecture 1 through Lecture {num_lectures} in chronological order. "
+            f"Ensure at least {per_lecture_min} question(s) is dedicated to each lecture. Do NOT bias questions toward the latest lecture; every single lecture must be represented.\n"
+            "2. Question Types (MCQ & Fill-in-the-Blank): Create a balanced mix of:\n"
+            "   - 'mcq': Multiple Choice Question testing mechanisms, theorems, trade-offs, or applications.\n"
+            "   - 'fill_in_the_blank': Sentence with '_____' testing an essential technical term, keyword, or variable, with 4 plausible options including the correct fill-in term.\n"
+            "3. Concept-First Framing: Each question must directly test academic theory, algorithms, equations, or definitions. "
+            "STRICTLY FORBIDDEN: NEVER use episodic phrasing, lecture titles, or speaker remarks in the question stem (NEVER write 'In Lecture 2...', 'According to the video...', 'At 15:30...'). The question must be standalone.\n"
+            "4. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $W^T x + b$, $\\mathcal{O}(n \\log n)$). NEVER duplicate variable characters.\n"
+            "5. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D).\n"
+            "6. Question Schema:\n"
+            "   - 'id': integer (1, 2, ...)\n"
+            "   - 'type': 'mcq' or 'fill_in_the_blank'\n"
+            "   - 'question': clear question text (must contain '_____' if type is 'fill_in_the_blank')\n"
+            "   - 'options': array of exactly 4 strings\n"
+            "   - 'correct_index': integer (0, 1, 2, or 3)\n"
+            "   - 'blank_answer': string (the correct term that fills the blank if fill_in_the_blank, matching options[correct_index]; empty string for mcq)\n"
+            "   - 'explanation': thorough pedagogical explanation citing the lecture title and key concept with LaTeX math\n"
             "   - 'lecture_id': exact video_id of the lecture this question tests\n"
             "   - 'lecture_title': title of the lecture this question tests\n"
-            "   - 'timestamp': timestamp string (e.g. '43:34') from that lecture\n"
-            "   - 'difficulty': 'easy', 'medium', or 'hard'\n"
-            "8. Return ONLY a single valid JSON object matching this schema:\n"
+            "   - 'timestamp': timestamp string (e.g. '12:30')\n"
+            "   - 'difficulty': 'easy', 'medium', or 'hard'\n\n"
+            "7. Return ONLY a single valid JSON object matching this schema:\n"
             "{\n"
             '  "questions": [\n'
             '    {\n'
             '      "id": 1,\n'
-            '      "question": "Which architectural property distinguishes...",\n'
+            '      "type": "mcq",\n'
+            '      "question": "Which objective function minimizes...",\n'
             '      "options": ["Option A", "Option B", "Option C", "Option D"],\n'
-            '      "correct_index": 2,\n'
+            '      "correct_index": 1,\n'
+            '      "blank_answer": "",\n'
             '      "explanation": "...",\n'
             '      "lecture_id": "...",\n'
             '      "lecture_title": "...",\n'
-            '      "timestamp": "MM:SS",\n'
+            '      "timestamp": "10:15",\n'
+            '      "difficulty": "medium"\n'
+            '    },\n'
+            '    {\n'
+            '      "id": 2,\n'
+            '      "type": "fill_in_the_blank",\n'
+            '      "question": "In sequence modeling, _____ is applied to dynamically weight token relationships across all time steps.",\n'
+            '      "options": ["Self-Attention", "Dropout", "Gradient Clipping", "Batch Normalization"],\n'
+            '      "correct_index": 0,\n'
+            '      "blank_answer": "Self-Attention",\n'
+            '      "explanation": "Self-attention dynamically calculates token importance...",\n'
+            '      "lecture_id": "...",\n'
+            '      "lecture_title": "...",\n'
+            '      "timestamp": "24:30",\n'
             '      "difficulty": "medium"\n'
             '    }\n'
             '  ]\n'
             "}"
         )
-        user_prompt = f"Course: {clean_course}\nTotal Lectures: {num_lectures}\n\nMulti-Lecture Transcripts:\n{transcript_sample}"
+        user_prompt = f"Course: {clean_course}\nTotal Lectures: {num_lectures}\n\nCourse Lecture Materials (Summaries & Tested Concepts):\n{course_context}"
 
         def _clean_and_parse_course_json(raw_text: str) -> Optional[List[Dict[str, Any]]]:
             if not raw_text:
@@ -2221,6 +2267,14 @@ class Llama3PineconeRAGStore:
                 raw_correct_idx = q.get("correct_index", 0)
                 shuffled_opts, balanced_idx = self._balance_and_shuffle_options(opts, raw_correct_idx)
 
+                q_type = str(q.get("type") or "").strip().lower()
+                if q_type not in ("mcq", "fill_in_the_blank"):
+                    q_type = "fill_in_the_blank" if ("_____" in q_text or "___" in q_text) else "mcq"
+
+                blank_ans = str(q.get("blank_answer") or "").strip()
+                if q_type == "fill_in_the_blank" and not blank_ans:
+                    blank_ans = shuffled_opts[balanced_idx]
+
                 ts = str(q.get("timestamp") or "00:00").strip().replace("[", "").replace("]", "")
                 lect_id = str(q.get("lecture_id") or "").strip()
                 lect_title = str(q.get("lecture_title") or "").strip()
@@ -2237,9 +2291,11 @@ class Llama3PineconeRAGStore:
 
                 cleaned_qs.append({
                     "id": len(cleaned_qs) + 1,
+                    "type": q_type,
                     "question": q_text,
                     "options": shuffled_opts,
                     "correct_index": balanced_idx,
+                    "blank_answer": blank_ans if q_type == "fill_in_the_blank" else "",
                     "explanation": explanation,
                     "lecture_id": lect_id,
                     "lecture_title": lect_title,
@@ -2261,7 +2317,7 @@ class Llama3PineconeRAGStore:
                         ],
                         "response_format": {"type": "json_object"},
                         "temperature": 0.3,
-                        "max_tokens": 4096
+                        "max_tokens": 6000
                     }
                     r = requests.post(
                         "https://api.groq.com/openai/v1/chat/completions",
@@ -2292,7 +2348,7 @@ class Llama3PineconeRAGStore:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
-                        "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 4096}
+                        "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 6000}
                     }
                     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
                     resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
@@ -2314,6 +2370,208 @@ class Llama3PineconeRAGStore:
 
         raise RuntimeError(
             f"Unable to generate course quiz for '{clean_course}'. All configured AI models failed or returned invalid responses."
+        )
+
+    def generate_course_summary(
+        self,
+        course_name: str,
+        lectures_data: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Synthesize comprehensive course-level summary across all lectures in the course
+        using saved lecture summaries (token-efficient, avoiding raw cue exhaustion).
+        """
+        import requests
+
+        clean_course = str(course_name or "").strip()
+        course_slug = re.sub(r'[^a-z0-9]+', '-', clean_course.lower()).strip('-')
+        if not clean_course or not course_slug:
+            raise ValueError("course_name is required.")
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        valid_lectures = []
+        for l in (lectures_data or []):
+            vid = str(l.get("video_id") or l.get("videoId") or "").strip()
+            ltitle = str(l.get("title") or l.get("video_title") or f"Lecture {vid}").strip()
+            lsum = str(l.get("summary") or "").strip()
+            cues = [c for c in (l.get("cues") or []) if (c.get("text") or "").strip()]
+            valid_lectures.append({
+                "video_id": vid,
+                "title": ltitle,
+                "summary": lsum,
+                "cues": cues
+            })
+
+        if not valid_lectures:
+            valid_lectures = [{
+                "video_id": "overview",
+                "title": f"{clean_course} Overview",
+                "summary": f"Foundations, curriculum, and core topics of {clean_course}.",
+                "cues": []
+            }]
+
+        valid_lectures.sort(
+            key=lambda item: [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)', item.get("title", ""))]
+        )
+        num_lectures = len(valid_lectures)
+
+        # Build token-efficient summary syllabus
+        syllabus_blocks = []
+        for l_idx, lect in enumerate(valid_lectures):
+            ltitle = lect["title"]
+            vid = lect["video_id"]
+            lsum = lect.get("summary") or ""
+            if not lsum and lect.get("cues"):
+                substantive = self._filter_substantive_cues(lect["cues"])
+                lsum = " ".join([c.get("text", "").strip() for c in substantive[:20]])
+            if not lsum:
+                lsum = f"Core concepts and topics of {ltitle}."
+
+            syllabus_blocks.append(
+                f"=== LECTURE {l_idx + 1}: {ltitle} (Video ID: {vid}) ===\n"
+                f"{lsum[:2500]}"
+            )
+
+        course_syllabus = "\n\n".join(syllabus_blocks)[:24000]
+
+        system_prompt = (
+            "You are a distinguished university professor and academic curriculum chair.\n"
+            f"Your task is to synthesize an executive, comprehensive Course-Level Summary for '{clean_course}' across all {num_lectures} lectures.\n\n"
+            "Requirements:\n"
+            "1. Executive Course Overview: 2-3 substantive academic paragraphs introducing the course curriculum, major theoretical pillars, overarching methodologies, and real-world relevance.\n"
+            "2. Thematic Progression & Modules: Group the lectures into 2-4 unified thematic modules describing how earlier concepts form the foundation for subsequent advanced topics.\n"
+            "3. Core Equations, Theorems & Definitions: List 4-8 critical mathematical formulas, definitions, or algorithms with standard LaTeX ($...$ or $$...$$) and clean explanations.\n"
+            "4. Lecture-by-Lecture Synopsis: For every lecture in chronological order, provide a clear 1-2 paragraph synopsis and 3-4 bulleted key takeaways.\n"
+            "5. Master Exam Study Checklist: 6-10 high-yield topics, trade-offs, and conceptual comparisons students must master for comprehensive exams.\n"
+            "6. Return ONLY a single valid JSON object matching this schema:\n"
+            "{\n"
+            '  "executive_summary": "Paragraph 1...\\n\\nParagraph 2...",\n'
+            '  "thematic_modules": [\n'
+            '    {\n'
+            '      "module_title": "Module 1: Foundations...",\n'
+            '      "lectures_covered": ["Lecture 1: Intro", "Lecture 2: ..."],\n'
+            '      "key_takeaways": ["Takeaway 1", "Takeaway 2"],\n'
+            '      "core_theories": "Synthesis of theories..."\n'
+            '    }\n'
+            '  ],\n'
+            '  "core_formulas_and_definitions": [\n'
+            '    {\n'
+            '      "name": "Loss Function / Mechanism Name",\n'
+            '      "formula": "$$\\mathcal{L}_{\\theta} = ...$$",\n'
+            '      "description": "Definition and significance..."\n'
+            '    }\n'
+            '  ],\n'
+            '  "lecture_summaries": [\n'
+            '    {\n'
+            '      "lecture_id": "...",\n'
+            '      "lecture_title": "...",\n'
+            '      "synopsis": "1-2 paragraph overview of this lecture...",\n'
+            '      "key_points": ["Point 1", "Point 2", "Point 3"]\n'
+            '    }\n'
+            '  ],\n'
+            '  "master_exam_checklist": [\n'
+            '    "Compare and contrast...",\n'
+            '    "Derive the proof of..."\n'
+            '  ]\n'
+            "}"
+        )
+        user_prompt = f"Course: {clean_course}\nTotal Lectures: {num_lectures}\n\nLectures Synthesis Input:\n{course_syllabus}"
+
+        def _clean_and_parse_course_summary_json(raw_text: str) -> Optional[Dict[str, Any]]:
+            if not raw_text:
+                return None
+            t = raw_text.strip()
+            if t.startswith("```"):
+                lines = t.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                t = "\n".join(lines).strip()
+            try:
+                data = json.loads(t)
+            except Exception:
+                match = re.search(r"\{.*\}", t, re.DOTALL)
+                if match:
+                    try:
+                        data = json.loads(match.group(0))
+                    except Exception:
+                        return None
+                else:
+                    return None
+
+            if not isinstance(data, dict):
+                return None
+
+            exec_sum = str(data.get("executive_summary") or "").strip()
+            if not exec_sum:
+                return None
+
+            return {
+                "course_name": clean_course,
+                "course_slug": course_slug,
+                "lecture_count": num_lectures,
+                "executive_summary": exec_sum,
+                "thematic_modules": data.get("thematic_modules") if isinstance(data.get("thematic_modules"), list) else [],
+                "core_formulas_and_definitions": data.get("core_formulas_and_definitions") if isinstance(data.get("core_formulas_and_definitions"), list) else [],
+                "lecture_summaries": data.get("lecture_summaries") if isinstance(data.get("lecture_summaries"), list) else [],
+                "master_exam_checklist": data.get("master_exam_checklist") if isinstance(data.get("master_exam_checklist"), list) else []
+            }
+
+        # 1. Groq
+        if groq_key:
+            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+                try:
+                    payload = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.3,
+                        "max_tokens": 4096
+                    }
+                    r = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json=payload,
+                        timeout=90
+                    )
+                    if r.status_code == 200:
+                        content = r.json()["choices"][0]["message"]["content"]
+                        parsed = _clean_and_parse_course_summary_json(content)
+                        if parsed:
+                            parsed["model"] = f"Groq {model_name}"
+                            parsed["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            return parsed
+                except Exception as e:
+                    print(f"⚠️ [Groq Course Summary Warning] {e}")
+
+        # 2. Gemini
+        if gemini_key:
+            for model_name in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash"]:
+                try:
+                    payload = {
+                        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                        "systemInstruction": {"parts": [{"text": system_prompt}]},
+                        "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 4096}
+                    }
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                    resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
+                    if resp.status_code == 200:
+                        content = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        parsed = _clean_and_parse_course_summary_json(content)
+                        if parsed:
+                            parsed["model"] = f"Gemini {model_name}"
+                            parsed["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                            return parsed
+                except Exception as e:
+                    print(f"⚠️ [Gemini Course Summary Warning] {e}")
+
+        raise RuntimeError(
+            f"Unable to generate course summary for '{clean_course}'. All configured AI models failed or returned invalid responses."
         )
 
     def generate_detailed_quiz_explanation(

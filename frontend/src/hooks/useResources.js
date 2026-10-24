@@ -16,7 +16,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       try {
         const params = new URLSearchParams(window.location.search);
         const tab = params.get('tab');
-        if (tab === 'quiz' || tab === 'tutor' || tab === 'resources' || tab === 'library' || tab === 'lectures') {
+        if (tab === 'quiz' || tab === 'tutor' || tab === 'resources' || tab === 'library' || tab === 'lectures' || tab === 'summary' || tab === 'assignments') {
           return tab;
         }
       } catch {}
@@ -49,7 +49,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       try {
         const params = new URLSearchParams(window.location.search);
         const tab = params.get('tab');
-        if (tab === 'quiz' || tab === 'resources' || tab === 'lectures') {
+        if (tab === 'quiz' || tab === 'tutor' || tab === 'resources' || tab === 'library' || tab === 'lectures' || tab === 'summary' || tab === 'assignments') {
           setCourseViewTabState(tab);
         } else {
           setCourseViewTabState('lectures');

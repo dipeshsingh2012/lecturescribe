@@ -59,6 +59,7 @@ describe('useCourseQuiz hook', () => {
     const mockQuiz = {
       course_name: 'Applied Mathematics',
       course_slug: 'applied-mathematics',
+      quiz_id: 'quiz-app-math-1',
       lecture_count: 2,
       questions: [
         {
@@ -116,7 +117,8 @@ describe('useCourseQuiz hook', () => {
           user_email: 'student@example.com',
           answers: { 1: 0 },
           score: 1,
-          completed: false
+          completed: false,
+          quiz_id: 'quiz-app-math-1'
         })
       })
     );
@@ -222,6 +224,7 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.quizData.quiz_id).toBe('cquiz_999');
     expect(result.current.selectedAnswers).toEqual({ 1: 0, 2: 1 });
     expect(result.current.reviewMode).toBe(true);
+    expect(result.current.replayingQuizId).toBe(null);
 
     // Load in replay mode
     await act(async () => {
@@ -231,6 +234,15 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.quizData.quiz_id).toBe('cquiz_999');
     expect(result.current.selectedAnswers).toEqual({});
     expect(result.current.reviewMode).toBe(false);
+    expect(result.current.replayingQuizId).toBe('cquiz_999');
+    expect(result.current.isReplaying).toBe(true);
+
+    // Exit replay mode returns to active quiz
+    await act(async () => {
+      await result.current.exitReplay();
+    });
+    expect(result.current.replayingQuizId).toBe(null);
+    expect(result.current.isReplaying).toBe(false);
   });
 
   it('finishQuiz triggers completion persistence and history refresh', async () => {

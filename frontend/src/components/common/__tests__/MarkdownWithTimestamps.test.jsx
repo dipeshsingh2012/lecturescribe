@@ -110,6 +110,21 @@ describe('MarkdownWithTimestamps', () => {
     expect(container.textContent).not.toContain('*{1}');
   });
 
+  it('correctly renders formulas containing LaTeX bracket delimiters like \\big[ and \\big]', () => {
+    const { container } = render(
+      <MarkdownWithTimestamps
+        content={String.raw`$\mathcal{L}_{\text{CE}} = -\frac{1}{N}\sum_{i=1}^{N}\big[ y_i\log \hat{y}_i + (1-y_i)\log(1-\hat{y}_i) \big]$`}
+      />
+    );
+
+    const katexEl = container.querySelector('.katex');
+    expect(katexEl).toBeInTheDocument();
+    const katexHtml = container.querySelector('.katex-html');
+    expect(katexHtml).toBeInTheDocument();
+    expect(katexHtml.textContent).not.toContain('\\big[');
+    expect(container.textContent).not.toContain('$$');
+  });
+
   it('renders standard inline and display LaTeX delimiters without damaging markdown', () => {
     const { container } = render(
       <MarkdownWithTimestamps

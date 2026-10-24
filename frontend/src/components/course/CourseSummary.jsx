@@ -59,6 +59,22 @@ export default function CourseSummary({
     }));
   };
 
+  const formatFormulaForDisplay = (str) => {
+    if (!str || typeof str !== 'string') return '';
+    const trimmed = str.trim();
+    if (!trimmed) return '';
+    if (
+      (trimmed.startsWith('$') && trimmed.endsWith('$')) ||
+      (trimmed.startsWith('\\[') && trimmed.endsWith('\\]'))
+    ) {
+      return trimmed;
+    }
+    if (/\\(?:frac|sum|prod|mathcal|mathbb|mathbf|sqrt|int|alpha|beta|sigma|theta|lambda|mu|hat|vec|partial|le|ge|cdot|times|big|Big|left|right)\b/.test(trimmed)) {
+      return `$$${trimmed}$$`;
+    }
+    return trimmed;
+  };
+
   const normalizeFormulas = (rawList) => {
     if (!Array.isArray(rawList)) return [];
     return rawList.map((item) => {
@@ -552,7 +568,7 @@ export default function CourseSummary({
                       }}
                     >
                       <Typography component="div" sx={{ fontFamily: 'monospace', fontSize: '0.88rem', color: textPrimary }}>
-                        <MarkdownWithTimestamps content={formula} text={formula} />
+                        <MarkdownWithTimestamps content={formatFormulaForDisplay(formula)} text={formatFormulaForDisplay(formula)} />
                       </Typography>
                     </Box>
                   ) : null}

@@ -157,5 +157,34 @@ describe('CourseSummary Component', () => {
     expect(screen.getByText('Mean Squared Error')).toBeInTheDocument();
     expect(screen.getByText(/Measures average squared difference/i)).toBeInTheDocument();
   });
+
+  it('renders bare LaTeX formulas containing sizing brackets correctly via KaTeX', () => {
+    const summaryWithBareFormula = {
+      course_name: 'Machine Learning',
+      executive_summary: 'Statistical learning overview.',
+      core_formulas_and_definitions: [
+        {
+          term: 'Cross-Entropy Loss',
+          formula_or_def: String.raw`\mathcal{L}_{\text{CE}} = -\frac{1}{N}\sum_{i=1}^{N}\big[ y_i\log \hat{y}_i + (1-y_i)\log(1-\hat{y}_i) \big]`,
+          significance: 'Measures divergence between predicted and true distributions.'
+        }
+      ]
+    };
+
+    const { container } = render(
+      <CourseSummary
+        courseName="Machine Learning"
+        summaryData={summaryWithBareFormula}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Cross-Entropy Loss')).toBeInTheDocument();
+    const katexEl = container.querySelector('.katex');
+    expect(katexEl).toBeInTheDocument();
+    const katexHtml = container.querySelector('.katex-html');
+    expect(katexHtml).toBeInTheDocument();
+    expect(katexHtml.textContent).not.toContain('\\big[');
+  });
 });
 

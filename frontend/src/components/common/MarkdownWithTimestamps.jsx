@@ -257,16 +257,14 @@ export default function MarkdownWithTimestamps({
       // Repair corrupted timestamp delimiters like [14:52$$ or $$22:23]
       .replace(/\[((?:\d{1,3}:\d{2}(?::\d{2})?(?:,\s*)?)+)\$\$/g, '[$1]')
       .replace(/\$\$((?:\d{1,3}:\d{2}(?::\d{2})?(?:,\s*)?)+)\]/g, '[$1]')
-      // Repair common bare, bracketed equations emitted without Markdown math delimiters.
+      // Repair common bare, bracketed display equations emitted without Markdown math delimiters.
+      // Must be a standalone block (start of line) to avoid mangling inline LaTeX brackets like \big[ or \left[.
       // Must NOT match across timestamps [MM:SS], tool citations 【...】, markdown bold/headers, or list markers.
-      .replace(/(?<!\\)\[\s*([\s\S]*?\\(?:hat|bar|vec|tilde|mathcal|mathbb|frac|sum|prod|sigma|beta|alpha|left|right)[\s\S]*?)\s*(?<!\\)\]/g, (match, equation) => {
+      .replace(/(?:^|\n)\[\s*([\s\S]*?\\(?:hat|bar|vec|tilde|mathcal|mathbb|frac|sum|prod|sigma|beta|alpha|left|right)[\s\S]*?)\s*\](?:\n|$)/g, (match, equation) => {
         if (/\[\d{1,3}:\d{2}|\d{1,3}:\d{2}\]|【|\*\*|##|^\d+\.\s/m.test(match) || /\d{1,3}:\d{2}/.test(equation)) {
           return match;
         }
-        if (equation.includes('\n') || /\\(?:hat|mathcal|frac|sum|left|right)/.test(equation)) {
-          return `$$${equation.trim()}$$`;
-        }
-        return match;
+        return `\n\n$$${equation.trim()}$$\n\n`;
       })
       // Some model responses use *{n} instead of the LaTeX subscript _{n}.
       .replace(/(\\(?:hat|bar|vec|tilde)\{[^{}\n]+\}|\\(?:beta|alpha|sigma|theta|mu|tau))\*\{([^{}\n]+)\}/g, '$1_{$2}')

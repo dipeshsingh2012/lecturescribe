@@ -588,6 +588,8 @@ export default function HomeView({
           timeLeft={courseQuiz.timeLeft}
           setTimeLeft={courseQuiz.setTimeLeft}
           autoSubmitted={courseQuiz.autoSubmitted}
+          examStarted={courseQuiz.examStarted}
+          startExam={courseQuiz.startExam}
           marksPerQuestion={courseQuiz.marksPerQuestion}
           totalMarks={courseQuiz.totalMarks}
           earnedMarks={courseQuiz.earnedMarks}

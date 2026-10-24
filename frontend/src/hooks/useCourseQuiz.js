@@ -26,6 +26,11 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const [timeLeft, setTimeLeft] = useState(1800); // 30 minutes in seconds
   const [autoSubmitted, setAutoSubmitted] = useState(false);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [examStarted, setExamStarted] = useState(false);
+
+  const startExam = useCallback(() => {
+    setExamStarted(true);
+  }, []);
 
   const lastSlugRef = useRef(courseSlug);
 
@@ -82,6 +87,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         setDetailedExplanations({});
         setQuizSubmitted(false);
         setAutoSubmitted(false);
+        setExamStarted(false);
         setTimeLeft(1800);
         // Reset answers in database if regenerating
         const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
@@ -91,9 +97,12 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       } else if (data.user_answers && Object.keys(data.user_answers).length > 0) {
         // Restore user's persisted answers directly from database
         setSelectedAnswers(data.user_answers);
+        setExamStarted(true);
         if (data.user_completed || data.is_completed) {
           setQuizSubmitted(true);
         }
+      } else {
+        setExamStarted(false);
       }
       fetchQuizHistory();
     } catch (err) {
@@ -254,6 +263,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setReviewMode(false);
     setQuizSubmitted(false);
     setAutoSubmitted(false);
+    setExamStarted(false);
     setTimeLeft(1800);
     if (courseSlug) {
       const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
@@ -268,6 +278,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setReviewMode(false);
     setQuizSubmitted(false);
     setAutoSubmitted(false);
+    setExamStarted(false);
     setTimeLeft(1800);
     fetchOrGenerateQuiz(false);
   }, [fetchOrGenerateQuiz]);
@@ -290,11 +301,13 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         setReviewMode(false);
         setQuizSubmitted(false);
         setAutoSubmitted(false);
+        setExamStarted(false);
         setTimeLeft(1800);
       } else {
         setReplayingQuizId(null);
         setSelectedAnswers(data.answers || {});
         setReviewMode(true);
+        setExamStarted(true);
       }
     } catch (err) {
       console.error('Failed to load past quiz run:', err);
@@ -310,7 +323,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
   // 30-Minute Countdown Timer & Auto-Submit on Expiry
   useEffect(() => {
-    if (!quizData || !quizData.questions?.length || isCompleted || reviewMode) {
+    if (!examStarted || !quizData || !quizData.questions?.length || isCompleted || reviewMode) {
       return;
     }
 
@@ -335,7 +348,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [quizData, isCompleted, reviewMode, timeLeft, quizSubmitted, finishQuiz]);
+  }, [examStarted, quizData, isCompleted, reviewMode, timeLeft, quizSubmitted, finishQuiz]);
 
   const score = (quizData?.questions || []).reduce((acc, q) => {
     const userChoice = selectedAnswers[q.id];
@@ -392,6 +405,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setTimeLeft,
     autoSubmitted,
     quizSubmitted,
+    examStarted,
+    startExam,
+    setExamStarted,
     marksPerQuestion,
     totalMarks,
     earnedMarks

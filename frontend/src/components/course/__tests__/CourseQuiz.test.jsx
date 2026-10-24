@@ -121,6 +121,7 @@ describe('CourseQuiz Component', () => {
         quizData={mockQuizData}
         quizLoading={false}
         selectedAnswers={{}}
+        examStarted={true}
         handleSelectLecture={handleSelectLecture}
         currentTheme={mockTheme}
       />
@@ -223,6 +224,7 @@ describe('CourseQuiz Component', () => {
         quizData={mockQuizData}
         quizLoading={false}
         selectedAnswers={{}}
+        examStarted={true}
         replayingQuizId="cquiz_123"
         exitReplay={exitReplay}
         currentTheme={mockTheme}
@@ -301,6 +303,7 @@ describe('CourseQuiz Component', () => {
         totalQuestions={2}
         answeredCount={0}
         timeLeft={1800}
+        examStarted={true}
         currentTheme={mockTheme}
       />
     );
@@ -443,6 +446,7 @@ describe('CourseQuiz Component', () => {
         selectedAnswers={{}}
         totalQuestions={2}
         answeredCount={0}
+        examStarted={true}
         currentTheme={mockTheme}
       />
     );
@@ -486,5 +490,42 @@ describe('CourseQuiz Component', () => {
     expect(clearBtn).toBeInTheDocument();
     fireEvent.click(clearBtn);
     expect(clearAnswer).toHaveBeenCalledWith(1);
+  });
+
+  it('renders exam briefing screen with Start Exam button, and clicking Start Exam begins the exam', () => {
+    const startExam = vi.fn();
+    const multiQuestionQuiz = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      questions: [
+        { id: 1, question: 'Question 1: What is ML?', options: ['A', 'B'], correct_index: 0 },
+        { id: 2, question: 'Question 2: What is DL?', options: ['C', 'D'], correct_index: 1 }
+      ]
+    };
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={multiQuestionQuiz}
+        quizLoading={false}
+        selectedAnswers={{}}
+        totalQuestions={2}
+        answeredCount={0}
+        examStarted={false}
+        startExam={startExam}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Machine Learning Comprehensive Exam/i)).toBeInTheDocument();
+    expect(screen.getByText('30 Minutes')).toBeInTheDocument();
+    expect(screen.getByText('2 Questions')).toBeInTheDocument();
+
+    const startBtn = screen.getByRole('button', { name: /Start Exam/i });
+    expect(startBtn).toBeInTheDocument();
+
+    fireEvent.click(startBtn);
+    expect(startExam).toHaveBeenCalled();
+    expect(screen.getByText(/Question 1: What is ML\?/i)).toBeInTheDocument();
   });
 });

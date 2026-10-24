@@ -355,8 +355,21 @@ describe('useCourseQuiz hook', () => {
 
     expect(result.current.timeLeft).toBe(1800);
     expect(result.current.autoSubmitted).toBe(false);
+    expect(result.current.examStarted).toBe(false);
 
-    // Advance 5 seconds
+    // Timer does NOT auto-start before startExam() is called
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current.timeLeft).toBe(1800);
+
+    // Start the exam
+    act(() => {
+      result.current.startExam();
+    });
+    expect(result.current.examStarted).toBe(true);
+
+    // Advance 5 seconds after starting exam
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });

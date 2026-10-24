@@ -187,6 +187,62 @@ class TestCourseSummaryAndQuizReplay(unittest.TestCase):
         self.assertIsNotNone(replay_attempt)
         self.assertEqual(replay_attempt["score"], 0)
 
+    def test_redis_course_summary_and_generic_primitives(self):
+        """Verify RedisCacheService has get_course_summary, set_course_summary, and generic get/set/delete."""
+        from backend.redis_service import RedisCacheService
+
+        redis_service = RedisCacheService()
+        mock_client = MagicMock()
+        redis_service.client = mock_client
+        redis_service.enabled = True
+
+        test_summary = {
+            "course_name": "Machine Learning",
+            "executive_summary": "Core principles of statistical learning."
+        }
+
+        # 1. Test set_course_summary
+        success = redis_service.set_course_summary("machine-learning", test_summary, ttl_seconds=3600)
+        self.assertTrue(success)
+        mock_client.setex.assert_called_with("ls:course_summary:machine-learning", 3600, json.dumps(test_summary))
+
+        # 2. Test get_course_summary cache hit
+        mock_client.get.return_value = json.dumps(test_summary)
+        retrieved = redis_service.get_course_summary("machine-learning")
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved["course_name"], "Machine Learning")
+        self.assertTrue(retrieved["cached"])
+
+        # 3. Test generic get, set, delete primitives
+        redis_service.set("custom_key", "custom_val", ex=60)
+        mock_client.setex.assert_called_with("custom_key", 60, "custom_val")
+
+        mock_client.get.return_value = "custom_val"
+        val = redis_service.get("custom_key")
+        self.assertEqual(val, "custom_val")
+
+        redis_service.delete("custom_key")
+        mock_client.delete.assert_called_with("custom_key")
+
+    def test_get_course_summary_endpoint_with_redis_cache(self):
+        """Verify GET /api/course/{course_name}/summary succeeds when redis_cache is active."""
+        from backend.redis_service import redis_cache
+
+        mock_client = MagicMock()
+        mock_summary = {
+            "course_name": "Data Structures",
+            "executive_summary": "Trees, graphs, and hash tables."
+        }
+        mock_client.get.return_value = json.dumps(mock_summary)
+
+        with patch.object(redis_cache, "client", mock_client), \
+             patch.object(redis_cache, "enabled", True):
+            resp = self.client.get("/api/course/data-structures/summary")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["course_name"], "Data Structures")
+            self.assertEqual(data["executive_summary"], "Trees, graphs, and hash tables.")
+
 
 if __name__ == "__main__":
     unittest.main()

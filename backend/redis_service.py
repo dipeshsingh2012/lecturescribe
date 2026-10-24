@@ -313,6 +313,91 @@ class RedisCacheService:
             return False
 
     # ---------------------------------------------------------
+    # Course Summary Cache Operations
+    # ---------------------------------------------------------
+
+    def get_course_summary(self, course_slug: str) -> Optional[Dict[str, Any]]:
+        """Retrieve cached course-level executive summary."""
+        if not self.client or not self.enabled or not course_slug:
+            return None
+
+        clean_slug = str(course_slug).strip().lower()
+        key = f"ls:course_summary:{clean_slug}"
+        try:
+            raw = self.client.get(key)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data["cached"] = True
+                    data["cache_tier"] = "REDIS"
+                    return data
+        except Exception as e:
+            print(f"[Redis Cache Warning] Course summary cache read error: {e}")
+        return None
+
+    def set_course_summary(
+        self,
+        course_slug: str,
+        summary_data: Dict[str, Any],
+        ttl_seconds: Optional[int] = 86400
+    ) -> bool:
+        """Store generated course-level summary in Redis (default 24h)."""
+        if not self.client or not self.enabled or not course_slug:
+            return False
+
+        clean_slug = str(course_slug).strip().lower()
+        key = f"ls:course_summary:{clean_slug}"
+        ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl
+        try:
+            val_str = json.dumps(summary_data)
+            if ttl and ttl > 0:
+                self.client.setex(key, ttl, val_str)
+            else:
+                self.client.set(key, val_str)
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] Course summary cache write error: {e}")
+            return False
+
+    # ---------------------------------------------------------
+    # Generic Key-Value Cache Primitives
+    # ---------------------------------------------------------
+
+    def get(self, key: str) -> Optional[str]:
+        """Generic string get for arbitrary keys."""
+        if not self.client or not self.enabled or not key:
+            return None
+        try:
+            return self.client.get(key)
+        except Exception as e:
+            print(f"[Redis Cache Warning] Generic get error on '{key}': {e}")
+            return None
+
+    def set(self, key: str, value: str, ex: Optional[int] = None) -> bool:
+        """Generic string set for arbitrary keys with optional TTL."""
+        if not self.client or not self.enabled or not key:
+            return False
+        try:
+            if ex and ex > 0:
+                self.client.setex(key, ex, value)
+            else:
+                self.client.set(key, value)
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] Generic set error on '{key}': {e}")
+            return False
+
+    def delete(self, *keys: str) -> int:
+        """Generic delete for arbitrary keys."""
+        if not self.client or not self.enabled or not keys:
+            return 0
+        try:
+            return self.client.delete(*keys)
+        except Exception as e:
+            print(f"[Redis Cache Warning] Generic delete error on keys: {e}")
+            return 0
+
+    # ---------------------------------------------------------
     # User Courses & Library Cache Operations
     # ---------------------------------------------------------
 
@@ -437,10 +522,10 @@ class RedisCacheService:
         target_base_slug = to_gcs_course_slug(clean_course)
 
         try:
-            # Invalidate cached course quiz for this specific course slug
-            self.client.delete(f"ls:course_quiz:{c_slug}")
+            # Invalidate cached course quiz and course summary for this specific course slug
+            self.client.delete(f"ls:course_quiz:{c_slug}", f"ls:course_summary:{c_slug}")
             if target_base_slug != c_slug:
-                self.client.delete(f"ls:course_quiz:{target_base_slug}")
+                self.client.delete(f"ls:course_quiz:{target_base_slug}", f"ls:course_summary:{target_base_slug}")
 
             if not lecture_entry:
                 self.invalidate_user(clean_email)

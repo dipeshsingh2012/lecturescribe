@@ -2962,15 +2962,10 @@ def get_or_generate_course_summary(
 
     # 1. Check Redis Cache
     if not is_regenerate and redis_cache:
-        cached_summary = redis_cache.get(f"course_summary:{course_slug}")
-        if cached_summary:
-            try:
-                data = json.loads(cached_summary) if isinstance(cached_summary, str) else cached_summary
-                if data and data.get("executive_summary"):
-                    print(f"⚡ [Redis Hit] Returning cached course summary for '{course_slug}'.")
-                    return data
-            except Exception:
-                pass
+        cached_summary = redis_cache.get_course_summary(course_slug)
+        if cached_summary and cached_summary.get("executive_summary"):
+            print(f"⚡ [Redis Hit] Returning cached course summary for '{course_slug}'.")
+            return cached_summary
 
     # 2. Check Database Persistence
     if not is_regenerate:
@@ -2978,7 +2973,7 @@ def get_or_generate_course_summary(
         if db_summary and db_summary.get("executive_summary"):
             print(f"💾 [PostgreSQL Hit] Returning persisted course summary for '{course_slug}'.")
             if redis_cache:
-                redis_cache.set(f"course_summary:{course_slug}", json.dumps(db_summary), ex=86400)
+                redis_cache.set_course_summary(course_slug, db_summary, ttl_seconds=86400)
             return db_summary
 
     # 3. Retrieve Course & Lecture list from DB
@@ -3041,7 +3036,7 @@ def get_or_generate_course_summary(
     # 6. Persist to Database & Cache
     db_manager.save_course_summary(canonical_title, summary_data)
     if redis_cache:
-        redis_cache.set(f"course_summary:{course_slug}", json.dumps(summary_data), ex=86400)
+        redis_cache.set_course_summary(course_slug, summary_data, ttl_seconds=86400)
 
     return summary_data
 

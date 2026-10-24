@@ -1686,9 +1686,6 @@ export default function CourseQuiz({
           </Paper>
         )}
       </Box>
-
-      {/* Past Quizzes History & Replay Section */}
-      {renderPastQuizzes()}
     </Box>
   );
 }

@@ -2894,10 +2894,17 @@ def get_or_generate_course_quiz(
         attempt = db_manager.get_quiz_attempt("course", course_slug, email)
         if attempt:
             quiz_data = dict(quiz_data)
-            quiz_data["user_answers"] = attempt.get("answers", {})
-            quiz_data["user_score"] = attempt.get("score", 0)
-            quiz_data["user_completed"] = attempt.get("completed", False)
-            quiz_data["is_completed"] = attempt.get("completed", False)
+            # Only restore user answers if this is an active in-progress attempt, NOT a completed attempt
+            if not attempt.get("completed"):
+                quiz_data["user_answers"] = attempt.get("answers", {})
+                quiz_data["user_score"] = attempt.get("score", 0)
+                quiz_data["user_completed"] = False
+                quiz_data["is_completed"] = False
+            else:
+                quiz_data["user_answers"] = {}
+                quiz_data["user_score"] = attempt.get("score", 0)
+                quiz_data["user_completed"] = True
+                quiz_data["is_completed"] = True
 
     return quiz_data
 
@@ -3152,6 +3159,17 @@ def get_course_quiz_history_run(course_name: str, quiz_id: str):
     if not quiz_run:
         raise HTTPException(status_code=404, detail=f"Quiz history for '{quiz_id}' not found.")
     return quiz_run
+
+
+@app.delete("/api/course/{course_name}/quiz/history/{quiz_id}")
+def delete_course_quiz_history_run(course_name: str, quiz_id: str, email: Optional[str] = Query(None)):
+    """Delete a specific historical quiz run by ID."""
+    clean_course = str(course_name or "").strip()
+    clean_id = str(quiz_id or "").strip()
+    deleted = db_manager.delete_course_quiz_history(clean_id, user_email=email)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Quiz history for '{clean_id}' could not be deleted.")
+    return {"status": "success", "success": True, "quiz_id": clean_id}
 
 
 # ==============================================================================

@@ -102,6 +102,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
           setQuizSubmitted(true);
         }
       } else {
+        setSelectedAnswers({});
         setExamStarted(false);
       }
       fetchQuizHistory();
@@ -283,6 +284,27 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     fetchOrGenerateQuiz(false);
   }, [fetchOrGenerateQuiz]);
 
+  const deleteQuizHistory = useCallback(async (quizId) => {
+    if (!courseSlug || !quizId) return false;
+    try {
+      const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/history/${encodeURIComponent(quizId)}${emailParam}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) {
+        throw new Error('Failed to delete quiz history');
+      }
+      setQuizHistory((prev) => prev.filter((item) => item.quiz_id !== quizId));
+      if (replayingQuizId === quizId) {
+        exitReplay();
+      }
+      return true;
+    } catch (err) {
+      console.error('Failed to delete quiz attempt:', err);
+      return false;
+    }
+  }, [courseSlug, userEmail, replayingQuizId, exitReplay]);
+
   const loadPastQuiz = useCallback(async (quizId, forReplay = false) => {
     if (!courseSlug || !quizId) return;
     setQuizLoading(true);
@@ -396,6 +418,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     historyLoading,
     fetchQuizHistory,
     loadPastQuiz,
+    deleteQuizHistory,
     reviewMode,
     setReviewMode,
     replayingQuizId,

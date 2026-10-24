@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import CourseQuiz from '../CourseQuiz';
 import { LMS_THEMES } from '../../../store/themeStore';
 
@@ -179,8 +179,10 @@ describe('CourseQuiz Component', () => {
     expect(fetchDetailedExplanation).toHaveBeenCalledWith(1, mockQuizData.questions[0]);
   });
 
-  it('renders Past Course Quizzes section and allows Review and Replay', () => {
+  it('renders Past Course Quizzes section and allows Review, Replay, and Delete', async () => {
     const loadPastQuiz = vi.fn();
+    const deleteQuizHistory = vi.fn().mockResolvedValue(true);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const mockHistory = [
       {
         quiz_id: 'cquiz_123',
@@ -199,11 +201,15 @@ describe('CourseQuiz Component', () => {
         selectedAnswers={{}}
         quizHistory={mockHistory}
         loadPastQuiz={loadPastQuiz}
+        deleteQuizHistory={deleteQuizHistory}
         currentTheme={mockTheme}
       />
     );
 
-    expect(screen.getByText(/Past Course Quizzes/i)).toBeInTheDocument();
+    const accordionSummary = screen.getByText(/Past Course Quizzes/i);
+    expect(accordionSummary).toBeInTheDocument();
+    fireEvent.click(accordionSummary);
+
     expect(screen.getByText(/4 \/ 5 \(80%\)/i)).toBeInTheDocument();
 
     const reviewBtn = screen.getByRole('button', { name: /Review/i });
@@ -213,6 +219,13 @@ describe('CourseQuiz Component', () => {
     const replayBtn = screen.getByRole('button', { name: /Replay/i });
     fireEvent.click(replayBtn);
     expect(loadPastQuiz).toHaveBeenCalledWith('cquiz_123', true);
+
+    const deleteBtn = screen.getByLabelText(/Delete quiz attempt/i);
+    await act(async () => {
+      fireEvent.click(deleteBtn);
+    });
+    expect(window.confirm).toHaveBeenCalled();
+    expect(deleteQuizHistory).toHaveBeenCalledWith('cquiz_123');
   });
 
   it('renders replay mode banner and triggers exitReplay', () => {

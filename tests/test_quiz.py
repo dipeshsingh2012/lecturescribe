@@ -785,6 +785,16 @@ class TestCourseQuizImprovements(unittest.TestCase):
         self.assertEqual(run_data["answers"], {"1": 0})
         self.assertEqual(len(run_data["quiz_json"]["questions"]), 1)
 
+        # 4. Delete quiz run from history
+        del_res = self.client.delete(f"/api/course/{course_name}/quiz/history/{quiz_id}?email=student@university.edu")
+        self.assertEqual(del_res.status_code, 200)
+        self.assertTrue(del_res.json().get("success"))
+
+        # Verify it is deleted
+        res_list_after = self.client.get(f"/api/course/{course_name}/quiz/history?email=student@university.edu")
+        history_after = res_list_after.json().get("history", [])
+        self.assertFalse(any(h["quiz_id"] == quiz_id for h in history_after))
+
     def test_is_trivial_or_greeting_question_detects_bad_questions(self):
         """Verify that questions testing greetings or filler options are flagged and rejected."""
         bad_q = {

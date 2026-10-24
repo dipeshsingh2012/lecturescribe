@@ -393,4 +393,38 @@ describe('useCourseQuiz hook', () => {
 
     vi.useRealTimers();
   });
+
+  it('deletes quiz history attempt via deleteQuizHistory', async () => {
+    const mockHistory = [
+      { quiz_id: 'quiz-1', score: 5, total_questions: 10 },
+      { quiz_id: 'quiz-2', score: 8, total_questions: 10 }
+    ];
+
+    global.fetch = vi.fn().mockImplementation((url, options) => {
+      if (options?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'success' }) });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ history: mockHistory })
+      });
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Machine Learning', 'student@example.com'));
+
+    await act(async () => {
+      await result.current.fetchQuizHistory();
+    });
+
+    expect(result.current.quizHistory).toHaveLength(2);
+
+    let success = false;
+    await act(async () => {
+      success = await result.current.deleteQuizHistory('quiz-1');
+    });
+
+    expect(success).toBe(true);
+    expect(result.current.quizHistory).toHaveLength(1);
+    expect(result.current.quizHistory[0].quiz_id).toBe('quiz-2');
+  });
 });

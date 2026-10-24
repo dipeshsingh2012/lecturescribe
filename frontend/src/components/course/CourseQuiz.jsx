@@ -33,7 +33,8 @@ import {
   PanelRightOpen,
   AlertTriangle,
   Check,
-  Play
+  Play,
+  Trash2
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
@@ -65,6 +66,7 @@ export default function CourseQuiz({
   historyLoading = false,
   fetchQuizHistory,
   loadPastQuiz,
+  deleteQuizHistory,
   reviewMode = false,
   replayingQuizId = null,
   exitReplay,
@@ -82,12 +84,30 @@ export default function CourseQuiz({
   const [reviewingQuestions, setReviewingQuestions] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [localExamStarted, setLocalExamStarted] = useState(false);
+  const [pastQuizzesOpen, setPastQuizzesOpen] = useState(false);
+  const [deletingQuizId, setDeletingQuizId] = useState(null);
 
-  const isStarted = examStarted || localExamStarted || Boolean(answeredCount > 0) || isCompleted || reviewMode || autoSubmitted;
+  const isStarted = examStarted || localExamStarted || Boolean(answeredCount > 0) || isCompleted || reviewMode || Boolean(replayingQuizId) || autoSubmitted;
 
   const handleStartExam = () => {
     if (typeof startExam === 'function') startExam();
     setLocalExamStarted(true);
+    setShowSummaryView(false);
+    setReviewingQuestions(false);
+  };
+
+  const handleDeleteQuiz = async (quizId) => {
+    if (!quizId) return;
+    if (window.confirm('Are you sure you want to delete this quiz attempt from your history?')) {
+      setDeletingQuizId(quizId);
+      try {
+        if (typeof deleteQuizHistory === 'function') {
+          await deleteQuizHistory(quizId);
+        }
+      } finally {
+        setDeletingQuizId(null);
+      }
+    }
   };
 
   const isGradedReview = isCompleted || reviewMode || Boolean(replayingQuizId) || autoSubmitted;
@@ -125,148 +145,190 @@ export default function CourseQuiz({
   const OPTION_LABELS = ['A', 'B', 'C', 'D'];
   const questions = quizData?.questions || [];
 
-  // Helper: Past Quizzes Component
+  // Helper: Past Quizzes Collapsible Component
   const renderPastQuizzes = () => {
     if (!quizHistory || quizHistory.length === 0) return null;
     return (
-      <Paper
+      <Accordion
+        expanded={pastQuizzesOpen}
+        onChange={(_, isExpanded) => setPastQuizzesOpen(isExpanded)}
+        slotProps={{ transition: { unmountOnExit: false } }}
         elevation={0}
         sx={{
-          mt: 4,
-          p: { xs: 2.5, sm: 3 },
-          borderRadius: 3,
+          mb: 3,
+          width: '100%',
+          borderRadius: '12px !important',
           bgcolor: cardBg,
           border: `1px solid ${cardBorder}`,
-          boxShadow: currentTheme?.palette?.cardShadow || '0 4px 20px rgba(0,0,0,0.1)'
+          '&:before': { display: 'none' },
+          overflow: 'hidden',
+          boxShadow: currentTheme?.palette?.cardShadow || '0 2px 12px rgba(0,0,0,0.06)'
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Award size={18} color={primaryColor} />
-            <Typography variant="subtitle1" sx={{ fontWeight: 800, color: textPrimary }}>
-              Past Course Quizzes
-            </Typography>
-            <Chip
-              label={`${quizHistory.length} attempts`}
-              size="small"
-              sx={{
-                height: 20,
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                bgcolor: 'rgba(99, 102, 241, 0.12)',
-                color: primaryColor
-              }}
-            />
-          </Box>
-          {typeof fetchQuizHistory === 'function' && (
-            <IconButton size="small" onClick={() => fetchQuizHistory()} sx={{ color: textSecondary }}>
-              <RotateCcw size={14} />
-            </IconButton>
-          )}
-        </Box>
-
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          {quizHistory.map((run, idx) => {
-            const pct = run.total_questions > 0 ? Math.round((run.score / run.total_questions) * 100) : 0;
-            const dateStr = run.created_at
-              ? new Date(run.created_at).toLocaleDateString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })
-              : `Quiz #${quizHistory.length - idx}`;
-            return (
-              <Box
-                key={run.quiz_id || idx}
+        <AccordionSummary
+          expandIcon={<ChevronDown size={18} color={textSecondary} />}
+          sx={{
+            px: { xs: 2, sm: 2.5 },
+            minHeight: 48,
+            '&.Mui-expanded': { minHeight: 48, borderBottom: `1px solid ${cardBorder}` }
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', pr: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <Award size={18} color={primaryColor} />
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: textPrimary, fontSize: '0.9rem' }}>
+                Past Course Quizzes
+              </Typography>
+              <Chip
+                label={`${quizHistory.length} attempt${quizHistory.length === 1 ? '' : 's'}`}
+                size="small"
                 sx={{
-                  p: 2,
-                  borderRadius: 2,
-                  bgcolor: 'rgba(255, 255, 255, 0.03)',
-                  border: `1px solid ${cardBorder}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: 1.5
+                  height: 20,
+                  fontSize: '0.7rem',
+                  fontWeight: 700,
+                  bgcolor: 'rgba(99, 102, 241, 0.12)',
+                  color: primaryColor
                 }}
+              />
+            </Box>
+            {typeof fetchQuizHistory === 'function' && (
+              <IconButton
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fetchQuizHistory();
+                }}
+                sx={{ color: textSecondary, mr: 0.5 }}
+                title="Refresh history"
               >
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 700, color: textPrimary }}>
-                    {dateStr}
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: textSecondary }}>
-                    {run.total_questions || totalQuestions} Questions • {run.completed ? 'Completed' : 'In Progress'}
-                  </Typography>
-                </Box>
+                <RotateCcw size={13} />
+              </IconButton>
+            )}
+          </Box>
+        </AccordionSummary>
 
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Chip
-                    label={`${run.score} / ${run.total_questions || totalQuestions} (${pct}%)`}
-                    size="small"
-                    sx={{
-                      fontWeight: 700,
-                      fontSize: '0.75rem',
-                      bgcolor: pct >= 70 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                      color: pct >= 70 ? '#22c55e' : '#f59e0b'
-                    }}
-                  />
+        <AccordionDetails sx={{ p: { xs: 2, sm: 2.5 }, pt: 2 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            {quizHistory.map((run, idx) => {
+              const pct = run.total_questions > 0 ? Math.round((run.score / run.total_questions) * 100) : 0;
+              const dateStr = run.created_at
+                ? new Date(run.created_at).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })
+                : `Quiz #${quizHistory.length - idx}`;
+              return (
+                <Box
+                  key={run.quiz_id || idx}
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    bgcolor: 'rgba(255, 255, 255, 0.03)',
+                    border: `1px solid ${cardBorder}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 1.5
+                  }}
+                >
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 700, color: textPrimary }}>
+                      {dateStr}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: textSecondary }}>
+                      {run.total_questions || totalQuestions} Questions • {run.completed ? 'Completed' : 'In Progress'}
+                    </Typography>
+                  </Box>
 
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    {typeof loadPastQuiz === 'function' && (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={() => {
-                          loadPastQuiz(run.quiz_id, false);
-                          setReviewingQuestions(true);
-                          setShowSummaryView(false);
-                          setCurrentIdx(0);
-                        }}
-                        startIcon={<BookOpen size={13} />}
-                        sx={{
-                          textTransform: 'none',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          borderRadius: 1.5,
-                          borderColor: cardBorder,
-                          color: textPrimary,
-                          '&:hover': { borderColor: primaryColor, color: primaryColor }
-                        }}
-                      >
-                        Review
-                      </Button>
-                    )}
-                    {typeof loadPastQuiz === 'function' && (
-                      <Button
-                        size="small"
-                        variant="contained"
-                        onClick={() => {
-                          loadPastQuiz(run.quiz_id, true);
-                          setShowSummaryView(false);
-                          setCurrentIdx(0);
-                        }}
-                        startIcon={<RotateCcw size={13} />}
-                        sx={{
-                          textTransform: 'none',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          borderRadius: 1.5,
-                          bgcolor: primaryColor,
-                          color: '#fff',
-                          '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
-                        }}
-                      >
-                        Replay
-                      </Button>
-                    )}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Chip
+                      label={`${run.score} / ${run.total_questions || totalQuestions} (${pct}%)`}
+                      size="small"
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.75rem',
+                        bgcolor: pct >= 70 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                        color: pct >= 70 ? '#22c55e' : '#f59e0b'
+                      }}
+                    />
+
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {typeof loadPastQuiz === 'function' && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            loadPastQuiz(run.quiz_id, false);
+                            setReviewingQuestions(true);
+                            setShowSummaryView(false);
+                            setCurrentIdx(0);
+                          }}
+                          startIcon={<BookOpen size={13} />}
+                          sx={{
+                            textTransform: 'none',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            borderRadius: 1.5,
+                            borderColor: cardBorder,
+                            color: textPrimary,
+                            '&:hover': { borderColor: primaryColor, color: primaryColor }
+                          }}
+                        >
+                          Review
+                        </Button>
+                      )}
+                      {typeof loadPastQuiz === 'function' && (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          onClick={() => {
+                            loadPastQuiz(run.quiz_id, true);
+                            setShowSummaryView(false);
+                            setCurrentIdx(0);
+                          }}
+                          startIcon={<RotateCcw size={13} />}
+                          sx={{
+                            textTransform: 'none',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            borderRadius: 1.5,
+                            bgcolor: primaryColor,
+                            color: '#fff',
+                            '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
+                          }}
+                        >
+                          Replay
+                        </Button>
+                      )}
+                      <Tooltip title="Delete quiz attempt">
+                        <IconButton
+                          size="small"
+                          aria-label="Delete quiz attempt"
+                          onClick={() => handleDeleteQuiz(run.quiz_id)}
+                          disabled={deletingQuizId === run.quiz_id}
+                          sx={{
+                            color: 'rgba(239, 68, 68, 0.75)',
+                            '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' }
+                          }}
+                        >
+                          {deletingQuizId === run.quiz_id ? (
+                            <CircularProgress size={13} color="inherit" />
+                          ) : (
+                            <Trash2 size={14} />
+                          )}
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
                   </Box>
                 </Box>
-              </Box>
-            );
-          })}
-        </Box>
-      </Paper>
+              );
+            })}
+          </Box>
+        </AccordionDetails>
+      </Accordion>
     );
   };
 
@@ -277,20 +339,18 @@ export default function CourseQuiz({
         sx={{
           flex: 1,
           width: '100%',
-          py: 6,
-          px: 2,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          maxWidth: 860,
+          py: 4,
+          px: { xs: 1.5, sm: 3 },
+          maxWidth: 1200,
           mx: 'auto'
         }}
       >
+        {renderPastQuizzes()}
+
         <Box
           sx={{
-            maxWidth: 580,
-            width: '100%',
+            maxWidth: 640,
+            mx: 'auto',
             p: { xs: 3, sm: 5 },
             borderRadius: 3,
             bgcolor: cardBg,
@@ -350,11 +410,6 @@ export default function CourseQuiz({
             Generate Course Quiz
           </Button>
         </Box>
-
-        {/* Show past quizzes list on initial landing if available */}
-        <Box sx={{ width: '100%', maxWidth: 700 }}>
-          {renderPastQuizzes()}
-        </Box>
       </Box>
     );
   }
@@ -392,20 +447,19 @@ export default function CourseQuiz({
         sx={{
           flex: 1,
           width: '100%',
-          py: 5,
-          px: 2,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          maxWidth: 860,
+          py: 4,
+          px: { xs: 1.5, sm: 3 },
+          maxWidth: 1200,
           mx: 'auto'
         }}
       >
+        {/* Past Quizzes Collapsible Accordion at Top */}
+        {renderPastQuizzes()}
+
         <Box
           sx={{
-            maxWidth: 640,
-            width: '100%',
+            maxWidth: 680,
+            mx: 'auto',
             p: { xs: 3, sm: 5 },
             borderRadius: 3,
             bgcolor: cardBg,
@@ -503,11 +557,6 @@ export default function CourseQuiz({
             Start Exam
           </Button>
         </Box>
-
-        {/* Past Quizzes */}
-        <Box sx={{ width: '100%', maxWidth: 700 }}>
-          {renderPastQuizzes()}
-        </Box>
       </Box>
     );
   }
@@ -519,7 +568,8 @@ export default function CourseQuiz({
     const isPassing = percentage >= 70;
 
     return (
-      <Box sx={{ width: '100%', py: 4, px: { xs: 1, sm: 3 }, maxWidth: 860, mx: 'auto' }}>
+      <Box sx={{ width: '100%', py: 4, px: { xs: 1.5, sm: 3 }, maxWidth: 1360, mx: 'auto' }}>
+        {renderPastQuizzes()}
         {autoSubmitted && (
           <Alert
             severity="warning"
@@ -708,8 +758,6 @@ export default function CourseQuiz({
             </Button>
           </Box>
         </Paper>
-
-        {renderPastQuizzes()}
       </Box>
     );
   }
@@ -740,7 +788,10 @@ export default function CourseQuiz({
   };
 
   return (
-    <Box sx={{ width: '100%', py: 3, px: { xs: 1, sm: 2 }, maxWidth: 900, mx: 'auto' }}>
+    <Box sx={{ width: '100%', py: 3, px: { xs: 1, sm: 3 }, maxWidth: 1360, mx: 'auto' }}>
+      {/* Top Collapsible Past Quizzes Accordion */}
+      {renderPastQuizzes()}
+
       {/* Replay Mode Banner */}
       {replayingQuizId && (
         <Alert
@@ -1425,9 +1476,9 @@ export default function CourseQuiz({
           <Paper
             elevation={0}
             sx={{
-              width: { xs: '100%', md: 280 },
+              width: { xs: '100%', md: 320, lg: 340 },
               flexShrink: 0,
-              p: 2.5,
+              p: { xs: 2.5, sm: 3 },
               borderRadius: 3,
               bgcolor: cardBg,
               border: `1px solid ${cardBorder}`,

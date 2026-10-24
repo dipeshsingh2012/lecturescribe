@@ -2052,6 +2052,50 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
+    def delete_course_quiz_history(self, quiz_id: str, user_email: Optional[str] = None) -> bool:
+        """Delete a historical course quiz run from PostgreSQL and In-Memory cache."""
+        if not quiz_id:
+            return False
+
+        clean_id = str(quiz_id).strip()
+        clean_email = str(user_email or "").strip().lower()
+
+        # Update in-memory history cache
+        self._course_quiz_history_memory = [
+            item for item in self._course_quiz_history_memory
+            if not (
+                item.get("quiz_id") == clean_id
+                and (not clean_email or item.get("user_email") == clean_email or not item.get("user_email"))
+            )
+        ]
+
+        if not self.postgres_url:
+            return True
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_course_quiz_history
+                            WHERE quiz_id = %s AND (user_email = %s OR user_email = '');
+                        """, (clean_id, clean_email))
+                    else:
+                        cursor.execute("""
+                            DELETE FROM lecturescribe_course_quiz_history
+                            WHERE quiz_id = %s;
+                        """, (clean_id,))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Warning] delete_course_quiz_history error for '{clean_id}': {e}")
+            return True
+        finally:
+            if conn:
+                conn.close()
+
     def save_course_quiz_explanation(self, course_name: str, question_id: Union[int, str], detailed_explanation: str) -> bool:
         """Persist detailed course quiz explanation to PostgreSQL and In-Memory cache."""
         if not course_name or not detailed_explanation:

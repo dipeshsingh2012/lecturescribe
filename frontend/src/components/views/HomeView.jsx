@@ -582,6 +582,7 @@ export default function HomeView({
           historyLoading={courseQuiz.historyLoading}
           fetchQuizHistory={courseQuiz.fetchQuizHistory}
           loadPastQuiz={courseQuiz.loadPastQuiz}
+          deleteQuizHistory={courseQuiz.deleteQuizHistory}
           reviewMode={courseQuiz.reviewMode}
           replayingQuizId={courseQuiz.replayingQuizId}
           exitReplay={courseQuiz.exitReplay}

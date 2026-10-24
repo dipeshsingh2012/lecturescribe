@@ -569,6 +569,12 @@ export default function HomeView({
           reviewMode={courseQuiz.reviewMode}
           replayingQuizId={courseQuiz.replayingQuizId}
           exitReplay={courseQuiz.exitReplay}
+          timeLeft={courseQuiz.timeLeft}
+          setTimeLeft={courseQuiz.setTimeLeft}
+          autoSubmitted={courseQuiz.autoSubmitted}
+          marksPerQuestion={courseQuiz.marksPerQuestion}
+          totalMarks={courseQuiz.totalMarks}
+          earnedMarks={courseQuiz.earnedMarks}
           handleSelectLecture={(vid, cName, ts) => {
             const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';
             handleTranscribe(`${vid}${tParam}`, false, cName, false, ts);

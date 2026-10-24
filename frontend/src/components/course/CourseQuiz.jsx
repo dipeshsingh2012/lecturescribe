@@ -28,7 +28,11 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
-  BookOpen
+  BookOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  AlertTriangle,
+  Check
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
@@ -61,10 +65,27 @@ export default function CourseQuiz({
   loadPastQuiz,
   reviewMode = false,
   replayingQuizId = null,
-  exitReplay
+  exitReplay,
+  timeLeft = 1800,
+  setTimeLeft,
+  autoSubmitted = false,
+  marksPerQuestion = 0.5,
+  totalMarks,
+  earnedMarks
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showSummaryView, setShowSummaryView] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  const calcTotalMarks = totalMarks !== undefined ? totalMarks : Number((totalQuestions * marksPerQuestion).toFixed(1));
+  const calcEarnedMarks = earnedMarks !== undefined ? earnedMarks : Number((score * marksPerQuestion).toFixed(1));
+
+  const formatTime = (secs) => {
+    const s = Math.max(0, Math.floor(secs || 0));
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  };
 
   const primaryColor = currentTheme?.palette?.primary || '#6366f1';
   const cardBg = currentTheme?.palette?.cardBg || '#1e293b';
@@ -334,13 +355,23 @@ export default function CourseQuiz({
     );
   }
 
-  // 3. Summary / Completion View (Shown when Finish Quiz is clicked or results toggled)
-  if (showSummaryView) {
+  // 3. Summary / Completion View (Shown when Finish Quiz is clicked, auto-submitted on timeout, or results toggled)
+  if (showSummaryView || autoSubmitted) {
     const percentage = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
     const isPassing = percentage >= 70;
 
     return (
       <Box sx={{ width: '100%', py: 4, px: { xs: 1, sm: 3 }, maxWidth: 860, mx: 'auto' }}>
+        {autoSubmitted && (
+          <Alert
+            severity="warning"
+            icon={<AlertTriangle size={20} />}
+            sx={{ mb: 3, textAlign: 'left', borderRadius: 2 }}
+          >
+            <strong>Time Expired (30:00 limit):</strong> The 30-minute exam time limit reached zero. Your answers were automatically submitted and graded.
+          </Alert>
+        )}
+
         <Paper
           elevation={0}
           sx={{
@@ -372,6 +403,20 @@ export default function CourseQuiz({
           <Typography variant="h4" sx={{ fontWeight: 800, color: textPrimary, mb: 1 }}>
             {percentage}%
           </Typography>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5, mb: 1.5 }}>
+            <Chip
+              label={`Score: ${calcEarnedMarks} / ${calcTotalMarks} Marks (${marksPerQuestion} mark each)`}
+              size="medium"
+              sx={{
+                fontWeight: 800,
+                fontSize: '0.88rem',
+                bgcolor: isPassing ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                color: isPassing ? '#22c55e' : '#ef4444'
+              }}
+            />
+          </Box>
+
           <Typography variant="h6" sx={{ fontWeight: 700, color: isPassing ? '#22c55e' : '#ef4444', mb: 1 }}>
             {percentage === 100
               ? 'Flawless Mastery!'
@@ -380,7 +425,7 @@ export default function CourseQuiz({
               : 'Keep Practicing! Review the Lectures Below'}
           </Typography>
           <Typography variant="body2" sx={{ color: textSecondary, mb: 4 }}>
-            You answered {score} out of {totalQuestions} questions correctly across all course lectures.
+            You answered {score} out of {totalQuestions} questions correctly ({calcEarnedMarks} / {calcTotalMarks} marks) across all course lectures.
           </Typography>
 
           {/* Lecture Breakdown Section */}
@@ -617,12 +662,12 @@ export default function CourseQuiz({
         }}
       >
         <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
             <Typography variant="h6" sx={{ fontWeight: 800, color: textPrimary }}>
               {courseName} Exam
             </Typography>
             <Chip
-              label={`${lectureCount} lectures covered`}
+              label={`${lectureCount} lectures`}
               size="small"
               sx={{
                 bgcolor: 'rgba(99, 102, 241, 0.12)',
@@ -631,13 +676,59 @@ export default function CourseQuiz({
                 fontSize: '0.72rem'
               }}
             />
+            <Chip
+              label="0.5 Mark / Q"
+              size="small"
+              sx={{
+                bgcolor: 'rgba(16, 185, 129, 0.12)',
+                color: '#10b981',
+                fontWeight: 700,
+                fontSize: '0.72rem'
+              }}
+            />
           </Box>
           <Typography variant="caption" sx={{ color: textSecondary }}>
-            Question {currentIdx + 1} of {totalQuestions} • {answeredCount} answered
+            Question {currentIdx + 1} of {totalQuestions} • {answeredCount} marked • {totalQuestions - answeredCount} remaining
           </Typography>
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          {/* 30-Minute Countdown Timer Chip */}
+          {!reviewMode && (
+            <Chip
+              icon={<Clock size={14} style={{ color: timeLeft <= 300 ? '#ef4444' : primaryColor }} />}
+              label={formatTime(timeLeft)}
+              size="small"
+              sx={{
+                fontWeight: 800,
+                fontFamily: 'monospace',
+                fontSize: '0.82rem',
+                bgcolor: timeLeft <= 300 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(99, 102, 241, 0.12)',
+                color: timeLeft <= 300 ? '#ef4444' : textPrimary,
+                border: timeLeft <= 300 ? '1.5px solid rgba(239, 68, 68, 0.5)' : `1px solid ${cardBorder}`
+              }}
+            />
+          )}
+
+          {/* Toggle Collapsible Sidebar Button */}
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => setSidebarOpen(prev => !prev)}
+            startIcon={sidebarOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              borderRadius: 2,
+              borderColor: cardBorder,
+              color: textPrimary,
+              '&:hover': { borderColor: primaryColor }
+            }}
+          >
+            {sidebarOpen ? 'Hide Overview' : `Overview (${answeredCount}/${totalQuestions})`}
+          </Button>
+
           {answeredCount > 0 && (
             <Chip
               label={`Score: ${score} / ${answeredCount}`}
@@ -678,474 +769,612 @@ export default function CourseQuiz({
         </Box>
       </Box>
 
-      {/* Linear Progress */}
-      <LinearProgress
-        variant="determinate"
-        value={totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0}
-        sx={{
-          height: 6,
-          borderRadius: 3,
-          mb: 3,
-          bgcolor: 'rgba(255, 255, 255, 0.08)',
-          '& .MuiLinearProgress-bar': {
-            bgcolor: primaryColor,
-            borderRadius: 3
-          }
-        }}
-      />
-
-      {/* Stepper Dots / Chips Bar */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          mb: 3,
-          overflowX: 'auto',
-          py: 0.5,
-          '&::-webkit-scrollbar': { height: 4 },
-          '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.2)', borderRadius: 2 }
-        }}
-      >
-        {questions.map((q, idx) => {
-          const ans = selectedAnswers[q.id];
-          const hasAnswered = ans !== undefined;
-          const wasCorrect = ans === q.correct_index;
-          const isSelected = idx === currentIdx;
-
-          return (
-            <Button
-              key={q.id}
-              size="small"
-              onClick={() => setCurrentIdx(idx)}
-              sx={{
-                minWidth: 34,
-                height: 34,
-                p: 0,
-                borderRadius: '50%',
-                fontWeight: 700,
-                fontSize: '0.75rem',
-                border: isSelected ? `2px solid ${primaryColor}` : `1px solid ${cardBorder}`,
-                bgcolor: hasAnswered
-                  ? wasCorrect
-                    ? 'rgba(34, 197, 94, 0.2)'
-                    : 'rgba(239, 68, 68, 0.2)'
-                  : isSelected
-                  ? 'rgba(99, 102, 241, 0.15)'
-                  : cardBg,
-                color: hasAnswered
-                  ? wasCorrect
-                    ? '#22c55e'
-                    : '#ef4444'
-                  : isSelected
-                  ? primaryColor
-                  : textSecondary,
-                '&:hover': {
-                  bgcolor: 'rgba(99, 102, 241, 0.25)'
-                }
-              }}
-            >
-              {idx + 1}
-            </Button>
-          );
-        })}
-      </Box>
-
-      {/* Question Card */}
-      <Paper
-        elevation={0}
-        sx={{
-          p: { xs: 2.5, sm: 4 },
-          borderRadius: 3,
-          bgcolor: cardBg,
-          border: `1px solid ${cardBorder}`,
-          mb: 3,
-          boxShadow: currentTheme?.palette?.cardShadow || '0 4px 20px rgba(0,0,0,0.15)'
-        }}
-      >
-        {/* Source Lecture Header & Clickable Timestamp */}
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5, flexWrap: 'wrap', gap: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            <Chip
-              icon={<Video size={13} style={{ marginLeft: 6 }} />}
-              label={currentQ.lecture_title || `Lecture ${currentQ.lecture_id}`}
-              size="small"
-              onClick={
-                currentQ.lecture_id && handleSelectLecture
-                  ? () => handleSelectLecture(currentQ.lecture_id, courseName, currentQ.timestamp)
-                  : undefined
-              }
-              sx={{
-                bgcolor: 'rgba(99, 102, 241, 0.15)',
-                color: primaryColor,
-                fontWeight: 700,
-                fontSize: '0.75rem',
-                cursor: currentQ.lecture_id && handleSelectLecture ? 'pointer' : 'default',
-                '&:hover': currentQ.lecture_id && handleSelectLecture ? { opacity: 0.85 } : {}
-              }}
-            />
-            {currentQ.timestamp && (
-              <Chip
-                icon={<Clock size={12} style={{ marginLeft: 6 }} />}
-                label={currentQ.timestamp}
-                size="small"
-                onClick={
-                  currentQ.lecture_id && handleSelectLecture
-                    ? () => handleSelectLecture(currentQ.lecture_id, courseName, currentQ.timestamp)
-                    : undefined
-                }
-                sx={{
-                  bgcolor: 'rgba(255, 255, 255, 0.08)',
-                  color: textPrimary,
-                  fontSize: '0.72rem',
-                  fontWeight: 600,
-                  cursor: currentQ.lecture_id && handleSelectLecture ? 'pointer' : 'default',
-                  '&:hover': currentQ.lecture_id && handleSelectLecture ? { bgcolor: 'rgba(255, 255, 255, 0.16)' } : {}
-                }}
-              />
-            )}
-          </Box>
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {currentQ.type === 'fill_in_the_blank' && (
-              <Chip
-                label="Fill in the Blank"
-                size="small"
-                sx={{
-                  textTransform: 'uppercase',
-                  fontSize: '0.65rem',
-                  fontWeight: 800,
-                  bgcolor: 'rgba(168, 85, 247, 0.15)',
-                  color: '#a855f7'
-                }}
-              />
-            )}
-            <Chip
-              label={currentQ.difficulty || 'medium'}
-              size="small"
-              sx={{
-                textTransform: 'uppercase',
-                fontSize: '0.65rem',
-                fontWeight: 800,
-                letterSpacing: '0.5px',
-                bgcolor:
-                  currentQ.difficulty === 'easy'
-                    ? 'rgba(34, 197, 94, 0.15)'
-                    : currentQ.difficulty === 'hard'
-                    ? 'rgba(239, 68, 68, 0.15)'
-                    : 'rgba(245, 158, 11, 0.15)',
-                color:
-                  currentQ.difficulty === 'easy'
-                    ? '#22c55e'
-                    : currentQ.difficulty === 'hard'
-                    ? '#ef4444'
-                    : '#f59e0b'
-              }}
-            />
-          </Box>
-        </Box>
-
-        {/* Question Text with LaTeX rendering */}
-        <Typography
-          component="div"
-          variant="h6"
-          sx={{
-            fontWeight: 700,
-            color: textPrimary,
-            fontSize: '1.05rem',
-            lineHeight: 1.6,
-            mb: 3
-          }}
-        >
-          <MarkdownWithTimestamps
-            content={currentQ.question}
-            text={currentQ.question}
-            onTimestampClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
-            onCueClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
-          />
-        </Typography>
-
-        {/* 4 Answer Options */}
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 3 }}>
-          {currentQ.options.map((optText, optIdx) => {
-            const isUserChoice = currentChoice === optIdx;
-            const isCorrectOption = optIdx === currentQ.correct_index;
-
-            let optBg = 'rgba(255, 255, 255, 0.03)';
-            let optBorder = cardBorder;
-            let optColor = textPrimary;
-            let iconComponent = (
-              <Box
-                sx={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: '50%',
-                  bgcolor: 'rgba(255, 255, 255, 0.06)',
-                  color: textSecondary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  flexShrink: 0
-                }}
-              >
-                {OPTION_LABELS[optIdx]}
-              </Box>
-            );
-
-            if (isAnswered) {
-              if (isCorrectOption) {
-                optBg = 'rgba(34, 197, 94, 0.15)';
-                optBorder = '#22c55e';
-                iconComponent = <CheckCircle2 size={22} color="#22c55e" style={{ flexShrink: 0 }} />;
-              } else if (isUserChoice && !isCorrect) {
-                optBg = 'rgba(239, 68, 68, 0.15)';
-                optBorder = '#ef4444';
-                iconComponent = <XCircle size={22} color="#ef4444" style={{ flexShrink: 0 }} />;
-              }
-            }
-
-            return (
-              <Box
-                key={optIdx}
-                onClick={() => {
-                  if (!isAnswered && !reviewMode) {
-                    selectAnswer(currentQ.id, optIdx);
-                  }
-                }}
-                sx={{
-                  p: 2,
-                  borderRadius: 2,
-                  bgcolor: optBg,
-                  border: `1.5px solid ${optBorder}`,
-                  color: optColor,
-                  cursor: isAnswered || reviewMode ? 'default' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 2,
-                  transition: 'all 0.15s ease',
-                  '&:hover': {
-                    bgcolor: isAnswered || reviewMode ? optBg : 'rgba(99, 102, 241, 0.12)',
-                    borderColor: isAnswered || reviewMode ? optBorder : primaryColor
-                  }
-                }}
-              >
-                {iconComponent}
-                <Typography component="div" sx={{ fontSize: '0.92rem', lineHeight: 1.5, flex: 1 }}>
-                  <MarkdownWithTimestamps
-                    content={optText}
-                    text={optText}
-                    onTimestampClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
-                    onCueClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
-                  />
-                </Typography>
-              </Box>
-            );
-          })}
-        </Box>
-
-        {/* Feedback & Static Explanation */}
-        {isAnswered && (
-          <Box
+      {/* Main 2-Column Responsive Body (Question Area + Collapsible Sidebar) */}
+      <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start', flexDirection: { xs: 'column', md: 'row' } }}>
+        {/* Left Column: 1 Question Per Page */}
+        <Box sx={{ flex: 1, minWidth: 0, width: '100%' }}>
+          {/* Linear Progress */}
+          <LinearProgress
+            variant="determinate"
+            value={totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0}
             sx={{
-              mt: 3,
-              p: 2.5,
-              borderRadius: 2,
-              bgcolor: isCorrect ? 'rgba(34, 197, 94, 0.08)' : 'rgba(239, 68, 68, 0.08)',
-              border: `1px solid ${isCorrect ? 'rgba(34, 197, 94, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`
+              height: 6,
+              borderRadius: 3,
+              mb: 3,
+              bgcolor: 'rgba(255, 255, 255, 0.08)',
+              '& .MuiLinearProgress-bar': {
+                bgcolor: primaryColor,
+                borderRadius: 3
+              }
+            }}
+          />
+
+          {/* Question Card */}
+          <Paper
+            elevation={0}
+            sx={{
+              p: { xs: 2.5, sm: 4 },
+              borderRadius: 3,
+              bgcolor: cardBg,
+              border: `1px solid ${cardBorder}`,
+              mb: 3,
+              boxShadow: currentTheme?.palette?.cardShadow || '0 4px 20px rgba(0,0,0,0.15)'
             }}
           >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              {isCorrect ? (
-                <CheckCircle2 size={18} color="#22c55e" />
-              ) : (
-                <XCircle size={18} color="#ef4444" />
-              )}
-              <Typography
-                variant="subtitle2"
-                sx={{
-                  fontWeight: 700,
-                  color: isCorrect ? '#22c55e' : '#ef4444'
-                }}
-              >
-                {isCorrect ? 'Correct!' : 'Incorrect'}
-              </Typography>
-            </Box>
-
-            {currentQ.type === 'fill_in_the_blank' && currentQ.blank_answer && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, color: textSecondary }}>
-                  Correct Term:
-                </Typography>
+            {/* Source Lecture Header & Clickable Timestamp */}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5, flexWrap: 'wrap', gap: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 <Chip
-                  label={currentQ.blank_answer}
+                  icon={<Video size={13} style={{ marginLeft: 6 }} />}
+                  label={currentQ.lecture_title || `Lecture ${currentQ.lecture_id}`}
                   size="small"
-                  sx={{ bgcolor: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', fontWeight: 700, fontSize: '0.75rem' }}
+                  onClick={
+                    currentQ.lecture_id && handleSelectLecture
+                      ? () => handleSelectLecture(currentQ.lecture_id, courseName, currentQ.timestamp)
+                      : undefined
+                  }
+                  sx={{
+                    bgcolor: 'rgba(99, 102, 241, 0.15)',
+                    color: primaryColor,
+                    fontWeight: 700,
+                    fontSize: '0.75rem',
+                    cursor: currentQ.lecture_id && handleSelectLecture ? 'pointer' : 'default',
+                    '&:hover': currentQ.lecture_id && handleSelectLecture ? { opacity: 0.85 } : {}
+                  }}
+                />
+                {currentQ.timestamp && (
+                  <Chip
+                    icon={<Clock size={12} style={{ marginLeft: 6 }} />}
+                    label={currentQ.timestamp}
+                    size="small"
+                    onClick={
+                      currentQ.lecture_id && handleSelectLecture
+                        ? () => handleSelectLecture(currentQ.lecture_id, courseName, currentQ.timestamp)
+                        : undefined
+                    }
+                    sx={{
+                      bgcolor: 'rgba(255, 255, 255, 0.08)',
+                      color: textPrimary,
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: currentQ.lecture_id && handleSelectLecture ? 'pointer' : 'default',
+                      '&:hover': currentQ.lecture_id && handleSelectLecture ? { bgcolor: 'rgba(255, 255, 255, 0.16)' } : {}
+                    }}
+                  />
+                )}
+              </Box>
+
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip
+                  label="0.5 Mark"
+                  size="small"
+                  sx={{
+                    fontWeight: 800,
+                    fontSize: '0.68rem',
+                    bgcolor: 'rgba(99, 102, 241, 0.15)',
+                    color: primaryColor
+                  }}
+                />
+                {currentQ.type === 'fill_in_the_blank' && (
+                  <Chip
+                    label="Fill in the Blank"
+                    size="small"
+                    sx={{
+                      textTransform: 'uppercase',
+                      fontSize: '0.65rem',
+                      fontWeight: 800,
+                      bgcolor: 'rgba(168, 85, 247, 0.15)',
+                      color: '#a855f7'
+                    }}
+                  />
+                )}
+                <Chip
+                  label={currentQ.difficulty || 'medium'}
+                  size="small"
+                  sx={{
+                    textTransform: 'uppercase',
+                    fontSize: '0.65rem',
+                    fontWeight: 800,
+                    letterSpacing: '0.5px',
+                    bgcolor:
+                      currentQ.difficulty === 'easy'
+                        ? 'rgba(34, 197, 94, 0.15)'
+                        : currentQ.difficulty === 'hard'
+                        ? 'rgba(239, 68, 68, 0.15)'
+                        : 'rgba(245, 158, 11, 0.15)',
+                    color:
+                      currentQ.difficulty === 'easy'
+                        ? '#22c55e'
+                        : currentQ.difficulty === 'hard'
+                        ? '#ef4444'
+                        : '#f59e0b'
+                  }}
                 />
               </Box>
-            )}
+            </Box>
 
-            <Typography component="div" sx={{ color: textPrimary, fontSize: '0.88rem', lineHeight: 1.6 }}>
+            {/* Question Text with LaTeX rendering */}
+            <Typography
+              component="div"
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                color: textPrimary,
+                fontSize: '1.05rem',
+                lineHeight: 1.6,
+                mb: 3
+              }}
+            >
               <MarkdownWithTimestamps
-                content={currentQ.explanation}
-                text={currentQ.explanation}
+                content={currentQ.question}
+                text={currentQ.question}
                 onTimestampClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
                 onCueClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
               />
             </Typography>
 
-            {currentQ.lecture_id && handleSelectLecture && (
-              <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => handleSelectLecture(currentQ.lecture_id, courseName, currentQ.timestamp)}
-                  startIcon={<Video size={14} />}
-                  sx={{
-                    textTransform: 'none',
-                    fontSize: '0.78rem',
-                    fontWeight: 600,
-                    borderRadius: 1.5,
-                    borderColor: cardBorder,
-                    color: textPrimary,
-                    '&:hover': { borderColor: primaryColor, color: primaryColor }
-                  }}
-                >
-                  Open {currentQ.lecture_title || 'Lecture'} {currentQ.timestamp ? `@ ${currentQ.timestamp}` : ''}
-                </Button>
-              </Box>
-            )}
-          </Box>
-        )}
+            {/* 4 Answer Options */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 3 }}>
+              {currentQ.options.map((optText, optIdx) => {
+                const isUserChoice = currentChoice === optIdx;
+                const isCorrectOption = optIdx === currentQ.correct_index;
 
-        {/* Detailed AI Explanation Accordion */}
-        {isAnswered && (
-          <Accordion
-            expanded={expandedExplanation[currentQ.id] || false}
-            onChange={(e, isExpanded) => {
-              if (typeof setExpandedExplanation === 'function') {
-                setExpandedExplanation(prev => ({ ...prev, [currentQ.id]: isExpanded }));
-              }
-              if (isExpanded && !detailedExplanations[currentQ.id] && !explanationLoading[currentQ.id]) {
-                if (typeof fetchDetailedExplanation === 'function') {
-                  fetchDetailedExplanation(currentQ.id, currentQ);
-                }
-              }
-            }}
-            sx={{
-              mt: 2.5,
-              bgcolor: 'rgba(99, 102, 241, 0.05)',
-              border: `1px solid ${cardBorder}`,
-              borderRadius: 1.5,
-              '&:before': { display: 'none' },
-              boxShadow: 'none'
-            }}
-          >
-            <AccordionSummary
-              expandIcon={<ChevronDown size={18} />}
-              sx={{
-                minHeight: 48,
-                '& .MuiAccordionSummary-content': {
-                  margin: '12px 0',
-                  alignItems: 'center'
-                }
-              }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1 }}>
-                <BookOpen size={18} color={primaryColor} />
-                <Typography
-                  variant="subtitle2"
-                  sx={{
-                    fontWeight: 700,
-                    color: textPrimary,
-                    fontSize: '0.9rem'
-                  }}
-                >
-                  Detailed AI Explanation
-                </Typography>
-                {explanationLoading[currentQ.id] && (
-                  <CircularProgress size={14} sx={{ color: primaryColor }} />
-                )}
-                {detailedExplanations[currentQ.id] && !explanationLoading[currentQ.id] && (
-                  <Chip
-                    label="Ready"
-                    size="small"
+                let optBg = 'rgba(255, 255, 255, 0.03)';
+                let optBorder = cardBorder;
+                let optColor = textPrimary;
+                let iconComponent = (
+                  <Box
                     sx={{
-                      height: 20,
-                      fontSize: '0.65rem',
+                      width: 26,
+                      height: 26,
+                      borderRadius: '50%',
+                      bgcolor: 'rgba(255, 255, 255, 0.06)',
+                      color: textSecondary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.75rem',
                       fontWeight: 700,
-                      bgcolor: 'rgba(16, 185, 129, 0.15)',
-                      color: '#10b981'
+                      flexShrink: 0
                     }}
-                  />
-                )}
-              </Box>
-            </AccordionSummary>
-            <AccordionDetails sx={{ pt: 0 }}>
-              <Divider sx={{ mb: 2, borderColor: cardBorder }} />
-              {explanationLoading[currentQ.id] ? (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 2 }}>
-                  <CircularProgress size={20} sx={{ color: primaryColor }} />
-                  <Typography variant="body2" sx={{ color: textSecondary }}>
-                    Generating detailed explanation with cross-lecture context and transcript proofs...
+                  >
+                    {OPTION_LABELS[optIdx]}
+                  </Box>
+                );
+
+                if (isAnswered) {
+                  if (isCorrectOption) {
+                    optBg = 'rgba(34, 197, 94, 0.15)';
+                    optBorder = '#22c55e';
+                    iconComponent = <CheckCircle2 size={22} color="#22c55e" style={{ flexShrink: 0 }} />;
+                  } else if (isUserChoice && !isCorrect) {
+                    optBg = 'rgba(239, 68, 68, 0.15)';
+                    optBorder = '#ef4444';
+                    iconComponent = <XCircle size={22} color="#ef4444" style={{ flexShrink: 0 }} />;
+                  }
+                }
+
+                return (
+                  <Box
+                    key={optIdx}
+                    onClick={() => {
+                      if (!isAnswered && !reviewMode) {
+                        selectAnswer(currentQ.id, optIdx);
+                      }
+                    }}
+                    sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      bgcolor: optBg,
+                      border: `1.5px solid ${optBorder}`,
+                      color: optColor,
+                      cursor: isAnswered || reviewMode ? 'default' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 2,
+                      transition: 'all 0.15s ease',
+                      '&:hover': {
+                        bgcolor: isAnswered || reviewMode ? optBg : 'rgba(99, 102, 241, 0.12)',
+                        borderColor: isAnswered || reviewMode ? optBorder : primaryColor
+                      }
+                    }}
+                  >
+                    {iconComponent}
+                    <Typography component="div" sx={{ fontSize: '0.92rem', lineHeight: 1.5, flex: 1 }}>
+                      <MarkdownWithTimestamps
+                        content={optText}
+                        text={optText}
+                        onTimestampClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
+                        onCueClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
+                      />
+                    </Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+
+            {/* Feedback & Static Explanation */}
+            {isAnswered && (
+              <Box
+                sx={{
+                  mt: 3,
+                  p: 2.5,
+                  borderRadius: 2,
+                  bgcolor: isCorrect ? 'rgba(34, 197, 94, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                  border: `1px solid ${isCorrect ? 'rgba(34, 197, 94, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  {isCorrect ? (
+                    <CheckCircle2 size={18} color="#22c55e" />
+                  ) : (
+                    <XCircle size={18} color="#ef4444" />
+                  )}
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      fontWeight: 700,
+                      color: isCorrect ? '#22c55e' : '#ef4444'
+                    }}
+                  >
+                    {isCorrect ? 'Correct! (+0.5 Mark)' : 'Incorrect'}
                   </Typography>
                 </Box>
-              ) : detailedExplanations[currentQ.id] ? (
-                <Box sx={{ color: textPrimary, fontSize: '0.9rem', lineHeight: 1.7 }}>
+
+                {currentQ.type === 'fill_in_the_blank' && currentQ.blank_answer && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, color: textSecondary }}>
+                      Correct Term:
+                    </Typography>
+                    <Chip
+                      label={currentQ.blank_answer}
+                      size="small"
+                      sx={{ bgcolor: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', fontWeight: 700, fontSize: '0.75rem' }}
+                    />
+                  </Box>
+                )}
+
+                <Typography component="div" sx={{ color: textPrimary, fontSize: '0.88rem', lineHeight: 1.6 }}>
                   <MarkdownWithTimestamps
-                    content={detailedExplanations[currentQ.id]}
-                    text={detailedExplanations[currentQ.id]}
+                    content={currentQ.explanation}
+                    text={currentQ.explanation}
                     onTimestampClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
                     onCueClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
                   />
-                </Box>
-              ) : (
-                <Typography variant="body2" sx={{ color: textSecondary, fontStyle: 'italic' }}>
-                  Click to generate a comprehensive explanation using lecture transcript, cross-lecture context, and academic formulas.
                 </Typography>
-              )}
-            </AccordionDetails>
-          </Accordion>
+
+                {currentQ.lecture_id && handleSelectLecture && (
+                  <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => handleSelectLecture(currentQ.lecture_id, courseName, currentQ.timestamp)}
+                      startIcon={<Video size={14} />}
+                      sx={{
+                        textTransform: 'none',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        borderRadius: 1.5,
+                        borderColor: cardBorder,
+                        color: textPrimary,
+                        '&:hover': { borderColor: primaryColor, color: primaryColor }
+                      }}
+                    >
+                      Open {currentQ.lecture_title || 'Lecture'} {currentQ.timestamp ? `@ ${currentQ.timestamp}` : ''}
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+            )}
+
+            {/* Detailed AI Explanation Accordion */}
+            {isAnswered && (
+              <Accordion
+                expanded={expandedExplanation[currentQ.id] || false}
+                onChange={(e, isExpanded) => {
+                  if (typeof setExpandedExplanation === 'function') {
+                    setExpandedExplanation(prev => ({ ...prev, [currentQ.id]: isExpanded }));
+                  }
+                  if (isExpanded && !detailedExplanations[currentQ.id] && !explanationLoading[currentQ.id]) {
+                    if (typeof fetchDetailedExplanation === 'function') {
+                      fetchDetailedExplanation(currentQ.id, currentQ);
+                    }
+                  }
+                }}
+                sx={{
+                  mt: 2.5,
+                  bgcolor: 'rgba(99, 102, 241, 0.05)',
+                  border: `1px solid ${cardBorder}`,
+                  borderRadius: 1.5,
+                  '&:before': { display: 'none' },
+                  boxShadow: 'none'
+                }}
+              >
+                <AccordionSummary
+                  expandIcon={<ChevronDown size={18} />}
+                  sx={{
+                    minHeight: 48,
+                    '& .MuiAccordionSummary-content': {
+                      margin: '12px 0',
+                      alignItems: 'center'
+                    }
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1 }}>
+                    <BookOpen size={18} color={primaryColor} />
+                    <Typography
+                      variant="subtitle2"
+                      sx={{
+                        fontWeight: 700,
+                        color: textPrimary,
+                        fontSize: '0.9rem'
+                      }}
+                    >
+                      Detailed AI Explanation
+                    </Typography>
+                    {explanationLoading[currentQ.id] && (
+                      <CircularProgress size={14} sx={{ color: primaryColor }} />
+                    )}
+                    {detailedExplanations[currentQ.id] && !explanationLoading[currentQ.id] && (
+                      <Chip
+                        label="Ready"
+                        size="small"
+                        sx={{
+                          height: 20,
+                          fontSize: '0.65rem',
+                          fontWeight: 700,
+                          bgcolor: 'rgba(16, 185, 129, 0.15)',
+                          color: '#10b981'
+                        }}
+                      />
+                    )}
+                  </Box>
+                </AccordionSummary>
+                <AccordionDetails sx={{ pt: 0 }}>
+                  <Divider sx={{ mb: 2, borderColor: cardBorder }} />
+                  {explanationLoading[currentQ.id] ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 2 }}>
+                      <CircularProgress size={20} sx={{ color: primaryColor }} />
+                      <Typography variant="body2" sx={{ color: textSecondary }}>
+                        Generating detailed explanation with cross-lecture context and transcript proofs...
+                      </Typography>
+                    </Box>
+                  ) : detailedExplanations[currentQ.id] ? (
+                    <Box sx={{ color: textPrimary, fontSize: '0.9rem', lineHeight: 1.7 }}>
+                      <MarkdownWithTimestamps
+                        content={detailedExplanations[currentQ.id]}
+                        text={detailedExplanations[currentQ.id]}
+                        onTimestampClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
+                        onCueClick={(ts) => handleSelectLecture && handleSelectLecture(currentQ.lecture_id, courseName, ts)}
+                      />
+                    </Box>
+                  ) : (
+                    <Typography variant="body2" sx={{ color: textSecondary, fontStyle: 'italic' }}>
+                      Click to generate a comprehensive explanation using lecture transcript, cross-lecture context, and academic formulas.
+                    </Typography>
+                  )}
+                </AccordionDetails>
+              </Accordion>
+            )}
+          </Paper>
+
+          {/* 1 Question Per Page Navigation Footer */}
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2.5 }}>
+            <Button
+              variant="outlined"
+              disabled={currentIdx === 0}
+              onClick={handlePrev}
+              startIcon={<ChevronLeft size={16} />}
+              sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
+            >
+              Previous
+            </Button>
+
+            <Typography variant="body2" sx={{ fontWeight: 700, color: textSecondary }}>
+              Question {currentIdx + 1} of {totalQuestions}
+            </Typography>
+
+            <Button
+              variant="contained"
+              onClick={handleNext}
+              endIcon={
+                currentIdx === totalQuestions - 1 ? (
+                  <Award size={16} />
+                ) : (
+                  <ChevronRight size={16} />
+                )
+              }
+              sx={{
+                bgcolor: primaryColor,
+                color: '#fff',
+                textTransform: 'none',
+                fontWeight: 700,
+                borderRadius: 2,
+                px: 3,
+                '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
+              }}
+            >
+              {currentIdx === totalQuestions - 1
+                ? 'Finish Quiz'
+                : 'Next Question'}
+            </Button>
+          </Box>
+        </Box>
+
+        {/* Right Column: Collapsible Quiz Status Sidebar */}
+        {sidebarOpen && (
+          <Paper
+            elevation={0}
+            sx={{
+              width: { xs: '100%', md: 280 },
+              flexShrink: 0,
+              p: 2.5,
+              borderRadius: 3,
+              bgcolor: cardBg,
+              border: `1px solid ${cardBorder}`,
+              boxShadow: currentTheme?.palette?.cardShadow || '0 4px 20px rgba(0,0,0,0.1)',
+              position: { md: 'sticky' },
+              top: { md: 24 }
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: textPrimary }}>
+                Exam Overview
+              </Typography>
+              <IconButton size="small" onClick={() => setSidebarOpen(false)} sx={{ color: textSecondary }}>
+                <PanelRightClose size={15} />
+              </IconButton>
+            </Box>
+
+            {/* 30-Minute Timer Box */}
+            {!reviewMode && (
+              <Box
+                sx={{
+                  p: 1.5,
+                  borderRadius: 2,
+                  bgcolor: timeLeft <= 300 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(99, 102, 241, 0.08)',
+                  border: `1px solid ${timeLeft <= 300 ? 'rgba(239, 68, 68, 0.3)' : cardBorder}`,
+                  mb: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Clock size={16} color={timeLeft <= 300 ? '#ef4444' : primaryColor} />
+                  <Typography variant="caption" sx={{ fontWeight: 700, color: timeLeft <= 300 ? '#ef4444' : textSecondary }}>
+                    Time Left
+                  </Typography>
+                </Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, fontFamily: 'monospace', color: timeLeft <= 300 ? '#ef4444' : textPrimary, fontSize: '0.95rem' }}>
+                  {formatTime(timeLeft)}
+                </Typography>
+              </Box>
+            )}
+
+            {/* Marked vs Remaining Stats */}
+            <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+              <Box sx={{ flex: 1, p: 1.2, borderRadius: 1.5, bgcolor: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.25)', textAlign: 'center' }}>
+                <Typography variant="caption" sx={{ color: '#22c55e', fontWeight: 800, display: 'block', fontSize: '0.7rem' }}>
+                  Marked
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 800, color: '#22c55e' }}>
+                  {answeredCount}
+                </Typography>
+              </Box>
+
+              <Box sx={{ flex: 1, p: 1.2, borderRadius: 1.5, bgcolor: 'rgba(255, 255, 255, 0.03)', border: `1px solid ${cardBorder}`, textAlign: 'center' }}>
+                <Typography variant="caption" sx={{ color: textSecondary, fontWeight: 700, display: 'block', fontSize: '0.7rem' }}>
+                  Remaining
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 800, color: textPrimary }}>
+                  {totalQuestions - answeredCount}
+                </Typography>
+              </Box>
+            </Box>
+
+            <Typography variant="caption" sx={{ color: textSecondary, display: 'block', mb: 2, textAlign: 'center', fontWeight: 600 }}>
+              0.5 Mark each • Total {calcTotalMarks} Marks
+            </Typography>
+
+            <Divider sx={{ mb: 2, borderColor: cardBorder }} />
+
+            {/* Interactive Question Palette Grid */}
+            <Typography variant="caption" sx={{ fontWeight: 700, color: textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', mb: 1.5 }}>
+              Question Palette
+            </Typography>
+
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1, mb: 2.5 }}>
+              {questions.map((q, idx) => {
+                const ans = selectedAnswers[q.id];
+                const hasAnswered = ans !== undefined;
+                const wasCorrect = ans === q.correct_index;
+                const isSelected = idx === currentIdx;
+
+                return (
+                  <Button
+                    key={q.id}
+                    size="small"
+                    onClick={() => setCurrentIdx(idx)}
+                    sx={{
+                      minWidth: 0,
+                      height: 36,
+                      p: 0,
+                      borderRadius: 1.5,
+                      fontWeight: 700,
+                      fontSize: '0.75rem',
+                      border: isSelected ? `2px solid ${primaryColor}` : `1px solid ${cardBorder}`,
+                      bgcolor: hasAnswered
+                        ? reviewMode
+                          ? wasCorrect
+                            ? 'rgba(34, 197, 94, 0.25)'
+                            : 'rgba(239, 68, 68, 0.25)'
+                          : 'rgba(34, 197, 94, 0.2)'
+                        : isSelected
+                        ? 'rgba(99, 102, 241, 0.15)'
+                        : 'rgba(255, 255, 255, 0.03)',
+                      color: hasAnswered
+                        ? reviewMode
+                          ? wasCorrect
+                            ? '#22c55e'
+                            : '#ef4444'
+                          : '#22c55e'
+                        : isSelected
+                        ? primaryColor
+                        : textSecondary,
+                      '&:hover': {
+                        bgcolor: 'rgba(99, 102, 241, 0.2)'
+                      }
+                    }}
+                  >
+                    {idx + 1}
+                  </Button>
+                );
+              })}
+            </Box>
+
+            {/* Legend */}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', mb: 2.5, px: 0.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#22c55e' }} />
+                <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Marked</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: primaryColor }} />
+                <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Current</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.2)' }} />
+                <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Remaining</Typography>
+              </Box>
+            </Box>
+
+            {/* Submit Exam Button */}
+            {!reviewMode && (
+              <Button
+                variant="contained"
+                fullWidth
+                onClick={() => {
+                  if (typeof finishQuiz === 'function') finishQuiz();
+                  setShowSummaryView(true);
+                }}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.82rem',
+                  borderRadius: 2,
+                  bgcolor: primaryColor,
+                  color: '#fff',
+                  py: 1,
+                  boxShadow: 'none',
+                  '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
+                }}
+              >
+                Submit Exam
+              </Button>
+            )}
+          </Paper>
         )}
-      </Paper>
-
-      {/* Navigation Footer */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Button
-          variant="outlined"
-          disabled={currentIdx === 0}
-          onClick={handlePrev}
-          startIcon={<ChevronLeft size={16} />}
-          sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
-        >
-          Previous
-        </Button>
-
-        <Button
-          variant="contained"
-          onClick={handleNext}
-          endIcon={
-            currentIdx === totalQuestions - 1 ? (
-              <Award size={16} />
-            ) : (
-              <ChevronRight size={16} />
-            )
-          }
-          sx={{
-            bgcolor: primaryColor,
-            color: '#fff',
-            textTransform: 'none',
-            fontWeight: 700,
-            borderRadius: 2,
-            px: 3,
-            '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
-          }}
-        >
-          {currentIdx === totalQuestions - 1
-            ? 'Finish Quiz'
-            : 'Next Question'}
-        </Button>
       </Box>
 
       {/* Past Quizzes History & Replay Section */}

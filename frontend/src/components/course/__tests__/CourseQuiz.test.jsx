@@ -271,4 +271,128 @@ describe('CourseQuiz Component', () => {
     expect(screen.getByText(/fill in the blank/i)).toBeInTheDocument();
     expect(screen.getAllByText('backpropagation').length).toBeGreaterThan(0);
   });
+
+  it('supports single-question pagination with Previous/Next buttons and 0.5 Mark badges', () => {
+    const multiQuestionQuiz = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      questions: [
+        {
+          id: 1,
+          question: 'Question 1: What is linear regression?',
+          options: ['A line', 'A circle', 'A tree', 'A network'],
+          correct_index: 0
+        },
+        {
+          id: 2,
+          question: 'Question 2: What is logistic regression?',
+          options: ['Sigmoid classifier', 'Clustering', 'Sorting', 'Hashing'],
+          correct_index: 0
+        }
+      ]
+    };
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={multiQuestionQuiz}
+        quizLoading={false}
+        selectedAnswers={{}}
+        totalQuestions={2}
+        answeredCount={0}
+        timeLeft={1800}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Initial page shows Question 1
+    expect(screen.getByText(/Question 1: What is linear regression\?/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Question 1 of 2/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('0.5 Mark')).toBeInTheDocument();
+
+    // Previous button is disabled on page 1
+    const prevBtn = screen.getByRole('button', { name: /Previous/i });
+    expect(prevBtn).toBeDisabled();
+
+    // Next button advances to Question 2
+    const nextBtn = screen.getByRole('button', { name: /Next/i });
+    expect(nextBtn).toBeEnabled();
+    fireEvent.click(nextBtn);
+
+    expect(screen.getByText(/Question 2: What is logistic regression\?/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Question 2 of 2/i).length).toBeGreaterThan(0);
+    expect(prevBtn).toBeEnabled();
+  });
+
+  it('renders collapsible question palette sidebar showing Marked and Remaining counts, and toggles visibility', () => {
+    const multiQuestionQuiz = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      questions: [
+        { id: 1, question: 'Question 1', options: ['A', 'B'], correct_index: 0 },
+        { id: 2, question: 'Question 2', options: ['C', 'D'], correct_index: 1 },
+        { id: 3, question: 'Question 3', options: ['E', 'F'], correct_index: 0 }
+      ]
+    };
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={multiQuestionQuiz}
+        quizLoading={false}
+        selectedAnswers={{ 1: 0 }} // 1 marked, 2 remaining
+        totalQuestions={3}
+        answeredCount={1}
+        timeLeft={1740} // 29m 00s
+        marksPerQuestion={0.5}
+        totalMarks={1.5}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Verify Timer and Palette metrics
+    expect(screen.getAllByText(/29:00/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Marked').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Remaining').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Total 1.5 Marks/i)).toBeInTheDocument();
+    expect(screen.getByText('Exam Overview')).toBeInTheDocument();
+
+    // Clicking palette button 3 jumps straight to question 3
+    const q3PaletteBtn = screen.getByRole('button', { name: '3' });
+    fireEvent.click(q3PaletteBtn);
+    expect(screen.getAllByText(/Question 3 of 3/i).length).toBeGreaterThan(0);
+
+    // Toggle sidebar visibility
+    const hideSidebarBtn = screen.getByRole('button', { name: /Hide Overview/i });
+    fireEvent.click(hideSidebarBtn);
+    expect(screen.queryByText('Exam Overview')).not.toBeInTheDocument();
+
+    // Show sidebar again
+    const showSidebarBtn = screen.getByRole('button', { name: /Overview/i });
+    fireEvent.click(showSidebarBtn);
+    expect(screen.getByText('Exam Overview')).toBeInTheDocument();
+  });
+
+  it('displays auto-submission timeout banner when time expires', () => {
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        quizLoading={false}
+        selectedAnswers={{}}
+        isCompleted={true}
+        score={0}
+        totalQuestions={1}
+        answeredCount={0}
+        autoSubmitted={true}
+        earnedMarks={0.0}
+        totalMarks={0.5}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Time Expired/i)).toBeInTheDocument();
+    expect(screen.getByText(/The 30-minute exam time limit reached zero/i)).toBeInTheDocument();
+    expect(screen.getByText(/Score: 0 \/ 0.5 Marks/i)).toBeInTheDocument();
+  });
 });

@@ -22,6 +22,11 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const [reviewMode, setReviewMode] = useState(false);
   const [replayingQuizId, setReplayingQuizId] = useState(null);
 
+  // 30-Minute Timer & Auto-Submit states
+  const [timeLeft, setTimeLeft] = useState(1800); // 30 minutes in seconds
+  const [autoSubmitted, setAutoSubmitted] = useState(false);
+  const [quizSubmitted, setQuizSubmitted] = useState(false);
+
   const lastSlugRef = useRef(courseSlug);
 
   const fetchQuizHistory = useCallback(async () => {
@@ -47,6 +52,11 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setQuizError(null);
     setReviewMode(false);
     setReplayingQuizId(null);
+    setQuizSubmitted(false);
+    setAutoSubmitted(false);
+    if (regenerate) {
+      setTimeLeft(1800);
+    }
     try {
       const payload = { regenerate };
       if (numQuestions) {
@@ -182,6 +192,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
   const finishQuiz = useCallback(() => {
     if (!courseSlug || !quizData) return;
+    setQuizSubmitted(true);
     const currentScore = (quizData?.questions || []).reduce((acc, q) => {
       const choice = selectedAnswers[q.id];
       return choice === q.correct_index ? acc + 1 : acc;
@@ -203,6 +214,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const resetQuiz = useCallback(() => {
     setSelectedAnswers({});
     setReviewMode(false);
+    setQuizSubmitted(false);
+    setAutoSubmitted(false);
+    setTimeLeft(1800);
     if (courseSlug) {
       const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
       fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers${delEmail}`, {
@@ -214,6 +228,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const exitReplay = useCallback(() => {
     setReplayingQuizId(null);
     setReviewMode(false);
+    setQuizSubmitted(false);
+    setAutoSubmitted(false);
+    setTimeLeft(1800);
     fetchOrGenerateQuiz(false);
   }, [fetchOrGenerateQuiz]);
 
@@ -233,6 +250,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         setReplayingQuizId(quizId);
         setSelectedAnswers({});
         setReviewMode(false);
+        setQuizSubmitted(false);
+        setAutoSubmitted(false);
+        setTimeLeft(1800);
       } else {
         setReplayingQuizId(null);
         setSelectedAnswers(data.answers || {});
@@ -248,12 +268,45 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
   const totalQuestions = quizData?.questions?.length || 0;
   const answeredCount = Object.keys(selectedAnswers).length;
-  const isCompleted = totalQuestions > 0 && (answeredCount === totalQuestions || reviewMode);
+  const isCompleted = totalQuestions > 0 && (answeredCount === totalQuestions || reviewMode || quizSubmitted || autoSubmitted);
+
+  // 30-Minute Countdown Timer & Auto-Submit on Expiry
+  useEffect(() => {
+    if (!quizData || !quizData.questions?.length || isCompleted || reviewMode) {
+      return;
+    }
+
+    if (timeLeft <= 0) {
+      if (!isCompleted && !quizSubmitted) {
+        setAutoSubmitted(true);
+        finishQuiz();
+      }
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setAutoSubmitted(true);
+          finishQuiz();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [quizData, isCompleted, reviewMode, timeLeft, quizSubmitted, finishQuiz]);
 
   const score = (quizData?.questions || []).reduce((acc, q) => {
     const userChoice = selectedAnswers[q.id];
     return userChoice === q.correct_index ? acc + 1 : acc;
   }, 0);
+
+  const marksPerQuestion = 0.5;
+  const totalMarks = Number((totalQuestions * marksPerQuestion).toFixed(1));
+  const earnedMarks = Number((score * marksPerQuestion).toFixed(1));
 
   // Group performance breakdown by lecture
   const lectureBreakdown = (quizData?.questions || []).reduce((acc, q) => {
@@ -295,6 +348,13 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setReviewMode,
     replayingQuizId,
     isReplaying: Boolean(replayingQuizId),
-    exitReplay
+    exitReplay,
+    timeLeft,
+    setTimeLeft,
+    autoSubmitted,
+    quizSubmitted,
+    marksPerQuestion,
+    totalMarks,
+    earnedMarks
   };
 }

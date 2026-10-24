@@ -2167,31 +2167,40 @@ class Llama3PineconeRAGStore:
         per_lecture_min = max(1, target_count // num_lectures)
 
         system_prompt = (
-            "You are an expert university professor and comprehensive exam creator.\n"
-            f"Your task is to generate an educational, balanced {target_count}-question course exam testing concepts across ALL {num_lectures} lectures in '{clean_course}'.\n\n"
+            "You are an expert university professor and rigorous comprehensive exam creator.\n"
+            f"Your task is to generate an academically rigorous, balanced {target_count}-question course exam testing concepts across ALL {num_lectures} lectures in '{clean_course}'.\n"
+            f"Exam Specifications: Total Questions = {target_count}, Marks per Question = 0.5 (Total Exam Marks = {round(target_count * 0.5, 1)}), Duration = 30 minutes.\n\n"
             "Strict Guidelines:\n"
             f"1. Equal Representation Across All Lectures: Distribute questions evenly from Lecture 1 through Lecture {num_lectures} in chronological order. "
             f"Ensure at least {per_lecture_min} question(s) is dedicated to each lecture. Do NOT bias questions toward the latest lecture; every single lecture must be represented.\n"
-            "2. Question Types (MCQ & Fill-in-the-Blank): Create a balanced mix of:\n"
-            "   - 'mcq': Multiple Choice Question testing mechanisms, theorems, trade-offs, or applications.\n"
-            "   - 'fill_in_the_blank': Sentence with '_____' testing an essential technical term, keyword, or variable, with 4 plausible options including the correct fill-in term.\n"
-            "3. Concept-First Framing: Each question must directly test academic theory, algorithms, equations, or definitions. "
+            "2. Five Universal Academic Question Archetypes (distribute questions across these 5 styles):\n"
+            "   - Archetype 1: Concrete Micro-Calculation / 1-Step Trace (~35-40% of questions): Provide 2-4 concrete numerical values, small coordinates, or a simple parameter vector. Ask the student to compute the exact numerical outcome of 1 step/iteration, an affine evaluation, or a metric.\n"
+            "   - Archetype 2: Failure Mode & Boundary Anomaly (~20% of questions): Present a concrete scenario where an algorithm, equation, or model produces an unexpected, invalid, or suboptimal output (e.g. unbounded values, undefined division, non-convergence). Ask which fundamental assumption was violated.\n"
+            "   - Archetype 3: Metric Pitfall & Diagnostic Paradox (~15% of questions): Present a scenario where a naive metric looks deceptively good or bad (e.g. the accuracy paradox with imbalanced classes, arithmetic vs harmonic means, or nominal vs real rates). Test why the metric misleads and which metric must be monitored.\n"
+            "   - Archetype 4: Problem-to-Paradigm Fit (~15% of questions): Describe 2 contrasting problem constraints and ask which algorithmic paradigm, objective function, or system design is justified.\n"
+            "   - Archetype 5: Theoretical Mechanics & Invariants (~10% of questions): Test structural properties like convexity vs local minima, linear independence, invariant transformations, or duality.\n"
+            "3. Diagnostic Distractors: Every incorrect option must represent a realistic student calculation mistake or genuine theoretical misconception (e.g. inverted ratios, arithmetic instead of harmonic mean, confusing update counts), NEVER obviously absurd filler.\n"
+            "4. Question Types (MCQ & Fill-in-the-Blank): Create a balanced mix of:\n"
+            "   - 'mcq': Multiple Choice Question testing mechanisms, numerical evaluations, trade-offs, or paradoxes.\n"
+            "   - 'fill_in_the_blank': Sentence with '_____' testing an essential technical term, equation keyword, or variable, with 4 plausible options including the correct fill-in term.\n"
+            "5. Concept-First Framing: Each question must directly test academic theory, algorithms, equations, or definitions. "
             "STRICTLY FORBIDDEN: NEVER use episodic phrasing, lecture titles, or speaker remarks in the question stem (NEVER write 'In Lecture 2...', 'According to the video...', 'At 15:30...'). The question must be standalone.\n"
-            "4. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $W^T x + b$, $\\mathcal{O}(n \\log n)$). NEVER duplicate variable characters.\n"
-            "5. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D).\n"
-            "6. Question Schema:\n"
+            "6. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $W^T x + b$, $\\mathcal{O}(n \\log n)$). NEVER duplicate variable characters.\n"
+            "7. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D).\n"
+            "8. Question Schema:\n"
             "   - 'id': integer (1, 2, ...)\n"
             "   - 'type': 'mcq' or 'fill_in_the_blank'\n"
             "   - 'question': clear question text (must contain '_____' if type is 'fill_in_the_blank')\n"
             "   - 'options': array of exactly 4 strings\n"
             "   - 'correct_index': integer (0, 1, 2, or 3)\n"
             "   - 'blank_answer': string (the correct term that fills the blank if fill_in_the_blank, matching options[correct_index]; empty string for mcq)\n"
+            "   - 'marks': 0.5\n"
             "   - 'explanation': thorough pedagogical explanation citing the lecture title and key concept with LaTeX math\n"
             "   - 'lecture_id': exact video_id of the lecture this question tests\n"
             "   - 'lecture_title': title of the lecture this question tests\n"
             "   - 'timestamp': timestamp string (e.g. '12:30')\n"
             "   - 'difficulty': 'easy', 'medium', or 'hard'\n\n"
-            "7. Return ONLY a single valid JSON object matching this schema:\n"
+            "9. Return ONLY a single valid JSON object matching this schema:\n"
             "{\n"
             '  "questions": [\n'
             '    {\n'
@@ -2201,6 +2210,7 @@ class Llama3PineconeRAGStore:
             '      "options": ["Option A", "Option B", "Option C", "Option D"],\n'
             '      "correct_index": 1,\n'
             '      "blank_answer": "",\n'
+            '      "marks": 0.5,\n'
             '      "explanation": "...",\n'
             '      "lecture_id": "...",\n'
             '      "lecture_title": "...",\n'
@@ -2214,6 +2224,7 @@ class Llama3PineconeRAGStore:
             '      "options": ["Self-Attention", "Dropout", "Gradient Clipping", "Batch Normalization"],\n'
             '      "correct_index": 0,\n'
             '      "blank_answer": "Self-Attention",\n'
+            '      "marks": 0.5,\n'
             '      "explanation": "Self-attention dynamically calculates token importance...",\n'
             '      "lecture_id": "...",\n'
             '      "lecture_title": "...",\n'
@@ -2296,6 +2307,7 @@ class Llama3PineconeRAGStore:
                     "options": shuffled_opts,
                     "correct_index": balanced_idx,
                     "blank_answer": blank_ans if q_type == "fill_in_the_blank" else "",
+                    "marks": 0.5,
                     "explanation": explanation,
                     "lecture_id": lect_id,
                     "lecture_title": lect_title,
@@ -2335,6 +2347,9 @@ class Llama3PineconeRAGStore:
                                 "lecture_count": num_lectures,
                                 "questions": parsed,
                                 "total_questions": len(parsed),
+                                "marks_per_question": 0.5,
+                                "total_marks": round(len(parsed) * 0.5, 1),
+                                "duration_minutes": 30,
                                 "model": f"Groq {model_name}",
                                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                             }
@@ -2362,6 +2377,9 @@ class Llama3PineconeRAGStore:
                                 "lecture_count": num_lectures,
                                 "questions": parsed,
                                 "total_questions": len(parsed),
+                                "marks_per_question": 0.5,
+                                "total_marks": round(len(parsed) * 0.5, 1),
+                                "duration_minutes": 30,
                                 "model": f"Gemini {model_name}",
                                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                             }

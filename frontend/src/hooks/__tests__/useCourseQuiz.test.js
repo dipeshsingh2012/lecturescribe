@@ -285,4 +285,99 @@ describe('useCourseQuiz hook', () => {
       })
     );
   });
+
+  it('calculates 0.5 marks per question and total marks correctly', async () => {
+    const mockQuiz = {
+      course_name: 'Machine Learning',
+      questions: [
+        { id: 1, correct_index: 0 },
+        { id: 2, correct_index: 1 },
+        { id: 3, correct_index: 2 },
+        { id: 4, correct_index: 3 }
+      ]
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockQuiz
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Machine Learning'));
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false);
+    });
+
+    // 4 questions => 4 * 0.5 = 2.0 total marks
+    expect(result.current.marksPerQuestion).toBe(0.5);
+    expect(result.current.totalMarks).toBe(2.0);
+    expect(result.current.earnedMarks).toBe(0.0);
+
+    // Answer Q1 correctly
+    act(() => {
+      result.current.selectAnswer(1, 0);
+    });
+
+    expect(result.current.score).toBe(1);
+    expect(result.current.earnedMarks).toBe(0.5);
+
+    // Answer Q2 correctly
+    act(() => {
+      result.current.selectAnswer(2, 1);
+    });
+
+    expect(result.current.score).toBe(2);
+    expect(result.current.earnedMarks).toBe(1.0);
+  });
+
+  it('runs 30-minute countdown timer and auto-submits quiz when timer reaches zero', async () => {
+    vi.useFakeTimers();
+
+    const mockQuiz = {
+      quiz_id: 'cquiz_timed',
+      course_name: 'Machine Learning',
+      questions: [
+        { id: 1, correct_index: 0 },
+        { id: 2, correct_index: 1 }
+      ]
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockQuiz
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Machine Learning'));
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false);
+    });
+
+    expect(result.current.timeLeft).toBe(1800);
+    expect(result.current.autoSubmitted).toBe(false);
+
+    // Advance 5 seconds
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current.timeLeft).toBe(1795);
+
+    // Fast-forward to 1 second remaining
+    await act(async () => {
+      vi.advanceTimersByTime(1794 * 1000);
+    });
+    expect(result.current.timeLeft).toBe(1);
+    expect(result.current.isCompleted).toBe(false);
+
+    // Final second: triggers timer expiry and auto-submission
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(result.current.timeLeft).toBe(0);
+    expect(result.current.autoSubmitted).toBe(true);
+    expect(result.current.isCompleted).toBe(true);
+
+    vi.useRealTimers();
+  });
 });

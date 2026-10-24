@@ -2475,9 +2475,12 @@ class Llama3PineconeRAGStore:
             '  ],\n'
             '  "core_formulas_and_definitions": [\n'
             '    {\n'
+            '      "term": "Loss Function / Mechanism Name",\n'
             '      "name": "Loss Function / Mechanism Name",\n'
-            '      "formula": "$$\\mathcal{L}_{\\theta} = ...$$",\n'
-            '      "description": "Definition and significance..."\n'
+            '      "formula_or_def": "$$\\mathcal{L}_{\\theta} = \\frac{1}{m}\\sum_{i=1}^m (h_\\theta(x^{(i)}) - y^{(i)})^2$$",\n'
+            '      "formula": "$$\\mathcal{L}_{\\theta} = \\frac{1}{m}\\sum_{i=1}^m (h_\\theta(x^{(i)}) - y^{(i)})^2$$",\n'
+            '      "significance": "Optimization objective for empirical risk minimization.",\n'
+            '      "description": "Optimization objective for empirical risk minimization."\n'
             '    }\n'
             '  ],\n'
             '  "lecture_summaries": [\n'
@@ -2526,13 +2529,66 @@ class Llama3PineconeRAGStore:
             if not exec_sum:
                 return None
 
+            raw_formulas = (
+                data.get("core_formulas_and_definitions")
+                or data.get("formulas_and_definitions")
+                or data.get("formulas")
+                or data.get("core_equations")
+                or data.get("key_formulas")
+                or []
+            )
+            normalized_formulas = []
+            if isinstance(raw_formulas, list):
+                for f in raw_formulas:
+                    if isinstance(f, dict):
+                        term = (
+                            f.get("term")
+                            or f.get("name")
+                            or f.get("title")
+                            or f.get("concept")
+                            or f.get("formula_name")
+                            or "Core Concept"
+                        )
+                        formula = (
+                            f.get("formula_or_def")
+                            or f.get("formula")
+                            or f.get("equation")
+                            or f.get("definition")
+                            or f.get("math")
+                            or ""
+                        )
+                        sig = (
+                            f.get("significance")
+                            or f.get("description")
+                            or f.get("explanation")
+                            or f.get("notes")
+                            or ""
+                        )
+                        normalized_formulas.append({
+                            "term": term,
+                            "name": term,
+                            "formula_or_def": formula,
+                            "formula": formula,
+                            "significance": sig,
+                            "description": sig
+                        })
+                    elif isinstance(f, str) and f.strip():
+                        normalized_formulas.append({
+                            "term": "Key Formula / Definition",
+                            "name": "Key Formula / Definition",
+                            "formula_or_def": f.strip(),
+                            "formula": f.strip(),
+                            "significance": "",
+                            "description": ""
+                        })
+
             return {
                 "course_name": clean_course,
                 "course_slug": course_slug,
                 "lecture_count": num_lectures,
                 "executive_summary": exec_sum,
                 "thematic_modules": data.get("thematic_modules") if isinstance(data.get("thematic_modules"), list) else [],
-                "core_formulas_and_definitions": data.get("core_formulas_and_definitions") if isinstance(data.get("core_formulas_and_definitions"), list) else [],
+                "core_formulas_and_definitions": normalized_formulas,
                 "lecture_summaries": data.get("lecture_summaries") if isinstance(data.get("lecture_summaries"), list) else [],
                 "master_exam_checklist": data.get("master_exam_checklist") if isinstance(data.get("master_exam_checklist"), list) else []
             }

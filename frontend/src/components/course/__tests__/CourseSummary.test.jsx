@@ -132,5 +132,30 @@ describe('CourseSummary Component', () => {
     fireEvent.click(checklistItem);
     expect(screen.getByText('0 / 2 Completed')).toBeInTheDocument();
   });
+
+  it('renders formulas when payload uses name, formula, and description schema keys', () => {
+    const summaryWithAltKeys = {
+      course_name: 'Machine Learning',
+      executive_summary: 'Statistical learning overview.',
+      core_formulas_and_definitions: [
+        {
+          name: 'Mean Squared Error',
+          formula: '$$MSE = \\frac{1}{n} \\sum (y_i - \\hat{y}_i)^2$$',
+          description: 'Measures average squared difference between estimated values and actual value.'
+        }
+      ]
+    };
+
+    render(
+      <CourseSummary
+        courseName="Machine Learning"
+        summaryData={summaryWithAltKeys}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Mean Squared Error')).toBeInTheDocument();
+    expect(screen.getByText(/Measures average squared difference/i)).toBeInTheDocument();
+  });
 });
 

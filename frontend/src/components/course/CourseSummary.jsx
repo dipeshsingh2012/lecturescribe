@@ -59,6 +59,65 @@ export default function CourseSummary({
     }));
   };
 
+  const normalizeFormulas = (rawList) => {
+    if (!Array.isArray(rawList)) return [];
+    return rawList.map((item) => {
+      if (typeof item === 'string') {
+        return {
+          term: 'Key Formula / Definition',
+          name: 'Key Formula / Definition',
+          formula_or_def: item,
+          formula: item,
+          significance: '',
+          description: ''
+        };
+      }
+      const term =
+        item?.term ||
+        item?.name ||
+        item?.title ||
+        item?.concept ||
+        item?.formula_name ||
+        item?.topic ||
+        'Core Concept';
+      const formula_or_def =
+        item?.formula_or_def ||
+        item?.formula ||
+        item?.equation ||
+        item?.definition ||
+        item?.math ||
+        item?.rule ||
+        item?.expression ||
+        item?.content ||
+        '';
+      const significance =
+        item?.significance ||
+        item?.description ||
+        item?.explanation ||
+        item?.notes ||
+        item?.meaning ||
+        item?.context ||
+        '';
+      return {
+        term,
+        name: term,
+        formula_or_def,
+        formula: formula_or_def,
+        significance,
+        description: significance
+      };
+    });
+  };
+
+  const rawFormulas =
+    summaryData?.core_formulas_and_definitions ||
+    summaryData?.formulas_and_definitions ||
+    summaryData?.formulas ||
+    summaryData?.core_equations ||
+    summaryData?.key_formulas ||
+    [];
+  const core_formulas_and_definitions = normalizeFormulas(rawFormulas);
+
   const handleCopyMarkdown = () => {
     if (!summaryData) return;
     const lines = [];
@@ -83,9 +142,9 @@ export default function CourseSummary({
       });
     }
 
-    if (summaryData.core_formulas_and_definitions?.length) {
+    if (core_formulas_and_definitions?.length) {
       lines.push(`## Core Formulas & Definitions\n`);
-      summaryData.core_formulas_and_definitions.forEach(fd => {
+      core_formulas_and_definitions.forEach(fd => {
         lines.push(`- **${fd.term}**: ${fd.formula_or_def}`);
         if (fd.significance) {
           lines.push(`  *Significance:* ${fd.significance}`);
@@ -232,10 +291,9 @@ export default function CourseSummary({
 
   const {
     executive_summary,
-    thematic_modules = [],
-    core_formulas_and_definitions = [],
-    lecture_summaries = [],
-    master_exam_checklist = []
+    thematic_modules = summaryData?.modules || [],
+    lecture_summaries = summaryData?.lectures || summaryData?.synopses || [],
+    master_exam_checklist = summaryData?.checklist || summaryData?.exam_checklist || []
   } = summaryData || {};
 
   return (
@@ -463,42 +521,49 @@ export default function CourseSummary({
           </Box>
 
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
-            {core_formulas_and_definitions.map((item, idx) => (
-              <Box
-                key={idx}
-                sx={{
-                  p: 2,
-                  borderRadius: 2,
-                  bgcolor: 'rgba(255, 255, 255, 0.02)',
-                  border: `1px solid ${cardBorder}`,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 1
-                }}
-              >
-                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: primaryColor, fontSize: '0.92rem' }}>
-                  {item.term}
-                </Typography>
+            {core_formulas_and_definitions.map((item, idx) => {
+              const term = item.term || item.name || 'Core Formula';
+              const formula = item.formula_or_def || item.formula || '';
+              const significance = item.significance || item.description || '';
+              return (
                 <Box
+                  key={idx}
                   sx={{
-                    p: 1.5,
-                    borderRadius: 1.5,
-                    bgcolor: 'rgba(0, 0, 0, 0.25)',
-                    border: `1px solid rgba(255, 255, 255, 0.05)`,
-                    overflowX: 'auto'
+                    p: 2,
+                    borderRadius: 2,
+                    bgcolor: 'rgba(255, 255, 255, 0.02)',
+                    border: `1px solid ${cardBorder}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 1
                   }}
                 >
-                  <Typography component="div" sx={{ fontFamily: 'monospace', fontSize: '0.88rem', color: textPrimary }}>
-                    <MarkdownWithTimestamps content={item.formula_or_def} text={item.formula_or_def} />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800, color: primaryColor, fontSize: '0.92rem' }}>
+                    {term}
                   </Typography>
+                  {formula ? (
+                    <Box
+                      sx={{
+                        p: 1.5,
+                        borderRadius: 1.5,
+                        bgcolor: 'rgba(0, 0, 0, 0.25)',
+                        border: `1px solid rgba(255, 255, 255, 0.05)`,
+                        overflowX: 'auto'
+                      }}
+                    >
+                      <Typography component="div" sx={{ fontFamily: 'monospace', fontSize: '0.88rem', color: textPrimary }}>
+                        <MarkdownWithTimestamps content={formula} text={formula} />
+                      </Typography>
+                    </Box>
+                  ) : null}
+                  {significance && (
+                    <Typography variant="caption" sx={{ color: textSecondary, lineHeight: 1.4, mt: 0.5 }}>
+                      <strong>Significance:</strong> {significance}
+                    </Typography>
+                  )}
                 </Box>
-                {item.significance && (
-                  <Typography variant="caption" sx={{ color: textSecondary, lineHeight: 1.4, mt: 0.5 }}>
-                    <strong>Significance:</strong> {item.significance}
-                  </Typography>
-                )}
-              </Box>
-            ))}
+              );
+            })}
           </Box>
         </Paper>
       )}

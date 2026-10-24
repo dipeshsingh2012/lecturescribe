@@ -126,17 +126,32 @@ export default function HomeView({
 
   // Automatically fetch course quiz if user is on the Course Quiz tab and no quiz is loaded yet
   useEffect(() => {
-    if (courseViewTab === 'quiz' && selectedCourse && !courseQuiz.quizData && !courseQuiz.quizLoading) {
+    if (courseViewTab === 'quiz' && selectedCourse && !courseQuiz.quizData && !courseQuiz.quizLoading && !courseQuiz.quizError) {
       courseQuiz.fetchOrGenerateQuiz(false);
     }
-  }, [courseViewTab, selectedCourse, courseQuiz.quizData, courseQuiz.quizLoading, courseQuiz.fetchOrGenerateQuiz]);
+  }, [courseViewTab, selectedCourse, courseQuiz.quizData, courseQuiz.quizLoading, courseQuiz.quizError, courseQuiz.fetchOrGenerateQuiz]);
 
   // Automatically fetch course summary if user is on Course Summary tab and no summary loaded yet
   useEffect(() => {
-    if (courseViewTab === 'summary' && selectedCourse && !courseSummary.summaryData && !courseSummary.loading) {
+    if (
+      courseViewTab === 'summary' &&
+      selectedCourse &&
+      !courseSummary.summaryData &&
+      !courseSummary.loading &&
+      !courseSummary.error &&
+      !courseSummary.hasFetched
+    ) {
       courseSummary.fetchSummary(false);
     }
-  }, [courseViewTab, selectedCourse, courseSummary.summaryData, courseSummary.loading, courseSummary.fetchSummary]);
+  }, [
+    courseViewTab,
+    selectedCourse,
+    courseSummary.summaryData,
+    courseSummary.loading,
+    courseSummary.error,
+    courseSummary.hasFetched,
+    courseSummary.fetchSummary
+  ]);
 
   return (
     <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>

@@ -96,5 +96,29 @@ describe('useCourseSummary hook', () => {
     expect(result.current.summaryData).toBe(null);
     expect(result.current.error).toBe('Failed to generate course summary');
   });
+
+  it('correctly unwraps summary objects returned directly without a .summary wrapper', async () => {
+    const directSummary = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      executive_summary: 'Supervised vs Unsupervised learning.'
+    };
+
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => directSummary
+    });
+
+    const { result } = renderHook(() => useCourseSummary('Machine Learning'));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.hasFetched).toBe(true);
+    expect(result.current.summaryData).toEqual(directSummary);
+    expect(result.current.error).toBe(null);
+  });
 });
 

@@ -9,6 +9,7 @@ export default function useCourseSummary(courseName) {
   const [summaryData, setSummaryData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [hasFetched, setHasFetched] = useState(false);
   const lastSlugRef = useRef('');
 
   const fetchSummary = useCallback(async (regenerate = false) => {
@@ -34,12 +35,14 @@ export default function useCourseSummary(courseName) {
       }
 
       const data = await res.json();
-      setSummaryData(data.summary || null);
+      const resolved = data?.summary || (data?.executive_summary ? data : null);
+      setSummaryData(resolved);
     } catch (err) {
       console.error('Failed to load course summary:', err);
       setError(err.message || 'Unable to load course summary.');
     } finally {
       setLoading(false);
+      setHasFetched(true);
     }
   }, [courseSlug]);
 
@@ -48,6 +51,7 @@ export default function useCourseSummary(courseName) {
       lastSlugRef.current = courseSlug;
       setSummaryData(null);
       setError(null);
+      setHasFetched(false);
       if (courseSlug) {
         fetchSummary(false);
       }
@@ -58,6 +62,7 @@ export default function useCourseSummary(courseName) {
     summaryData,
     loading,
     error,
+    hasFetched,
     fetchSummary,
     regenerateSummary: () => fetchSummary(true)
   };

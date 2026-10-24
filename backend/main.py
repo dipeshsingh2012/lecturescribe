@@ -2965,7 +2965,12 @@ def get_or_generate_course_summary(
         cached_summary = redis_cache.get_course_summary(course_slug)
         if cached_summary and cached_summary.get("executive_summary"):
             print(f"⚡ [Redis Hit] Returning cached course summary for '{course_slug}'.")
-            return cached_summary
+            return {
+                **cached_summary,
+                "course_slug": cached_summary.get("course_slug") or course_slug,
+                "course_name": cached_summary.get("course_name") or clean_course,
+                "summary": cached_summary
+            }
 
     # 2. Check Database Persistence
     if not is_regenerate:
@@ -2974,7 +2979,12 @@ def get_or_generate_course_summary(
             print(f"💾 [PostgreSQL Hit] Returning persisted course summary for '{course_slug}'.")
             if redis_cache:
                 redis_cache.set_course_summary(course_slug, db_summary, ttl_seconds=86400)
-            return db_summary
+            return {
+                **db_summary,
+                "course_slug": db_summary.get("course_slug") or course_slug,
+                "course_name": db_summary.get("course_name") or clean_course,
+                "summary": db_summary
+            }
 
     # 3. Retrieve Course & Lecture list from DB
     course_info = db_manager.get_course_details(clean_course, user_email=user_email)
@@ -3038,7 +3048,12 @@ def get_or_generate_course_summary(
     if redis_cache:
         redis_cache.set_course_summary(course_slug, summary_data, ttl_seconds=86400)
 
-    return summary_data
+    return {
+        **summary_data,
+        "course_slug": summary_data.get("course_slug") or course_slug,
+        "course_name": summary_data.get("course_name") or canonical_title,
+        "summary": summary_data
+    }
 
 
 @app.delete("/api/course/{course_name}/quiz/answers")

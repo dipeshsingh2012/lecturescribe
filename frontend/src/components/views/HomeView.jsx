@@ -570,6 +570,7 @@ export default function HomeView({
           lectureBreakdown={courseQuiz.lectureBreakdown}
           fetchOrGenerateQuiz={courseQuiz.fetchOrGenerateQuiz}
           selectAnswer={courseQuiz.selectAnswer}
+          clearAnswer={courseQuiz.clearAnswer}
           finishQuiz={courseQuiz.finishQuiz}
           resetQuiz={courseQuiz.resetQuiz}
           detailedExplanations={courseQuiz.detailedExplanations}

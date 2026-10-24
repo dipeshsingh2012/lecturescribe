@@ -80,6 +80,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       if (regenerate) {
         setSelectedAnswers({});
         setDetailedExplanations({});
+        setQuizSubmitted(false);
+        setAutoSubmitted(false);
+        setTimeLeft(1800);
         // Reset answers in database if regenerating
         const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
         fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers${delEmail}`, {
@@ -88,6 +91,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       } else if (data.user_answers && Object.keys(data.user_answers).length > 0) {
         // Restore user's persisted answers directly from database
         setSelectedAnswers(data.user_answers);
+        if (data.user_completed || data.is_completed) {
+          setQuizSubmitted(true);
+        }
       }
       fetchQuizHistory();
     } catch (err) {
@@ -157,9 +163,11 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   }, [courseSlug, cleanCourse, userEmail]);
 
   const selectAnswer = useCallback((questionId, optionIndex) => {
+    // If the quiz is submitted or in review mode, answers are locked
+    if (quizSubmitted || autoSubmitted || reviewMode) return;
+
     setSelectedAnswers((prev) => {
-      // Once answered, do not allow changing to preserve initial test score
-      if (prev[questionId] !== undefined) return prev;
+      if (prev[questionId] === optionIndex) return prev;
       const next = { ...prev, [questionId]: optionIndex };
 
       // Persist directly to Relational Database and history
@@ -188,7 +196,37 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
       return next;
     });
-  }, [courseSlug, quizData, replayingQuizId, userEmail, fetchQuizHistory]);
+  }, [courseSlug, quizData, replayingQuizId, userEmail, fetchQuizHistory, quizSubmitted, autoSubmitted, reviewMode]);
+
+  const clearAnswer = useCallback((questionId) => {
+    if (quizSubmitted || autoSubmitted || reviewMode) return;
+    setSelectedAnswers((prev) => {
+      if (prev[questionId] === undefined) return prev;
+      const next = { ...prev };
+      delete next[questionId];
+
+      if (courseSlug) {
+        const currentScore = (quizData?.questions || []).reduce((acc, q) => {
+          const choice = next[q.id];
+          return choice === q.correct_index ? acc + 1 : acc;
+        }, 0);
+
+        fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_email: userEmail || 'anonymous',
+            answers: next,
+            score: currentScore,
+            completed: false,
+            quiz_id: quizData?.quiz_id || replayingQuizId
+          })
+        }).catch((e) => console.warn('Database answer save error:', e));
+      }
+
+      return next;
+    });
+  }, [courseSlug, quizData, replayingQuizId, userEmail, quizSubmitted, autoSubmitted, reviewMode]);
 
   const finishQuiz = useCallback(() => {
     if (!courseSlug || !quizData) return;
@@ -333,6 +371,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     lectureBreakdown,
     fetchOrGenerateQuiz,
     selectAnswer,
+    clearAnswer,
     finishQuiz,
     resetQuiz,
     detailedExplanations,

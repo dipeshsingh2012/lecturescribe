@@ -2772,11 +2772,12 @@ def get_or_generate_course_quiz(
     req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
 
     # 1. Check Redis Cache
+    min_questions = req_count if req_count is not None else 10
     if not is_regenerate and redis_cache:
         cached_quiz = redis_cache.get_course_quiz(course_slug)
         if cached_quiz:
             cached_quiz = sanitize_quiz_payload(cached_quiz)
-            if cached_quiz and len(cached_quiz.get("questions") or []) > 0:
+            if cached_quiz and len(cached_quiz.get("questions") or []) >= min_questions:
                 print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
                 if email:
                     attempt = db_manager.get_quiz_attempt("course", course_slug, email)
@@ -2793,7 +2794,7 @@ def get_or_generate_course_quiz(
         db_quiz = db_manager.get_saved_course_quiz(clean_course)
         if db_quiz and db_quiz.get("questions"):
             db_quiz = sanitize_quiz_payload(db_quiz)
-            if db_quiz and len(db_quiz.get("questions") or []) > 0:
+            if db_quiz and len(db_quiz.get("questions") or []) >= min_questions:
                 print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
                 if redis_cache:
                     redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)

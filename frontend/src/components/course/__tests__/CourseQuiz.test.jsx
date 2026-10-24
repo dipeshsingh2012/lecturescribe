@@ -395,4 +395,96 @@ describe('CourseQuiz Component', () => {
     expect(screen.getByText(/The 30-minute exam time limit reached zero/i)).toBeInTheDocument();
     expect(screen.getByText(/Score: 0 \/ 0.5 Marks/i)).toBeInTheDocument();
   });
+
+  it('allows clicking Review Questions after autoSubmitted to inspect questions', () => {
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        quizLoading={false}
+        selectedAnswers={{ 1: 0 }}
+        isCompleted={true}
+        score={1}
+        totalQuestions={1}
+        answeredCount={1}
+        autoSubmitted={true}
+        earnedMarks={0.5}
+        totalMarks={0.5}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Initial view shows summary view due to autoSubmitted
+    expect(screen.getByText(/Time Expired/i)).toBeInTheDocument();
+    const reviewBtn = screen.getByRole('button', { name: /Review Questions/i });
+    expect(reviewBtn).toBeInTheDocument();
+
+    // Clicking Review Questions reveals question card and review banner
+    fireEvent.click(reviewBtn);
+    expect(screen.getByText(/What is loss function/i)).toBeInTheDocument();
+    expect(screen.getByText(/Viewing graded exam answers/i)).toBeInTheDocument();
+  });
+
+  it('supports keyboard ArrowLeft and ArrowRight navigation between questions', () => {
+    const multiQuestionQuiz = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      questions: [
+        { id: 1, question: 'Question 1', options: ['A', 'B'], correct_index: 0 },
+        { id: 2, question: 'Question 2', options: ['C', 'D'], correct_index: 1 }
+      ]
+    };
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={multiQuestionQuiz}
+        quizLoading={false}
+        selectedAnswers={{}}
+        totalQuestions={2}
+        answeredCount={0}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getAllByText(/Question 1 of 2/i).length).toBeGreaterThan(0);
+
+    // ArrowRight advances to Question 2
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(screen.getAllByText(/Question 2 of 2/i).length).toBeGreaterThan(0);
+
+    // ArrowLeft goes back to Question 1
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    expect(screen.getAllByText(/Question 1 of 2/i).length).toBeGreaterThan(0);
+  });
+
+  it('renders Clear Selection button and invokes clearAnswer', () => {
+    const clearAnswer = vi.fn();
+    const multiQuestionQuiz = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      questions: [
+        { id: 1, question: 'Question 1', options: ['A', 'B'], correct_index: 0 },
+        { id: 2, question: 'Question 2', options: ['C', 'D'], correct_index: 1 }
+      ]
+    };
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={multiQuestionQuiz}
+        quizLoading={false}
+        selectedAnswers={{ 1: 0 }}
+        totalQuestions={2}
+        answeredCount={1}
+        clearAnswer={clearAnswer}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const clearBtn = screen.getByRole('button', { name: /Clear Selection/i });
+    expect(clearBtn).toBeInTheDocument();
+    fireEvent.click(clearBtn);
+    expect(clearAnswer).toHaveBeenCalledWith(1);
+  });
 });

@@ -50,6 +50,7 @@ export default function CourseQuiz({
   lectureBreakdown = {},
   fetchOrGenerateQuiz,
   selectAnswer,
+  clearAnswer,
   finishQuiz,
   resetQuiz,
   handleSelectLecture,
@@ -75,10 +76,27 @@ export default function CourseQuiz({
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showSummaryView, setShowSummaryView] = useState(false);
+  const [reviewingQuestions, setReviewingQuestions] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  const isGradedReview = isCompleted || reviewMode || Boolean(replayingQuizId) || autoSubmitted;
+  const isExamActive = !isGradedReview;
 
   const calcTotalMarks = totalMarks !== undefined ? totalMarks : Number((totalQuestions * marksPerQuestion).toFixed(1));
   const calcEarnedMarks = earnedMarks !== undefined ? earnedMarks : Number((score * marksPerQuestion).toFixed(1));
+
+  React.useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) return;
+      if (e.key === 'ArrowLeft') {
+        setCurrentIdx((prev) => Math.max(0, prev - 1));
+      } else if (e.key === 'ArrowRight') {
+        setCurrentIdx((prev) => Math.min(Math.max(0, totalQuestions - 1), prev + 1));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [totalQuestions]);
 
   const formatTime = (secs) => {
     const s = Math.max(0, Math.floor(secs || 0));
@@ -190,6 +208,7 @@ export default function CourseQuiz({
                         variant="outlined"
                         onClick={() => {
                           loadPastQuiz(run.quiz_id, false);
+                          setReviewingQuestions(true);
                           setShowSummaryView(false);
                           setCurrentIdx(0);
                         }}
@@ -356,7 +375,8 @@ export default function CourseQuiz({
   }
 
   // 3. Summary / Completion View (Shown when Finish Quiz is clicked, auto-submitted on timeout, or results toggled)
-  if (showSummaryView || autoSubmitted) {
+  const shouldShowSummary = (showSummaryView || autoSubmitted) && !reviewingQuestions;
+  if (shouldShowSummary) {
     const percentage = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
     const isPassing = percentage >= 70;
 
@@ -505,7 +525,10 @@ export default function CourseQuiz({
           <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, flexWrap: 'wrap' }}>
             <Button
               variant="outlined"
-              onClick={() => setShowSummaryView(false)}
+              onClick={() => {
+                setShowSummaryView(false);
+                setReviewingQuestions(true);
+              }}
               startIcon={<BookOpen size={16} />}
               sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
             >
@@ -516,6 +539,7 @@ export default function CourseQuiz({
               onClick={() => {
                 resetQuiz();
                 setCurrentIdx(0);
+                setReviewingQuestions(false);
                 setShowSummaryView(false);
               }}
               startIcon={<RotateCcw size={16} />}
@@ -528,6 +552,7 @@ export default function CourseQuiz({
               onClick={() => {
                 fetchOrGenerateQuiz(true);
                 setCurrentIdx(0);
+                setReviewingQuestions(false);
                 setShowSummaryView(false);
               }}
               startIcon={<Sparkles size={16} />}
@@ -647,6 +672,39 @@ export default function CourseQuiz({
           }
         >
           Viewing past quiz attempt in review mode.
+        </Alert>
+      )}
+
+      {/* Graded Review Mode Banner */}
+      {isGradedReview && !replayingQuizId && !reviewMode && (
+        <Alert
+          severity="info"
+          icon={<Award size={18} />}
+          sx={{
+            mb: 2.5,
+            borderRadius: 2,
+            bgcolor: 'rgba(99, 102, 241, 0.12)',
+            color: textPrimary,
+            border: `1px solid ${cardBorder}`
+          }}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => {
+                setReviewingQuestions(false);
+                setShowSummaryView(true);
+              }}
+              startIcon={<Award size={14} />}
+              sx={{ textTransform: 'none', fontWeight: 700 }}
+            >
+              View Results Summary
+            </Button>
+          }
+        >
+          {autoSubmitted
+            ? 'Exam time expired (30:00 limit) • Viewing graded exam answers & explanations.'
+            : `Exam completed • Score: ${calcEarnedMarks} / ${calcTotalMarks} Marks (${score}/${totalQuestions} correct) • Viewing graded exam answers & explanations.`}
         </Alert>
       )}
 
@@ -928,8 +986,8 @@ export default function CourseQuiz({
                       width: 26,
                       height: 26,
                       borderRadius: '50%',
-                      bgcolor: 'rgba(255, 255, 255, 0.06)',
-                      color: textSecondary,
+                      bgcolor: isUserChoice && !isGradedReview ? primaryColor : 'rgba(255, 255, 255, 0.06)',
+                      color: isUserChoice && !isGradedReview ? '#fff' : textSecondary,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -942,7 +1000,7 @@ export default function CourseQuiz({
                   </Box>
                 );
 
-                if (isAnswered) {
+                if (isGradedReview && isAnswered) {
                   if (isCorrectOption) {
                     optBg = 'rgba(34, 197, 94, 0.15)';
                     optBorder = '#22c55e';
@@ -952,13 +1010,16 @@ export default function CourseQuiz({
                     optBorder = '#ef4444';
                     iconComponent = <XCircle size={22} color="#ef4444" style={{ flexShrink: 0 }} />;
                   }
+                } else if (isUserChoice) {
+                  optBg = 'rgba(99, 102, 241, 0.14)';
+                  optBorder = primaryColor;
                 }
 
                 return (
                   <Box
                     key={optIdx}
                     onClick={() => {
-                      if (!isAnswered && !reviewMode) {
+                      if (!isGradedReview && typeof selectAnswer === 'function') {
                         selectAnswer(currentQ.id, optIdx);
                       }
                     }}
@@ -968,14 +1029,14 @@ export default function CourseQuiz({
                       bgcolor: optBg,
                       border: `1.5px solid ${optBorder}`,
                       color: optColor,
-                      cursor: isAnswered || reviewMode ? 'default' : 'pointer',
+                      cursor: isGradedReview ? 'default' : 'pointer',
                       display: 'flex',
                       alignItems: 'center',
                       gap: 2,
                       transition: 'all 0.15s ease',
                       '&:hover': {
-                        bgcolor: isAnswered || reviewMode ? optBg : 'rgba(99, 102, 241, 0.12)',
-                        borderColor: isAnswered || reviewMode ? optBorder : primaryColor
+                        bgcolor: isGradedReview ? optBg : 'rgba(99, 102, 241, 0.12)',
+                        borderColor: isGradedReview ? optBorder : primaryColor
                       }
                     }}
                   >
@@ -993,8 +1054,26 @@ export default function CourseQuiz({
               })}
             </Box>
 
+            {/* Clear Selection in Live Exam Mode */}
+            {isExamActive && isAnswered && typeof clearAnswer === 'function' && (
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: -1.5, mb: 2 }}>
+                <Button
+                  size="small"
+                  onClick={() => clearAnswer(currentQ.id)}
+                  sx={{
+                    textTransform: 'none',
+                    fontSize: '0.72rem',
+                    color: textSecondary,
+                    '&:hover': { color: textPrimary }
+                  }}
+                >
+                  Clear Selection
+                </Button>
+              </Box>
+            )}
+
             {/* Feedback & Static Explanation */}
-            {isAnswered && (
+            {isGradedReview && isAnswered && (
               <Box
                 sx={{
                   mt: 3,
@@ -1195,7 +1274,7 @@ export default function CourseQuiz({
               }}
             >
               {currentIdx === totalQuestions - 1
-                ? 'Finish Quiz'
+                ? (reviewMode ? 'View Results' : 'Finish Quiz')
                 : 'Next Question'}
             </Button>
           </Box>
@@ -1305,7 +1384,7 @@ export default function CourseQuiz({
                       fontSize: '0.75rem',
                       border: isSelected ? `2px solid ${primaryColor}` : `1px solid ${cardBorder}`,
                       bgcolor: hasAnswered
-                        ? reviewMode
+                        ? isGradedReview
                           ? wasCorrect
                             ? 'rgba(34, 197, 94, 0.25)'
                             : 'rgba(239, 68, 68, 0.25)'
@@ -1314,7 +1393,7 @@ export default function CourseQuiz({
                         ? 'rgba(99, 102, 241, 0.15)'
                         : 'rgba(255, 255, 255, 0.03)',
                       color: hasAnswered
-                        ? reviewMode
+                        ? isGradedReview
                           ? wasCorrect
                             ? '#22c55e'
                             : '#ef4444'
@@ -1334,28 +1413,68 @@ export default function CourseQuiz({
             </Box>
 
             {/* Legend */}
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', mb: 2.5, px: 0.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#22c55e' }} />
-                <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Marked</Typography>
+            {isGradedReview ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', mb: 2.5, px: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#22c55e' }} />
+                  <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Correct</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#ef4444' }} />
+                  <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Incorrect</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: primaryColor }} />
+                  <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Current</Typography>
+                </Box>
               </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: primaryColor }} />
-                <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Current</Typography>
+            ) : (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', mb: 2.5, px: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#22c55e' }} />
+                  <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Marked</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: primaryColor }} />
+                  <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Current</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.2)' }} />
+                  <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Remaining</Typography>
+                </Box>
               </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.2)' }} />
-                <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.68rem' }}>Remaining</Typography>
-              </Box>
-            </Box>
+            )}
 
-            {/* Submit Exam Button */}
-            {!reviewMode && (
+            {/* Submit Exam / View Summary Button */}
+            {isGradedReview ? (
+              <Button
+                variant="outlined"
+                fullWidth
+                onClick={() => {
+                  setReviewingQuestions(false);
+                  setShowSummaryView(true);
+                }}
+                startIcon={<Award size={15} />}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.82rem',
+                  borderRadius: 2,
+                  borderColor: cardBorder,
+                  color: textPrimary,
+                  py: 1,
+                  '&:hover': { borderColor: primaryColor, color: primaryColor }
+                }}
+              >
+                View Score Summary
+              </Button>
+            ) : (
               <Button
                 variant="contained"
                 fullWidth
                 onClick={() => {
                   if (typeof finishQuiz === 'function') finishQuiz();
+                  setReviewingQuestions(false);
                   setShowSummaryView(true);
                 }}
                 sx={{

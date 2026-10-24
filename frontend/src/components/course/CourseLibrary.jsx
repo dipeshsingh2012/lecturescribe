@@ -524,7 +524,7 @@ export default function CourseLibrary({
             <Typography variant="body2" sx={{ color: currentTheme.palette.textSecondary, maxWidth: 420, mx: 'auto', mb: 2 }}>
               Upload PowerPoint (.pptx) or PDF presentation slides used by the professor for this course.
             </Typography>
-            {googleUser && (
+            {googleUser && typeof openUploadModal === 'function' && (
               <Button
                 variant="outlined"
                 size="small"
@@ -672,7 +672,7 @@ export default function CourseLibrary({
                       </>
                     )}
 
-                    {isOwner && (
+                    {isOwner && typeof handleDeleteResource === 'function' && (
                       <Tooltip title="Delete Resource">
                         <IconButton
                           size="small"
@@ -773,7 +773,7 @@ export default function CourseLibrary({
             >
               Research Literature & Books
             </Button>
-            {courseReadings.length > 0 && (
+            {courseReadings.length > 0 && typeof triggerExtractReadings === 'function' && (
               <Button
                 variant="outlined"
                 size="small"
@@ -845,23 +845,25 @@ export default function CourseLibrary({
               Click below to scan lecture transcripts & slides, or research and add peer-reviewed papers & textbooks directly.
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<Sparkles size={14} />}
-                onClick={() => handleExtractClick(false)}
-                sx={{
-                  bgcolor: currentTheme.palette.primary,
-                  color: '#fff',
-                  fontWeight: 700,
-                  textTransform: 'none',
-                  borderRadius: 2,
-                  px: 2.5,
-                  '&:hover': { bgcolor: currentTheme.palette.primaryHover }
-                }}
-              >
-                Scan & Extract Books
-              </Button>
+              {typeof triggerExtractReadings === 'function' && (
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<Sparkles size={14} />}
+                  onClick={() => handleExtractClick(false)}
+                  sx={{
+                    bgcolor: currentTheme.palette.primary,
+                    color: '#fff',
+                    fontWeight: 700,
+                    textTransform: 'none',
+                    borderRadius: 2,
+                    px: 2.5,
+                    '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                  }}
+                >
+                  Scan & Extract Books
+                </Button>
+              )}
               <Button
                 variant="outlined"
                 size="small"

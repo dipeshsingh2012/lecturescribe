@@ -231,5 +231,36 @@ describe('HomeView', () => {
       '03:10'
     );
   });
+
+  it('shows Assignments tab and QuickAddBar for Tutor role, and hides both for Student role', () => {
+    const mockTutor = { email: 'tutor@iiitdwd.ac.in', name: 'Prof Tutor' };
+    const { rerender } = render(
+      <HomeView
+        {...baseProps}
+        googleUser={mockTutor}
+        userRole="tutor"
+        isTutor={true}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Course Assignments/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Add video URL or ID to this course/i)).toBeInTheDocument();
+
+    rerender(
+      <HomeView
+        {...baseProps}
+        googleUser={mockTutor}
+        userRole="student"
+        isTutor={false}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Course Assignments/i })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Add video URL or ID to this course/i)).not.toBeInTheDocument();
+  });
 });
 

@@ -283,6 +283,8 @@ export default function App() {
           summaryOutdated={summary.isOutdated || activeData?.is_outdated || activeData?.summary_outdated}
           openDownloadModal={() => auth.openDownloadModal(activeData)}
           googleUser={auth.googleUser}
+          userRole={auth.userRole}
+          onSwitchRole={auth.switchUserRole}
           handleGoogleSignIn={auth.handleGoogleSignIn}
           handleGoogleSignOut={auth.handleGoogleSignOut}
           handleBackToHub={handleNavigateHome}
@@ -318,6 +320,8 @@ export default function App() {
           <HomeView
             selectedCourse={selectedCourse}
             googleUser={auth.googleUser}
+            userRole={auth.userRole}
+            isTutor={auth.isTutor}
             userLibrary={library.userLibrary}
             handleGoogleSignIn={auth.handleGoogleSignIn}
             urlInput={urlInput}

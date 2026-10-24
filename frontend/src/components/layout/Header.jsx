@@ -19,7 +19,10 @@ import {
   Cloud,
   Folder,
   LogOut,
-  Check
+  Check,
+  GraduationCap,
+  ShieldCheck,
+  ArrowLeftRight
 } from 'lucide-react';
 import { ProtonThemeSelector } from '@dipesh.singh/proton';
 import { LMS_THEMES } from '../../store/themeStore';
@@ -33,6 +36,8 @@ export default function Header({
   summaryOutdated,
   openDownloadModal,
   googleUser,
+  userRole = 'student',
+  onSwitchRole,
   handleGoogleSignIn,
   handleGoogleSignOut,
   handleBackToHub,
@@ -45,6 +50,7 @@ export default function Header({
   currentTheme
 }) {
   const onHomeClick = handleNavigateHome || handleBackToHub;
+  const isTutor = userRole === 'tutor';
 
   return (
     <header className="app-header" style={{
@@ -278,6 +284,32 @@ export default function Header({
           </Button>
         ) : (
           <>
+            <Tooltip title={isTutor ? "Tutor Mode (Instructor capabilities enabled) — Click to switch to Student view" : "Student Mode (Learner view) — Click to switch to Tutor view"}>
+              <button
+                type="button"
+                data-testid="header-role-badge"
+                aria-label={`Active role: ${isTutor ? 'Tutor' : 'Student'}`}
+                onClick={() => typeof onSwitchRole === 'function' && onSwitchRole(isTutor ? 'student' : 'tutor')}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 10px',
+                  borderRadius: '16px',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: typeof onSwitchRole === 'function' ? 'pointer' : 'default',
+                  background: isTutor ? 'rgba(16, 185, 129, 0.22)' : 'rgba(255, 255, 255, 0.16)',
+                  color: '#ffffff',
+                  border: isTutor ? '1px solid rgba(16, 185, 129, 0.65)' : '1px solid rgba(255, 255, 255, 0.3)',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                {isTutor ? <ShieldCheck size={14} color="#34d399" /> : <GraduationCap size={14} />}
+                <span>{isTutor ? 'Tutor' : 'Student'}</span>
+              </button>
+            </Tooltip>
+
             <Tooltip title={`${googleUser.name || 'Google User'} (${googleUser.email})`}>
               <IconButton
                 onClick={(e) => setUserMenuAnchor(e.currentTarget)}
@@ -313,14 +345,47 @@ export default function Header({
               anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
             >
               <Box sx={{ px: 2, py: 1.5 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#f8fafc' }}>
-                  {googleUser.name || 'Google Scholar'}
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.3 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#f8fafc' }}>
+                    {googleUser.name || 'Google Scholar'}
+                  </Typography>
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      padding: '2px 8px',
+                      borderRadius: '10px',
+                      backgroundColor: isTutor ? 'rgba(16, 185, 129, 0.18)' : 'rgba(59, 130, 246, 0.18)',
+                      color: isTutor ? '#34d399' : '#60a5fa',
+                      border: isTutor ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(59, 130, 246, 0.4)',
+                      textTransform: 'uppercase'
+                    }}
+                  >
+                    {isTutor ? 'Tutor' : 'Student'}
+                  </span>
+                </Box>
                 <Typography variant="caption" sx={{ color: '#94a3b8', wordBreak: 'break-all', display: 'block' }}>
                   {googleUser.email}
                 </Typography>
               </Box>
               <Divider sx={{ my: 1, borderColor: 'rgba(255, 255, 255, 0.1)' }} />
+              {typeof onSwitchRole === 'function' && (
+                <MenuItem
+                  data-testid="menu-switch-role"
+                  onClick={() => {
+                    onSwitchRole(isTutor ? 'student' : 'tutor');
+                    setUserMenuAnchor(null);
+                  }}
+                  sx={{ borderRadius: 1, py: 1 }}
+                >
+                  <ListItemIcon>
+                    <ArrowLeftRight size={18} color={isTutor ? '#60a5fa' : '#10b981'} />
+                  </ListItemIcon>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {isTutor ? 'Switch to Student View' : 'Switch to Tutor View'}
+                  </Typography>
+                </MenuItem>
+              )}
               <MenuItem
                 onClick={() => {
                   setUserMenuAnchor(null);

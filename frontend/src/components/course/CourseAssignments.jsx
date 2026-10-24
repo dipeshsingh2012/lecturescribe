@@ -44,6 +44,7 @@ export default function CourseAssignments({
   uploadError = null,
   onUploadAssignment,
   onProvideDataset,
+  onSkipDataset,
   onRegenerateAssignment,
   onDeleteAssignment,
   currentTheme
@@ -529,6 +530,28 @@ export default function CourseAssignments({
                           >
                             {uploadingDataset[asgn.assignment_id] ? 'Uploading...' : 'Upload & Resume Execution'}
                           </Button>
+                          {(onSkipDataset || onRegenerateAssignment) && (
+                            <Button
+                              variant="text"
+                              size="small"
+                              onClick={() => {
+                                if (onSkipDataset) {
+                                  onSkipDataset(asgn.assignment_id);
+                                } else if (onRegenerateAssignment) {
+                                  onRegenerateAssignment(asgn.assignment_id);
+                                }
+                              }}
+                              startIcon={<Sparkles size={14} />}
+                              sx={{
+                                textTransform: 'none',
+                                fontWeight: 700,
+                                color: '#92400e',
+                                '&:hover': { bgcolor: 'rgba(217, 119, 6, 0.12)' }
+                              }}
+                            >
+                              Generate Without Dataset
+                            </Button>
+                          )}
                         </Box>
                       </Box>
                     )}

@@ -125,6 +125,8 @@ class RelationalDBManager:
         self._assignments_memory_cache: List[Dict[str, Any]] = []
         self._predicted_quizzes_memory: List[Dict[str, Any]] = []
         self._user_course_pins_memory: Dict[str, List[str]] = {}
+        self._users_memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._course_memberships_memory: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -729,6 +731,31 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_assignments_id ON lecturescribe_course_assignments(assignment_id);
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS required_files JSONB DEFAULT '[]'::jsonb;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS dataset_files JSONB DEFAULT '[]'::jsonb;
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_users (
+                            id SERIAL PRIMARY KEY,
+                            email VARCHAR(255) UNIQUE NOT NULL,
+                            name VARCHAR(255),
+                            picture_url TEXT,
+                            system_role VARCHAR(32) NOT NULL DEFAULT 'student',
+                            active_view_role VARCHAR(32) DEFAULT NULL,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            last_login_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_users_email ON lecturescribe_users(email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_memberships (
+                            id SERIAL PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            user_email VARCHAR(255) NOT NULL,
+                            course_role VARCHAR(32) NOT NULL DEFAULT 'student',
+                            enrol_method VARCHAR(32) NOT NULL DEFAULT 'manual',
+                            status VARCHAR(32) NOT NULL DEFAULT 'active',
+                            enrolled_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            UNIQUE (course_slug, user_email)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_course_memberships_slug ON lecturescribe_course_memberships(course_slug);
+                        CREATE INDEX IF NOT EXISTS idx_course_memberships_email ON lecturescribe_course_memberships(user_email);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -5850,6 +5877,386 @@ class RelationalDBManager:
         elif len(parts) == 2:
             return int(parts[0]) * 60 + int(parts[1].split(".")[0])
         return 0
+
+    # =====================================================================
+    # LMS RBAC v1: Users & Course Memberships (Tutor / Student Roles)
+    # =====================================================================
+
+    @staticmethod
+    def _is_bootstrap_tutor_email(email: str) -> bool:
+        """Return True if email is listed in TUTOR_EMAILS environment variable."""
+        clean = (email or "").strip().lower()
+        if not clean:
+            return False
+        raw = os.getenv("TUTOR_EMAILS", "")
+        if not raw:
+            return False
+        configured = {e.strip().lower() for e in raw.split(",") if e.strip()}
+        return clean in configured
+
+    @staticmethod
+    def _normalize_role(role: Optional[str], default: str = "student") -> str:
+        clean = (role or "").strip().lower()
+        if clean in ("tutor", "student", "admin"):
+            return "tutor" if clean == "admin" else clean
+        return default
+
+    def upsert_user_session(
+        self,
+        email: str,
+        name: Optional[str] = None,
+        picture_url: Optional[str] = None,
+        requested_role: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upsert a user profile on sign-in or session check and resolve their effective role."""
+        clean_email = (email or "").strip().lower()
+        if not clean_email:
+            return {
+                "email": None,
+                "name": None,
+                "picture_url": None,
+                "system_role": "guest",
+                "active_view_role": None,
+                "effective_role": "guest",
+                "is_tutor": False,
+                "is_student": False,
+                "course_roles": {},
+            }
+
+        is_env_tutor = self._is_bootstrap_tutor_email(clean_email)
+        initial_role = "tutor" if is_env_tutor else self._normalize_role(requested_role, "student")
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        existing_mem = self._users_memory_cache.get(clean_email)
+        if existing_mem:
+            sys_role = "tutor" if is_env_tutor else existing_mem.get("system_role", initial_role)
+            view_role = existing_mem.get("active_view_role")
+            user_record = {
+                "email": clean_email,
+                "name": name or existing_mem.get("name") or clean_email.split("@")[0],
+                "picture_url": picture_url or existing_mem.get("picture_url"),
+                "system_role": sys_role,
+                "active_view_role": view_role,
+                "last_login_at": now_iso,
+            }
+        else:
+            user_record = {
+                "email": clean_email,
+                "name": name or clean_email.split("@")[0],
+                "picture_url": picture_url,
+                "system_role": initial_role,
+                "active_view_role": None,
+                "last_login_at": now_iso,
+            }
+        self._users_memory_cache[clean_email] = user_record
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if is_env_tutor:
+                        cursor.execute(
+                            """
+                            INSERT INTO lecturescribe_users (email, name, picture_url, system_role, last_login_at)
+                            VALUES (%s, %s, %s, 'tutor', NOW())
+                            ON CONFLICT (email) DO UPDATE SET
+                                name = COALESCE(EXCLUDED.name, lecturescribe_users.name),
+                                picture_url = COALESCE(EXCLUDED.picture_url, lecturescribe_users.picture_url),
+                                system_role = 'tutor',
+                                last_login_at = NOW()
+                            RETURNING email, name, picture_url, system_role, active_view_role;
+                            """,
+                            (clean_email, user_record["name"], picture_url),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO lecturescribe_users (email, name, picture_url, system_role, last_login_at)
+                            VALUES (%s, %s, %s, %s, NOW())
+                            ON CONFLICT (email) DO UPDATE SET
+                                name = COALESCE(EXCLUDED.name, lecturescribe_users.name),
+                                picture_url = COALESCE(EXCLUDED.picture_url, lecturescribe_users.picture_url),
+                                last_login_at = NOW()
+                            RETURNING email, name, picture_url, system_role, active_view_role;
+                            """,
+                            (clean_email, user_record["name"], picture_url, initial_role),
+                        )
+                    row = cursor.fetchone()
+                    if row:
+                        user_record["name"] = row.get("name") or user_record["name"]
+                        user_record["picture_url"] = row.get("picture_url") or user_record["picture_url"]
+                        user_record["system_role"] = self._normalize_role(row.get("system_role"), initial_role)
+                        user_record["active_view_role"] = (
+                            self._normalize_role(row.get("active_view_role"), "")
+                            if row.get("active_view_role")
+                            else None
+                        )
+                        self._users_memory_cache[clean_email] = user_record
+        except Exception as e:
+            print(f"[PostgreSQL RBAC Notice] upsert_user_session fallback to memory ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        course_roles = self.get_user_course_roles(clean_email)
+        effective_role = user_record.get("active_view_role") or user_record.get("system_role") or "student"
+        return {
+            "email": clean_email,
+            "name": user_record.get("name"),
+            "picture_url": user_record.get("picture_url"),
+            "system_role": user_record.get("system_role", "student"),
+            "active_view_role": user_record.get("active_view_role"),
+            "effective_role": effective_role,
+            "is_tutor": effective_role == "tutor",
+            "is_student": effective_role == "student",
+            "course_roles": course_roles,
+        }
+
+    def get_user_role_info(self, email: Optional[str], course_identifier: Optional[str] = None) -> Dict[str, Any]:
+        """Resolve effective role for a user globally or within a specific course context."""
+        clean_email = (email or "").strip().lower()
+        if not clean_email:
+            return {
+                "email": None,
+                "system_role": "guest",
+                "active_view_role": None,
+                "course_role": None,
+                "effective_role": "guest",
+                "is_tutor": False,
+                "is_student": False,
+            }
+
+        profile = self._users_memory_cache.get(clean_email)
+        if not profile:
+            profile = self.upsert_user_session(clean_email)
+
+        system_role = profile.get("system_role", "student")
+        active_view_role = profile.get("active_view_role")
+        course_roles = self.get_user_course_roles(clean_email)
+        course_slug = to_course_slug(course_identifier) if course_identifier else None
+        course_role = course_roles.get(course_slug) if course_slug else None
+
+        # Precedence: active_view_role (explicit preview switch) -> course_role -> system_role
+        if active_view_role in ("tutor", "student"):
+            effective_role = active_view_role
+        elif course_role in ("tutor", "student"):
+            effective_role = course_role
+        else:
+            effective_role = system_role
+
+        return {
+            "email": clean_email,
+            "name": profile.get("name"),
+            "picture_url": profile.get("picture_url"),
+            "system_role": system_role,
+            "active_view_role": active_view_role,
+            "course_role": course_role,
+            "effective_role": effective_role,
+            "is_tutor": effective_role == "tutor",
+            "is_student": effective_role == "student",
+            "course_roles": course_roles,
+        }
+
+    def set_user_role(
+        self,
+        email: str,
+        role: str,
+        update_system_role: bool = False,
+    ) -> Dict[str, Any]:
+        """Switch a user's active view role (or system role) between 'tutor' and 'student'."""
+        clean_email = (email or "").strip().lower()
+        if not clean_email:
+            raise ValueError("User email is required.")
+        target_role = self._normalize_role(role, "student")
+
+        profile = self._users_memory_cache.get(clean_email) or self.upsert_user_session(clean_email)
+        if update_system_role:
+            profile["system_role"] = target_role
+            profile["active_view_role"] = target_role
+        else:
+            profile["active_view_role"] = target_role
+        self._users_memory_cache[clean_email] = profile
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if update_system_role:
+                        cursor.execute(
+                            """
+                            INSERT INTO lecturescribe_users (email, system_role, active_view_role, last_login_at)
+                            VALUES (%s, %s, %s, NOW())
+                            ON CONFLICT (email) DO UPDATE SET
+                                system_role = EXCLUDED.system_role,
+                                active_view_role = EXCLUDED.active_view_role,
+                                last_login_at = NOW();
+                            """,
+                            (clean_email, target_role, target_role),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO lecturescribe_users (email, system_role, active_view_role, last_login_at)
+                            VALUES (%s, %s, %s, NOW())
+                            ON CONFLICT (email) DO UPDATE SET
+                                active_view_role = EXCLUDED.active_view_role,
+                                last_login_at = NOW();
+                            """,
+                            (clean_email, profile.get("system_role", "student"), target_role),
+                        )
+        except Exception as e:
+            print(f"[PostgreSQL RBAC Notice] set_user_role fallback to memory ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return self.get_user_role_info(clean_email)
+
+    def assign_course_role(
+        self,
+        course_identifier: str,
+        user_email: str,
+        course_role: str = "student",
+        enrol_method: str = "manual",
+    ) -> Dict[str, Any]:
+        """Assign or update a user's contextual role ('tutor' | 'student') in a course."""
+        clean_slug = to_course_slug(course_identifier or "")
+        clean_email = (user_email or "").strip().lower()
+        norm_role = self._normalize_role(course_role, "student")
+        if not clean_slug or not clean_email:
+            raise ValueError("course_identifier and user_email are required.")
+
+        record = {
+            "course_slug": clean_slug,
+            "user_email": clean_email,
+            "course_role": norm_role,
+            "enrol_method": enrol_method or "manual",
+            "status": "active",
+            "enrolled_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        self._course_memberships_memory[(clean_slug, clean_email)] = record
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_course_memberships
+                            (course_slug, user_email, course_role, enrol_method, status, enrolled_at)
+                        VALUES (%s, %s, %s, %s, 'active', NOW())
+                        ON CONFLICT (course_slug, user_email) DO UPDATE SET
+                            course_role = EXCLUDED.course_role,
+                            enrol_method = EXCLUDED.enrol_method,
+                            status = 'active'
+                        RETURNING course_slug, user_email, course_role, enrol_method, status, enrolled_at;
+                        """,
+                        (clean_slug, clean_email, norm_role, enrol_method or "manual"),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        item = dict(row)
+                        if hasattr(item.get("enrolled_at"), "isoformat"):
+                            item["enrolled_at"] = item["enrolled_at"].isoformat()
+                        self._course_memberships_memory[(clean_slug, clean_email)] = item
+                        return item
+        except Exception as e:
+            print(f"[PostgreSQL RBAC Notice] assign_course_role fallback to memory ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_user_course_roles(self, user_email: str) -> Dict[str, str]:
+        """Return mapping of {course_slug: course_role} for a user."""
+        clean_email = (user_email or "").strip().lower()
+        if not clean_email:
+            return {}
+
+        roles_map: Dict[str, str] = {}
+        for (slug, em), rec in self._course_memberships_memory.items():
+            if em == clean_email and rec.get("status", "active") == "active":
+                roles_map[slug] = rec.get("course_role", "student")
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT course_slug, course_role
+                        FROM lecturescribe_course_memberships
+                        WHERE LOWER(user_email) = %s AND status = 'active';
+                        """,
+                        (clean_email,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        s = row.get("course_slug")
+                        r = self._normalize_role(row.get("course_role"), "student")
+                        if s:
+                            roles_map[s] = r
+                            self._course_memberships_memory[(s, clean_email)] = {
+                                "course_slug": s,
+                                "user_email": clean_email,
+                                "course_role": r,
+                                "status": "active",
+                            }
+        except Exception as e:
+            print(f"[PostgreSQL RBAC Notice] get_user_course_roles fallback to memory ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return roles_map
+
+    def get_course_members(self, course_identifier: str) -> List[Dict[str, Any]]:
+        """Return list of all enrolled members (Tutors & Students) for a course."""
+        clean_slug = to_course_slug(course_identifier or "")
+        if not clean_slug:
+            return []
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT m.course_slug, m.user_email, m.course_role, m.enrol_method, m.status, m.enrolled_at,
+                               u.name, u.picture_url
+                        FROM lecturescribe_course_memberships m
+                        LEFT JOIN lecturescribe_users u ON LOWER(u.email) = LOWER(m.user_email)
+                        WHERE m.course_slug = %s AND m.status = 'active'
+                        ORDER BY CASE WHEN m.course_role = 'tutor' THEN 0 ELSE 1 END, m.enrolled_at ASC;
+                        """,
+                        (clean_slug,),
+                    )
+                    rows = cursor.fetchall() or []
+                    result = []
+                    for r in rows:
+                        item = dict(r)
+                        if hasattr(item.get("enrolled_at"), "isoformat"):
+                            item["enrolled_at"] = item["enrolled_at"].isoformat()
+                        result.append(item)
+                    if result:
+                        return result
+        except Exception as e:
+            print(f"[PostgreSQL RBAC Notice] get_course_members fallback to memory ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        mem_list = [
+            dict(rec)
+            for (slug, _), rec in self._course_memberships_memory.items()
+            if slug == clean_slug and rec.get("status", "active") == "active"
+        ]
+        return sorted(mem_list, key=lambda x: (0 if x.get("course_role") == "tutor" else 1, x.get("user_email", "")))
 
 
 # Export singleton instance

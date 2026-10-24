@@ -48,6 +48,8 @@ import useCourseSummary from '../../hooks/useCourseSummary';
 export default function HomeView({
   selectedCourse,
   googleUser,
+  userRole,
+  isTutor: isTutorProp,
   userLibrary,
   handleGoogleSignIn,
   urlInput,
@@ -104,6 +106,10 @@ export default function HomeView({
   currentTheme
 }) {
   const [newMenuAnchor, setNewMenuAnchor] = React.useState(null);
+  const effectiveRole = isTutorProp !== undefined
+    ? (isTutorProp ? 'tutor' : 'student')
+    : (userRole || (googleUser ? 'student' : 'tutor'));
+  const isTutor = effectiveRole === 'tutor';
 
   const courseQuiz = useCourseQuiz(
     activeCourseData?.course_name || selectedCourse,
@@ -164,7 +170,7 @@ export default function HomeView({
         />
       )}
 
-      {!googleUser && !selectedCourse && (
+      {isTutor && !selectedCourse && (
         <QuickAddBar
           urlInput={urlInput}
           setUrlInput={setUrlInput}
@@ -293,7 +299,7 @@ export default function HomeView({
       </Box>
 
       {/* Course-level Quick Add Bar */}
-      {!googleUser && selectedCourse && (
+      {isTutor && selectedCourse && (
         <QuickAddBar
           urlInput={urlInput}
           setUrlInput={setUrlInput}
@@ -401,29 +407,31 @@ export default function HomeView({
             >
               Library ({courseResources.length + (courseReadings?.length || 0) + (courseNotes?.length || 0)})
             </Button>
-            <Button
-              variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
-              size="small"
-              startIcon={<FileCode size={15} />}
-              onClick={() => setCourseViewTab('assignments')}
-              aria-label="Course Assignments"
-              sx={{
-                textTransform: 'none',
-                fontWeight: 700,
-                fontSize: '0.82rem',
-                borderRadius: 2,
-                ...(courseViewTab === 'assignments'
-                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
-                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
-              }}
-            >
-              Assignments ({courseAssignments.assignments.length})
-            </Button>
+            {isTutor && (
+              <Button
+                variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
+                size="small"
+                startIcon={<FileCode size={15} />}
+                onClick={() => setCourseViewTab('assignments')}
+                aria-label="Course Assignments"
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.82rem',
+                  borderRadius: 2,
+                  ...(courseViewTab === 'assignments'
+                    ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                    : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+                }}
+              >
+                Assignments ({courseAssignments.assignments.length})
+              </Button>
+            )}
           </Box>
 
           {/* "+ NEW" MINI DROPBOX ACTION BUTTON & MENU */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Tooltip title={!googleUser ? "Sign in with Google to create notes or upload files" : "Create a new note or upload files"}>
+            <Tooltip title={!googleUser ? "Sign in with Google to create notes or upload files" : (isTutor ? "Create a new note or upload files" : "Create a new personal study note")}>
               <span>
                 <Button
                   variant="contained"
@@ -480,26 +488,28 @@ export default function HomeView({
                 </Box>
               </MenuItem>
 
-              <MenuItem
-                onClick={() => {
-                  setNewMenuAnchor(null);
-                  openUploadModal({
-                    courseName: activeCourseData?.course_name || selectedCourse,
-                    videoId: null
-                  });
-                }}
-                sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
-              >
-                <Upload size={17} color={currentTheme.palette.primary} />
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
-                    Upload File
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
-                    Slides (.pptx, .pdf), docs
-                  </Typography>
-                </Box>
-              </MenuItem>
+              {isTutor && (
+                <MenuItem
+                  onClick={() => {
+                    setNewMenuAnchor(null);
+                    openUploadModal({
+                      courseName: activeCourseData?.course_name || selectedCourse,
+                      videoId: null
+                    });
+                  }}
+                  sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                >
+                  <Upload size={17} color={currentTheme.palette.primary} />
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
+                      Upload File
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
+                      Slides (.pptx, .pdf), docs
+                    </Typography>
+                  </Box>
+                </MenuItem>
+              )}
             </Menu>
           </Box>
         </Box>
@@ -527,7 +537,7 @@ export default function HomeView({
           <CourseGrid
             filteredCourses={filteredCourses}
             handleSelectCourse={handleSelectCourse}
-            handleDeleteCourse={handleDeleteCourse}
+            handleDeleteCourse={isTutor ? handleDeleteCourse : null}
             handleTogglePin={handleTogglePin}
             librarySearch={librarySearch}
             currentTheme={currentTheme}
@@ -542,7 +552,8 @@ export default function HomeView({
           loading={courseSummary.loading}
           error={courseSummary.error}
           fetchSummary={courseSummary.fetchSummary}
-          regenerateSummary={courseSummary.regenerateSummary}
+          regenerateSummary={isTutor ? courseSummary.regenerateSummary : null}
+          isTutor={isTutor}
           handleSelectLecture={(vid, cName, ts) => {
             if (vid) {
               const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';
@@ -569,6 +580,7 @@ export default function HomeView({
           answeredCount={courseQuiz.answeredCount}
           lectureBreakdown={courseQuiz.lectureBreakdown}
           fetchOrGenerateQuiz={courseQuiz.fetchOrGenerateQuiz}
+          isTutor={isTutor}
           selectAnswer={courseQuiz.selectAnswer}
           clearAnswer={courseQuiz.clearAnswer}
           finishQuiz={courseQuiz.finishQuiz}
@@ -632,19 +644,20 @@ export default function HomeView({
           courseReadings={courseReadings}
           courseReadingsLoading={courseReadingsLoading}
           isExtractingReadings={isExtractingReadings}
-          triggerExtractReadings={triggerExtractReadings}
+          triggerExtractReadings={isTutor ? triggerExtractReadings : null}
           handleRefreshReadingReader={handleRefreshReadingReader}
-          handleDeleteCourseReading={handleDeleteCourseReading}
+          handleDeleteCourseReading={isTutor ? handleDeleteCourseReading : null}
           searchReadingWeb={searchReadingWeb}
           searchLiterature={searchLiterature}
-          addCourseReading={addCourseReading}
+          addCourseReading={isTutor ? addCourseReading : null}
           googleUser={googleUser}
+          isTutor={isTutor}
           userLibrary={userLibrary}
           selectedCourse={selectedCourse}
           activeCourseData={activeCourseData}
-          openUploadModal={openUploadModal}
+          openUploadModal={isTutor ? openUploadModal : null}
           openPreviewModal={openPreviewModal}
-          handleDeleteResource={handleDeleteResource}
+          handleDeleteResource={isTutor ? handleDeleteResource : null}
           courseNotes={courseNotes}
           courseNotesLoading={courseNotesLoading}
           onCreateNewNote={onCreateNewNote}
@@ -652,8 +665,8 @@ export default function HomeView({
           onDeleteNote={onDeleteNote}
           currentTheme={currentTheme}
         />
-      ) : courseViewTab === 'assignments' ? (
-        /* LEVEL 2E: COURSE ASSIGNMENT PLANNER & SOLVER */
+      ) : (courseViewTab === 'assignments' && isTutor) ? (
+        /* LEVEL 2E: COURSE ASSIGNMENT PLANNER & SOLVER (TUTOR ONLY) */
         <CourseAssignments
           courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
           assignments={courseAssignments.assignments}
@@ -663,6 +676,7 @@ export default function HomeView({
           uploadError={courseAssignments.uploadError}
           onUploadAssignment={courseAssignments.uploadAssignment}
           onProvideDataset={courseAssignments.provideDataset}
+          onSkipDataset={courseAssignments.skipDataset}
           onRegenerateAssignment={courseAssignments.regenerateAssignment}
           onDeleteAssignment={courseAssignments.deleteAssignment}
           currentTheme={currentTheme}
@@ -673,7 +687,7 @@ export default function HomeView({
           courseLoading={courseLoading}
           filteredCourseLectures={filteredCourseLectures}
           handleTranscribe={handleTranscribe}
-          handleDeleteFromLibrary={handleDeleteFromLibrary}
+          handleDeleteFromLibrary={isTutor ? handleDeleteFromLibrary : null}
           handleClearCourse={handleClearCourse}
           selectedCourse={selectedCourse}
           librarySearch={librarySearch}

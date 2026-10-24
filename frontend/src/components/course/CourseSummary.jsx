@@ -40,6 +40,7 @@ export default function CourseSummary({
   error = null,
   fetchSummary,
   regenerateSummary,
+  isTutor = true,
   handleSelectLecture,
   currentTheme
 }) {
@@ -365,25 +366,27 @@ export default function CourseSummary({
             {copied ? 'Copied Markdown' : 'Copy Summary'}
           </Button>
 
-          <Tooltip title="Regenerate summary from latest lecture notes">
-            <Button
-              size="small"
-              variant="contained"
-              onClick={() => regenerateSummary && regenerateSummary()}
-              startIcon={<RotateCcw size={14} />}
-              sx={{
-                bgcolor: primaryColor,
-                color: '#fff',
-                textTransform: 'none',
-                fontWeight: 700,
-                fontSize: '0.78rem',
-                borderRadius: 2,
-                '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
-              }}
-            >
-              Regenerate
-            </Button>
-          </Tooltip>
+          {isTutor && typeof regenerateSummary === 'function' && (
+            <Tooltip title="Regenerate summary from latest lecture notes">
+              <Button
+                size="small"
+                variant="contained"
+                onClick={() => regenerateSummary()}
+                startIcon={<RotateCcw size={14} />}
+                sx={{
+                  bgcolor: primaryColor,
+                  color: '#fff',
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.78rem',
+                  borderRadius: 2,
+                  '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
+                }}
+              >
+                Regenerate
+              </Button>
+            </Tooltip>
+          )}
         </Box>
       </Box>
 

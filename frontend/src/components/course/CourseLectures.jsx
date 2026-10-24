@@ -670,15 +670,18 @@ export default function CourseLectures({
                         </IconButton>
                       </Tooltip>
                     )}
-                    <Tooltip title="Remove from My Library">
-                      <IconButton
-                        size="small"
-                        onClick={() => handleDeleteFromLibrary(item.video_id)}
-                        sx={{ color: '#64748b', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
-                      >
-                        <Trash2 size={16} />
-                      </IconButton>
-                    </Tooltip>
+                    {typeof handleDeleteFromLibrary === 'function' && (
+                      <Tooltip title="Remove from Course Library">
+                        <IconButton
+                          size="small"
+                          aria-label="Remove from Course Library"
+                          onClick={() => handleDeleteFromLibrary(item.video_id)}
+                          sx={{ color: '#64748b', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239, 68, 68, 0.1)' } }}
+                        >
+                          <Trash2 size={16} />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </Box>
                 </CardActions>
               </Card>

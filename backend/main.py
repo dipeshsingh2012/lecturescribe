@@ -2729,6 +2729,9 @@ def delete_course_endpoint(
     if not clean_name or not clean_email:
         raise HTTPException(status_code=400, detail="course_name and email are required.")
 
+    if clean_email in db_manager._users_memory_cache:
+        require_tutor_role(clean_email, clean_name, action_label="delete courses")
+
     result = db_manager.delete_course(clean_name, clean_email)
 
     # Best-effort delete associated GCS blobs (notes, resources, self-hosted videos)
@@ -4814,6 +4817,8 @@ async def upload_course_assignment(
     clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
     course_slug = to_course_slug(clean_course)
     clean_email = (user_email or "").strip().lower() if user_email else None
+    if clean_email and clean_email in db_manager._users_memory_cache:
+        require_tutor_role(clean_email, clean_course, action_label="upload and solve assignments")
 
     # Validate filename and PDF extension
     fname = file.filename or "assignment.pdf"
@@ -4919,10 +4924,25 @@ async def provide_assignment_dataset(
     except Exception as gcs_err:
         logger.warning(f"[Dataset Upload Notice] Could not persist dataset to GCS: {gcs_err}")
 
-    # 3. Update DB record dataset_files
+    # 3. Update DB record dataset_files (and alias if single missing required filename differs)
     existing_datasets = list(record.get("dataset_files") or [])
     if fname not in existing_datasets:
         existing_datasets.append(fname)
+
+    missing_req = [
+        rf for rf in (record.get("required_files") or [])
+        if rf not in existing_datasets and not os.path.exists(os.path.join(ws, rf))
+    ]
+    if len(missing_req) == 1 and fname != missing_req[0]:
+        alias_name = missing_req[0]
+        try:
+            with open(os.path.join(ws, alias_name), "wb") as af:
+                af.write(file_bytes)
+            alias_blob = gcs_storage_service.get_assignment_blob_path(course_slug, clean_id, alias_name)
+            gcs_storage_service.upload_blob_bytes(alias_blob, file_bytes, content_type="application/octet-stream")
+            existing_datasets.append(alias_name)
+        except Exception as alias_err:
+            logger.warning(f"[Dataset Alias Notice] Could not alias '{fname}' to '{alias_name}': {alias_err}")
 
     db_manager.update_assignment(
         clean_id,
@@ -4946,18 +4966,57 @@ async def provide_assignment_dataset(
     }
 
 
+@app.post("/api/course/{course_name}/assignments/{assignment_id}/skip-dataset")
+async def skip_assignment_dataset(
+    course_name: str,
+    assignment_id: str,
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """Bypass missing dataset prompt and generate/execute solution using synthetic/in-memory fallback data."""
+    from backend.assignment_service import resume_assignment_pipeline
+
+    clean_id = assignment_id.strip()
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    db_manager.update_assignment(
+        clean_id,
+        status="processing",
+        required_files=[],
+        error_message=None
+    )
+
+    background_tasks.add_task(
+        resume_assignment_pipeline,
+        assignment_id=clean_id,
+        course_name=clean_course,
+        skip_missing=True
+    )
+
+    return {
+        "status": "success",
+        "message": "Proceeding with assignment solution generation without external dataset.",
+        "assignment_id": clean_id
+    }
+
+
 @app.get("/api/course/{course_name}/assignments")
 def list_course_assignments(
     course_name: str,
-    user_email: Optional[str] = Query(None, description="Optional filter by student Google email")
+    user_email: Optional[str] = Query(None, description="Optional filter by student Google email"),
+    background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """List all assignment solutions for the specified course."""
+    from backend.assignment_service import is_output_or_generated_dataset, resume_assignment_pipeline
+
     clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
     clean_email = (user_email or "").strip().lower() if user_email else None
 
     assignments = db_manager.get_course_assignments(clean_course, clean_email)
     
-    # Decorate with download endpoints
+    # Decorate with download endpoints and auto-recover assignments paused on output/cleaned filenames
     decorated = []
     for asgn in assignments:
         item = dict(asgn)
@@ -4965,6 +5024,23 @@ def list_course_assignments(
         if aid:
             item["download_ipynb_url"] = f"/api/course/assignment/{aid}/download/ipynb"
             item["download_pdf_url"] = f"/api/course/assignment/{aid}/download/pdf"
+            if item.get("status") == "needs_input":
+                req_files = item.get("required_files") or []
+                remaining_req = [
+                    rf for rf in req_files
+                    if not is_output_or_generated_dataset(rf, "", item.get("questions_summary"))
+                ]
+                if req_files and not remaining_req:
+                    item["status"] = "processing"
+                    item["required_files"] = []
+                    item["error_message"] = None
+                    db_manager.update_assignment(aid, status="processing", required_files=[], error_message=None)
+                    background_tasks.add_task(
+                        resume_assignment_pipeline,
+                        assignment_id=aid,
+                        course_name=clean_course,
+                        skip_missing=True
+                    )
         decorated.append(item)
 
     return {
@@ -5088,9 +5164,12 @@ async def regenerate_course_assignment_endpoint(
 @app.delete("/api/course/{course_name}/assignments/{assignment_id}")
 def delete_course_assignment_route(
     course_name: str,
-    assignment_id: str
+    assignment_id: str,
+    user_email: Optional[str] = Query(None, description="Optional user email for role verification")
 ):
     """Delete an assignment and its generated files."""
+    if user_email:
+        require_tutor_role(user_email, course_name, action_label="delete assignments")
     clean_id = assignment_id.strip()
     record = db_manager.get_assignment_by_id(clean_id)
     if not record:
@@ -5106,6 +5185,130 @@ def delete_course_assignment_route(
 
     db_manager.delete_assignment(clean_id)
     return {"status": "success", "message": f"Assignment '{clean_id}' deleted."}
+
+
+# ==============================================================================
+# LMS Role-Based Access Control (RBAC v1: Tutor & Student Roles)
+# ==============================================================================
+
+class AuthSessionRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    picture_url: Optional[str] = None
+    requested_role: Optional[str] = None
+
+
+class SwitchRoleRequest(BaseModel):
+    email: str
+    role: str
+    update_system_role: Optional[bool] = False
+
+
+class AssignCourseMemberRequest(BaseModel):
+    user_email: str
+    course_role: str = "student"
+    enrol_method: Optional[str] = "manual"
+    actor_email: Optional[str] = None
+
+
+def require_tutor_role(
+    user_email: Optional[str],
+    course_identifier: Optional[str] = None,
+    action_label: str = "perform this instructor action"
+) -> Dict[str, Any]:
+    """Raise 403 Forbidden if a known user_email has effective_role == 'student'."""
+    clean_email = (user_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=403, detail=f"Tutor role is required to {action_label}.")
+    role_info = db_manager.get_user_role_info(clean_email, course_identifier=course_identifier)
+    if not role_info.get("is_tutor"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Permission denied: Only Tutors can {action_label}. Current role is '{role_info.get('effective_role', 'student')}'."
+        )
+    return role_info
+
+
+@app.post("/api/auth/session")
+def sync_auth_session(req: AuthSessionRequest):
+    """Sync Google OAuth user profile and resolve Tutor / Student role."""
+    clean_email = (req.email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=400, detail="email is required.")
+    session_info = db_manager.upsert_user_session(
+        email=clean_email,
+        name=req.name,
+        picture_url=req.picture_url,
+        requested_role=req.requested_role
+    )
+    return {"status": "success", **session_info}
+
+
+@app.get("/api/auth/role")
+def get_user_role_endpoint(
+    email: Optional[str] = Query(None, description="User Google email"),
+    course: Optional[str] = Query(None, description="Optional course name or slug")
+):
+    """Retrieve effective role ('tutor', 'student', or 'guest') for a user."""
+    role_info = db_manager.get_user_role_info(email, course_identifier=course)
+    return {"status": "success", **role_info}
+
+
+@app.patch("/api/auth/role")
+def switch_user_role_endpoint(req: SwitchRoleRequest):
+    """Switch active view role (or system role) between 'tutor' and 'student'."""
+    clean_email = (req.email or "").strip().lower()
+    target_role = (req.role or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=400, detail="email is required.")
+    if target_role not in ("tutor", "student"):
+        raise HTTPException(status_code=400, detail="role must be 'tutor' or 'student'.")
+    updated = db_manager.set_user_role(
+        email=clean_email,
+        role=target_role,
+        update_system_role=bool(req.update_system_role)
+    )
+    return {"status": "success", **updated}
+
+
+@app.get("/api/course/{course_name}/members")
+def list_course_members_endpoint(course_name: str):
+    """Return list of Tutors and Students enrolled in a course."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    members = db_manager.get_course_members(clean_course)
+    return {
+        "status": "success",
+        "course_name": clean_course,
+        "course_slug": to_course_slug(clean_course),
+        "count": len(members),
+        "members": members
+    }
+
+
+@app.post("/api/course/{course_name}/members")
+def assign_course_member_endpoint(course_name: str, req: AssignCourseMemberRequest):
+    """Assign a user as 'tutor' or 'student' in a specific course."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="manage course members")
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    clean_email = (req.user_email or "").strip().lower()
+    target_role = (req.course_role or "student").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=400, detail="user_email is required.")
+    if target_role not in ("tutor", "student"):
+        raise HTTPException(status_code=400, detail="course_role must be 'tutor' or 'student'.")
+
+    member = db_manager.assign_course_role(
+        course_identifier=clean_course,
+        user_email=clean_email,
+        course_role=target_role,
+        enrol_method=req.enrol_method or "manual"
+    )
+    return {
+        "status": "success",
+        "course_name": clean_course,
+        "member": member
+    }
 
 
 # -------------------------------------------------------------

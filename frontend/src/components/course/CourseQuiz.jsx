@@ -78,7 +78,8 @@ export default function CourseQuiz({
   startExam,
   marksPerQuestion = 0.5,
   totalMarks,
-  earnedMarks
+  earnedMarks,
+  isTutor = true
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showSummaryView, setShowSummaryView] = useState(false);
@@ -744,26 +745,28 @@ export default function CourseQuiz({
             >
               Retake Quiz
             </Button>
-            <Button
-              variant="contained"
-              onClick={() => {
-                fetchOrGenerateQuiz(true);
-                setCurrentIdx(0);
-                setReviewingQuestions(false);
-                setShowSummaryView(false);
-                setLocalExamStarted(false);
-              }}
-              startIcon={<Sparkles size={16} />}
-              sx={{
-                bgcolor: primaryColor,
-                color: '#fff',
-                textTransform: 'none',
-                fontWeight: 700,
-                borderRadius: 2
-              }}
-            >
-              Generate New Quiz
-            </Button>
+            {isTutor && (
+              <Button
+                variant="contained"
+                onClick={() => {
+                  fetchOrGenerateQuiz(true);
+                  setCurrentIdx(0);
+                  setReviewingQuestions(false);
+                  setShowSummaryView(false);
+                  setLocalExamStarted(false);
+                }}
+                startIcon={<Sparkles size={16} />}
+                sx={{
+                  bgcolor: primaryColor,
+                  color: '#fff',
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  borderRadius: 2
+                }}
+              >
+                Generate New Quiz
+              </Button>
+            )}
           </Box>
         </Paper>
       </Box>

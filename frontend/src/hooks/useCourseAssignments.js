@@ -168,6 +168,29 @@ export function useCourseAssignments(courseName, userEmail = null) {
     }
   }, [courseSlug]);
 
+  // Skip missing dataset prompt and proceed with synthetic/in-code data
+  const skipDataset = useCallback(async (assignmentId) => {
+    if (!assignmentId || !courseSlug) return null;
+    setAssignments((prev) =>
+      prev.map((a) => (a.assignment_id === assignmentId ? { ...a, status: 'processing', error_message: null } : a))
+    );
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/skip-dataset`,
+        { method: 'POST' }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        await fetchAssignments();
+        return data;
+      }
+    } catch (err) {
+      console.error('[useCourseAssignments] skipDataset error:', err);
+      await fetchAssignments();
+    }
+    return null;
+  }, [courseSlug, fetchAssignments]);
+
   // Regenerate Assignment
   const regenerateAssignment = useCallback(async (assignmentId) => {
     if (!assignmentId || !courseSlug) return;
@@ -193,6 +216,7 @@ export function useCourseAssignments(courseName, userEmail = null) {
     uploadError,
     uploadAssignment,
     provideDataset,
+    skipDataset,
     regenerateAssignment,
     deleteAssignment,
     refetchAssignments: fetchAssignments

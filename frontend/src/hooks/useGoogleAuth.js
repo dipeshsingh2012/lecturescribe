@@ -30,6 +30,98 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
     }
   });
 
+  const [userRole, setUserRoleState] = useState(() => {
+    try {
+      const savedRole = localStorage.getItem('lecturescribe_user_role');
+      if (savedRole === 'tutor' || savedRole === 'student') return savedRole;
+      const savedUser = localStorage.getItem('lecturescribe_google_user');
+      if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+        if (parsed?.role === 'tutor' || parsed?.effective_role === 'tutor') return 'tutor';
+        return 'student';
+      }
+      return 'guest';
+    } catch {
+      return 'guest';
+    }
+  });
+  const [courseRoles, setCourseRoles] = useState({});
+
+  const syncUserRoleSession = async (userObj) => {
+    const email = userObj?.email;
+    if (!email || email === 'Google User') {
+      setUserRoleState('guest');
+      return 'guest';
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          name: userObj.name || null,
+          picture_url: userObj.picture || null
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const effective = data.effective_role === 'tutor' ? 'tutor' : 'student';
+        setUserRoleState(effective);
+        if (data.course_roles && typeof data.course_roles === 'object') {
+          setCourseRoles(data.course_roles);
+        }
+        try {
+          localStorage.setItem('lecturescribe_user_role', effective);
+        } catch {}
+        return effective;
+      }
+    } catch (err) {
+      console.warn('Could not sync user role session:', err);
+    }
+    return userRole === 'guest' ? 'student' : userRole;
+  };
+
+  const switchUserRole = async (nextRole) => {
+    const normalized = nextRole === 'tutor' ? 'tutor' : 'student';
+    setUserRoleState(normalized);
+    try {
+      localStorage.setItem('lecturescribe_user_role', normalized);
+    } catch {}
+    if (googleUser?.email && googleUser.email !== 'Google User') {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/role`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: googleUser.email,
+            role: normalized,
+            update_system_role: true
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.effective_role) {
+            setUserRoleState(data.effective_role);
+            try {
+              localStorage.setItem('lecturescribe_user_role', data.effective_role);
+            } catch {}
+          }
+        }
+      } catch (err) {
+        console.warn('Role switch backend sync warning:', err);
+      }
+    }
+    return normalized;
+  };
+
+  useEffect(() => {
+    if (googleUser?.email && googleUser.email !== 'Google User') {
+      syncUserRoleSession(googleUser);
+    } else if (!googleUser) {
+      setUserRoleState('guest');
+    }
+  }, [googleUser?.email]);
+
   const [googleClientIdInput, setGoogleClientIdInput] = useState(() => {
     try {
       return localStorage.getItem('lecturescribe_google_client_id') || '';
@@ -117,13 +209,16 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
                 const uData = await uRes.json();
                 setGoogleUser(uData);
                 try { localStorage.setItem('lecturescribe_google_user', JSON.stringify(uData)); } catch {}
+                await syncUserRoleSession(uData);
                 if (typeof onUploadSuccess === 'function') onUploadSuccess(uData.email);
               } else {
                 setGoogleUser({ email: 'Google User' });
+                setUserRoleState('student');
                 if (typeof onUploadSuccess === 'function') onUploadSuccess('Google User');
               }
             } catch {
               setGoogleUser({ email: 'Google User' });
+              setUserRoleState('student');
               if (typeof onUploadSuccess === 'function') onUploadSuccess('Google User');
             }
 
@@ -148,10 +243,13 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
     }
     setGdriveAccessToken('');
     setGoogleUser(null);
+    setUserRoleState('guest');
+    setCourseRoles({});
     try {
       localStorage.removeItem('lecturescribe_gdrive_token');
       localStorage.removeItem('lecturescribe_gdrive_token_expires');
       localStorage.removeItem('lecturescribe_google_user');
+      localStorage.removeItem('lecturescribe_user_role');
     } catch {}
   };
 
@@ -291,6 +389,12 @@ export function useGoogleAuth(activeData, onUploadSuccess) {
     gdriveAccessToken,
     googleUser,
     setGoogleUser,
+    userRole,
+    isTutor: userRole === 'tutor',
+    isStudent: userRole === 'student',
+    courseRoles,
+    switchUserRole,
+    syncUserRoleSession,
     googleClientIdInput,
     setGoogleClientIdInput,
     gdriveError,

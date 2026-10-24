@@ -140,13 +140,113 @@ def test_detect_required_datasets():
     text = (
         "Question 1: Load the dataset from titanic.csv using pandas.\n"
         "Inspect the first 5 rows and summarize missing values.\n"
-        "Question 2: Also examine customer_churn.xlsx and save cleaned version to clean.csv."
+        "Question 2: Also examine customer_churn.xlsx and save cleaned version to clean.csv.\n"
+        "Question 3: Export the cleaned student records to cleaned_student_data.csv."
     )
     detected = detect_required_datasets(text)
     assert "titanic.csv" in detected
     assert "customer_churn.xlsx" in detected
+    # Output/cleaned files must NOT be flagged as missing external prerequisite datasets
+    assert "clean.csv" not in detected
+    assert "cleaned_student_data.csv" not in detected
     # Should not include code or non-dataset files
     assert not any(f.endswith(".py") for f in detected)
+
+
+def test_cleaned_output_dataset_does_not_pause_pipeline(monkeypatch):
+    from backend.assignment_service import process_assignment_pipeline
+
+    aid = "asgn_cleaned_student_test"
+    course = "Data Science 101"
+
+    monkeypatch.setattr(
+        "backend.assignment_service.extract_text_from_pdf",
+        lambda b: (
+            "Question 1: Create a student DataFrame, handle missing values, "
+            "and save the cleaned dataset to 'cleaned_student_data.csv'.\n"
+            "Question 2: Load 'cleaned_student_data.csv' and display summary statistics."
+        )
+    )
+    monkeypatch.setattr(
+        "backend.assignment_service.enrich_questions_with_course_rag",
+        lambda c, q: q
+    )
+
+    db_manager.create_assignment(
+        assignment_id=aid,
+        course_name=course,
+        user_email="tutor@uni.edu",
+        title="Student Data Cleaning Lab",
+        source_filename="student_cleaning.pdf",
+        source_blob_name="courses/student_cleaning.pdf",
+        status="pending"
+    )
+
+    result = process_assignment_pipeline(
+        assignment_id=aid,
+        course_name=course,
+        user_email="tutor@uni.edu",
+        pdf_bytes=b"%PDF-1.4 dummy content",
+        filename="student_cleaning.pdf"
+    )
+
+    assert result["status"] == "completed"
+    record = db_manager.get_assignment_by_id(aid)
+    assert record["status"] == "completed"
+    assert record["notebook_blob_name"] is not None
+    assert record["pdf_blob_name"] is not None
+
+
+def test_embedded_pdf_dataset_materialized_and_executed(monkeypatch):
+    from backend.assignment_service import process_assignment_pipeline, get_assignment_workspace
+
+    aid = "asgn_embedded_pdf_data"
+    course = "Data Science 101"
+
+    pdf_text_with_inline_data = (
+        "Given the dataset below:\n"
+        "StudentID,Name,Marks,Attendance\n"
+        "101,Aarav,91,95\n"
+        "102,Diya,84,88\n"
+        "103,Rohan,79,82\n\n"
+        "Question 1: Load cleaned_student_data.csv and display the first 5 rows and mean Marks."
+    )
+
+    monkeypatch.setattr(
+        "backend.assignment_service.extract_text_from_pdf",
+        lambda b: pdf_text_with_inline_data
+    )
+    monkeypatch.setattr(
+        "backend.assignment_service.enrich_questions_with_course_rag",
+        lambda c, q: q
+    )
+
+    db_manager.create_assignment(
+        assignment_id=aid,
+        course_name=course,
+        user_email="tutor@uni.edu",
+        title="Embedded PDF Dataset Lab",
+        source_filename="lab_inline.pdf",
+        source_blob_name="courses/lab_inline.pdf",
+        status="pending"
+    )
+
+    result = process_assignment_pipeline(
+        assignment_id=aid,
+        course_name=course,
+        user_email="tutor@uni.edu",
+        pdf_bytes=b"%PDF-1.4 dummy content",
+        filename="lab_inline.pdf"
+    )
+
+    assert result["status"] == "completed"
+    ws = get_assignment_workspace(aid)
+    materialized_csv = os.path.join(ws, "cleaned_student_data.csv")
+    assert os.path.exists(materialized_csv)
+    with open(materialized_csv, "r", encoding="utf-8") as f:
+        csv_body = f.read()
+    assert "Aarav" in csv_body
+    assert "Diya" in csv_body
 
 
 def test_execute_code_cells_with_real_workspace_dataset(tmp_path):

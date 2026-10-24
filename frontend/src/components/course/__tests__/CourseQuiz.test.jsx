@@ -155,7 +155,27 @@ describe('CourseQuiz Component', () => {
     expect(screen.getByText(/100%/i)).toBeInTheDocument();
   });
 
-  it('renders Detailed AI Explanation accordion and triggers fetchDetailedExplanation on click', () => {
+  it('does not display Detailed AI Explanation while exam is active and uncompleted', () => {
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        quizLoading={false}
+        selectedAnswers={{ 1: 0 }}
+        score={0}
+        totalQuestions={2}
+        answeredCount={1}
+        examStarted={true}
+        isCompleted={false}
+        reviewMode={false}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.queryByText(/Detailed AI Explanation/i)).not.toBeInTheDocument();
+  });
+
+  it('renders Detailed AI Explanation accordion when quiz is completed and triggers fetchDetailedExplanation on click', () => {
     const fetchDetailedExplanation = vi.fn();
     const setExpandedExplanation = vi.fn();
     render(
@@ -164,6 +184,7 @@ describe('CourseQuiz Component', () => {
         quizData={mockQuizData}
         quizLoading={false}
         selectedAnswers={{ 1: 0 }}
+        isCompleted={true}
         score={1}
         totalQuestions={1}
         answeredCount={1}

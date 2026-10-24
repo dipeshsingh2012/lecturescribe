@@ -1337,8 +1337,8 @@ export default function CourseQuiz({
               </Box>
             )}
 
-            {/* Detailed AI Explanation Accordion */}
-            {isAnswered && (
+            {/* Detailed AI Explanation Accordion (Only displayed when entire quiz is completed) */}
+            {isGradedReview && isAnswered && (
               <Accordion
                 expanded={expandedExplanation[currentQ.id] || false}
                 onChange={(e, isExpanded) => {

@@ -216,4 +216,21 @@ describe('LectureSummary component', () => {
       summaryType: 'comprehensive'
     });
   });
+
+  it('displays outdated banner when summaryHook.isOutdated is true and clears it when Dismiss & Keep Current is clicked', () => {
+    const clearOutdated = vi.fn();
+    const hook = createHookMock({
+      isOutdated: true,
+      clearOutdated
+    });
+
+    render(<LectureSummary summaryHook={hook} activeData={{ videoId: 'vid-123', title: 'Deep Learning' }} />);
+
+    expect(screen.getByText(/Transcript Modified — Summary May Be Outdated/i)).toBeInTheDocument();
+    const dismissBtn = screen.getByRole('button', { name: /Dismiss outdated summary warning/i });
+    expect(dismissBtn).toBeInTheDocument();
+
+    fireEvent.click(dismissBtn);
+    expect(clearOutdated).toHaveBeenCalled();
+  });
 });

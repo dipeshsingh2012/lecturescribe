@@ -100,5 +100,28 @@ describe('useLectureSummary hook', () => {
     expect(writeTextMock).toHaveBeenCalledWith('Sample academic text');
     expect(result.current.copiedField).toBe('submission');
   });
+
+  it('clearOutdated resets isOutdated flag locally and calls backend clear-outdated endpoint', async () => {
+    global.fetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({ ok: true, json: async () => ({ status: 'success' }) })
+    );
+
+    const activeData = { videoId: 'v300', is_outdated: true, summary_outdated: true };
+    const { result } = renderHook(() => useLectureSummary(activeData, null));
+
+    expect(result.current.isOutdated).toBe(true);
+
+    await act(async () => {
+      await result.current.clearOutdated();
+    });
+
+    expect(result.current.isOutdated).toBe(false);
+    expect(activeData.is_outdated).toBe(false);
+    expect(activeData.summary_outdated).toBe(false);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/lecture/v300/summary/clear-outdated'),
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
 });
 

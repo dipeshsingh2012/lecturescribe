@@ -3,7 +3,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
 import { useThemeStore, LMS_THEMES, applyThemeCssVariables, createAppMuiTheme } from './store/themeStore';
-import { parsePathRoute, getLectureTabFromPath, normalizeCourseSlug } from './utils/routing';
+import { parsePathRoute, getLectureTabFromPath, normalizeCourseSlug, isCalendarPath } from './utils/routing';
 
 import { useGoogleAuth } from './hooks/useGoogleAuth';
 import { useUserLibrary } from './hooks/useUserLibrary';
@@ -17,7 +17,9 @@ import useLectureSummary from './hooks/useLectureSummary';
 import { useCourseNotes } from './hooks/useCourseNotes';
 
 import Header from './components/layout/Header';
+import MobileBottomNav from './components/layout/MobileBottomNav';
 import HomeView from './components/views/HomeView';
+import CalendarView from './components/views/CalendarView';
 import LectureWorkspace from './components/views/LectureWorkspace';
 import CourseNotepadView from './components/views/CourseNotepadView';
 import LoadingView from './components/views/LoadingView';
@@ -49,7 +51,7 @@ export default function App() {
   };
 
   const [userMenuAnchor, setUserMenuAnchor] = useState(null);
-  const [, setCurrentPath] = useState(() => (typeof window !== 'undefined' ? window.location.pathname || '/' : '/'));
+  const [currentPath, setCurrentPath] = useState(() => (typeof window !== 'undefined' ? window.location.pathname || '/' : '/'));
 
   const navigateTo = (path, replace = false) => {
     try {
@@ -212,7 +214,15 @@ export default function App() {
     if (initialCourse) {
       setSelectedCourse(prev => (prev && normalizeCourseSlug(prev) === normalizeCourseSlug(initialCourse) ? prev : initialCourse));
     }
-    if (initialVidId) handleTranscribe(initialVidId, false, initialCourse);
+    if (initialVidId) {
+      if (!auth.googleUser?.email) {
+        lecture.setError("Sign in with Google is required to ingest or access lecture videos.");
+        const fallback = initialCourse ? `/course/${normalizeCourseSlug(initialCourse)}` : '/';
+        navigateTo(fallback, true, setCurrentPath);
+      } else {
+        handleTranscribe(initialVidId, false, initialCourse);
+      }
+    }
     if (initialNoteId) setActiveNoteId(initialNoteId);
 
     const onPopState = () => {
@@ -227,7 +237,11 @@ export default function App() {
       }
 
       if (videoId) {
-        if (lecture.activeDataRef.current?.videoId !== videoId) {
+        if (!auth.googleUser?.email) {
+          lecture.setError("Sign in with Google is required to ingest or access lecture videos.");
+          const fallback = courseName ? `/course/${normalizeCourseSlug(courseName)}` : '/';
+          navigateTo(fallback, true, setCurrentPath);
+        } else if (lecture.activeDataRef.current?.videoId !== videoId) {
           handleTranscribe(videoId, false, courseName);
         }
       } else {
@@ -240,6 +254,17 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // Guard against unauthenticated lecture access if auth state changes or activeData exists without auth
+  useEffect(() => {
+    if (!auth.googleUser?.email && activeData) {
+      setActiveData(null);
+      lecture.setError("Sign in with Google is required to ingest or access lecture videos.");
+      const { courseName } = parsePathRoute(window.location.pathname || '/');
+      const fallback = courseName ? `/course/${normalizeCourseSlug(courseName)}` : '/';
+      navigateTo(fallback, true, setCurrentPath);
+    }
+  }, [auth.googleUser?.email, activeData]);
 
   // When user is on or switches to Summary tab, ensure summary is loaded if empty
   useEffect(() => {
@@ -289,6 +314,12 @@ export default function App() {
           handleGoogleSignOut={auth.handleGoogleSignOut}
           handleBackToHub={handleNavigateHome}
           handleNavigateHome={handleNavigateHome}
+          onNavigateCalendar={() => {
+            setActiveNoteId(null);
+            setActiveData(null);
+            navigateTo('/calendar');
+          }}
+          isCalendarPage={isCalendarPath(currentPath)}
           userLibrary={library.userLibrary}
           userMenuAnchor={userMenuAnchor}
           setUserMenuAnchor={setUserMenuAnchor}
@@ -313,6 +344,26 @@ export default function App() {
             }}
             googleUser={auth.googleUser}
             currentTheme={currentTheme}
+          />
+        ) : isCalendarPath(currentPath) ? (
+          <CalendarView
+            currentTheme={currentTheme}
+            googleUser={auth.googleUser}
+            isTutor={auth.isTutor}
+            selectedCourse={selectedCourse}
+            courses={library.filteredCourses}
+            onNavigateBack={handleNavigateHome}
+            onSelectLecture={(vid, ts, cName) => {
+              if (!vid) return;
+              if (!auth.googleUser?.email) {
+                lecture.setError("Sign in with Google is required to ingest or access lecture videos.");
+                return;
+              }
+              handleTranscribe(vid, true, cName || selectedCourse || null, false, ts);
+              if (ts) {
+                setTimeout(() => player.handleCueClick(ts), 350);
+              }
+            }}
           />
         ) : loading && !activeData ? (
           <LoadingView currentTheme={currentTheme} />
@@ -371,6 +422,11 @@ export default function App() {
             onCreateNewNote={handleCreateNewNote}
             onOpenNote={handleOpenNote}
             onDeleteNote={(nid) => courseNotes.deleteNote(effectiveCourse, nid, auth.googleUser?.email)}
+            onOpenFullCalendar={() => {
+              setActiveNoteId(null);
+              setActiveData(null);
+              navigateTo('/calendar');
+            }}
             currentTheme={currentTheme}
           />
         ) : (
@@ -453,6 +509,25 @@ export default function App() {
           onClose={resources.closePreviewModal}
           resource={resources.previewResource}
         />
+
+        {/* Global Mobile Bottom Navigation Bar (Hidden when watching lecture) */}
+        {!activeData && (
+          <MobileBottomNav
+            selectedCourse={selectedCourse}
+            courseViewTab={resources.courseViewTab}
+            setCourseViewTab={resources.setCourseViewTab}
+            isCalendarPage={isCalendarPath(currentPath)}
+            onNavigateHome={handleNavigateHome}
+            onNavigateCalendar={() => {
+              setActiveNoteId(null);
+              setActiveData(null);
+              navigateTo('/calendar');
+            }}
+            isTutor={auth.isTutor}
+            onCreateNewNote={handleCreateNewNote}
+            currentTheme={currentTheme}
+          />
+        )}
       </div>
     </ThemeProvider>
   );

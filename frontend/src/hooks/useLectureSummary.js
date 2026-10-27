@@ -153,6 +153,32 @@ export default function useLectureSummary(activeData, userEmail = null) {
     setIsOutdated(true);
   }, []);
 
+  const clearOutdated = useCallback(async () => {
+    setIsOutdated(false);
+    if (activeData) {
+      activeData.is_outdated = false;
+      activeData.summary_outdated = false;
+    }
+    setSummaries(prev => {
+      const updated = { ...prev };
+      for (const k of Object.keys(updated)) {
+        if (updated[k]) {
+          updated[k] = { ...updated[k], isOutdated: false };
+        }
+      }
+      return updated;
+    });
+    if (videoId && videoId !== 'active') {
+      try {
+        await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/summary/clear-outdated`, {
+          method: 'POST'
+        });
+      } catch (err) {
+        console.warn('Failed to clear outdated summary flag on server:', err);
+      }
+    }
+  }, [videoId, activeData]);
+
   const saveCustomSummary = useCallback(async ({ markdownText, submissionText, summaryType = activeSummaryType }) => {
     if (!videoId || videoId === 'active') return;
     setError(null);
@@ -210,6 +236,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
     transcriptAvailable,
     isOutdated,
     markOutdated,
+    clearOutdated,
     setIsOutdated
   };
 }

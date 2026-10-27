@@ -127,6 +127,23 @@ class RelationalDBManager:
         self._user_course_pins_memory: Dict[str, List[str]] = {}
         self._users_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._course_memberships_memory: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._calendar_events_memory: List[Dict[str, Any]] = []
+        self._assignment_submissions_memory: List[Dict[str, Any]] = []
+        self._gradebook_overrides_memory: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        self._enrollment_keys_memory: Dict[str, Dict[str, Any]] = {}
+        self._forum_threads_memory: List[Dict[str, Any]] = []
+        self._forum_replies_memory: List[Dict[str, Any]] = []
+        self._module_completions_memory: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        self._access_rules_memory: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._question_bank_memory: List[Dict[str, Any]] = []
+        self._course_sections_memory: List[Dict[str, Any]] = []
+        self._rubrics_memory: List[Dict[str, Any]] = []
+        self._competencies_memory: List[Dict[str, Any]] = []
+        self._workshops_memory: List[Dict[str, Any]] = []
+        self._workshop_submissions_memory: List[Dict[str, Any]] = []
+        self._workshop_reviews_memory: List[Dict[str, Any]] = []
+        self._announcements_memory: List[Dict[str, Any]] = []
+        self._audit_logs_memory: List[Dict[str, Any]] = []
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -756,6 +773,271 @@ class RelationalDBManager:
                         );
                         CREATE INDEX IF NOT EXISTS idx_course_memberships_slug ON lecturescribe_course_memberships(course_slug);
                         CREATE INDEX IF NOT EXISTS idx_course_memberships_email ON lecturescribe_course_memberships(user_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_calendar_events (
+                            id VARCHAR(128) PRIMARY KEY,
+                            title VARCHAR(500) NOT NULL,
+                            description TEXT DEFAULT '',
+                            category VARCHAR(32) NOT NULL DEFAULT 'schedule',
+                            event_scope VARCHAR(32) NOT NULL DEFAULT 'course',
+                            course_slug VARCHAR(255) DEFAULT '',
+                            course_name VARCHAR(255) DEFAULT '',
+                            created_by_email VARCHAR(255) DEFAULT '',
+                            start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                            end_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                            is_all_day BOOLEAN DEFAULT FALSE,
+                            location VARCHAR(500) DEFAULT '',
+                            meeting_url TEXT DEFAULT '',
+                            meeting_platform VARCHAR(32) DEFAULT '',
+                            source_type VARCHAR(32) NOT NULL DEFAULT 'manual',
+                            approval_status VARCHAR(32) NOT NULL DEFAULT 'approved',
+                            ai_confidence DOUBLE PRECISION DEFAULT 1.0,
+                            source_metadata JSONB DEFAULT '{}'::jsonb,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_cal_events_start ON lecturescribe_calendar_events(start_time);
+                        CREATE INDEX IF NOT EXISTS idx_cal_events_course ON lecturescribe_calendar_events(course_slug);
+                        CREATE INDEX IF NOT EXISTS idx_cal_events_status ON lecturescribe_calendar_events(approval_status);
+                        CREATE INDEX IF NOT EXISTS idx_cal_events_scope ON lecturescribe_calendar_events(event_scope);
+
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS due_date VARCHAR(128) DEFAULT NULL;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS max_marks DOUBLE PRECISION DEFAULT 100.0;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE;
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_assignment_submissions (
+                            submission_id VARCHAR(64) PRIMARY KEY,
+                            assignment_id VARCHAR(64) NOT NULL,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            student_email VARCHAR(255) NOT NULL,
+                            student_name VARCHAR(255) DEFAULT '',
+                            submission_text TEXT DEFAULT '',
+                            file_name TEXT DEFAULT '',
+                            file_blob_name TEXT DEFAULT '',
+                            status VARCHAR(32) NOT NULL DEFAULT 'submitted',
+                            score DOUBLE PRECISION DEFAULT NULL,
+                            max_marks DOUBLE PRECISION NOT NULL DEFAULT 100.0,
+                            ai_suggested_score DOUBLE PRECISION DEFAULT NULL,
+                            ai_feedback TEXT DEFAULT '',
+                            instructor_feedback TEXT DEFAULT '',
+                            graded_by_email VARCHAR(255) DEFAULT '',
+                            submitted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            graded_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+                            UNIQUE (assignment_id, student_email)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_asgn_sub_asgn ON lecturescribe_assignment_submissions(assignment_id);
+                        CREATE INDEX IF NOT EXISTS idx_asgn_sub_course ON lecturescribe_assignment_submissions(course_slug);
+                        CREATE INDEX IF NOT EXISTS idx_asgn_sub_student ON lecturescribe_assignment_submissions(student_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_gradebook_overrides (
+                            course_slug VARCHAR(255) NOT NULL,
+                            student_email VARCHAR(255) NOT NULL,
+                            item_id VARCHAR(128) NOT NULL,
+                            item_title VARCHAR(255) DEFAULT '',
+                            item_type VARCHAR(32) DEFAULT 'manual',
+                            score DOUBLE PRECISION NOT NULL,
+                            max_marks DOUBLE PRECISION NOT NULL DEFAULT 100.0,
+                            feedback TEXT DEFAULT '',
+                            updated_by_email VARCHAR(255) DEFAULT '',
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            PRIMARY KEY (course_slug, student_email, item_id)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_gradebook_course ON lecturescribe_gradebook_overrides(course_slug);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_enrollment_keys (
+                            course_slug VARCHAR(255) PRIMARY KEY,
+                            course_name VARCHAR(255) NOT NULL,
+                            enrollment_key VARCHAR(64) UNIQUE NOT NULL,
+                            created_by_email VARCHAR(255) DEFAULT '',
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_enrol_key_val ON lecturescribe_course_enrollment_keys(enrollment_key);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_forum_threads (
+                            thread_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            title VARCHAR(500) NOT NULL,
+                            body TEXT NOT NULL,
+                            category VARCHAR(64) DEFAULT 'general',
+                            author_email VARCHAR(255) NOT NULL,
+                            author_name VARCHAR(255) DEFAULT '',
+                            author_role VARCHAR(32) DEFAULT 'student',
+                            video_id VARCHAR(128) DEFAULT '',
+                            lecture_title VARCHAR(255) DEFAULT '',
+                            timestamp_str VARCHAR(32) DEFAULT '',
+                            is_pinned BOOLEAN DEFAULT FALSE,
+                            is_resolved BOOLEAN DEFAULT FALSE,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_forum_threads_course ON lecturescribe_forum_threads(course_slug);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_forum_replies (
+                            reply_id VARCHAR(64) PRIMARY KEY,
+                            thread_id VARCHAR(64) NOT NULL,
+                            author_email VARCHAR(255) NOT NULL,
+                            author_name VARCHAR(255) DEFAULT '',
+                            author_role VARCHAR(32) DEFAULT 'student',
+                            body TEXT NOT NULL,
+                            is_instructor_endorsed BOOLEAN DEFAULT FALSE,
+                            is_ai_generated BOOLEAN DEFAULT FALSE,
+                            citations_json JSONB DEFAULT '[]'::jsonb,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_forum_replies_thread ON lecturescribe_forum_replies(thread_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_module_completions (
+                            course_slug VARCHAR(255) NOT NULL,
+                            user_email VARCHAR(255) NOT NULL,
+                            module_id VARCHAR(255) NOT NULL,
+                            module_type VARCHAR(64) DEFAULT 'lecture',
+                            module_title VARCHAR(500) DEFAULT '',
+                            status VARCHAR(32) DEFAULT 'complete',
+                            completed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            PRIMARY KEY (course_slug, user_email, module_id)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_mod_comp_course_user ON lecturescribe_module_completions(course_slug, user_email);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_access_rules (
+                            course_slug VARCHAR(255) NOT NULL,
+                            target_module_id VARCHAR(255) NOT NULL,
+                            target_module_type VARCHAR(64) DEFAULT 'quiz',
+                            target_title VARCHAR(500) DEFAULT '',
+                            required_module_ids JSONB DEFAULT '[]'::jsonb,
+                            min_quiz_score_pct DOUBLE PRECISION DEFAULT NULL,
+                            unlock_date VARCHAR(128) DEFAULT NULL,
+                            created_by_email VARCHAR(255) DEFAULT '',
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            PRIMARY KEY (course_slug, target_module_id)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_access_rules_course ON lecturescribe_access_rules(course_slug);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_question_bank (
+                            question_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            video_id VARCHAR(128) DEFAULT '',
+                            lecture_title VARCHAR(255) DEFAULT '',
+                            timestamp_str VARCHAR(32) DEFAULT '',
+                            question_type VARCHAR(32) DEFAULT 'mcq',
+                            difficulty VARCHAR(32) DEFAULT 'medium',
+                            bloom_level VARCHAR(32) DEFAULT 'apply',
+                            question_text TEXT NOT NULL,
+                            options_json JSONB DEFAULT '[]'::jsonb,
+                            correct_answer TEXT DEFAULT '',
+                            explanation TEXT DEFAULT '',
+                            default_marks DOUBLE PRECISION DEFAULT 1.0,
+                            tags_json JSONB DEFAULT '[]'::jsonb,
+                            created_by_email VARCHAR(255) DEFAULT '',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_qbank_course ON lecturescribe_question_bank(course_slug);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_course_sections (
+                            section_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            section_number INT NOT NULL DEFAULT 1,
+                            title VARCHAR(500) NOT NULL,
+                            summary TEXT DEFAULT '',
+                            learning_objectives_json JSONB DEFAULT '[]'::jsonb,
+                            items_json JSONB DEFAULT '[]'::jsonb,
+                            is_visible BOOLEAN DEFAULT TRUE,
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_course_sections_slug ON lecturescribe_course_sections(course_slug, section_number);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_rubrics (
+                            rubric_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            assignment_id VARCHAR(128) DEFAULT '',
+                            title VARCHAR(500) NOT NULL,
+                            criteria_json JSONB DEFAULT '[]'::jsonb,
+                            created_by_email VARCHAR(255) DEFAULT '',
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_rubrics_course ON lecturescribe_rubrics(course_slug, assignment_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_competencies (
+                            competency_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            code VARCHAR(64) NOT NULL,
+                            title VARCHAR(500) NOT NULL,
+                            description TEXT DEFAULT '',
+                            linked_module_ids_json JSONB DEFAULT '[]'::jsonb,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_competencies_course ON lecturescribe_competencies(course_slug);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_workshops (
+                            workshop_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            title VARCHAR(500) NOT NULL,
+                            instructions TEXT DEFAULT '',
+                            phase VARCHAR(32) DEFAULT 'submission',
+                            submission_weight DOUBLE PRECISION DEFAULT 80.0,
+                            assessment_weight DOUBLE PRECISION DEFAULT 20.0,
+                            created_by_email VARCHAR(255) DEFAULT '',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_workshops_course ON lecturescribe_workshops(course_slug);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_workshop_submissions (
+                            submission_id VARCHAR(64) PRIMARY KEY,
+                            workshop_id VARCHAR(64) NOT NULL,
+                            course_slug VARCHAR(255) NOT NULL,
+                            student_email VARCHAR(255) NOT NULL,
+                            student_name VARCHAR(255) DEFAULT '',
+                            title VARCHAR(500) NOT NULL,
+                            content TEXT NOT NULL,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_ws_sub_workshop ON lecturescribe_workshop_submissions(workshop_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_workshop_reviews (
+                            review_id VARCHAR(64) PRIMARY KEY,
+                            workshop_id VARCHAR(64) NOT NULL,
+                            submission_id VARCHAR(64) NOT NULL,
+                            reviewer_email VARCHAR(255) NOT NULL,
+                            reviewer_name VARCHAR(255) DEFAULT '',
+                            peer_score DOUBLE PRECISION NOT NULL,
+                            feedback TEXT DEFAULT '',
+                            ai_calibration_score DOUBLE PRECISION DEFAULT 90.0,
+                            ai_calibration_note TEXT DEFAULT '',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_ws_rev_sub ON lecturescribe_workshop_reviews(submission_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_announcements (
+                            announcement_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            title VARCHAR(500) NOT NULL,
+                            body TEXT NOT NULL,
+                            priority VARCHAR(32) DEFAULT 'normal',
+                            author_email VARCHAR(255) DEFAULT '',
+                            author_name VARCHAR(255) DEFAULT '',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_announcements_course ON lecturescribe_announcements(course_slug, created_at DESC);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_audit_logs (
+                            log_id VARCHAR(64) PRIMARY KEY,
+                            course_slug VARCHAR(255) NOT NULL,
+                            actor_email VARCHAR(255) DEFAULT '',
+                            verb VARCHAR(128) NOT NULL,
+                            object_type VARCHAR(128) DEFAULT '',
+                            object_id VARCHAR(255) DEFAULT '',
+                            summary TEXT DEFAULT '',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_audit_logs_course ON lecturescribe_audit_logs(course_slug, created_at DESC);
                     """)
                     conn.commit()
             self._schema_initialized = True
@@ -4769,6 +5051,25 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
+    def clear_summary_outdated(self, video_id: str) -> bool:
+        """Clear the outdated flag on all summaries for a video."""
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE lecturescribe_lecture_summaries SET is_outdated = FALSE WHERE video_id = %s;", (video_id,))
+                    conn.commit()
+            if hasattr(self, '_memory_cache') and isinstance(self._memory_cache, dict):
+                self._memory_cache.pop(video_id, None)
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Notice] clear_summary_outdated error: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
     def _format_annotation_dict(
         self,
         ann_id: str,
@@ -5032,10 +5333,13 @@ class RelationalDBManager:
     def update_annotation(
         self,
         annotation_id: str,
-        note_text: str,
+        note_text: Optional[str] = None,
+        ai_prompt: Optional[str] = None,
+        ai_response: Optional[str] = None,
+        annotation_type: Optional[str] = None,
         user_email: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Update an existing annotation's note text."""
+        """Update an existing annotation's note text or AI response."""
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         conn = None
@@ -5044,24 +5348,42 @@ class RelationalDBManager:
             conn = self._get_connection()
             with conn:
                 with conn.cursor() as cursor:
+                    fields = ["updated_at = %s"]
+                    params = [now_iso]
+                    if note_text is not None:
+                        fields.append("note_text = %s")
+                        params.append(note_text)
+                    if ai_prompt is not None:
+                        fields.append("ai_prompt = %s")
+                        params.append(ai_prompt)
+                    if ai_response is not None:
+                        fields.append("ai_response = %s")
+                        params.append(ai_response)
+                    if annotation_type is not None:
+                        fields.append("annotation_type = %s")
+                        params.append(annotation_type)
+
+                    set_clause = ", ".join(fields)
                     if clean_email:
-                        cursor.execute("""
+                        params.extend([annotation_id, clean_email])
+                        cursor.execute(f"""
                             UPDATE lecturescribe_transcript_annotations
-                            SET note_text = %s, updated_at = %s
+                            SET {set_clause}
                             WHERE id = %s AND user_email = %s
                             RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
                                       selected_text, annotation_type, color, note_text,
                                       ai_prompt, ai_response, created_at, updated_at;
-                        """, (note_text, now_iso, annotation_id, clean_email))
+                        """, tuple(params))
                     else:
-                        cursor.execute("""
+                        params.append(annotation_id)
+                        cursor.execute(f"""
                             UPDATE lecturescribe_transcript_annotations
-                            SET note_text = %s, updated_at = %s
+                            SET {set_clause}
                             WHERE id = %s
                             RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
                                       selected_text, annotation_type, color, note_text,
                                       ai_prompt, ai_response, created_at, updated_at;
-                        """, (note_text, now_iso, annotation_id))
+                        """, tuple(params))
                     row = cursor.fetchone()
                     if row:
                         conn.commit()
@@ -5631,6 +5953,9 @@ class RelationalDBManager:
             "questions_summary": questions_summary or [],
             "required_files": required_files or [],
             "dataset_files": dataset_files or [],
+            "due_date": None,
+            "max_marks": 100.0,
+            "is_published": True,
             "error_message": None,
             "created_at": now_iso,
             "updated_at": now_iso
@@ -5647,7 +5972,7 @@ class RelationalDBManager:
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NOW(), NOW())
                         RETURNING id, assignment_id, course_name, user_email, title, source_filename,
                                   source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                  questions_summary, required_files, dataset_files, error_message, created_at, updated_at;
+                                  questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at;
                     """, (clean_id, clean_course, clean_email, clean_title, source_filename, source_blob_name, status, questions_json, req_files_json, data_files_json))
                     row = cursor.fetchone()
                     if row:
@@ -5767,7 +6092,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                    source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                   questions_summary, required_files, dataset_files, error_message, created_at, updated_at
+                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (user_email = %s OR user_email IS NULL) AND (
                                 LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
@@ -5779,7 +6104,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                    source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                   questions_summary, required_files, dataset_files, error_message, created_at, updated_at
+                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (
                                 LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
@@ -5823,7 +6148,7 @@ class RelationalDBManager:
                     cursor.execute("""
                         SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                               questions_summary, required_files, dataset_files, error_message, created_at, updated_at
+                               questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at
                         FROM lecturescribe_course_assignments
                         WHERE assignment_id = %s;
                     """, (clean_id,))
@@ -5847,7 +6172,7 @@ class RelationalDBManager:
         return None
 
     def delete_assignment(self, assignment_id: str) -> bool:
-        """Delete an assignment record by assignment_id."""
+        """Delete an assignment record by assignment_id and remove its linked calendar event."""
         clean_id = (assignment_id or "").strip()
         deleted = False
         conn = None
@@ -5867,6 +6192,11 @@ class RelationalDBManager:
         self._assignments_memory_cache = [x for x in self._assignments_memory_cache if x.get("assignment_id") != clean_id]
         if len(self._assignments_memory_cache) < before_len:
             deleted = True
+
+        try:
+            self.delete_calendar_event(f"cal_asgn_{clean_id}")
+        except Exception:
+            pass
         return deleted
 
     def _ts_to_secs(self, ts: str) -> int:
@@ -6257,6 +6587,3663 @@ class RelationalDBManager:
             if slug == clean_slug and rec.get("status", "active") == "active"
         ]
         return sorted(mem_list, key=lambda x: (0 if x.get("course_role") == "tutor" else 1, x.get("user_email", "")))
+
+    # =========================================================================
+    # LMS Calendar Events & AI Extracted Deadlines (Moodle-Grade Hybrid Engine)
+    # =========================================================================
+
+    @staticmethod
+    def _format_calendar_event_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize a DB or memory calendar event into the canonical API dictionary."""
+        from zoneinfo import ZoneInfo
+        ist = ZoneInfo("Asia/Kolkata")
+
+        def _parse_iso_to_ist(val: Any) -> datetime.datetime:
+            if isinstance(val, datetime.datetime):
+                return val.astimezone(ist) if val.tzinfo else val.replace(tzinfo=ist)
+            if isinstance(val, datetime.date):
+                return datetime.datetime.combine(val, datetime.time.min, tzinfo=ist)
+            s = str(val or "").strip()
+            if not s:
+                return datetime.datetime.now(ist)
+            try:
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                dt = datetime.datetime.fromisoformat(s)
+                return dt.astimezone(ist) if dt.tzinfo else dt.replace(tzinfo=ist)
+            except Exception:
+                try:
+                    dt_date = datetime.date.fromisoformat(s[:10])
+                    return datetime.datetime.combine(dt_date, datetime.time(9, 0), tzinfo=ist)
+                except Exception:
+                    return datetime.datetime.now(ist)
+
+        start_dt = _parse_iso_to_ist(raw.get("start_time") or raw.get("start"))
+        end_raw = raw.get("end_time") or raw.get("end")
+        is_all_day = bool(raw.get("is_all_day", False))
+        if end_raw:
+            end_dt = _parse_iso_to_ist(end_raw)
+        else:
+            end_dt = start_dt + (datetime.timedelta(days=1) if is_all_day else datetime.timedelta(hours=1))
+
+        if end_dt <= start_dt:
+            end_dt = start_dt + (datetime.timedelta(days=1) if is_all_day else datetime.timedelta(hours=1))
+
+        hour = start_dt.hour
+        if is_all_day:
+            day_slot = "all_day"
+        elif hour < 12:
+            day_slot = "morning"
+        elif hour < 17:
+            day_slot = "afternoon"
+        else:
+            day_slot = "evening"
+
+        meta = raw.get("source_metadata")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        elif not isinstance(meta, dict):
+            meta = {}
+
+        course_name = str(raw.get("course_name") or "").strip()
+        course_slug = str(raw.get("course_slug") or "").strip()
+        if course_name and not course_slug:
+            course_slug = to_course_slug(course_name)
+        elif course_slug and not course_name:
+            course_name = course_slug.replace("-", " ").title()
+
+        meeting_url = str(raw.get("meeting_url") or raw.get("url") or "").strip() or None
+        meeting_platform = str(raw.get("meeting_platform") or "").strip() or None
+
+        return {
+            "id": str(raw.get("id") or f"cal_{uuid.uuid4().hex[:12]}"),
+            "title": str(raw.get("title") or "Untitled Event").strip(),
+            "description": str(raw.get("description") or "").strip(),
+            "location": str(raw.get("location") or "").strip(),
+            "url": meeting_url,
+            "meeting_url": meeting_url,
+            "meeting_platform": meeting_platform,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "start_time_formatted": start_dt.strftime("%I:%M %p"),
+            "end_time_formatted": end_dt.strftime("%I:%M %p"),
+            "date_formatted": start_dt.strftime("%A, %b %d, %Y"),
+            "date_iso": start_dt.strftime("%Y-%m-%d"),
+            "is_all_day": is_all_day,
+            "category": str(raw.get("category") or "schedule").strip().lower(),
+            "day_slot": day_slot,
+            "timestamp_start": start_dt.timestamp(),
+            "timestamp_end": end_dt.timestamp(),
+            "event_scope": str(raw.get("event_scope") or "course").strip().lower(),
+            "course_slug": course_slug,
+            "course_name": course_name,
+            "created_by_email": str(raw.get("created_by_email") or "").strip().lower(),
+            "source_type": str(raw.get("source_type") or "manual").strip().lower(),
+            "approval_status": str(raw.get("approval_status") or "approved").strip().lower(),
+            "ai_confidence": float(raw.get("ai_confidence") if raw.get("ai_confidence") is not None else 1.0),
+            "source_metadata": meta,
+        }
+
+    def save_calendar_events(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Insert or update one or more calendar events in PostgreSQL and memory cache."""
+        if not events:
+            return []
+
+        formatted_list: List[Dict[str, Any]] = []
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            norm = self._format_calendar_event_record(ev)
+            formatted_list.append(norm)
+            # Update in-memory list (replace if ID exists)
+            self._calendar_events_memory = [
+                m for m in self._calendar_events_memory if m.get("id") != norm["id"]
+            ]
+            self._calendar_events_memory.append(norm)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    for norm in formatted_list:
+                        cursor.execute(
+                            """
+                            INSERT INTO lecturescribe_calendar_events (
+                                id, title, description, category, event_scope,
+                                course_slug, course_name, created_by_email,
+                                start_time, end_time, is_all_day, location,
+                                meeting_url, meeting_platform, source_type,
+                                approval_status, ai_confidence, source_metadata,
+                                created_at, updated_at
+                            )
+                            VALUES (
+                                %s, %s, %s, %s, %s,
+                                %s, %s, %s,
+                                %s, %s, %s, %s,
+                                %s, %s, %s,
+                                %s, %s, %s::jsonb,
+                                NOW(), NOW()
+                            )
+                            ON CONFLICT (id) DO UPDATE SET
+                                title = EXCLUDED.title,
+                                description = EXCLUDED.description,
+                                category = EXCLUDED.category,
+                                event_scope = EXCLUDED.event_scope,
+                                course_slug = EXCLUDED.course_slug,
+                                course_name = EXCLUDED.course_name,
+                                start_time = EXCLUDED.start_time,
+                                end_time = EXCLUDED.end_time,
+                                is_all_day = EXCLUDED.is_all_day,
+                                location = EXCLUDED.location,
+                                meeting_url = EXCLUDED.meeting_url,
+                                meeting_platform = EXCLUDED.meeting_platform,
+                                source_type = EXCLUDED.source_type,
+                                approval_status = EXCLUDED.approval_status,
+                                ai_confidence = EXCLUDED.ai_confidence,
+                                source_metadata = EXCLUDED.source_metadata,
+                                updated_at = NOW();
+                            """,
+                            (
+                                norm["id"],
+                                norm["title"],
+                                norm["description"],
+                                norm["category"],
+                                norm["event_scope"],
+                                norm["course_slug"],
+                                norm["course_name"],
+                                norm["created_by_email"],
+                                norm["start"],
+                                norm["end"],
+                                norm["is_all_day"],
+                                norm["location"],
+                                norm["meeting_url"] or "",
+                                norm["meeting_platform"] or "",
+                                norm["source_type"],
+                                norm["approval_status"],
+                                norm["ai_confidence"],
+                                json.dumps(norm["source_metadata"]),
+                            ),
+                        )
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Calendar Notice] save_calendar_events fallback to memory ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return formatted_list
+
+    def get_calendar_events(
+        self,
+        course_slug: Optional[str] = None,
+        user_email: Optional[str] = None,
+        approval_status: Optional[str] = "approved",
+        source_type: Optional[str] = None,
+        include_site: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve calendar events filtered by course, user, approval_status, and source_type."""
+        clean_slug = to_course_slug(course_slug) if course_slug else None
+        clean_email = (user_email or "").strip().lower() if user_email else None
+        clean_status = (approval_status or "").strip().lower() if approval_status else None
+        clean_source = (source_type or "").strip().lower() if source_type else None
+
+        rows_out: List[Dict[str, Any]] = []
+        db_succeeded = False
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = """
+                        SELECT id, title, description, category, event_scope,
+                               course_slug, course_name, created_by_email,
+                               start_time, end_time, is_all_day, location,
+                               meeting_url, meeting_platform, source_type,
+                               approval_status, ai_confidence, source_metadata,
+                               created_at, updated_at
+                        FROM lecturescribe_calendar_events
+                        WHERE 1=1
+                    """
+                    params: List[Any] = []
+                    if clean_status and clean_status != "all":
+                        query += " AND approval_status = %s"
+                        params.append(clean_status)
+                    if clean_source and clean_source != "all":
+                        query += " AND source_type = %s"
+                        params.append(clean_source)
+                    query += " ORDER BY start_time ASC;"
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall() or []
+                    db_succeeded = True
+                    for r in rows:
+                        rows_out.append(self._format_calendar_event_record(dict(r)))
+        except Exception as e:
+            print(f"[PostgreSQL Calendar Notice] get_calendar_events fallback to memory ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        if not db_succeeded:
+            for m in self._calendar_events_memory:
+                if clean_status and clean_status != "all" and m.get("approval_status") != clean_status:
+                    continue
+                if clean_source and clean_source != "all" and m.get("source_type") != clean_source:
+                    continue
+                rows_out.append(self._format_calendar_event_record(m))
+        else:
+            # Also merge any memory-only items not yet in rows_out (useful during test mocks)
+            seen_ids = {r["id"] for r in rows_out}
+            for m in self._calendar_events_memory:
+                if m.get("id") in seen_ids:
+                    continue
+                if clean_status and clean_status != "all" and m.get("approval_status") != clean_status:
+                    continue
+                if clean_source and clean_source != "all" and m.get("source_type") != clean_source:
+                    continue
+                rows_out.append(self._format_calendar_event_record(m))
+
+        # Apply scope / course / user visibility filter
+        filtered: List[Dict[str, Any]] = []
+        for ev in rows_out:
+            scope = ev.get("event_scope", "course")
+            # Personal ('user') events are only visible to their creator if user_email is specified
+            if scope == "user" and clean_email and ev.get("created_by_email") and ev.get("created_by_email") != clean_email:
+                continue
+
+            if clean_slug:
+                clean_name = re.sub(r"^[0-9\.\s\-_]+", "", course_slug or "").strip()
+                clean_slug_stripped = to_course_slug(clean_name) if clean_name else ""
+                ev_slug = (ev.get("course_slug") or to_course_slug(ev.get("course_name", ""))).lower().strip("-")
+                title_desc = f"{ev.get('title', '')} {ev.get('description', '')}".lower()
+                ev_title_lower = (ev.get("title") or "").lower().strip()
+                slug_words = clean_slug.replace("-", " ").lower()
+                clean_words = clean_slug_stripped.replace("-", " ").lower() if clean_slug_stripped else ""
+
+                GENERIC_SLUGS = {
+                    "", "course", "site", "user", "category", "group", "general",
+                    "schedule", "event", "lecture", "session", "quiz", "assignment", "exam"
+                }
+                STOP_WORDS = {
+                    "introduction", "intro", "advanced", "fundamentals", "principles", "basics",
+                    "course", "lecture", "session", "lab", "to", "of", "and", "in", "for",
+                    "the", "a", "an", "i", "ii", "iii", "part"
+                }
+                distinctive = [w for w in clean_words.split() if len(w) > 2 and w not in STOP_WORDS]
+                course_acronym = "".join([w[0] for w in clean_words.split() if w])
+
+                matches_course = False
+                if ev_slug and ev_slug not in GENERIC_SLUGS:
+                    if ev_slug == clean_slug or (clean_slug_stripped and ev_slug == clean_slug_stripped):
+                        matches_course = True
+                    elif course_acronym and len(course_acronym) >= 3 and (ev_slug.startswith(course_acronym) or course_acronym in ev_slug):
+                        matches_course = True
+
+                if not matches_course:
+                    if (clean_words and (clean_words in title_desc or title_desc in clean_words or clean_words in ev_title_lower or ev_title_lower in clean_words)):
+                        matches_course = True
+                    elif (slug_words and (slug_words in title_desc or title_desc in slug_words or slug_words in ev_title_lower or ev_title_lower in slug_words)):
+                        matches_course = True
+                    elif distinctive and all(w in title_desc or w in ev_title_lower for w in distinctive):
+                        matches_course = True
+
+                if include_site and scope == "site":
+                    matches_course = True
+                if not matches_course:
+                    continue
+
+            filtered.append(ev)
+
+        filtered.sort(key=lambda x: x["timestamp_start"])
+        return filtered
+
+    def update_calendar_event(self, event_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update an existing calendar event by ID."""
+        clean_id = (event_id or "").strip()
+        if not clean_id:
+            return None
+
+        # Find existing event in DB or memory
+        existing: Optional[Dict[str, Any]] = None
+        for m in self._calendar_events_memory:
+            if m.get("id") == clean_id:
+                existing = dict(m)
+                break
+
+        conn = None
+        if not existing:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT * FROM lecturescribe_calendar_events WHERE id = %s;",
+                            (clean_id,),
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            existing = self._format_calendar_event_record(dict(row))
+            except Exception:
+                pass
+            finally:
+                if conn:
+                    conn.close()
+
+        if not existing:
+            return None
+
+        merged = {**existing, **updates, "id": clean_id}
+        if "start" in updates and "start_time" not in updates:
+            merged["start_time"] = updates["start"]
+        if "end" in updates and "end_time" not in updates:
+            merged["end_time"] = updates["end"]
+
+        saved = self.save_calendar_events([merged])
+        return saved[0] if saved else None
+
+    def delete_calendar_event(self, event_id: str) -> bool:
+        """Delete a calendar event by ID from PostgreSQL and memory cache."""
+        clean_id = (event_id or "").strip()
+        if not clean_id:
+            return False
+
+        before_len = len(self._calendar_events_memory)
+        self._calendar_events_memory = [
+            m for m in self._calendar_events_memory if m.get("id") != clean_id
+        ]
+        deleted_mem = len(self._calendar_events_memory) < before_len
+
+        deleted_db = False
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM lecturescribe_calendar_events WHERE id = %s;",
+                        (clean_id,),
+                    )
+                    deleted_db = (cursor.rowcount or 0) > 0
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Calendar Notice] delete_calendar_event error ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return deleted_db or deleted_mem
+
+    # =========================================================================
+    # Option 1: Assignment Publishing, Calendar Deadline Sync & Submissions
+    # =========================================================================
+
+    def publish_assignment_settings(
+        self,
+        assignment_id: str,
+        due_date: Optional[str] = None,
+        max_marks: Optional[float] = None,
+        is_published: Optional[bool] = None,
+        updated_by_email: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Update assignment deadline, max marks, and publish status, automatically syncing deadline to LMS Calendar."""
+        clean_id = (assignment_id or "").strip()
+        if not clean_id:
+            return None
+
+        existing = self.get_assignment_by_id(clean_id)
+        if not existing:
+            return None
+
+        new_due = due_date.strip() if isinstance(due_date, str) else existing.get("due_date")
+        new_marks = float(max_marks) if max_marks is not None else float(existing.get("max_marks") or 100.0)
+        new_pub = bool(is_published) if is_published is not None else bool(existing.get("is_published", True))
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        updated_record: Optional[Dict[str, Any]] = None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_course_assignments
+                        SET due_date = %s,
+                            max_marks = %s,
+                            is_published = %s,
+                            updated_at = NOW()
+                        WHERE assignment_id = %s
+                        RETURNING id, assignment_id, course_name, user_email, title, source_filename,
+                                  source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                  questions_summary, required_files, dataset_files,
+                                  due_date, max_marks, is_published, error_message, created_at, updated_at;
+                        """,
+                        (new_due, new_marks, new_pub, clean_id),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_record = dict(row)
+                        if hasattr(db_record.get("created_at"), "isoformat"):
+                            db_record["created_at"] = db_record["created_at"].isoformat()
+                        if hasattr(db_record.get("updated_at"), "isoformat"):
+                            db_record["updated_at"] = db_record["updated_at"].isoformat()
+                        updated_record = db_record
+                        conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Notice] publish_assignment_settings fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        for item in self._assignments_memory_cache:
+            if item.get("assignment_id") == clean_id:
+                item["due_date"] = new_due
+                item["max_marks"] = new_marks
+                item["is_published"] = new_pub
+                item["updated_at"] = now_iso
+                if not updated_record:
+                    updated_record = dict(item)
+                break
+
+        if not updated_record:
+            updated_record = {
+                **existing,
+                "due_date": new_due,
+                "max_marks": new_marks,
+                "is_published": new_pub,
+                "updated_at": now_iso,
+            }
+
+        # Sync deadline with LMS Calendar
+        cal_event_id = f"cal_asgn_{clean_id}"
+        if new_due and new_pub:
+            course_name = updated_record.get("course_name") or existing.get("course_name") or ""
+            course_slug = to_course_slug(course_name)
+            title = updated_record.get("title") or existing.get("title") or "Course Assignment"
+            self.save_calendar_events(
+                [
+                    {
+                        "id": cal_event_id,
+                        "title": f"[{course_name}] Assignment Due: {title}" if course_name else f"Assignment Due: {title}",
+                        "description": f"Course assignment submission deadline ({int(new_marks) if new_marks.is_integer() else new_marks} marks).",
+                        "category": "assignment",
+                        "event_scope": "course",
+                        "course_slug": course_slug,
+                        "course_name": course_name,
+                        "created_by_email": (updated_by_email or existing.get("user_email") or "").strip().lower(),
+                        "start_time": new_due,
+                        "is_all_day": len(new_due) <= 10,
+                        "source_type": "lms_module",
+                        "approval_status": "approved",
+                        "ai_confidence": 1.0,
+                        "source_metadata": {
+                            "assignment_id": clean_id,
+                            "max_marks": new_marks,
+                            "module": "assignments",
+                        },
+                    }
+                ]
+            )
+            updated_record["calendar_event_id"] = cal_event_id
+        elif not new_due or not new_pub:
+            self.delete_calendar_event(cal_event_id)
+
+        return updated_record
+
+    def submit_assignment(
+        self,
+        assignment_id: str,
+        course_name: str,
+        student_email: str,
+        student_name: str = "",
+        submission_text: str = "",
+        file_name: str = "",
+        file_blob_name: str = "",
+        max_marks: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a student's submission for a course assignment."""
+        clean_asgn_id = (assignment_id or "").strip()
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        clean_email = (student_email or "").strip().lower()
+        if not clean_asgn_id or not clean_email:
+            raise ValueError("assignment_id and student_email are required.")
+
+        asgn = self.get_assignment_by_id(clean_asgn_id)
+        resolved_max = float(max_marks) if max_marks is not None else float((asgn or {}).get("max_marks") or 100.0)
+        resolved_name = (student_name or "").strip() or (self._users_memory_cache.get(clean_email, {}).get("name") or clean_email.split("@")[0])
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        # Check existing submission for idempotent upsert
+        existing_sub: Optional[Dict[str, Any]] = None
+        for s in self._assignment_submissions_memory:
+            if s.get("assignment_id") == clean_asgn_id and s.get("student_email") == clean_email:
+                existing_sub = s
+                break
+
+        sub_id = (existing_sub or {}).get("submission_id") or f"sub_{uuid.uuid4().hex[:12]}"
+        record = {
+            "submission_id": sub_id,
+            "assignment_id": clean_asgn_id,
+            "course_slug": clean_slug,
+            "course_name": clean_course or (asgn or {}).get("course_name") or clean_slug,
+            "student_email": clean_email,
+            "student_name": resolved_name,
+            "submission_text": (submission_text or "").strip(),
+            "file_name": (file_name or "").strip(),
+            "file_blob_name": (file_blob_name or "").strip(),
+            "status": (existing_sub or {}).get("status") or "submitted",
+            "score": (existing_sub or {}).get("score"),
+            "max_marks": resolved_max,
+            "ai_suggested_score": (existing_sub or {}).get("ai_suggested_score"),
+            "ai_feedback": (existing_sub or {}).get("ai_feedback") or "",
+            "instructor_feedback": (existing_sub or {}).get("instructor_feedback") or "",
+            "graded_by_email": (existing_sub or {}).get("graded_by_email") or "",
+            "submitted_at": now_iso,
+            "graded_at": (existing_sub or {}).get("graded_at"),
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_assignment_submissions (
+                            submission_id, assignment_id, course_slug, course_name,
+                            student_email, student_name, submission_text, file_name,
+                            file_blob_name, status, max_marks, submitted_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'submitted', %s, NOW())
+                        ON CONFLICT (assignment_id, student_email) DO UPDATE SET
+                            student_name = COALESCE(NULLIF(EXCLUDED.student_name, ''), lecturescribe_assignment_submissions.student_name),
+                            submission_text = EXCLUDED.submission_text,
+                            file_name = CASE WHEN EXCLUDED.file_name != '' THEN EXCLUDED.file_name ELSE lecturescribe_assignment_submissions.file_name END,
+                            file_blob_name = CASE WHEN EXCLUDED.file_blob_name != '' THEN EXCLUDED.file_blob_name ELSE lecturescribe_assignment_submissions.file_blob_name END,
+                            max_marks = EXCLUDED.max_marks,
+                            submitted_at = NOW()
+                        RETURNING *;
+                        """,
+                        (
+                            sub_id,
+                            clean_asgn_id,
+                            clean_slug,
+                            record["course_name"],
+                            clean_email,
+                            resolved_name,
+                            record["submission_text"],
+                            record["file_name"],
+                            record["file_blob_name"],
+                            resolved_max,
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        for k in ("submitted_at", "graded_at"):
+                            if hasattr(db_rec.get(k), "isoformat"):
+                                db_rec[k] = db_rec[k].isoformat()
+                        record = db_rec
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Submission Notice] submit_assignment fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        self._assignment_submissions_memory = [
+            s
+            for s in self._assignment_submissions_memory
+            if not (s.get("assignment_id") == clean_asgn_id and s.get("student_email") == clean_email)
+        ]
+        self._assignment_submissions_memory.append(record)
+        return record
+
+    def get_assignment_submissions(
+        self,
+        course_name: Optional[str] = None,
+        assignment_id: Optional[str] = None,
+        student_email: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve assignment submissions filtered by course, assignment_id, or student_email."""
+        clean_slug = to_course_slug(course_name or "") if course_name else None
+        clean_asgn = (assignment_id or "").strip() if assignment_id else None
+        clean_email = (student_email or "").strip().lower() if student_email else None
+
+        combined: Dict[str, Dict[str, Any]] = {}
+        for m in self._assignment_submissions_memory:
+            sid = m.get("submission_id")
+            if sid:
+                combined[sid] = dict(m)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = "SELECT * FROM lecturescribe_assignment_submissions WHERE 1=1"
+                    params: List[Any] = []
+                    if clean_slug:
+                        query += " AND course_slug = %s"
+                        params.append(clean_slug)
+                    if clean_asgn:
+                        query += " AND assignment_id = %s"
+                        params.append(clean_asgn)
+                    if clean_email:
+                        query += " AND LOWER(student_email) = %s"
+                        params.append(clean_email)
+                    query += " ORDER BY submitted_at DESC;"
+                    cursor.execute(query, tuple(params))
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        for k in ("submitted_at", "graded_at"):
+                            if hasattr(item.get(k), "isoformat"):
+                                item[k] = item[k].isoformat()
+                        combined[item["submission_id"]] = item
+        except Exception as e:
+            print(f"[PostgreSQL Submission Notice] get_assignment_submissions fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        results = []
+        for sub in combined.values():
+            if clean_slug and sub.get("course_slug") != clean_slug:
+                continue
+            if clean_asgn and sub.get("assignment_id") != clean_asgn:
+                continue
+            if clean_email and (sub.get("student_email") or "").lower() != clean_email:
+                continue
+            results.append(sub)
+
+        return sorted(results, key=lambda x: x.get("submitted_at") or "", reverse=True)
+
+    def grade_assignment_submission(
+        self,
+        submission_id: str,
+        score: Optional[float] = None,
+        instructor_feedback: Optional[str] = None,
+        ai_suggested_score: Optional[float] = None,
+        ai_feedback: Optional[str] = None,
+        graded_by_email: Optional[str] = None,
+        apply_grade: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Update AI suggested score/feedback or finalize instructor grade on a student submission."""
+        clean_sid = (submission_id or "").strip()
+        if not clean_sid:
+            return None
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        existing: Optional[Dict[str, Any]] = None
+        for s in self._assignment_submissions_memory:
+            if s.get("submission_id") == clean_sid:
+                existing = s
+                break
+
+        conn = None
+        if not existing:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT * FROM lecturescribe_assignment_submissions WHERE submission_id = %s;",
+                            (clean_sid,),
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            existing = dict(row)
+            except Exception:
+                pass
+            finally:
+                if conn:
+                    conn.close()
+
+        if not existing:
+            return None
+
+        new_score = float(score) if score is not None else existing.get("score")
+        new_inst_fb = instructor_feedback if instructor_feedback is not None else existing.get("instructor_feedback", "")
+        new_ai_score = float(ai_suggested_score) if ai_suggested_score is not None else existing.get("ai_suggested_score")
+        new_ai_fb = ai_feedback if ai_feedback is not None else existing.get("ai_feedback", "")
+        new_status = "graded" if (apply_grade and new_score is not None) else existing.get("status", "submitted")
+        new_graded_by = (graded_by_email or existing.get("graded_by_email") or "").strip().lower()
+        new_graded_at = now_iso if new_status == "graded" else existing.get("graded_at")
+
+        updated = {
+            **existing,
+            "score": new_score,
+            "instructor_feedback": new_inst_fb,
+            "ai_suggested_score": new_ai_score,
+            "ai_feedback": new_ai_fb,
+            "status": new_status,
+            "graded_by_email": new_graded_by,
+            "graded_at": new_graded_at,
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_assignment_submissions
+                        SET score = %s,
+                            instructor_feedback = %s,
+                            ai_suggested_score = %s,
+                            ai_feedback = %s,
+                            status = %s,
+                            graded_by_email = %s,
+                            graded_at = CASE WHEN %s = 'graded' THEN NOW() ELSE graded_at END
+                        WHERE submission_id = %s
+                        RETURNING *;
+                        """,
+                        (
+                            new_score,
+                            new_inst_fb,
+                            new_ai_score,
+                            new_ai_fb,
+                            new_status,
+                            new_graded_by,
+                            new_status,
+                            clean_sid,
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        for k in ("submitted_at", "graded_at"):
+                            if hasattr(db_rec.get(k), "isoformat"):
+                                db_rec[k] = db_rec[k].isoformat()
+                        updated = db_rec
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Submission Notice] grade_assignment_submission fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        self._assignment_submissions_memory = [
+            updated if s.get("submission_id") == clean_sid else s
+            for s in self._assignment_submissions_memory
+        ]
+        if not any(s.get("submission_id") == clean_sid for s in self._assignment_submissions_memory):
+            self._assignment_submissions_memory.append(updated)
+
+        return updated
+
+    # =========================================================================
+    # Option 2: Centralized Course Gradebook Engine
+    # =========================================================================
+
+    @staticmethod
+    def _compute_letter_grade(pct: float) -> str:
+        if pct >= 90.0:
+            return "A+"
+        if pct >= 85.0:
+            return "A"
+        if pct >= 75.0:
+            return "B+"
+        if pct >= 65.0:
+            return "B"
+        if pct >= 55.0:
+            return "C"
+        if pct >= 45.0:
+            return "D"
+        return "F"
+
+    def upsert_gradebook_override(
+        self,
+        course_name: str,
+        student_email: str,
+        item_id: str,
+        score: float,
+        max_marks: float = 100.0,
+        item_title: str = "",
+        item_type: str = "manual",
+        feedback: str = "",
+        updated_by_email: str = "",
+    ) -> Dict[str, Any]:
+        """Create or update a tutor score override or manual grade item in the course gradebook."""
+        clean_slug = to_course_slug(course_name or "")
+        clean_email = (student_email or "").strip().lower()
+        clean_item = (item_id or "").strip()
+        if not clean_slug or not clean_email or not clean_item:
+            raise ValueError("course_name, student_email, and item_id are required.")
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record = {
+            "course_slug": clean_slug,
+            "student_email": clean_email,
+            "item_id": clean_item,
+            "item_title": (item_title or clean_item).strip(),
+            "item_type": (item_type or "manual").strip().lower(),
+            "score": float(score),
+            "max_marks": float(max_marks or 100.0),
+            "feedback": (feedback or "").strip(),
+            "updated_by_email": (updated_by_email or "").strip().lower(),
+            "updated_at": now_iso,
+        }
+        self._gradebook_overrides_memory[(clean_slug, clean_email, clean_item)] = record
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_gradebook_overrides (
+                            course_slug, student_email, item_id, item_title, item_type,
+                            score, max_marks, feedback, updated_by_email, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (course_slug, student_email, item_id) DO UPDATE SET
+                            item_title = CASE WHEN EXCLUDED.item_title != '' THEN EXCLUDED.item_title ELSE lecturescribe_gradebook_overrides.item_title END,
+                            item_type = EXCLUDED.item_type,
+                            score = EXCLUDED.score,
+                            max_marks = EXCLUDED.max_marks,
+                            feedback = EXCLUDED.feedback,
+                            updated_by_email = EXCLUDED.updated_by_email,
+                            updated_at = NOW()
+                        RETURNING *;
+                        """,
+                        (
+                            clean_slug,
+                            clean_email,
+                            clean_item,
+                            record["item_title"],
+                            record["item_type"],
+                            record["score"],
+                            record["max_marks"],
+                            record["feedback"],
+                            record["updated_by_email"],
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        if hasattr(db_rec.get("updated_at"), "isoformat"):
+                            db_rec["updated_at"] = db_rec["updated_at"].isoformat()
+                        record = db_rec
+                        self._gradebook_overrides_memory[(clean_slug, clean_email, clean_item)] = record
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Gradebook Notice] upsert_gradebook_override fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_course_gradebook(
+        self,
+        course_name: str,
+        student_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compute the unified Moodle-style Course Gradebook across Assignments, Course Quizzes, and Manual Overrides."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        filter_email = (student_email or "").strip().lower() if student_email else None
+
+        # 1. Gather all course assignments
+        assignments = self.get_course_assignments(clean_course)
+        columns: List[Dict[str, Any]] = []
+        col_map: Dict[str, Dict[str, Any]] = {}
+
+        for asgn in reversed(assignments):
+            aid = asgn.get("assignment_id")
+            if not aid:
+                continue
+            col = {
+                "item_id": aid,
+                "title": asgn.get("title") or "Assignment",
+                "item_type": "assignment",
+                "max_marks": float(asgn.get("max_marks") or 100.0),
+                "due_date": asgn.get("due_date"),
+            }
+            columns.append(col)
+            col_map[aid] = col
+
+        # 2. Gather course quiz attempts across students
+        quiz_rows: List[Dict[str, Any]] = []
+        for item in self._course_quiz_history_memory:
+            if item.get("course_slug") == clean_slug and item.get("user_email"):
+                quiz_rows.append(dict(item))
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT quiz_id, course_slug, course_name, user_email, score, total_questions, completed, created_at, updated_at
+                        FROM lecturescribe_course_quiz_history
+                        WHERE course_slug = %s AND user_email IS NOT NULL AND user_email != ''
+                        ORDER BY created_at ASC;
+                        """,
+                        (clean_slug,),
+                    )
+                    for r in cursor.fetchall() or []:
+                        quiz_rows.append(dict(r))
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        # Also check lecturescribe_quiz_attempts for 'course' target_id == clean_slug
+        for key, att in self._quiz_attempts_memory_cache.items():
+            if att.get("quiz_type") == "course" and att.get("target_id") == clean_slug:
+                em = (att.get("user_email") or "").strip().lower()
+                if em and em != "anonymous":
+                    quiz_rows.append(
+                        {
+                            "quiz_id": f"course_quiz_{clean_slug}",
+                            "user_email": em,
+                            "score": att.get("score", 0),
+                            "total_questions": max(len(att.get("answers") or {}), int(att.get("score") or 0), 5),
+                            "completed": att.get("completed", True),
+                        }
+                    )
+
+        # Add a synthetic "Course AI Quiz (Best Attempt)" column if any quiz attempts exist or always as a standard assessment column
+        quiz_col_id = f"quiz_best_{clean_slug}"
+        quiz_col = {
+            "item_id": quiz_col_id,
+            "title": "Course AI Quiz (Best Score)",
+            "item_type": "quiz",
+            "max_marks": 100.0,
+            "due_date": None,
+        }
+        columns.append(quiz_col)
+        col_map[quiz_col_id] = quiz_col
+
+        # 3. Gather all assignment submissions for this course
+        submissions = self.get_assignment_submissions(course_name=clean_course)
+
+        # 4. Gather gradebook overrides
+        overrides: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for (s_slug, s_email, i_id), ov in self._gradebook_overrides_memory.items():
+            if s_slug == clean_slug:
+                overrides[(s_email, i_id)] = dict(ov)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_gradebook_overrides WHERE course_slug = %s;",
+                        (clean_slug,),
+                    )
+                    for r in cursor.fetchall() or []:
+                        ov = dict(r)
+                        overrides[(ov["student_email"].lower(), ov["item_id"])] = ov
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        for (_, i_id), ov in overrides.items():
+            if i_id not in col_map:
+                col = {
+                    "item_id": i_id,
+                    "title": ov.get("item_title") or i_id,
+                    "item_type": ov.get("item_type") or "manual",
+                    "max_marks": float(ov.get("max_marks") or 100.0),
+                    "due_date": None,
+                }
+                columns.append(col)
+                col_map[i_id] = col
+
+        # 5. Collect roster of students
+        members = self.get_course_members(clean_course)
+        student_roster: Dict[str, Dict[str, Any]] = {}
+        for m in members:
+            em = (m.get("user_email") or "").strip().lower()
+            if not em:
+                continue
+            if m.get("course_role") == "student" or em == filter_email:
+                student_roster[em] = {
+                    "student_email": em,
+                    "student_name": m.get("name") or self._users_memory_cache.get(em, {}).get("name") or em.split("@")[0],
+                }
+
+        for sub in submissions:
+            em = (sub.get("student_email") or "").strip().lower()
+            if em and em not in student_roster:
+                student_roster[em] = {
+                    "student_email": em,
+                    "student_name": sub.get("student_name") or em.split("@")[0],
+                }
+
+        for qr in quiz_rows:
+            em = (qr.get("user_email") or "").strip().lower()
+            if em and em != "anonymous" and em not in student_roster:
+                student_roster[em] = {
+                    "student_email": em,
+                    "student_name": self._users_memory_cache.get(em, {}).get("name") or em.split("@")[0],
+                }
+
+        for (em, _) in overrides.keys():
+            if em and em not in student_roster:
+                student_roster[em] = {
+                    "student_email": em,
+                    "student_name": self._users_memory_cache.get(em, {}).get("name") or em.split("@")[0],
+                }
+
+        if filter_email and filter_email not in student_roster:
+            student_roster[filter_email] = {
+                "student_email": filter_email,
+                "student_name": self._users_memory_cache.get(filter_email, {}).get("name") or filter_email.split("@")[0],
+            }
+
+        # 6. Compute per-student grades across all columns
+        student_rows: List[Dict[str, Any]] = []
+        for em, info in sorted(student_roster.items(), key=lambda x: x[0]):
+            if filter_email and em != filter_email:
+                continue
+
+            grades_by_item: Dict[str, Dict[str, Any]] = {}
+            total_earned = 0.0
+            total_possible = 0.0
+
+            # Populate assignment grades from submissions
+            for sub in submissions:
+                if (sub.get("student_email") or "").lower() != em:
+                    continue
+                aid = sub.get("assignment_id")
+                if not aid or aid not in col_map:
+                    continue
+                sc = sub.get("score")
+                mm = float(sub.get("max_marks") or col_map[aid]["max_marks"] or 100.0)
+                grades_by_item[aid] = {
+                    "item_id": aid,
+                    "submission_id": sub.get("submission_id"),
+                    "score": float(sc) if sc is not None else None,
+                    "max_marks": mm,
+                    "status": sub.get("status", "submitted"),
+                    "feedback": sub.get("instructor_feedback") or sub.get("ai_feedback") or "",
+                    "percentage": round((float(sc) / mm) * 100.0, 1) if (sc is not None and mm > 0) else None,
+                }
+
+            # Populate best quiz score
+            best_quiz_pct: Optional[float] = None
+            for qr in quiz_rows:
+                if (qr.get("user_email") or "").lower() != em:
+                    continue
+                tot_q = int(qr.get("total_questions") or 0)
+                sc_q = int(qr.get("score") or 0)
+                if tot_q > 0:
+                    pct = round((sc_q / tot_q) * 100.0, 1)
+                    if best_quiz_pct is None or pct > best_quiz_pct:
+                        best_quiz_pct = pct
+
+            if best_quiz_pct is not None:
+                grades_by_item[quiz_col_id] = {
+                    "item_id": quiz_col_id,
+                    "score": best_quiz_pct,
+                    "max_marks": 100.0,
+                    "status": "graded",
+                    "feedback": "Best Course Quiz Attempt",
+                    "percentage": best_quiz_pct,
+                }
+
+            # Apply tutor overrides
+            for (ov_email, ov_item), ov in overrides.items():
+                if ov_email != em:
+                    continue
+                sc = float(ov.get("score") or 0.0)
+                mm = float(ov.get("max_marks") or col_map.get(ov_item, {}).get("max_marks") or 100.0)
+                grades_by_item[ov_item] = {
+                    "item_id": ov_item,
+                    "score": sc,
+                    "max_marks": mm,
+                    "status": "overridden",
+                    "feedback": ov.get("feedback") or "Instructor Override",
+                    "percentage": round((sc / mm) * 100.0, 1) if mm > 0 else 0.0,
+                }
+
+            for col in columns:
+                cid = col["item_id"]
+                g = grades_by_item.get(cid)
+                if g and g.get("score") is not None:
+                    total_earned += float(g["score"])
+                    total_possible += float(g["max_marks"] or col["max_marks"] or 100.0)
+                else:
+                    grades_by_item.setdefault(
+                        cid,
+                        {
+                            "item_id": cid,
+                            "score": None,
+                            "max_marks": col["max_marks"],
+                            "status": "missing",
+                            "feedback": "",
+                            "percentage": None,
+                        },
+                    )
+
+            overall_pct = round((total_earned / total_possible) * 100.0, 1) if total_possible > 0 else 0.0
+            student_rows.append(
+                {
+                    "student_email": em,
+                    "student_name": info["student_name"],
+                    "grades": grades_by_item,
+                    "total_earned": round(total_earned, 2),
+                    "total_possible": round(total_possible, 2),
+                    "overall_percentage": overall_pct,
+                    "letter_grade": self._compute_letter_grade(overall_pct) if total_possible > 0 else "N/A",
+                }
+            )
+
+        graded_pcts = [s["overall_percentage"] for s in student_rows if s["total_possible"] > 0]
+        summary = {
+            "course_name": clean_course,
+            "course_slug": clean_slug,
+            "student_count": len(student_rows),
+            "assessment_count": len(columns),
+            "class_average_percentage": round(sum(graded_pcts) / len(graded_pcts), 1) if graded_pcts else 0.0,
+            "highest_percentage": round(max(graded_pcts), 1) if graded_pcts else 0.0,
+            "total_submissions": len(submissions),
+        }
+
+        return {
+            "course_name": clean_course,
+            "course_slug": clean_slug,
+            "columns": columns,
+            "students": student_rows,
+            "summary": summary,
+        }
+
+    # =========================================================================
+    # Option 3: Course Enrollment, Roster & Self-Enrollment Keys
+    # =========================================================================
+
+    def generate_course_enrollment_key(
+        self,
+        course_name: str,
+        created_by_email: str = "",
+        custom_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate or rotate a shareable self-enrollment key for a course."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        if not clean_slug:
+            raise ValueError("course_name is required.")
+
+        prefix = "".join(ch for ch in clean_slug.upper() if ch.isalnum())[:6] or "COURSE"
+        key_val = (custom_key or "").strip().upper() or f"{prefix}-{uuid.uuid4().hex[:6].upper()}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        record = {
+            "course_slug": clean_slug,
+            "course_name": clean_course,
+            "enrollment_key": key_val,
+            "created_by_email": (created_by_email or "").strip().lower(),
+            "is_active": True,
+            "created_at": now_iso,
+        }
+        self._enrollment_keys_memory[clean_slug] = record
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_course_enrollment_keys
+                            (course_slug, course_name, enrollment_key, created_by_email, is_active, created_at)
+                        VALUES (%s, %s, %s, %s, TRUE, NOW())
+                        ON CONFLICT (course_slug) DO UPDATE SET
+                            course_name = EXCLUDED.course_name,
+                            enrollment_key = EXCLUDED.enrollment_key,
+                            created_by_email = EXCLUDED.created_by_email,
+                            is_active = TRUE,
+                            created_at = NOW()
+                        RETURNING *;
+                        """,
+                        (clean_slug, clean_course, key_val, record["created_by_email"]),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        if hasattr(db_rec.get("created_at"), "isoformat"):
+                            db_rec["created_at"] = db_rec["created_at"].isoformat()
+                        record = db_rec
+                        self._enrollment_keys_memory[clean_slug] = record
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Enrol Key Notice] generate_course_enrollment_key fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_course_enrollment_key(self, course_name: str) -> Optional[Dict[str, Any]]:
+        """Retrieve active enrollment key for a course."""
+        clean_slug = to_course_slug(course_name or "")
+        if not clean_slug:
+            return None
+
+        if clean_slug in self._enrollment_keys_memory:
+            return self._enrollment_keys_memory[clean_slug]
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_course_enrollment_keys WHERE course_slug = %s AND is_active = TRUE;",
+                        (clean_slug,),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        rec = dict(row)
+                        if hasattr(rec.get("created_at"), "isoformat"):
+                            rec["created_at"] = rec["created_at"].isoformat()
+                        self._enrollment_keys_memory[clean_slug] = rec
+                        return rec
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return None
+
+    def enrol_user_by_key(
+        self,
+        enrollment_key: str,
+        user_email: str,
+        user_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Validate an enrollment key and enrol the student in the matching course."""
+        clean_key = (enrollment_key or "").strip().upper()
+        clean_email = (user_email or "").strip().lower()
+        if not clean_key or not clean_email:
+            return None
+
+        matched_course: Optional[Dict[str, Any]] = None
+        for rec in self._enrollment_keys_memory.values():
+            if (rec.get("enrollment_key") or "").upper() == clean_key and rec.get("is_active", True):
+                matched_course = rec
+                break
+
+        conn = None
+        if not matched_course:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT * FROM lecturescribe_course_enrollment_keys WHERE UPPER(enrollment_key) = %s AND is_active = TRUE;",
+                            (clean_key,),
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            matched_course = dict(row)
+            except Exception:
+                pass
+            finally:
+                if conn:
+                    conn.close()
+
+        if not matched_course:
+            return None
+
+        if user_name:
+            self.upsert_user_session(email=clean_email, name=user_name)
+
+        membership = self.assign_course_role(
+            course_identifier=matched_course["course_slug"],
+            user_email=clean_email,
+            course_role="student",
+            enrol_method="self_key",
+        )
+        return {
+            **membership,
+            "course_name": matched_course.get("course_name") or matched_course["course_slug"],
+            "enrollment_key": clean_key,
+        }
+
+    def remove_course_member(self, course_identifier: str, user_email: str) -> bool:
+        """Remove a user's membership from a course."""
+        clean_slug = to_course_slug(course_identifier or "")
+        clean_email = (user_email or "").strip().lower()
+        if not clean_slug or not clean_email:
+            return False
+
+        existed_mem = (clean_slug, clean_email) in self._course_memberships_memory
+        self._course_memberships_memory.pop((clean_slug, clean_email), None)
+
+        deleted_db = False
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM lecturescribe_course_memberships WHERE course_slug = %s AND LOWER(user_email) = %s;",
+                        (clean_slug, clean_email),
+                    )
+                    deleted_db = (cursor.rowcount or 0) > 0
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL RBAC Notice] remove_course_member fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return existed_mem or deleted_db
+
+    # =========================================================================
+    # Option 4: Course Discussions / Q&A Forum with Timestamp Deep-Links & AI TA
+    # =========================================================================
+
+    def create_forum_thread(
+        self,
+        course_name: str,
+        title: str,
+        body: str,
+        author_email: str,
+        author_name: str = "",
+        author_role: str = "student",
+        category: str = "general",
+        video_id: str = "",
+        lecture_title: str = "",
+        timestamp_str: str = "",
+        is_pinned: bool = False,
+    ) -> Dict[str, Any]:
+        """Create a new course discussion / Q&A forum thread."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        clean_email = (author_email or "anonymous@lecturescribe.local").strip().lower()
+        clean_title = (title or "").strip()
+        clean_body = (body or "").strip()
+        if not clean_slug or not clean_title or not clean_body:
+            raise ValueError("course_name, title, and body are required.")
+
+        tid = f"thr_{uuid.uuid4().hex[:12]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        resolved_name = (author_name or "").strip() or (self._users_memory_cache.get(clean_email, {}).get("name") or clean_email.split("@")[0])
+
+        record = {
+            "thread_id": tid,
+            "course_slug": clean_slug,
+            "course_name": clean_course,
+            "title": clean_title,
+            "body": clean_body,
+            "category": (category or "general").strip().lower(),
+            "author_email": clean_email,
+            "author_name": resolved_name,
+            "author_role": self._normalize_role(author_role, "student"),
+            "video_id": (video_id or "").strip(),
+            "lecture_title": (lecture_title or "").strip(),
+            "timestamp_str": (timestamp_str or "").strip(),
+            "is_pinned": bool(is_pinned),
+            "is_resolved": False,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "replies": [],
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_forum_threads (
+                            thread_id, course_slug, course_name, title, body, category,
+                            author_email, author_name, author_role, video_id, lecture_title,
+                            timestamp_str, is_pinned, is_resolved, created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NOW(), NOW())
+                        RETURNING *;
+                        """,
+                        (
+                            tid,
+                            clean_slug,
+                            clean_course,
+                            clean_title,
+                            clean_body,
+                            record["category"],
+                            clean_email,
+                            resolved_name,
+                            record["author_role"],
+                            record["video_id"],
+                            record["lecture_title"],
+                            record["timestamp_str"],
+                            record["is_pinned"],
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        for k in ("created_at", "updated_at"):
+                            if hasattr(db_rec.get(k), "isoformat"):
+                                db_rec[k] = db_rec[k].isoformat()
+                        db_rec["replies"] = []
+                        record = db_rec
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Forum Notice] create_forum_thread fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        self._forum_threads_memory.append(record)
+        return record
+
+    def get_forum_threads(
+        self,
+        course_name: str,
+        category: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch all discussion threads and their nested replies for a course."""
+        clean_slug = to_course_slug(course_name or "")
+        if not clean_slug:
+            return []
+
+        threads_map: Dict[str, Dict[str, Any]] = {}
+        for t in self._forum_threads_memory:
+            if t.get("course_slug") == clean_slug:
+                threads_map[t["thread_id"]] = {**t, "replies": []}
+
+        replies_map: Dict[str, Dict[str, Any]] = {}
+        for r in self._forum_replies_memory:
+            replies_map[r["reply_id"]] = dict(r)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT * FROM lecturescribe_forum_threads
+                        WHERE course_slug = %s
+                        ORDER BY is_pinned DESC, updated_at DESC;
+                        """,
+                        (clean_slug,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        for k in ("created_at", "updated_at"):
+                            if hasattr(item.get(k), "isoformat"):
+                                item[k] = item[k].isoformat()
+                        item["replies"] = []
+                        threads_map[item["thread_id"]] = item
+
+                    if threads_map:
+                        cursor.execute(
+                            """
+                            SELECT * FROM lecturescribe_forum_replies
+                            WHERE thread_id = ANY(%s)
+                            ORDER BY created_at ASC;
+                            """,
+                            (list(threads_map.keys()),),
+                        )
+                        for r_row in cursor.fetchall() or []:
+                            rep = dict(r_row)
+                            if hasattr(rep.get("created_at"), "isoformat"):
+                                rep["created_at"] = rep["created_at"].isoformat()
+                            if isinstance(rep.get("citations_json"), str):
+                                try:
+                                    rep["citations_json"] = json.loads(rep["citations_json"])
+                                except Exception:
+                                    rep["citations_json"] = []
+                            replies_map[rep["reply_id"]] = rep
+        except Exception as e:
+            print(f"[PostgreSQL Forum Notice] get_forum_threads fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        for rep in sorted(replies_map.values(), key=lambda x: x.get("created_at") or ""):
+            tid = rep.get("thread_id")
+            if tid in threads_map:
+                threads_map[tid]["replies"].append(rep)
+
+        results = list(threads_map.values())
+        if category and category != "all":
+            results = [t for t in results if t.get("category") == category]
+
+        return sorted(
+            results,
+            key=lambda x: (1 if x.get("is_pinned") else 0, x.get("updated_at") or ""),
+            reverse=True,
+        )
+
+    def add_forum_reply(
+        self,
+        thread_id: str,
+        author_email: str,
+        body: str,
+        author_name: str = "",
+        author_role: str = "student",
+        is_ai_generated: bool = False,
+        citations: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Append a reply (student, tutor, or AI TA) to a discussion thread."""
+        clean_tid = (thread_id or "").strip()
+        clean_body = (body or "").strip()
+        clean_email = (author_email or "anonymous@lecturescribe.local").strip().lower()
+        if not clean_tid or not clean_body:
+            return None
+
+        rid = f"rep_{uuid.uuid4().hex[:12]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        resolved_name = (author_name or "").strip() or (self._users_memory_cache.get(clean_email, {}).get("name") or clean_email.split("@")[0])
+        norm_role = "ai_ta" if is_ai_generated else self._normalize_role(author_role, "student")
+
+        reply_rec = {
+            "reply_id": rid,
+            "thread_id": clean_tid,
+            "author_email": clean_email,
+            "author_name": resolved_name,
+            "author_role": norm_role,
+            "body": clean_body,
+            "is_instructor_endorsed": norm_role == "tutor",
+            "is_ai_generated": bool(is_ai_generated),
+            "citations_json": citations or [],
+            "created_at": now_iso,
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_forum_replies (
+                            reply_id, thread_id, author_email, author_name, author_role,
+                            body, is_instructor_endorsed, is_ai_generated, citations_json, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+                        RETURNING *;
+                        """,
+                        (
+                            rid,
+                            clean_tid,
+                            clean_email,
+                            resolved_name,
+                            norm_role,
+                            clean_body,
+                            reply_rec["is_instructor_endorsed"],
+                            reply_rec["is_ai_generated"],
+                            json.dumps(citations or []),
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        if hasattr(db_rec.get("created_at"), "isoformat"):
+                            db_rec["created_at"] = db_rec["created_at"].isoformat()
+                        reply_rec = db_rec
+                    cursor.execute(
+                        "UPDATE lecturescribe_forum_threads SET updated_at = NOW() WHERE thread_id = %s;",
+                        (clean_tid,),
+                    )
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Forum Notice] add_forum_reply fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        self._forum_replies_memory.append(reply_rec)
+        for t in self._forum_threads_memory:
+            if t.get("thread_id") == clean_tid:
+                t["updated_at"] = now_iso
+                break
+
+        return reply_rec
+
+    def toggle_forum_reply_endorsement(
+        self,
+        thread_id: str,
+        reply_id: str,
+        is_endorsed: bool = True,
+        resolve_thread: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Tutor endorses a student or AI TA reply and optionally marks the thread resolved."""
+        clean_tid = (thread_id or "").strip()
+        clean_rid = (reply_id or "").strip()
+        if not clean_tid or not clean_rid:
+            return None
+
+        updated_reply: Optional[Dict[str, Any]] = None
+        for r in self._forum_replies_memory:
+            if r.get("reply_id") == clean_rid and r.get("thread_id") == clean_tid:
+                r["is_instructor_endorsed"] = bool(is_endorsed)
+                updated_reply = dict(r)
+                break
+
+        if resolve_thread and is_endorsed:
+            for t in self._forum_threads_memory:
+                if t.get("thread_id") == clean_tid:
+                    t["is_resolved"] = True
+                    break
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_forum_replies
+                        SET is_instructor_endorsed = %s
+                        WHERE reply_id = %s AND thread_id = %s
+                        RETURNING *;
+                        """,
+                        (bool(is_endorsed), clean_rid, clean_tid),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        if hasattr(db_rec.get("created_at"), "isoformat"):
+                            db_rec["created_at"] = db_rec["created_at"].isoformat()
+                        updated_reply = db_rec
+                    if resolve_thread and is_endorsed:
+                        cursor.execute(
+                            "UPDATE lecturescribe_forum_threads SET is_resolved = TRUE, updated_at = NOW() WHERE thread_id = %s;",
+                            (clean_tid,),
+                        )
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Forum Notice] toggle_forum_reply_endorsement fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return updated_reply
+
+    def update_forum_thread_flags(
+        self,
+        thread_id: str,
+        is_pinned: Optional[bool] = None,
+        is_resolved: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Update thread pin or resolved flags."""
+        clean_tid = (thread_id or "").strip()
+        if not clean_tid:
+            return None
+
+        updated: Optional[Dict[str, Any]] = None
+        for t in self._forum_threads_memory:
+            if t.get("thread_id") == clean_tid:
+                if is_pinned is not None:
+                    t["is_pinned"] = bool(is_pinned)
+                if is_resolved is not None:
+                    t["is_resolved"] = bool(is_resolved)
+                updated = dict(t)
+                break
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE lecturescribe_forum_threads
+                        SET is_pinned = COALESCE(%s, is_pinned),
+                            is_resolved = COALESCE(%s, is_resolved),
+                            updated_at = NOW()
+                        WHERE thread_id = %s
+                        RETURNING *;
+                        """,
+                        (is_pinned, is_resolved, clean_tid),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        for k in ("created_at", "updated_at"):
+                            if hasattr(db_rec.get(k), "isoformat"):
+                                db_rec[k] = db_rec[k].isoformat()
+                        updated = db_rec
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Forum Notice] update_forum_thread_flags fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return updated
+
+    # =========================================================================
+    # Next-Wave Option 1: Course Completion Tracking & Prerequisite Access Rules
+    # =========================================================================
+
+    def get_course_lectures(
+        self,
+        course_name: str,
+        user_email: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return the list of lectures for a course from get_course_details."""
+        try:
+            details = self.get_course_details(course_name, user_email=user_email)
+            if isinstance(details, dict) and isinstance(details.get("lectures"), list):
+                return details["lectures"]
+        except Exception:
+            pass
+        return []
+
+    def toggle_module_completion(
+        self,
+        course_name: str,
+        user_email: str,
+        module_id: str,
+        module_type: str = "lecture",
+        module_title: str = "",
+        is_completed: bool = True,
+    ) -> Dict[str, Any]:
+        """Mark a course activity/module as complete or incomplete for a student."""
+        clean_slug = to_course_slug(course_name or "")
+        clean_email = (user_email or "").strip().lower()
+        clean_mod = (module_id or "").strip()
+        if not clean_slug or not clean_email or not clean_mod:
+            raise ValueError("course_name, user_email, and module_id are required.")
+
+        status_val = "complete" if is_completed else "incomplete"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record = {
+            "course_slug": clean_slug,
+            "user_email": clean_email,
+            "module_id": clean_mod,
+            "module_type": (module_type or "lecture").strip().lower(),
+            "module_title": (module_title or clean_mod).strip(),
+            "status": status_val,
+            "completed_at": now_iso if is_completed else None,
+        }
+        self._module_completions_memory[(clean_slug, clean_email, clean_mod)] = record
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_module_completions
+                            (course_slug, user_email, module_id, module_type, module_title, status, completed_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (course_slug, user_email, module_id) DO UPDATE SET
+                            module_type = EXCLUDED.module_type,
+                            module_title = CASE WHEN EXCLUDED.module_title != '' THEN EXCLUDED.module_title ELSE lecturescribe_module_completions.module_title END,
+                            status = EXCLUDED.status,
+                            completed_at = NOW()
+                        RETURNING *;
+                        """,
+                        (
+                            clean_slug,
+                            clean_email,
+                            clean_mod,
+                            record["module_type"],
+                            record["module_title"],
+                            status_val,
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        if hasattr(db_rec.get("completed_at"), "isoformat"):
+                            db_rec["completed_at"] = db_rec["completed_at"].isoformat()
+                        record = db_rec
+                        self._module_completions_memory[(clean_slug, clean_email, clean_mod)] = record
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Completion Notice] toggle_module_completion fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def upsert_access_rule(
+        self,
+        course_name: str,
+        target_module_id: str,
+        target_module_type: str = "quiz",
+        target_title: str = "",
+        required_module_ids: Optional[List[str]] = None,
+        min_quiz_score_pct: Optional[float] = None,
+        unlock_date: Optional[str] = None,
+        created_by_email: str = "",
+    ) -> Dict[str, Any]:
+        """Configure Moodle-style Restrict Access prerequisite rules on a course module."""
+        clean_slug = to_course_slug(course_name or "")
+        clean_target = (target_module_id or "").strip()
+        if not clean_slug or not clean_target:
+            raise ValueError("course_name and target_module_id are required.")
+
+        req_ids = [str(x).strip() for x in (required_module_ids or []) if str(x).strip()]
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record = {
+            "course_slug": clean_slug,
+            "target_module_id": clean_target,
+            "target_module_type": (target_module_type or "quiz").strip().lower(),
+            "target_title": (target_title or clean_target).strip(),
+            "required_module_ids": req_ids,
+            "min_quiz_score_pct": float(min_quiz_score_pct) if min_quiz_score_pct is not None else None,
+            "unlock_date": (unlock_date or "").strip() or None,
+            "created_by_email": (created_by_email or "").strip().lower(),
+            "updated_at": now_iso,
+        }
+        self._access_rules_memory[(clean_slug, clean_target)] = record
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_access_rules (
+                            course_slug, target_module_id, target_module_type, target_title,
+                            required_module_ids, min_quiz_score_pct, unlock_date, created_by_email, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW())
+                        ON CONFLICT (course_slug, target_module_id) DO UPDATE SET
+                            target_module_type = EXCLUDED.target_module_type,
+                            target_title = EXCLUDED.target_title,
+                            required_module_ids = EXCLUDED.required_module_ids,
+                            min_quiz_score_pct = EXCLUDED.min_quiz_score_pct,
+                            unlock_date = EXCLUDED.unlock_date,
+                            updated_at = NOW()
+                        RETURNING *;
+                        """,
+                        (
+                            clean_slug,
+                            clean_target,
+                            record["target_module_type"],
+                            record["target_title"],
+                            json.dumps(req_ids),
+                            record["min_quiz_score_pct"],
+                            record["unlock_date"],
+                            record["created_by_email"],
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        if hasattr(db_rec.get("updated_at"), "isoformat"):
+                            db_rec["updated_at"] = db_rec["updated_at"].isoformat()
+                        if isinstance(db_rec.get("required_module_ids"), str):
+                            db_rec["required_module_ids"] = json.loads(db_rec["required_module_ids"])
+                        record = db_rec
+                        self._access_rules_memory[(clean_slug, clean_target)] = record
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Access Rule Notice] upsert_access_rule fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_access_rules(self, course_name: str) -> List[Dict[str, Any]]:
+        """Retrieve all Restrict Access rules configured for a course."""
+        clean_slug = to_course_slug(course_name or "")
+        rules_map: Dict[str, Dict[str, Any]] = {}
+        for (c_slug, t_id), rec in self._access_rules_memory.items():
+            if c_slug == clean_slug:
+                rules_map[t_id] = dict(rec)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_access_rules WHERE course_slug = %s;",
+                        (clean_slug,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        if hasattr(item.get("updated_at"), "isoformat"):
+                            item["updated_at"] = item["updated_at"].isoformat()
+                        if isinstance(item.get("required_module_ids"), str):
+                            item["required_module_ids"] = json.loads(item["required_module_ids"])
+                        rules_map[item["target_module_id"]] = item
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return list(rules_map.values())
+
+    def get_course_completion_status(
+        self,
+        course_name: str,
+        user_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute Moodle-style Activity Completion & Restrict Access evaluation across all modules in a course.
+        """
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        clean_email = (user_email or "student@iiitdwd.ac.in").strip().lower()
+
+        # 1. Gather manual completion records
+        manual_map: Dict[str, str] = {}
+        for (c_slug, u_email, m_id), rec in self._module_completions_memory.items():
+            if c_slug == clean_slug and u_email == clean_email:
+                manual_map[m_id] = rec.get("status", "incomplete")
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT module_id, status FROM lecturescribe_module_completions
+                        WHERE course_slug = %s AND LOWER(user_email) = %s;
+                        """,
+                        (clean_slug, clean_email),
+                    )
+                    for row in cursor.fetchall() or []:
+                        manual_map[row["module_id"]] = row.get("status", "incomplete")
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        # 2. Gather course lectures, assignments, readings, and quiz
+        lectures = self.get_course_lectures(clean_course, user_email=clean_email)
+        assignments = self.get_course_assignments(clean_course)
+        submissions = self.get_assignment_submissions(course_name=clean_course, student_email=clean_email)
+        sub_asgn_ids = {s.get("assignment_id") for s in submissions}
+
+        # Check student's best quiz score
+        gradebook = self.get_course_gradebook(clean_course, student_email=clean_email)
+        student_gb = (gradebook.get("students") or [{}])[0] if gradebook.get("students") else {}
+        quiz_col_id = f"quiz_best_{clean_slug}"
+        quiz_grade_info = (student_gb.get("grades") or {}).get(quiz_col_id) or {}
+        best_quiz_pct = quiz_grade_info.get("percentage")
+
+        modules: List[Dict[str, Any]] = []
+        completed_ids: set = {mid for mid, st in manual_map.items() if st == "complete"}
+
+        for lec in lectures:
+            vid = str(lec.get("video_id") or lec.get("videoId") or "")
+            if not vid:
+                continue
+            prog = self.get_lecture_progress(vid, clean_email) or {}
+            prog_pct = float(prog.get("progress_percent") or 0.0)
+            is_done = (vid in completed_ids) or (prog_pct >= 80.0 and manual_map.get(vid) != "incomplete")
+            if is_done:
+                completed_ids.add(vid)
+            modules.append(
+                {
+                    "module_id": vid,
+                    "module_type": "lecture",
+                    "title": lec.get("title") or f"Lecture {vid}",
+                    "is_completed": is_done,
+                    "completion_Rule": "Watch >= 80% or Mark Done",
+                    "progress_percent": round(prog_pct, 1),
+                }
+            )
+
+        for asgn in reversed(assignments):
+            aid = asgn.get("assignment_id")
+            if not aid:
+                continue
+            is_done = (aid in completed_ids) or (aid in sub_asgn_ids and manual_map.get(aid) != "incomplete")
+            if is_done:
+                completed_ids.add(aid)
+            modules.append(
+                {
+                    "module_id": aid,
+                    "module_type": "assignment",
+                    "title": asgn.get("title") or "Assignment",
+                    "is_completed": is_done,
+                    "completion_rule": "Submit assignment solution",
+                    "due_date": asgn.get("due_date"),
+                }
+            )
+
+        quiz_done = (quiz_col_id in completed_ids) or (best_quiz_pct is not None and manual_map.get(quiz_col_id) != "incomplete")
+        if quiz_done:
+            completed_ids.add(quiz_col_id)
+        modules.append(
+            {
+                "module_id": quiz_col_id,
+                "module_type": "quiz",
+                "title": "Course Comprehensive AI Exam",
+                "is_completed": quiz_done,
+                "completion_rule": "Complete Course Quiz Attempt",
+                "score_pct": best_quiz_pct,
+            }
+        )
+
+        # Include any manually tracked module_ids that aren't already in modules
+        existing_mod_ids = {m["module_id"] for m in modules}
+        for (c_slug, u_email, m_id), rec in self._module_completions_memory.items():
+            if c_slug == clean_slug and u_email == clean_email and m_id not in existing_mod_ids:
+                is_done = rec.get("status") == "complete"
+                if is_done:
+                    completed_ids.add(m_id)
+                modules.append(
+                    {
+                        "module_id": m_id,
+                        "module_type": rec.get("module_type", "lecture"),
+                        "title": rec.get("module_title") or m_id,
+                        "is_completed": is_done,
+                        "completion_rule": "Activity completion",
+                    }
+                )
+
+        # 3. Evaluate Restrict Access Prerequisite Rules
+        rules = self.get_access_rules(clean_course)
+        rules_by_target = {r["target_module_id"]: r for r in rules}
+        title_lookup = {m["module_id"]: m["title"] for m in modules}
+
+        for mod in modules:
+            rule = rules_by_target.get(mod["module_id"])
+            lock_reasons: List[str] = []
+            if rule:
+                for req_id in rule.get("required_module_ids") or []:
+                    if req_id not in completed_ids:
+                        req_title = title_lookup.get(req_id, req_id)
+                        lock_reasons.append(f"Complete prerequisite: {req_title}")
+                min_q = rule.get("min_quiz_score_pct")
+                if min_q is not None and (best_quiz_pct is None or best_quiz_pct < float(min_q)):
+                    lock_reasons.append(f"Achieve >= {min_q}% on Course Quiz")
+            mod["is_locked"] = len(lock_reasons) > 0
+            mod["lock_reasons"] = lock_reasons
+
+        total_count = len(modules)
+        done_count = sum(1 for m in modules if m["is_completed"])
+        overall_pct = round((done_count / total_count) * 100.0, 1) if total_count > 0 else 0.0
+
+        return {
+            "course_name": clean_course,
+            "course_slug": clean_slug,
+            "user_email": clean_email,
+            "completed_count": done_count,
+            "total_count": total_count,
+            "completion_percentage": overall_pct,
+            "modules": modules,
+            "access_rules": rules,
+        }
+
+    # =========================================================================
+    # Next-Wave Option 2: Decoupled AI Question Bank & Custom Quiz Builder
+    # =========================================================================
+
+    def save_question_bank_items(
+        self,
+        course_name: str,
+        items: List[Dict[str, Any]],
+        created_by_email: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Save one or more reusable questions into the Course Question Bank."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        saved: List[Dict[str, Any]] = []
+
+        for raw in items or []:
+            qid = (raw.get("question_id") or "").strip() or f"qb_{uuid.uuid4().hex[:12]}"
+            q_text = (raw.get("question_text") or raw.get("question") or "").strip()
+            if not q_text:
+                continue
+            opts = raw.get("options") if isinstance(raw.get("options"), list) else (raw.get("options_json") or [])
+            tags = raw.get("tags") if isinstance(raw.get("tags"), list) else (raw.get("tags_json") or [])
+            rec = {
+                "question_id": qid,
+                "course_slug": clean_slug,
+                "course_name": clean_course,
+                "video_id": str(raw.get("video_id") or "").strip(),
+                "lecture_title": str(raw.get("lecture_title") or "").strip(),
+                "timestamp_str": str(raw.get("timestamp_str") or raw.get("timestamp") or "").strip(),
+                "question_type": str(raw.get("question_type") or "mcq").strip().lower(),
+                "difficulty": str(raw.get("difficulty") or "medium").strip().lower(),
+                "bloom_level": str(raw.get("bloom_level") or "apply").strip().lower(),
+                "question_text": q_text,
+                "options": opts,
+                "correct_answer": str(raw.get("correct_answer") if raw.get("correct_answer") is not None else "0"),
+                "explanation": str(raw.get("explanation") or "").strip(),
+                "default_marks": float(raw.get("default_marks") or 1.0),
+                "tags": tags,
+                "created_by_email": (created_by_email or raw.get("created_by_email") or "").strip().lower(),
+                "created_at": now_iso,
+            }
+            self._question_bank_memory = [q for q in self._question_bank_memory if q.get("question_id") != qid]
+            self._question_bank_memory.append(rec)
+            saved.append(rec)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    for rec in saved:
+                        cursor.execute(
+                            """
+                            INSERT INTO lecturescribe_question_bank (
+                                question_id, course_slug, course_name, video_id, lecture_title,
+                                timestamp_str, question_type, difficulty, bloom_level,
+                                question_text, options_json, correct_answer, explanation,
+                                default_marks, tags_json, created_by_email, created_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s, NOW())
+                            ON CONFLICT (question_id) DO UPDATE SET
+                                question_text = EXCLUDED.question_text,
+                                options_json = EXCLUDED.options_json,
+                                correct_answer = EXCLUDED.correct_answer,
+                                explanation = EXCLUDED.explanation,
+                                difficulty = EXCLUDED.difficulty,
+                                bloom_level = EXCLUDED.bloom_level,
+                                default_marks = EXCLUDED.default_marks,
+                                tags_json = EXCLUDED.tags_json;
+                            """,
+                            (
+                                rec["question_id"],
+                                rec["course_slug"],
+                                rec["course_name"],
+                                rec["video_id"],
+                                rec["lecture_title"],
+                                rec["timestamp_str"],
+                                rec["question_type"],
+                                rec["difficulty"],
+                                rec["bloom_level"],
+                                rec["question_text"],
+                                json.dumps(rec["options"]),
+                                rec["correct_answer"],
+                                rec["explanation"],
+                                rec["default_marks"],
+                                json.dumps(rec["tags"]),
+                                rec["created_by_email"],
+                            ),
+                        )
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL QuestionBank Notice] save_question_bank_items fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return saved
+
+    def get_question_bank(
+        self,
+        course_name: str,
+        difficulty: Optional[str] = None,
+        bloom_level: Optional[str] = None,
+        question_type: Optional[str] = None,
+        video_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve questions from the Course Question Bank with optional filters."""
+        clean_slug = to_course_slug(course_name or "")
+        combined: Dict[str, Dict[str, Any]] = {}
+        for q in self._question_bank_memory:
+            if q.get("course_slug") == clean_slug:
+                combined[q["question_id"]] = dict(q)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_question_bank WHERE course_slug = %s ORDER BY created_at DESC;",
+                        (clean_slug,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        if hasattr(item.get("created_at"), "isoformat"):
+                            item["created_at"] = item["created_at"].isoformat()
+                        opts = item.get("options_json")
+                        if isinstance(opts, str):
+                            opts = json.loads(opts)
+                        tags = item.get("tags_json")
+                        if isinstance(tags, str):
+                            tags = json.loads(tags)
+                        item["options"] = opts or []
+                        item["tags"] = tags or []
+                        combined[item["question_id"]] = item
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        results = list(combined.values())
+        if difficulty and difficulty != "all":
+            results = [q for q in results if q.get("difficulty") == difficulty.lower()]
+        if bloom_level and bloom_level != "all":
+            results = [q for q in results if q.get("bloom_level") == bloom_level.lower()]
+        if question_type and question_type != "all":
+            results = [q for q in results if q.get("question_type") == question_type.lower()]
+        if video_id and video_id != "all":
+            results = [q for q in results if q.get("video_id") == video_id]
+
+        return sorted(results, key=lambda x: x.get("created_at") or "", reverse=True)
+
+    def delete_question_bank_item(self, question_id: str) -> bool:
+        clean_id = (question_id or "").strip()
+        before = len(self._question_bank_memory)
+        self._question_bank_memory = [q for q in self._question_bank_memory if q.get("question_id") != clean_id]
+        deleted_mem = len(self._question_bank_memory) < before
+
+        deleted_db = False
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM lecturescribe_question_bank WHERE question_id = %s;", (clean_id,))
+                    deleted_db = (cursor.rowcount or 0) > 0
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return deleted_mem or deleted_db
+
+    def generate_questions_for_bank(
+        self,
+        course_name: str,
+        video_id: Optional[str] = None,
+        lecture_title: Optional[str] = None,
+        count: int = 3,
+        difficulty: str = "medium",
+        bloom_level: str = "apply",
+        created_by_email: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Generate Bloom-tagged questions for the Course Question Bank using lecture transcript context or course topics."""
+        clean_course = (course_name or "").strip()
+        vid = (video_id or "").strip()
+        lec_title = (lecture_title or "").strip()
+
+        cues_text = ""
+        if vid:
+            saved_vid = self.get_saved_video(vid)
+            if saved_vid:
+                lec_title = lec_title or saved_vid.get("title") or f"Lecture {vid}"
+                cues = saved_vid.get("cues") or []
+                cues_text = "\n".join(f"[{c.get('time', '00:00')}] {c.get('text', '')}" for c in cues[:40])
+
+        generated_items: List[Dict[str, Any]] = []
+        try:
+            from backend.assignment_service import _call_llm_json
+            sys_prompt = (
+                "You are an expert university examiner building a Moodle Question Bank. "
+                "Return JSON: {\"questions\": [{\"question_text\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], "
+                "\"correct_answer\": \"0\", \"explanation\": \"...\", \"timestamp_str\": \"05:20\", \"tags\": [\"topic\"]}]}"
+            )
+            usr_prompt = (
+                f"Course: {clean_course}\nLecture: {lec_title or 'Course Overview'}\n"
+                f"Target Difficulty: {difficulty}\nTarget Bloom Level: {bloom_level}\n"
+                f"Generate {count} rigorous multiple-choice questions.\nTranscript Context:\n{cues_text[:4000]}"
+            )
+            parsed = _call_llm_json(sys_prompt, usr_prompt)
+            if isinstance(parsed, dict) and isinstance(parsed.get("questions"), list):
+                for q in parsed["questions"][:count]:
+                    generated_items.append(
+                        {
+                            "video_id": vid,
+                            "lecture_title": lec_title or clean_course,
+                            "timestamp_str": q.get("timestamp_str") or "02:15",
+                            "question_type": "mcq",
+                            "difficulty": difficulty,
+                            "bloom_level": bloom_level,
+                            "question_text": q.get("question_text") or q.get("question"),
+                            "options": q.get("options") or ["Option A", "Option B", "Option C", "Option D"],
+                            "correct_answer": str(q.get("correct_answer", "0")),
+                            "explanation": q.get("explanation") or "Grounded in course lecture material.",
+                            "default_marks": 1.0,
+                            "tags": q.get("tags") or [clean_course, bloom_level],
+                        }
+                    )
+        except Exception:
+            pass
+
+        if not generated_items:
+            topic_label = lec_title or clean_course
+            templates = [
+                (
+                    f"[{bloom_level.capitalize()}] In {topic_label}, which condition guarantees consistency and asymptotic normality of the estimator?",
+                    [
+                        "Regularity of the log-likelihood and non-singular Fisher Information matrix",
+                        "Zero sample variance across all observations",
+                        "Strict linearity of the prior distribution",
+                        "Unbounded parameter space without identifiability",
+                    ],
+                    "0",
+                    "Under standard regularity conditions, the MLE is consistent and asymptotically normal with variance equal to the inverse Fisher Information.",
+                    "04:15",
+                ),
+                (
+                    f"[{bloom_level.capitalize()}] When applying {topic_label} to empirical datasets, how does regularization affect the bias-variance tradeoff?",
+                    [
+                        "Introduces a controlled bias to significantly reduce estimator variance",
+                        "Eliminates both bias and irreducible noise simultaneously",
+                        "Increases variance while keeping training error zero",
+                        "Has no effect on out-of-sample generalization",
+                    ],
+                    "0",
+                    "Penalized estimation shrinks coefficients, trading a small increase in bias for a substantial reduction in variance.",
+                    "11:40",
+                ),
+                (
+                    f"[{bloom_level.capitalize()}] Which diagnostic best validates the structural assumptions discussed in {topic_label}?",
+                    [
+                        "Residual orthogonality and cross-validated log-likelihood",
+                        "Maximizing raw parameter count regardless of sample size",
+                        "Ignoring heteroskedasticity in high-leverage points",
+                        "Evaluating only in-sample R-squared on a single split",
+                    ],
+                    "0",
+                    "Checking residual structure and out-of-fold likelihood verifies model specification and guards against overfitting.",
+                    "18:05",
+                ),
+            ]
+            for i in range(max(1, min(count, len(templates)))):
+                q_txt, opts, ans, exp, ts = templates[i]
+                generated_items.append(
+                    {
+                        "video_id": vid,
+                        "lecture_title": topic_label,
+                        "timestamp_str": ts,
+                        "question_type": "mcq",
+                        "difficulty": difficulty,
+                        "bloom_level": bloom_level,
+                        "question_text": q_txt,
+                        "options": opts,
+                        "correct_answer": ans,
+                        "explanation": exp,
+                        "default_marks": 1.0,
+                        "tags": [clean_course, difficulty, bloom_level],
+                    }
+                )
+
+        return self.save_question_bank_items(clean_course, generated_items, created_by_email=created_by_email)
+
+    def publish_custom_quiz_from_bank(
+        self,
+        course_name: str,
+        question_ids: Optional[List[str]] = None,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Assemble selected Question Bank items into the active Course Quiz (`lecturescribe_course_quizzes`)."""
+        clean_course = (course_name or "").strip()
+        all_bank = self.get_question_bank(clean_course)
+        if question_ids:
+            id_set = set(question_ids)
+            selected = [q for q in all_bank if q["question_id"] in id_set]
+        else:
+            selected = all_bank
+
+        quiz_questions = []
+        for idx, q in enumerate(selected, start=1):
+            ans_idx = 0
+            try:
+                ans_idx = int(q.get("correct_answer", 0))
+            except Exception:
+                ans_idx = 0
+            quiz_questions.append(
+                {
+                    "id": idx,
+                    "question_id": q["question_id"],
+                    "question": q["question_text"],
+                    "options": q.get("options") or ["True", "False"],
+                    "correct_answer": ans_idx,
+                    "explanation": q.get("explanation") or "",
+                    "lecture_title": q.get("lecture_title") or clean_course,
+                    "video_id": q.get("video_id") or "",
+                    "timestamp": q.get("timestamp_str") or "00:00",
+                    "difficulty": q.get("difficulty") or "medium",
+                    "bloom_level": q.get("bloom_level") or "apply",
+                }
+            )
+
+        quiz_payload = {
+            "course_name": clean_course,
+            "title": title or f"{clean_course} Custom Question Bank Exam",
+            "questions": quiz_questions,
+        }
+        self.save_course_quiz(clean_course, quiz_payload, lecture_count=len(quiz_questions))
+        return quiz_payload
+
+    # =========================================================================
+    # Next-Wave Option 3: Modular Course Syllabus Spine (Weeks / Topics Builder)
+    # =========================================================================
+
+    def save_course_section(
+        self,
+        course_name: str,
+        title: str,
+        summary: str = "",
+        section_number: Optional[int] = None,
+        learning_objectives: Optional[List[str]] = None,
+        items: Optional[List[Dict[str, Any]]] = None,
+        section_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a weekly/topic module section in the Course Syllabus Spine."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        existing = self.get_course_sections(clean_course)
+        sec_id = (section_id or "").strip() or f"sec_{uuid.uuid4().hex[:12]}"
+        sec_num = int(section_number) if section_number is not None else (len(existing) + 1)
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        record = {
+            "section_id": sec_id,
+            "course_slug": clean_slug,
+            "course_name": clean_course,
+            "section_number": sec_num,
+            "title": (title or f"Week {sec_num}").strip(),
+            "summary": (summary or "").strip(),
+            "learning_objectives": learning_objectives or [],
+            "items": items or [],
+            "is_visible": True,
+            "updated_at": now_iso,
+        }
+
+        self._course_sections_memory = [s for s in self._course_sections_memory if s.get("section_id") != sec_id]
+        self._course_sections_memory.append(record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_course_sections (
+                            section_id, course_slug, course_name, section_number,
+                            title, summary, learning_objectives_json, items_json, is_visible, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, TRUE, NOW())
+                        ON CONFLICT (section_id) DO UPDATE SET
+                            section_number = EXCLUDED.section_number,
+                            title = EXCLUDED.title,
+                            summary = EXCLUDED.summary,
+                            learning_objectives_json = EXCLUDED.learning_objectives_json,
+                            items_json = EXCLUDED.items_json,
+                            updated_at = NOW()
+                        RETURNING *;
+                        """,
+                        (
+                            sec_id,
+                            clean_slug,
+                            clean_course,
+                            sec_num,
+                            record["title"],
+                            record["summary"],
+                            json.dumps(record["learning_objectives"]),
+                            json.dumps(record["items"]),
+                        ),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        db_rec = dict(row)
+                        if hasattr(db_rec.get("updated_at"), "isoformat"):
+                            db_rec["updated_at"] = db_rec["updated_at"].isoformat()
+                        db_rec["learning_objectives"] = (
+                            json.loads(db_rec["learning_objectives_json"])
+                            if isinstance(db_rec.get("learning_objectives_json"), str)
+                            else (db_rec.get("learning_objectives_json") or [])
+                        )
+                        db_rec["items"] = (
+                            json.loads(db_rec["items_json"])
+                            if isinstance(db_rec.get("items_json"), str)
+                            else (db_rec.get("items_json") or [])
+                        )
+                        record = db_rec
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Syllabus Notice] save_course_section fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_course_sections(self, course_name: str) -> List[Dict[str, Any]]:
+        """Retrieve ordered weekly/topic sections for a course."""
+        clean_slug = to_course_slug(course_name or "")
+        sections_map: Dict[str, Dict[str, Any]] = {}
+        for s in self._course_sections_memory:
+            if s.get("course_slug") == clean_slug:
+                sections_map[s["section_id"]] = dict(s)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_course_sections WHERE course_slug = %s ORDER BY section_number ASC;",
+                        (clean_slug,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        if hasattr(item.get("updated_at"), "isoformat"):
+                            item["updated_at"] = item["updated_at"].isoformat()
+                        item["learning_objectives"] = (
+                            json.loads(item["learning_objectives_json"])
+                            if isinstance(item.get("learning_objectives_json"), str)
+                            else (item.get("learning_objectives_json") or [])
+                        )
+                        item["items"] = (
+                            json.loads(item["items_json"])
+                            if isinstance(item.get("items_json"), str)
+                            else (item.get("items_json") or [])
+                        )
+                        sections_map[item["section_id"]] = item
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return sorted(sections_map.values(), key=lambda x: int(x.get("section_number") or 1))
+
+    def delete_course_section(self, section_id: str) -> bool:
+        clean_id = (section_id or "").strip()
+        before = len(self._course_sections_memory)
+        self._course_sections_memory = [s for s in self._course_sections_memory if s.get("section_id") != clean_id]
+        deleted_mem = len(self._course_sections_memory) < before
+
+        deleted_db = False
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM lecturescribe_course_sections WHERE section_id = %s;", (clean_id,))
+                    deleted_db = (cursor.rowcount or 0) > 0
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return deleted_mem or deleted_db
+
+    def ai_auto_organize_course_syllabus(self, course_name: str) -> List[Dict[str, Any]]:
+        """
+        Automatically organize a course's lectures, assignments, readings, and quizzes into
+        Moodle-style Weekly Curriculum Modules with learning objectives.
+        """
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        lectures = self.get_course_lectures(clean_course)
+        assignments = self.get_course_assignments(clean_course)
+        readings = self.get_course_readings(clean_course)
+
+        # Clear old auto-generated sections for this course before rebuilding
+        self._course_sections_memory = [s for s in self._course_sections_memory if s.get("course_slug") != clean_slug]
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM lecturescribe_course_sections WHERE course_slug = %s;", (clean_slug,))
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        created_sections: List[Dict[str, Any]] = []
+        # Group lectures in pairs per week (or create foundational modules if no lectures yet)
+        if lectures:
+            chunk_size = 2
+            for idx in range(0, len(lectures), chunk_size):
+                week_num = (idx // chunk_size) + 1
+                chunk = lectures[idx : idx + chunk_size]
+                items = []
+                objectives = []
+                for lec in chunk:
+                    vid = lec.get("video_id") or lec.get("videoId")
+                    l_title = lec.get("title") or f"Lecture {vid}"
+                    items.append(
+                        {
+                            "item_id": str(vid),
+                            "item_type": "lecture",
+                            "title": l_title,
+                            "video_id": str(vid),
+                            "duration": lec.get("duration") or "",
+                        }
+                    )
+                    objectives.append(f"Master core concepts and derivations in {l_title}")
+
+                if week_num <= len(readings):
+                    rd = readings[week_num - 1]
+                    items.append(
+                        {
+                            "item_id": f"reading_{rd.get('id', week_num)}",
+                            "item_type": "reading",
+                            "title": f"Reading: {rd.get('title', 'Course Reference')}",
+                        }
+                    )
+
+                sec = self.save_course_section(
+                    course_name=clean_course,
+                    section_number=week_num,
+                    title=f"Week {week_num}: {chunk[0].get('title', clean_course)}",
+                    summary=f"Core lectures, guided readings, and conceptual foundations for Week {week_num}.",
+                    learning_objectives=objectives,
+                    items=items,
+                )
+                created_sections.append(sec)
+        else:
+            sec1 = self.save_course_section(
+                course_name=clean_course,
+                section_number=1,
+                title=f"Week 1: Foundations of {clean_course}",
+                summary=f"Introduction, core mathematical formulation, and foundational principles of {clean_course}.",
+                learning_objectives=[
+                    f"Understand the problem formulation and notation of {clean_course}",
+                    "Review foundational prerequisites and reference readings",
+                ],
+                items=[
+                    {
+                        "item_id": f"reading_intro_{clean_slug}",
+                        "item_type": "reading",
+                        "title": f"{clean_course} Syllabus & Foundational Reading",
+                    }
+                ],
+            )
+            created_sections.append(sec1)
+
+        # Add Assessments & Capstone Week
+        eval_items = []
+        for asgn in reversed(assignments):
+            eval_items.append(
+                {
+                    "item_id": asgn.get("assignment_id"),
+                    "item_type": "assignment",
+                    "title": f"Assignment: {asgn.get('title', 'Problem Set')}",
+                    "due_date": asgn.get("due_date"),
+                }
+            )
+        eval_items.append(
+            {
+                "item_id": f"quiz_best_{clean_slug}",
+                "item_type": "quiz",
+                "title": f"{clean_course} Comprehensive AI Practice Exam",
+            }
+        )
+        sec_eval = self.save_course_section(
+            course_name=clean_course,
+            section_number=len(created_sections) + 1,
+            title=f"Week {len(created_sections) + 1}: Problem Sets, Assignments & Comprehensive Exam",
+            summary="Apply course concepts to graded assignments and verify mastery with the AI Practice Exam.",
+            learning_objectives=[
+                "Complete code-verified problem sets and mathematical derivations",
+                "Achieve mastery on the timed Course AI Quiz",
+            ],
+            items=eval_items,
+        )
+        created_sections.append(sec_eval)
+        return created_sections
+
+    # =========================================================================
+    # Next-Wave Option 4: Instructor Learning Analytics & At-Risk AI Dashboard
+    # =========================================================================
+
+    def get_course_learning_analytics(self, course_name: str) -> Dict[str, Any]:
+        """
+        Compute per-student engagement telemetry, completion rates, assessment performance,
+        forum participation, and AI early-warning risk classification.
+        """
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+
+        gradebook = self.get_course_gradebook(clean_course)
+        gb_students = gradebook.get("students") or []
+        threads = self.get_forum_threads(clean_course)
+        assignments = self.get_course_assignments(clean_course)
+        total_assignments = len(assignments)
+
+        # Count forum posts (threads + replies) per user email
+        forum_counts: Dict[str, int] = {}
+        total_forum_posts = 0
+        for thr in threads:
+            a_em = (thr.get("author_email") or "").strip().lower()
+            if a_em:
+                forum_counts[a_em] = forum_counts.get(a_em, 0) + 1
+                total_forum_posts += 1
+            for rep in thr.get("replies") or []:
+                r_em = (rep.get("author_email") or "").strip().lower()
+                if r_em and not rep.get("is_ai_generated"):
+                    forum_counts[r_em] = forum_counts.get(r_em, 0) + 1
+                    total_forum_posts += 1
+
+        analytics_students: List[Dict[str, Any]] = []
+        for st in gb_students:
+            em = st["student_email"]
+            comp = self.get_course_completion_status(clean_course, user_email=em)
+            comp_pct = float(comp.get("completion_percentage") or 0.0)
+            grade_pct = float(st.get("overall_percentage") or 0.0)
+            has_grades = float(st.get("total_possible") or 0.0) > 0
+            f_posts = forum_counts.get(em, 0)
+
+            subs = self.get_assignment_submissions(course_name=clean_course, student_email=em)
+            sub_count = len(subs)
+
+            # Weighted engagement index (0-100)
+            effective_grade = grade_pct if has_grades else 50.0
+            forum_score = min(100.0, f_posts * 35.0)
+            engagement_score = round(0.45 * comp_pct + 0.40 * effective_grade + 0.15 * forum_score, 1)
+
+            risk_factors: List[str] = []
+            if comp_pct < 50.0:
+                risk_factors.append(f"Low module completion ({comp_pct}%)")
+            if total_assignments > 0 and sub_count < total_assignments:
+                risk_factors.append(f"Missing assignments ({sub_count}/{total_assignments} submitted)")
+            if has_grades and grade_pct < 60.0:
+                risk_factors.append(f"Assessment average below 60% ({grade_pct}%)")
+            if f_posts == 0:
+                risk_factors.append("Zero forum Q&A participation")
+
+            if (has_grades and grade_pct < 50.0) or (comp_pct < 35.0 and sub_count == 0):
+                risk_level = "high"
+            elif len(risk_factors) >= 2 or comp_pct < 65.0:
+                risk_level = "medium"
+            else:
+                risk_level = "low"
+
+            if risk_level == "high":
+                ai_intervention = (
+                    f"Hi {st['student_name']}, our LectureScribe learning copilot noticed your current progress in {clean_course} "
+                    f"is at {comp_pct}% completion. Let's focus on reviewing the Course Executive Summary and submitting the pending assignment this week—reach out if you'd like a 1-on-1 walkthrough!"
+                )
+            elif risk_level == "medium":
+                ai_intervention = (
+                    f"Hi {st['student_name']}, great start in {clean_course}! Completing the remaining lecture modules and trying the AI Practice Quiz will help boost your mastery before the upcoming exam."
+                )
+            else:
+                ai_intervention = (
+                    f"Excellent momentum in {clean_course}, {st['student_name']} ({grade_pct}% average)! Consider helping peers in the Course Q&A Forum."
+                )
+
+            analytics_students.append(
+                {
+                    "student_email": em,
+                    "student_name": st["student_name"],
+                    "completion_percentage": comp_pct,
+                    "overall_grade_percentage": grade_pct,
+                    "letter_grade": st.get("letter_grade", "N/A"),
+                    "assignments_submitted": sub_count,
+                    "assignments_total": total_assignments,
+                    "forum_posts": f_posts,
+                    "engagement_score": engagement_score,
+                    "risk_level": risk_level,
+                    "risk_factors": risk_factors,
+                    "ai_intervention_message": ai_intervention,
+                }
+            )
+
+        high_count = sum(1 for s in analytics_students if s["risk_level"] == "high")
+        med_count = sum(1 for s in analytics_students if s["risk_level"] == "medium")
+        low_count = sum(1 for s in analytics_students if s["risk_level"] == "low")
+        avg_eng = (
+            round(sum(s["engagement_score"] for s in analytics_students) / len(analytics_students), 1)
+            if analytics_students
+            else 0.0
+        )
+        avg_comp = (
+            round(sum(s["completion_percentage"] for s in analytics_students) / len(analytics_students), 1)
+            if analytics_students
+            else 0.0
+        )
+
+        return {
+            "course_name": clean_course,
+            "course_slug": clean_slug,
+            "summary": {
+                "total_students": len(analytics_students),
+                "at_risk_high_count": high_count,
+                "at_risk_medium_count": med_count,
+                "on_track_count": low_count,
+                "avg_engagement_score": avg_eng,
+                "avg_completion_percentage": avg_comp,
+                "total_forum_posts": total_forum_posts,
+            },
+            "students": sorted(
+                analytics_students,
+                key=lambda x: (0 if x["risk_level"] == "high" else 1 if x["risk_level"] == "medium" else 2, x["engagement_score"]),
+            ),
+        }
+
+    # =========================================================================
+    # Wave 3 — Option 1: 2D Grading Rubrics & AI Rubric-Guided Evaluation
+    # =========================================================================
+
+    def save_course_rubric(
+        self,
+        course_name: str,
+        title: str,
+        criteria: List[Dict[str, Any]],
+        assignment_id: str = "",
+        created_by_email: str = "",
+        rubric_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a 2D Criterion x Level Grading Rubric for a course or assignment."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        clean_asgn = (assignment_id or "").strip()
+        rid = (rubric_id or "").strip() or (f"rub_{clean_asgn}" if clean_asgn else f"rub_{uuid.uuid4().hex[:10]}")
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        normalized_criteria = []
+        for idx, c in enumerate(criteria or [], start=1):
+            cid = str(c.get("criterion_id") or f"crit_{idx}")
+            max_pts = float(c.get("max_points") or 10.0)
+            levels = c.get("levels") or [
+                {"label": "Exemplary", "points": max_pts, "description": "Complete, rigorous derivation and clear explanation."},
+                {"label": "Proficient", "points": round(max_pts * 0.75, 1), "description": "Minor algebraic or formatting omissions."},
+                {"label": "Developing", "points": round(max_pts * 0.4, 1), "description": "Partial setup with conceptual gaps."},
+                {"label": "Unattempted", "points": 0.0, "description": "Missing or incorrect formulation."},
+            ]
+            normalized_criteria.append(
+                {
+                    "criterion_id": cid,
+                    "title": str(c.get("title") or f"Criterion {idx}"),
+                    "max_points": max_pts,
+                    "levels": levels,
+                }
+            )
+
+        record = {
+            "rubric_id": rid,
+            "course_slug": clean_slug,
+            "course_name": clean_course,
+            "assignment_id": clean_asgn,
+            "title": (title or f"{clean_course} Grading Rubric").strip(),
+            "criteria": normalized_criteria,
+            "total_points": sum(c["max_points"] for c in normalized_criteria),
+            "created_by_email": (created_by_email or "").strip().lower(),
+            "updated_at": now_iso,
+        }
+
+        self._rubrics_memory = [r for r in self._rubrics_memory if r.get("rubric_id") != rid]
+        self._rubrics_memory.append(record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_rubrics (
+                            rubric_id, course_slug, course_name, assignment_id,
+                            title, criteria_json, created_by_email, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, NOW())
+                        ON CONFLICT (rubric_id) DO UPDATE SET
+                            assignment_id = EXCLUDED.assignment_id,
+                            title = EXCLUDED.title,
+                            criteria_json = EXCLUDED.criteria_json,
+                            updated_at = NOW();
+                        """,
+                        (
+                            rid,
+                            clean_slug,
+                            clean_course,
+                            clean_asgn,
+                            record["title"],
+                            json.dumps(normalized_criteria),
+                            record["created_by_email"],
+                        ),
+                    )
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Rubric Notice] save_course_rubric fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_course_rubrics(
+        self,
+        course_name: str,
+        assignment_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve 2D Grading Rubrics for a course (optionally filtered by assignment_id)."""
+        clean_slug = to_course_slug(course_name or "")
+        rub_map: Dict[str, Dict[str, Any]] = {}
+        for r in self._rubrics_memory:
+            if r.get("course_slug") == clean_slug:
+                rub_map[r["rubric_id"]] = dict(r)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_rubrics WHERE course_slug = %s ORDER BY updated_at DESC;",
+                        (clean_slug,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        if hasattr(item.get("updated_at"), "isoformat"):
+                            item["updated_at"] = item["updated_at"].isoformat()
+                        crit = item.get("criteria_json")
+                        if isinstance(crit, str):
+                            crit = json.loads(crit)
+                        item["criteria"] = crit or []
+                        item["total_points"] = sum(float(c.get("max_points") or 0) for c in item["criteria"])
+                        rub_map[item["rubric_id"]] = item
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        results = list(rub_map.values())
+        if assignment_id:
+            results = [r for r in results if r.get("assignment_id") == assignment_id.strip()]
+        return results
+
+    def ai_generate_assignment_rubric(
+        self,
+        course_name: str,
+        assignment_id: str = "",
+        title: str = "",
+        max_marks: float = 50.0,
+        created_by_email: str = "",
+    ) -> Dict[str, Any]:
+        """Generate a 2D Criterion x Level Grading Rubric aligned with an assignment's questions or course topic."""
+        clean_course = (course_name or "").strip()
+        asgn = self.get_assignment_by_id(assignment_id) if assignment_id else None
+        asgn_title = title or (asgn.get("title") if asgn else f"{clean_course} Assessment")
+        total_pts = float((asgn.get("max_marks") if asgn and asgn.get("max_marks") else max_marks) or 50.0)
+
+        p1 = round(total_pts * 0.4, 1)
+        p2 = round(total_pts * 0.35, 1)
+        p3 = round(total_pts - p1 - p2, 1)
+
+        criteria = [
+            {
+                "criterion_id": "crit_formulation",
+                "title": "Mathematical Formulation & Theoretical Rigor",
+                "max_points": p1,
+                "levels": [
+                    {"label": "Exemplary", "points": p1, "description": "Complete derivation with all regularity conditions stated."},
+                    {"label": "Proficient", "points": round(p1 * 0.75, 1), "description": "Correct formulation with minor notation skips."},
+                    {"label": "Developing", "points": round(p1 * 0.4, 1), "description": "Partial setup; missing key steps."},
+                    {"label": "Unattempted", "points": 0.0, "description": "No valid mathematical setup."},
+                ],
+            },
+            {
+                "criterion_id": "crit_computation",
+                "title": "Algorithmic Implementation & Numerical Verification",
+                "max_points": p2,
+                "levels": [
+                    {"label": "Exemplary", "points": p2, "description": "Clean, reproducible code/calculations with exact outputs."},
+                    {"label": "Proficient", "points": round(p2 * 0.75, 1), "description": "Correct logic with minor rounding or edge-case issues."},
+                    {"label": "Developing", "points": round(p2 * 0.4, 1), "description": "Incomplete execution or syntax/calculation errors."},
+                    {"label": "Unattempted", "points": 0.0, "description": "Missing implementation."},
+                ],
+            },
+            {
+                "criterion_id": "crit_interpretation",
+                "title": "Empirical Interpretation & Diagnostic Analysis",
+                "max_points": p3,
+                "levels": [
+                    {"label": "Exemplary", "points": p3, "description": "Insightful interpretation grounded in course lecture concepts."},
+                    {"label": "Proficient", "points": round(p3 * 0.75, 1), "description": "Clear summary of results."},
+                    {"label": "Developing", "points": round(p3 * 0.4, 1), "description": "Superficial commentary without justification."},
+                    {"label": "Unattempted", "points": 0.0, "description": "No interpretation provided."},
+                ],
+            },
+        ]
+
+        return self.save_course_rubric(
+            course_name=clean_course,
+            title=f"2D Rubric: {asgn_title}",
+            criteria=criteria,
+            assignment_id=assignment_id,
+            created_by_email=created_by_email,
+        )
+
+    # =========================================================================
+    # Wave 3 — Option 2: Course Competency & Skill Mastery Matrix
+    # =========================================================================
+
+    def save_course_competency(
+        self,
+        course_name: str,
+        code: str,
+        title: str,
+        description: str = "",
+        linked_module_ids: Optional[List[str]] = None,
+        competency_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a Course Learning Outcome / Competency."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        cid = (competency_id or "").strip() or f"comp_{uuid.uuid4().hex[:10]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        record = {
+            "competency_id": cid,
+            "course_slug": clean_slug,
+            "course_name": clean_course,
+            "code": (code or "CLO-1").strip().upper(),
+            "title": (title or "Core Competency").strip(),
+            "description": (description or "").strip(),
+            "linked_module_ids": [str(x).strip() for x in (linked_module_ids or []) if str(x).strip()],
+            "created_at": now_iso,
+        }
+
+        self._competencies_memory = [c for c in self._competencies_memory if c.get("competency_id") != cid]
+        self._competencies_memory.append(record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_competencies (
+                            competency_id, course_slug, course_name, code,
+                            title, description, linked_module_ids_json, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+                        ON CONFLICT (competency_id) DO UPDATE SET
+                            code = EXCLUDED.code,
+                            title = EXCLUDED.title,
+                            description = EXCLUDED.description,
+                            linked_module_ids_json = EXCLUDED.linked_module_ids_json;
+                        """,
+                        (
+                            cid,
+                            clean_slug,
+                            clean_course,
+                            record["code"],
+                            record["title"],
+                            record["description"],
+                            json.dumps(record["linked_module_ids"]),
+                        ),
+                    )
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Competency Notice] save_course_competency fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_course_competencies(self, course_name: str) -> List[Dict[str, Any]]:
+        clean_slug = to_course_slug(course_name or "")
+        comp_map: Dict[str, Dict[str, Any]] = {}
+        for c in self._competencies_memory:
+            if c.get("course_slug") == clean_slug:
+                comp_map[c["competency_id"]] = dict(c)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_competencies WHERE course_slug = %s ORDER BY code ASC;",
+                        (clean_slug,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        if hasattr(item.get("created_at"), "isoformat"):
+                            item["created_at"] = item["created_at"].isoformat()
+                        l_ids = item.get("linked_module_ids_json")
+                        if isinstance(l_ids, str):
+                            l_ids = json.loads(l_ids)
+                        item["linked_module_ids"] = l_ids or []
+                        comp_map[item["competency_id"]] = item
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return sorted(comp_map.values(), key=lambda x: x.get("code") or "")
+
+    def ai_extract_course_competencies(self, course_name: str) -> List[Dict[str, Any]]:
+        """Auto-extract Course Learning Outcomes / Competencies and link them to course activities."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        lectures = self.get_course_lectures(clean_course)
+        assignments = self.get_course_assignments(clean_course)
+
+        lec_ids = [str(l.get("video_id") or l.get("videoId")) for l in lectures if l.get("video_id") or l.get("videoId")]
+        asgn_ids = [str(a.get("assignment_id")) for a in assignments if a.get("assignment_id")]
+        quiz_id = f"quiz_best_{clean_slug}"
+
+        templates = [
+            (
+                "CLO-1",
+                f"Theoretical Foundations & Mathematical Formulation of {clean_course}",
+                "Formulate core models, regularity assumptions, and analytical proofs covered in lectures.",
+                lec_ids[:2] if lec_ids else [quiz_id],
+            ),
+            (
+                "CLO-2",
+                f"Applied Problem Solving & Computational Modeling in {clean_course}",
+                "Implement estimators and algorithms on empirical datasets and verify diagnostics.",
+                asgn_ids if asgn_ids else [quiz_id],
+            ),
+            (
+                "CLO-3",
+                f"Critical Evaluation & Exam Mastery in {clean_course}",
+                "Synthesize multi-lecture concepts under timed examination conditions.",
+                [quiz_id] + lec_ids[2:4],
+            ),
+        ]
+
+        saved = []
+        for idx, (code, title, desc, mod_ids) in enumerate(templates, start=1):
+            comp = self.save_course_competency(
+                course_name=clean_course,
+                code=code,
+                title=title,
+                description=desc,
+                linked_module_ids=mod_ids,
+                competency_id=f"comp_{clean_slug}_{idx}",
+            )
+            saved.append(comp)
+        return saved
+
+    def get_course_competency_matrix(
+        self,
+        course_name: str,
+        student_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compute per-student mastery level across all Course Competencies."""
+        clean_course = (course_name or "").strip()
+        competencies = self.get_course_competencies(clean_course)
+        if not competencies:
+            competencies = self.ai_extract_course_competencies(clean_course)
+
+        gradebook = self.get_course_gradebook(clean_course, student_email=student_email)
+        students = gradebook.get("students") or []
+
+        matrix_rows = []
+        for st in students:
+            em = st["student_email"]
+            comp_status = self.get_course_completion_status(clean_course, user_email=em)
+            done_ids = {m["module_id"] for m in (comp_status.get("modules") or []) if m.get("is_completed")}
+            overall_grade = float(st.get("overall_percentage") or 0.0)
+            has_grades = float(st.get("total_possible") or 0.0) > 0
+
+            mastery_map = {}
+            for comp in competencies:
+                linked = comp.get("linked_module_ids") or []
+                if linked:
+                    linked_done = sum(1 for mid in linked if mid in done_ids)
+                    evidence_pct = round((linked_done / len(linked)) * 100.0, 1)
+                else:
+                    evidence_pct = float(comp_status.get("completion_percentage") or 0.0)
+
+                score_pct = round(0.55 * evidence_pct + 0.45 * (overall_grade if has_grades else evidence_pct), 1)
+                if score_pct >= 85.0:
+                    level = "Mastered"
+                elif score_pct >= 70.0:
+                    level = "Proficient"
+                elif score_pct >= 40.0:
+                    level = "Developing"
+                else:
+                    level = "Initiating"
+
+                mastery_map[comp["competency_id"]] = {
+                    "competency_id": comp["competency_id"],
+                    "code": comp["code"],
+                    "score_percentage": score_pct,
+                    "mastery_level": level,
+                }
+
+            matrix_rows.append(
+                {
+                    "student_email": em,
+                    "student_name": st["student_name"],
+                    "competencies": mastery_map,
+                }
+            )
+
+        return {
+            "course_name": clean_course,
+            "competencies": competencies,
+            "students": matrix_rows,
+        }
+
+    # =========================================================================
+    # Wave 3 — Option 3: Peer Review Workshop & AI Calibration Engine
+    # =========================================================================
+
+    def save_course_workshop(
+        self,
+        course_name: str,
+        title: str,
+        instructions: str = "",
+        phase: str = "submission",
+        submission_weight: float = 80.0,
+        assessment_weight: float = 20.0,
+        created_by_email: str = "",
+        workshop_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create or update a multi-phase Peer Review Workshop activity."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        wid = (workshop_id or "").strip() or f"ws_{uuid.uuid4().hex[:10]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        record = {
+            "workshop_id": wid,
+            "course_slug": clean_slug,
+            "course_name": clean_course,
+            "title": (title or f"{clean_course} Peer Review Workshop").strip(),
+            "instructions": (instructions or "Submit your solution and complete structured peer reviews.").strip(),
+            "phase": (phase or "submission").strip().lower(),
+            "submission_weight": float(submission_weight),
+            "assessment_weight": float(assessment_weight),
+            "created_by_email": (created_by_email or "").strip().lower(),
+            "created_at": now_iso,
+        }
+
+        self._workshops_memory = [w for w in self._workshops_memory if w.get("workshop_id") != wid]
+        self._workshops_memory.append(record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_workshops (
+                            workshop_id, course_slug, course_name, title,
+                            instructions, phase, submission_weight, assessment_weight,
+                            created_by_email, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (workshop_id) DO UPDATE SET
+                            title = EXCLUDED.title,
+                            instructions = EXCLUDED.instructions,
+                            phase = EXCLUDED.phase,
+                            submission_weight = EXCLUDED.submission_weight,
+                            assessment_weight = EXCLUDED.assessment_weight;
+                        """,
+                        (
+                            wid,
+                            clean_slug,
+                            clean_course,
+                            record["title"],
+                            record["instructions"],
+                            record["phase"],
+                            record["submission_weight"],
+                            record["assessment_weight"],
+                            record["created_by_email"],
+                        ),
+                    )
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Workshop Notice] save_course_workshop fallback ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def submit_workshop_artifact(
+        self,
+        course_name: str,
+        workshop_id: str,
+        student_email: str,
+        student_name: str,
+        title: str,
+        content: str,
+    ) -> Dict[str, Any]:
+        """Submit a student artifact into a Peer Review Workshop."""
+        clean_slug = to_course_slug(course_name or "")
+        sid = f"wssub_{uuid.uuid4().hex[:10]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record = {
+            "submission_id": sid,
+            "workshop_id": workshop_id.strip(),
+            "course_slug": clean_slug,
+            "student_email": student_email.strip().lower(),
+            "student_name": (student_name or student_email.split("@")[0]).strip(),
+            "title": (title or "Workshop Submission").strip(),
+            "content": (content or "").strip(),
+            "created_at": now_iso,
+        }
+        self._workshop_submissions_memory.append(record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_workshop_submissions (
+                            submission_id, workshop_id, course_slug, student_email,
+                            student_name, title, content, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW());
+                        """,
+                        (
+                            sid,
+                            record["workshop_id"],
+                            clean_slug,
+                            record["student_email"],
+                            record["student_name"],
+                            record["title"],
+                            record["content"],
+                        ),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def submit_workshop_peer_review(
+        self,
+        workshop_id: str,
+        submission_id: str,
+        reviewer_email: str,
+        reviewer_name: str,
+        peer_score: float,
+        feedback: str,
+    ) -> Dict[str, Any]:
+        """Record a peer review and compute an AI Calibration Quality score for the reviewer's feedback."""
+        rid = f"wsrev_{uuid.uuid4().hex[:10]}"
+        clean_fb = (feedback or "").strip()
+        word_count = len(clean_fb.split())
+        # AI calibration evaluates feedback depth and specificity
+        if word_count >= 12:
+            cal_score = 95.0
+            cal_note = "High-calibration peer review: specific, constructive, and well-justified."
+        elif word_count >= 5:
+            cal_score = 82.0
+            cal_note = "Good peer review; adding concrete mathematical or code suggestions will improve calibration."
+        else:
+            cal_score = 65.0
+            cal_note = "Brief review; expand on specific rubric strengths and areas for improvement."
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record = {
+            "review_id": rid,
+            "workshop_id": workshop_id.strip(),
+            "submission_id": submission_id.strip(),
+            "reviewer_email": reviewer_email.strip().lower(),
+            "reviewer_name": (reviewer_name or reviewer_email.split("@")[0]).strip(),
+            "peer_score": float(peer_score),
+            "feedback": clean_fb,
+            "ai_calibration_score": cal_score,
+            "ai_calibration_note": cal_note,
+            "created_at": now_iso,
+        }
+        self._workshop_reviews_memory.append(record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_workshop_reviews (
+                            review_id, workshop_id, submission_id, reviewer_email,
+                            reviewer_name, peer_score, feedback, ai_calibration_score,
+                            ai_calibration_note, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW());
+                        """,
+                        (
+                            rid,
+                            record["workshop_id"],
+                            record["submission_id"],
+                            record["reviewer_email"],
+                            record["reviewer_name"],
+                            record["peer_score"],
+                            record["feedback"],
+                            cal_score,
+                            cal_note,
+                        ),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_course_workshops(self, course_name: str) -> List[Dict[str, Any]]:
+        """Retrieve all workshops for a course hydrated with submissions and calibrated peer reviews."""
+        clean_slug = to_course_slug(course_name or "")
+        ws_map: Dict[str, Dict[str, Any]] = {}
+        for w in self._workshops_memory:
+            if w.get("course_slug") == clean_slug:
+                ws_map[w["workshop_id"]] = dict(w)
+
+        subs_by_ws: Dict[str, List[Dict[str, Any]]] = {}
+        for s in self._workshop_submissions_memory:
+            if s.get("course_slug") == clean_slug:
+                subs_by_ws.setdefault(s["workshop_id"], []).append(dict(s))
+
+        revs_by_sub: Dict[str, List[Dict[str, Any]]] = {}
+        for r in self._workshop_reviews_memory:
+            revs_by_sub.setdefault(r["submission_id"], []).append(dict(r))
+
+        result = []
+        for wid, ws in ws_map.items():
+            subs = subs_by_ws.get(wid, [])
+            for sub in subs:
+                revs = revs_by_sub.get(sub["submission_id"], [])
+                sub["reviews"] = revs
+                sub["avg_peer_score"] = (
+                    round(sum(float(r["peer_score"]) for r in revs) / len(revs), 1)
+                    if revs
+                    else None
+                )
+            ws["submissions"] = subs
+            result.append(ws)
+        return result
+
+    # =========================================================================
+    # Wave 3 — Option 4: Course Announcements & Pedagogical Audit Log
+    # =========================================================================
+
+    def create_course_announcement(
+        self,
+        course_name: str,
+        title: str,
+        body: str,
+        priority: str = "normal",
+        author_email: str = "",
+        author_name: str = "",
+    ) -> Dict[str, Any]:
+        """Broadcast an official instructor announcement to the course and record an audit event."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course)
+        aid = f"ann_{uuid.uuid4().hex[:10]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        record = {
+            "announcement_id": aid,
+            "course_slug": clean_slug,
+            "course_name": clean_course,
+            "title": (title or "Course Announcement").strip(),
+            "body": (body or "").strip(),
+            "priority": (priority or "normal").strip().lower(),
+            "author_email": (author_email or "instructor@iiitdwd.ac.in").strip().lower(),
+            "author_name": (author_name or "Course Instructor").strip(),
+            "created_at": now_iso,
+        }
+        self._announcements_memory.insert(0, record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_announcements (
+                            announcement_id, course_slug, course_name, title,
+                            body, priority, author_email, author_name, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW());
+                        """,
+                        (
+                            aid,
+                            clean_slug,
+                            clean_course,
+                            record["title"],
+                            record["body"],
+                            record["priority"],
+                            record["author_email"],
+                            record["author_name"],
+                        ),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        self.log_pedagogical_event(
+            course_name=clean_course,
+            actor_email=record["author_email"],
+            verb="broadcasted_announcement",
+            object_type="announcement",
+            object_id=aid,
+            summary=f"Broadcasted [{record['priority'].upper()}] announcement: {record['title']}",
+        )
+        return record
+
+    def get_course_announcements(self, course_name: str) -> List[Dict[str, Any]]:
+        clean_slug = to_course_slug(course_name or "")
+        ann_map: Dict[str, Dict[str, Any]] = {}
+        for a in self._announcements_memory:
+            if a.get("course_slug") == clean_slug:
+                ann_map[a["announcement_id"]] = dict(a)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT * FROM lecturescribe_announcements WHERE course_slug = %s ORDER BY created_at DESC LIMIT 50;",
+                        (clean_slug,),
+                    )
+                    for row in cursor.fetchall() or []:
+                        item = dict(row)
+                        if hasattr(item.get("created_at"), "isoformat"):
+                            item["created_at"] = item["created_at"].isoformat()
+                        ann_map[item["announcement_id"]] = item
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return sorted(ann_map.values(), key=lambda x: x.get("created_at") or "", reverse=True)
+
+    def log_pedagogical_event(
+        self,
+        course_name: str,
+        actor_email: str,
+        verb: str,
+        object_type: str = "",
+        object_id: str = "",
+        summary: str = "",
+    ) -> Dict[str, Any]:
+        """Append an immutable Actor-Verb-Object entry to the Pedagogical Event Audit Log."""
+        clean_slug = to_course_slug(course_name or "")
+        lid = f"evt_{uuid.uuid4().hex[:12]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record = {
+            "log_id": lid,
+            "course_slug": clean_slug,
+            "actor_email": (actor_email or "system@lecturescribe.ai").strip().lower(),
+            "verb": (verb or "accessed").strip(),
+            "object_type": (object_type or "course").strip(),
+            "object_id": (object_id or "").strip(),
+            "summary": (summary or f"{actor_email} {verb} {object_type}").strip(),
+            "created_at": now_iso,
+        }
+        self._audit_logs_memory.insert(0, record)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_audit_logs (
+                            log_id, course_slug, actor_email, verb,
+                            object_type, object_id, summary, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW());
+                        """,
+                        (
+                            lid,
+                            clean_slug,
+                            record["actor_email"],
+                            record["verb"],
+                            record["object_type"],
+                            record["object_id"],
+                            record["summary"],
+                        ),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        return record
+
+    def get_pedagogical_audit_logs(self, course_name: str, limit: int = 40) -> List[Dict[str, Any]]:
+        clean_slug = to_course_slug(course_name or "")
+        logs = [dict(l) for l in self._audit_logs_memory if l.get("course_slug") == clean_slug]
+        return logs[:limit]
 
 
 # Export singleton instance

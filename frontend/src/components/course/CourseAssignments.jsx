@@ -31,9 +31,14 @@ import {
   ChevronUp,
   FileCode,
   RotateCcw,
-  Database
+  Database,
+  Calendar,
+  Send,
+  Award,
+  Users
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function CourseAssignments({
   courseName = 'Active Course',
@@ -47,7 +52,10 @@ export default function CourseAssignments({
   onSkipDataset,
   onRegenerateAssignment,
   onDeleteAssignment,
-  currentTheme
+  currentTheme,
+  isTutor = true,
+  userEmail = '',
+  userName = ''
 }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedDatasetFile, setSelectedDatasetFile] = useState(null);
@@ -55,6 +63,184 @@ export default function CourseAssignments({
   const [expandedDetails, setExpandedDetails] = useState({});
   const [pendingDatasetFiles, setPendingDatasetFiles] = useState({});
   const [uploadingDataset, setUploadingDataset] = useState({});
+
+  // Option 1: Deadline Publishing, Student Submissions & AI SpeedGrader state
+  const [publishDrafts, setPublishDrafts] = useState({});
+  const [publishingId, setPublishingId] = useState(null);
+  const [publishStatusMsg, setPublishStatusMsg] = useState({});
+  const [openGraderMap, setOpenGraderMap] = useState({});
+  const [submissionsByAsgn, setSubmissionsByAsgn] = useState({});
+  const [loadingSubs, setLoadingSubs] = useState({});
+  const [gradeDrafts, setGradeDrafts] = useState({});
+  const [aiGradingSubId, setAiGradingSubId] = useState(null);
+  const [savingGradeSubId, setSavingGradeSubId] = useState(null);
+  const [studentSubmitDrafts, setStudentSubmitDrafts] = useState({});
+  const [submittingAsgnId, setSubmittingAsgnId] = useState(null);
+
+  const courseSlug = normalizeCourseSlug(courseName);
+
+  const fetchSubmissionsForAssignment = async (assignmentId) => {
+    if (!courseSlug || !assignmentId) return;
+    setLoadingSubs((prev) => ({ ...prev, [assignmentId]: true }));
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/submissions`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const subs = data.submissions || [];
+        setSubmissionsByAsgn((prev) => ({ ...prev, [assignmentId]: subs }));
+        const nextDrafts = {};
+        subs.forEach((s) => {
+          nextDrafts[s.submission_id] = {
+            score: s.score ?? s.ai_suggested_score ?? '',
+            feedback: s.instructor_feedback || s.ai_feedback || ''
+          };
+        });
+        setGradeDrafts((prev) => ({ ...prev, ...nextDrafts }));
+      }
+    } catch (e) {
+      console.warn('[CourseAssignments] fetchSubmissions error:', e);
+    } finally {
+      setLoadingSubs((prev) => ({ ...prev, [assignmentId]: false }));
+    }
+  };
+
+  const handleToggleGrader = (assignmentId) => {
+    const nextOpen = !openGraderMap[assignmentId];
+    setOpenGraderMap((prev) => ({ ...prev, [assignmentId]: nextOpen }));
+    if (nextOpen) {
+      fetchSubmissionsForAssignment(assignmentId);
+    }
+  };
+
+  const handlePublishSettings = async (asgn) => {
+    const aid = asgn.assignment_id;
+    const draft = publishDrafts[aid] || {};
+    const dueDate = draft.due_date !== undefined ? draft.due_date : (asgn.due_date || '');
+    const maxMarks = draft.max_marks !== undefined ? Number(draft.max_marks) : Number(asgn.max_marks || 100);
+    setPublishingId(aid);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(aid)}/publish`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            due_date: dueDate || null,
+            max_marks: maxMarks,
+            is_published: true,
+            actor_email: userEmail || undefined
+          })
+        }
+      );
+      if (res.ok) {
+        setPublishStatusMsg((prev) => ({
+          ...prev,
+          [aid]: dueDate ? 'Deadline published & synced to LMS Calendar!' : 'Assignment settings saved.'
+        }));
+      }
+    } catch (e) {
+      console.error('Publish assignment settings error:', e);
+    } finally {
+      setPublishingId(null);
+    }
+  };
+
+  const handleStudentSubmitWork = async (asgn) => {
+    const aid = asgn.assignment_id;
+    const draft = studentSubmitDrafts[aid] || {};
+    if (!draft.text?.trim() && !draft.fileName) return;
+    setSubmittingAsgnId(aid);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(aid)}/submit`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            student_email: userEmail || 'student@iiitdwd.ac.in',
+            student_name: userName || (userEmail ? userEmail.split('@')[0] : 'Student'),
+            submission_text: draft.text || '',
+            file_name: draft.fileName || ''
+          })
+        }
+      );
+      if (res.ok) {
+        await fetchSubmissionsForAssignment(aid);
+        setStudentSubmitDrafts((prev) => ({ ...prev, [aid]: { text: '', fileName: '', submitted: true } }));
+      }
+    } catch (e) {
+      console.error('Student submit error:', e);
+    } finally {
+      setSubmittingAsgnId(null);
+    }
+  };
+
+  const handleRunAiSpeedGrader = async (assignmentId, submissionId) => {
+    setAiGradingSubId(submissionId);
+    try {
+      const emailParam = userEmail ? `?actor_email=${encodeURIComponent(userEmail)}` : '';
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/ai-grade${emailParam}`,
+        { method: 'POST' }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const sub = data.submission;
+        if (sub) {
+          setSubmissionsByAsgn((prev) => ({
+            ...prev,
+            [assignmentId]: (prev[assignmentId] || []).map((s) => (s.submission_id === submissionId ? sub : s))
+          }));
+          setGradeDrafts((prev) => ({
+            ...prev,
+            [submissionId]: {
+              score: sub.ai_suggested_score ?? sub.score ?? '',
+              feedback: sub.ai_feedback || sub.instructor_feedback || ''
+            }
+          }));
+        }
+      }
+    } catch (e) {
+      console.error('AI SpeedGrader error:', e);
+    } finally {
+      setAiGradingSubId(null);
+    }
+  };
+
+  const handleSaveSubmissionGrade = async (assignmentId, submissionId) => {
+    const draft = gradeDrafts[submissionId] || {};
+    if (draft.score === '' || draft.score === undefined) return;
+    setSavingGradeSubId(submissionId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/submissions/${encodeURIComponent(submissionId)}/grade`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            score: Number(draft.score),
+            instructor_feedback: draft.feedback || '',
+            actor_email: userEmail || undefined
+          })
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.submission) {
+          setSubmissionsByAsgn((prev) => ({
+            ...prev,
+            [assignmentId]: (prev[assignmentId] || []).map((s) => (s.submission_id === submissionId ? data.submission : s))
+          }));
+        }
+      }
+    } catch (e) {
+      console.error('Save grade error:', e);
+    } finally {
+      setSavingGradeSubId(null);
+    }
+  };
 
   const fileInputRef = useRef(null);
   const datasetInputRef = useRef(null);
@@ -643,6 +829,321 @@ export default function CourseAssignments({
                     </IconButton>
                   </Box>
                 </Box>
+
+                {/* OPTION 1: DEADLINE & CALENDAR SYNC BAR + SUBMISSIONS / AI SPEEDGRADER */}
+                <Box
+                  sx={{
+                    mt: 2,
+                    pt: 2,
+                    borderTop: `1px dashed ${palette.cardBorder}`,
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 1.5
+                  }}
+                >
+                  {isTutor ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap' }}>
+                      <TextField
+                        type="datetime-local"
+                        size="small"
+                        label="Due Date (Calendar Sync)"
+                        slotProps={{ inputLabel: { shrink: true } }}
+                        value={
+                          publishDrafts[asgn.assignment_id]?.due_date !== undefined
+                            ? publishDrafts[asgn.assignment_id].due_date
+                            : (asgn.due_date || '').slice(0, 16)
+                        }
+                        onChange={(e) =>
+                          setPublishDrafts((prev) => ({
+                            ...prev,
+                            [asgn.assignment_id]: {
+                              ...(prev[asgn.assignment_id] || {}),
+                              due_date: e.target.value
+                            }
+                          }))
+                        }
+                        sx={{ minWidth: 215 }}
+                      />
+                      <TextField
+                        type="number"
+                        size="small"
+                        label="Max Marks"
+                        value={
+                          publishDrafts[asgn.assignment_id]?.max_marks !== undefined
+                            ? publishDrafts[asgn.assignment_id].max_marks
+                            : (asgn.max_marks ?? 100)
+                        }
+                        onChange={(e) =>
+                          setPublishDrafts((prev) => ({
+                            ...prev,
+                            [asgn.assignment_id]: {
+                              ...(prev[asgn.assignment_id] || {}),
+                              max_marks: e.target.value
+                            }
+                          }))
+                        }
+                        sx={{ width: 105 }}
+                      />
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        disabled={publishingId === asgn.assignment_id}
+                        startIcon={<Calendar size={14} />}
+                        onClick={() => handlePublishSettings(asgn)}
+                        sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2 }}
+                      >
+                        {publishingId === asgn.assignment_id ? 'Syncing...' : 'Publish & Sync Calendar'}
+                      </Button>
+                      {(asgn.due_date || publishStatusMsg[asgn.assignment_id]) && (
+                        <Chip
+                          icon={<Calendar size={12} color="#047857" />}
+                          label={publishStatusMsg[asgn.assignment_id] || `Due: ${new Date(asgn.due_date).toLocaleDateString()}`}
+                          size="small"
+                          sx={{ bgcolor: '#ecfdf5', color: '#047857', fontWeight: 700, fontSize: '0.72rem' }}
+                        />
+                      )}
+                    </Box>
+                  ) : (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Chip
+                        icon={<Calendar size={13} />}
+                        label={asgn.due_date ? `Due: ${new Date(asgn.due_date).toLocaleString()}` : 'No strict deadline'}
+                        size="small"
+                        sx={{ fontWeight: 600 }}
+                      />
+                      <Chip
+                        icon={<Award size={13} />}
+                        label={`${asgn.max_marks || 100} Marks`}
+                        size="small"
+                        sx={{ fontWeight: 700, bgcolor: 'rgba(59, 130, 246, 0.1)', color: '#1d4ed8' }}
+                      />
+                    </Box>
+                  )}
+
+                  <Button
+                    variant={openGraderMap[asgn.assignment_id] ? 'contained' : 'outlined'}
+                    size="small"
+                    startIcon={isTutor ? <Users size={14} /> : <Send size={14} />}
+                    onClick={() => handleToggleGrader(asgn.assignment_id)}
+                    sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2 }}
+                  >
+                    {isTutor
+                      ? `Submissions & AI SpeedGrader${submissionsByAsgn[asgn.assignment_id] ? ` (${submissionsByAsgn[asgn.assignment_id].length})` : ''}`
+                      : 'Submit Work / View Grade'}
+                  </Button>
+                </Box>
+
+                {/* SUBMISSIONS & AI SPEEDGRADER DRAWER */}
+                <Collapse in={!!openGraderMap[asgn.assignment_id]} timeout="auto" unmountOnExit>
+                  <Box
+                    sx={{
+                      mt: 2,
+                      p: 2.5,
+                      borderRadius: 2.5,
+                      bgcolor: 'rgba(59, 130, 246, 0.03)',
+                      border: `1px solid ${palette.cardBorder}`
+                    }}
+                  >
+                    {/* Student Submission Form (available to students or tutors testing submission) */}
+                    <Box sx={{ mb: isTutor ? 2.5 : 0 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800, color: palette.textPrimary, mb: 1 }}>
+                        {isTutor ? 'Submit Test Student Solution / Reference Attempt' : 'Submit Your Assignment Solution'}
+                      </Typography>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+                        <TextField
+                          multiline
+                          minRows={2}
+                          size="small"
+                          placeholder="Paste your mathematical derivation, Python code, or solution summary here..."
+                          value={studentSubmitDrafts[asgn.assignment_id]?.text || ''}
+                          onChange={(e) =>
+                            setStudentSubmitDrafts((prev) => ({
+                              ...prev,
+                              [asgn.assignment_id]: {
+                                ...(prev[asgn.assignment_id] || {}),
+                                text: e.target.value
+                              }
+                            }))
+                          }
+                        />
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+                          <TextField
+                            size="small"
+                            placeholder="Attachment filename (e.g. solution.ipynb)"
+                            value={studentSubmitDrafts[asgn.assignment_id]?.fileName || ''}
+                            onChange={(e) =>
+                              setStudentSubmitDrafts((prev) => ({
+                                ...prev,
+                                [asgn.assignment_id]: {
+                                  ...(prev[asgn.assignment_id] || {}),
+                                  fileName: e.target.value
+                                }
+                              }))
+                            }
+                            sx={{ minWidth: 240 }}
+                          />
+                          <Button
+                            variant="contained"
+                            size="small"
+                            disabled={submittingAsgnId === asgn.assignment_id}
+                            startIcon={<Send size={14} />}
+                            onClick={() => handleStudentSubmitWork(asgn)}
+                            sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2 }}
+                          >
+                            {submittingAsgnId === asgn.assignment_id ? 'Submitting...' : 'Submit Assignment'}
+                          </Button>
+                        </Box>
+                      </Box>
+                    </Box>
+
+                    {/* Submissions List & AI SpeedGrader */}
+                    <Divider sx={{ my: 2 }} />
+                    <Typography variant="subtitle2" sx={{ fontWeight: 800, color: palette.textPrimary, mb: 1.5 }}>
+                      {isTutor ? 'Student Submissions & AI SpeedGrader' : 'Your Submission Status & Feedback'}
+                    </Typography>
+
+                    {loadingSubs[asgn.assignment_id] ? (
+                      <CircularProgress size={22} />
+                    ) : (submissionsByAsgn[asgn.assignment_id] || []).length === 0 ? (
+                      <Typography variant="body2" sx={{ color: palette.textSecondary, fontSize: '0.84rem' }}>
+                        No student submissions recorded for this assignment yet.
+                      </Typography>
+                    ) : (
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                        {(submissionsByAsgn[asgn.assignment_id] || []).map((sub) => {
+                          const gDraft = gradeDrafts[sub.submission_id] || {};
+                          return (
+                            <Paper
+                              key={sub.submission_id}
+                              elevation={0}
+                              sx={{
+                                p: 2,
+                                borderRadius: 2,
+                                border: `1px solid ${palette.cardBorder}`,
+                                bgcolor: palette.cardBg
+                              }}
+                            >
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, flexWrap: 'wrap', gap: 1 }}>
+                                <Box>
+                                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                                    {sub.student_name || sub.student_email} ({sub.student_email})
+                                  </Typography>
+                                  <Typography variant="caption" sx={{ color: palette.textSecondary }}>
+                                    Submitted {new Date(sub.submitted_at || Date.now()).toLocaleString()}
+                                    {sub.file_name ? ` • Attachment: ${sub.file_name}` : ''}
+                                  </Typography>
+                                </Box>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <Chip
+                                    label={
+                                      sub.status === 'graded'
+                                        ? `Graded: ${sub.score} / ${sub.max_marks}`
+                                        : 'Submitted (Pending Grade)'
+                                    }
+                                    size="small"
+                                    sx={{
+                                      bgcolor: sub.status === 'graded' ? '#ecfdf5' : '#eff6ff',
+                                      color: sub.status === 'graded' ? '#047857' : '#1d4ed8',
+                                      fontWeight: 700
+                                    }}
+                                  />
+                                  {isTutor && (
+                                    <Button
+                                      variant="outlined"
+                                      size="small"
+                                      disabled={aiGradingSubId === sub.submission_id}
+                                      startIcon={<Sparkles size={13} />}
+                                      onClick={() => handleRunAiSpeedGrader(asgn.assignment_id, sub.submission_id)}
+                                      sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 1.5 }}
+                                    >
+                                      {aiGradingSubId === sub.submission_id ? 'Evaluating...' : 'AI SpeedGrade'}
+                                    </Button>
+                                  )}
+                                </Box>
+                              </Box>
+
+                              {sub.submission_text && (
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    p: 1.5,
+                                    mb: 1.5,
+                                    borderRadius: 1.5,
+                                    bgcolor: 'rgba(0,0,0,0.025)',
+                                    fontFamily: 'monospace',
+                                    fontSize: '0.8rem',
+                                    whiteSpace: 'pre-wrap'
+                                  }}
+                                >
+                                  {sub.submission_text}
+                                </Typography>
+                              )}
+
+                              {sub.ai_suggested_score !== null && sub.ai_suggested_score !== undefined && (
+                                <Alert severity="info" sx={{ mb: 1.5, py: 0.5, borderRadius: 1.5 }}>
+                                  <strong>AI SpeedGrader Suggestion:</strong> {sub.ai_suggested_score} / {sub.max_marks} — {sub.ai_feedback}
+                                </Alert>
+                              )}
+
+                              {isTutor ? (
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap', mt: 1 }}>
+                                  <TextField
+                                    type="number"
+                                    size="small"
+                                    label={`Score (/ ${sub.max_marks})`}
+                                    value={gDraft.score ?? ''}
+                                    onChange={(e) =>
+                                      setGradeDrafts((prev) => ({
+                                        ...prev,
+                                        [sub.submission_id]: {
+                                          ...(prev[sub.submission_id] || {}),
+                                          score: e.target.value
+                                        }
+                                      }))
+                                    }
+                                    sx={{ width: 130 }}
+                                  />
+                                  <TextField
+                                    size="small"
+                                    label="Instructor Feedback"
+                                    value={gDraft.feedback ?? ''}
+                                    onChange={(e) =>
+                                      setGradeDrafts((prev) => ({
+                                        ...prev,
+                                        [sub.submission_id]: {
+                                          ...(prev[sub.submission_id] || {}),
+                                          feedback: e.target.value
+                                        }
+                                      }))
+                                    }
+                                    sx={{ flex: 1, minWidth: 220 }}
+                                  />
+                                  <Button
+                                    variant="contained"
+                                    size="small"
+                                    disabled={savingGradeSubId === sub.submission_id}
+                                    onClick={() => handleSaveSubmissionGrade(asgn.assignment_id, sub.submission_id)}
+                                    sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 1.5 }}
+                                  >
+                                    {savingGradeSubId === sub.submission_id ? 'Saving...' : 'Approve & Save Grade'}
+                                  </Button>
+                                </Box>
+                              ) : (
+                                sub.instructor_feedback && (
+                                  <Typography variant="body2" sx={{ color: '#047857', fontWeight: 600 }}>
+                                    Instructor Feedback: {sub.instructor_feedback}
+                                  </Typography>
+                                )
+                              )}
+                            </Paper>
+                          );
+                        })}
+                      </Box>
+                    )}
+                  </Box>
+                </Collapse>
 
                 {/* PROBLEM BREAKDOWN COLLAPSIBLE DRAWER */}
                 {questions.length > 0 && (

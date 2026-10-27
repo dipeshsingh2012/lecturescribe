@@ -85,6 +85,17 @@ const mockAgendaData = {
       end_time_formatted: '12:30 PM',
       is_all_day: false,
       location: 'Auditorium'
+    },
+    {
+      id: 'evt_genai_27',
+      title: 'Introduction to Generative AI',
+      category: 'lecture',
+      date_iso: '2026-10-27',
+      date_formatted: 'Tuesday, Oct 27, 2026',
+      start_time_formatted: '06:30 PM',
+      start: '2026-10-27T18:30:00+05:30',
+      course_slug: 'course',
+      course_name: 'course'
     }
   ]
 };
@@ -216,5 +227,64 @@ describe('CalendarAlertCard Component', () => {
     fireEvent.click(collapseBtn);
 
     expect(screen.getAllByRole('button', { name: /Show details \/ credentials/i }).length).toBeGreaterThan(0);
+  });
+
+  it('renders only the corresponding upcoming events when selectedCourse is provided', async () => {
+    render(
+      <CalendarAlertCard
+        currentTheme={mockTheme}
+        googleUser={mockUser}
+        selectedCourse="Machine Learning"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Key dates/i)).toBeInTheDocument();
+    });
+
+    // Should NOT render the Today vs Next 7 Days tabs
+    expect(screen.queryByRole('button', { name: /Today's Timeline/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Next 7 Days/i })).not.toBeInTheDocument();
+
+    // Machine Learning event should be rendered
+    expect(screen.getByText(/Machine Learning Quiz 2/i)).toBeInTheDocument();
+
+    // Other course event should NOT be rendered
+    expect(screen.queryByText(/Applied Math Assignment 3 Due/i)).not.toBeInTheDocument();
+  });
+
+  it('renders friendly empty state when course has no upcoming events', async () => {
+    render(
+      <CalendarAlertCard
+        currentTheme={mockTheme}
+        googleUser={mockUser}
+        selectedCourse="Robotics"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/No upcoming key dates for this course/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders Introduction to Generative AI event on 27th Oct for course with prefix like 1.5 Introduction to Generative AI', async () => {
+    render(
+      <CalendarAlertCard
+        currentTheme={mockTheme}
+        googleUser={mockUser}
+        selectedCourse="1.5 Introduction to Generative AI"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Key dates/i)).toBeInTheDocument();
+    });
+
+    // Should display the event title
+    expect(screen.getByText('Introduction to Generative AI')).toBeInTheDocument();
+
+    // Should display the 27 OCT badge
+    expect(screen.getByText('27')).toBeInTheDocument();
+    expect(screen.getByText('OCT')).toBeInTheDocument();
   });
 });

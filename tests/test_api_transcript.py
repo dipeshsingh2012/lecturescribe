@@ -66,7 +66,7 @@ Today we discuss forward kinematics.
         mock_pinecone.return_value = []
 
         # Calling without course_name parameter triggers extract_course_name(title)
-        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1229247139")
+        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1229247139&email=student%40example.com")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -106,7 +106,7 @@ Today we discuss forward kinematics.
         mock_fetch_vtt.return_value = self.sample_vtt
         mock_save_transcript.return_value = True
 
-        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1229247139&course_name=Artificial%20Intelligence")
+        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1229247139&course_name=Artificial%20Intelligence&email=student%40example.com")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -141,7 +141,7 @@ Today we discuss forward kinematics.
             }
         }
 
-        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1233458452")
+        response = self.client.get("/api/transcript?url=https://video.lecturescribe.local/1233458452&email=student%40example.com")
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -224,7 +224,7 @@ Today we discuss forward kinematics.
         )
 
         with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):
-            response = self.client.post("/api/lecture/1233458452/transcribe")
+            response = self.client.post("/api/lecture/1233458452/transcribe?email=student%40example.com")
 
         self.assertEqual(response.status_code, 502)
         self.assertEqual(
@@ -247,7 +247,7 @@ Today we discuss forward kinematics.
         }
 
         with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):
-            response = self.client.post("/api/lecture/1233458452/transcribe")
+            response = self.client.post("/api/lecture/1233458452/transcribe?email=student%40example.com")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["cues"], saved_cues)
@@ -259,7 +259,7 @@ Today we discuss forward kinematics.
     @patch("backend.main.db_manager.get_saved_video", return_value=None)
     def test_transcription_endpoint_requires_an_imported_video(self, _mock_get_video):
         with patch.dict(os.environ, {"TRANSCRIPTION_SERVICE_URL": "https://transcription.example"}):
-            response = self.client.post("/api/lecture/1233458452/transcribe")
+            response = self.client.post("/api/lecture/1233458452/transcribe?email=student%40example.com")
 
         self.assertEqual(response.status_code, 404)
 
@@ -321,7 +321,7 @@ Today we discuss forward kinematics.
             patch("backend.main.db_manager.create_transcription_job", return_value=job),
             patch("backend.main.enqueue_transcription_task") as enqueue,
         ):
-            response = self.client.post("/api/lecture/1233458452/transcribe")
+            response = self.client.post("/api/lecture/1233458452/transcribe?email=student%40example.com")
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["status"], "processing")
@@ -402,7 +402,8 @@ Today we discuss forward kinematics.
                 }
             },
             "course_name": "Distributed Systems",
-            "lms_page_url": "https://canvas.example.edu/courses/456/pages/week-2"
+            "lms_page_url": "https://canvas.example.edu/courses/456/pages/week-2",
+            "email": "student@example.com"
         }
 
         response = self.client.post("/api/extension/import", json=payload)
@@ -449,7 +450,8 @@ Today we discuss forward kinematics.
 
         payload = {
             "video_id": "999888777",
-            "course_name": "Cloud Computing"
+            "course_name": "Cloud Computing",
+            "email": "student@example.com"
         }
 
         response = self.client.post("/api/extension/import", json=payload)
@@ -475,7 +477,7 @@ Today we discuss forward kinematics.
             "cached": True
         }
 
-        response = self.client.post("/api/extension/import", json={"video_id": "12345"})
+        response = self.client.post("/api/extension/import", json={"video_id": "12345", "email": "student@example.com"})
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["videoId"], "12345")

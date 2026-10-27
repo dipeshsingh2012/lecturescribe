@@ -69,7 +69,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -223,7 +223,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -238,8 +238,10 @@ describe('useLectureIngestion hook functionality', () => {
       await result.current.handleTranscribe('999', true, null);
     });
 
-    // Should NOT call the backend API because cache hit
-    expect(global.fetch).not.toHaveBeenCalled();
+    // Should NOT call the backend API for transcript because cache hit
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/api/transcript')
+    );
     expect(result.current.activeData.videoId).toBe('999');
     expect(result.current.activeData.cached).toBe(true);
   });
@@ -261,7 +263,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -291,7 +293,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -329,7 +331,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -365,7 +367,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -398,7 +400,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -484,7 +486,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: 'Data Science',
         setSelectedCourse: vi.fn(),
         activeCourseData: { course_name: 'Data Science' },
@@ -538,7 +540,7 @@ describe('useLectureIngestion hook functionality', () => {
 
     const { result } = renderHook(() =>
       useLectureIngestion({
-        userEmail: null,
+        userEmail: 'student@example.com',
         selectedCourse: null,
         setSelectedCourse: vi.fn(),
         activeCourseData: null,
@@ -591,7 +593,7 @@ describe('useLectureIngestion hook functionality', () => {
     const { result, rerender } = renderHook(
       (props) =>
         useLectureIngestion({
-          userEmail: null,
+          userEmail: 'student@example.com',
           selectedCourse: null,
           setSelectedCourse: vi.fn(),
           activeCourseData: null,
@@ -618,5 +620,32 @@ describe('useLectureIngestion hook functionality', () => {
       expect.stringContaining('/api/lecture/transcription-jobs/job-resumed'),
       expect.any(Object)
     );
+  });
+
+  it('rejects video ingestion and displays an error when user is not authenticated', async () => {
+    const navigateTo = vi.fn();
+    global.fetch = vi.fn();
+
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: null,
+        selectedCourse: 'Generative AI',
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo,
+        initChatMessages: vi.fn()
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('https://video.lecturescribe.local/1233458452');
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result.current.activeData).toBeNull();
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(result.current.error).toBe('Sign in with Google is required to ingest or access lecture videos.');
   });
 });

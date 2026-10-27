@@ -200,7 +200,7 @@ export default function LectureSummary({
       position: 'relative'
     }}>
       {/* Top Header */}
-      <div style={{
+      <div className="summary-header-wrap" style={{
         padding: '12px 18px',
         borderBottom: '1px solid var(--border-color)',
         display: 'flex',
@@ -235,7 +235,7 @@ export default function LectureSummary({
         </div>
 
         {/* Action Buttons: Podcast Audio, Pop-out, Expand/Restore, and Regenerate */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <div className="summary-actions-wrap" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           {currentSummary && (
             <button
               type="button"
@@ -393,27 +393,57 @@ export default function LectureSummary({
               Transcript Modified — Summary May Be Outdated
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => generateSummary('comprehensive', true)}
-            disabled={generating || !transcriptAvailable}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '4px 10px',
-              borderRadius: '6px',
-              fontSize: '0.74rem',
-              fontWeight: 700,
-              background: '#d97706',
-              color: '#ffffff',
-              border: 'none',
-              cursor: generating || !transcriptAvailable ? 'not-allowed' : 'pointer'
-            }}
-          >
-            <RefreshCw size={12} className={generating ? 'loading-pulse' : ''} />
-            <span>Regenerate Summary Now</span>
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof summaryHook.clearOutdated === 'function') {
+                  summaryHook.clearOutdated();
+                } else if (typeof summaryHook.setIsOutdated === 'function') {
+                  summaryHook.setIsOutdated(false);
+                }
+              }}
+              title="Dismiss warning and keep current summary"
+              aria-label="Dismiss outdated summary warning"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '0.74rem',
+                fontWeight: 600,
+                background: 'var(--card-bg)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border-color)',
+                cursor: 'pointer'
+              }}
+            >
+              <Check size={12} color="#10b981" />
+              <span>Dismiss & Keep Current</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => generateSummary('comprehensive', true)}
+              disabled={generating || !transcriptAvailable}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '0.74rem',
+                fontWeight: 700,
+                background: '#d97706',
+                color: '#ffffff',
+                border: 'none',
+                cursor: generating || !transcriptAvailable ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <RefreshCw size={12} className={generating ? 'loading-pulse' : ''} />
+              <span>Regenerate Summary Now</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -459,7 +489,7 @@ export default function LectureSummary({
       )}
 
       {/* Sub-bar: View Mode Selector & Word Count */}
-      <div style={{
+      <div className="summary-sub-bar" style={{
         padding: '8px 18px',
         borderBottom: '1px solid var(--border-color)',
         display: 'flex',
@@ -616,14 +646,7 @@ export default function LectureSummary({
       )}
 
       {/* Main Content Area */}
-      <div style={{
-        flex: '1 1 0%',
-        minHeight: 0,
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        padding: isExpanded ? '28px 36px 60px' : '20px 24px',
-        scrollBehavior: 'smooth'
-      }}>
+      <div className={`summary-scroll-area ${isExpanded ? 'is-expanded' : ''}`}>
         {isEditingSummary ? (
           <div style={{
             background: 'var(--card-bg)',
@@ -1004,10 +1027,8 @@ export default function LectureSummary({
                   background: 'var(--card-bg)',
                   border: '1px solid var(--border-color)',
                   borderRadius: '10px',
-                  padding: isExpanded ? '32px 48px' : '24px 28px',
                   color: 'var(--text-primary)',
                   lineHeight: '1.75',
-                  fontSize: isExpanded ? '0.98rem' : '0.92rem',
                   boxShadow: isExpanded ? '0 4px 20px rgba(0, 0, 0, 0.12)' : '0 1px 3px rgba(0, 0, 0, 0.05)',
                   transition: 'all 0.25s ease'
                 }}
@@ -1026,8 +1047,6 @@ export default function LectureSummary({
                   background: 'var(--card-bg)',
                   border: '1px solid var(--border-color)',
                   borderRadius: '10px',
-                  padding: isExpanded ? '32px 48px' : '24px 28px',
-                  fontSize: isExpanded ? '1rem' : '0.92rem',
                   lineHeight: '1.8',
                   color: 'var(--text-primary)',
                   boxShadow: isExpanded ? '0 4px 20px rgba(0, 0, 0, 0.12)' : '0 1px 3px rgba(0, 0, 0, 0.05)',

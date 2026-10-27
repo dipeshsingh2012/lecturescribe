@@ -91,7 +91,7 @@ describe('HomeView', () => {
     );
 
     expect(screen.getByText('Course Syllabus')).toBeInTheDocument();
-    const viewButton = screen.getByRole('button', { name: /View/i });
+    const viewButton = screen.getByRole('button', { name: /^View$/i });
     fireEvent.click(viewButton);
     expect(openPreviewModal).toHaveBeenCalledWith(testResource);
   });

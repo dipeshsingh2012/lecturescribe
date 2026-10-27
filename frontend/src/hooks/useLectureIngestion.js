@@ -232,6 +232,11 @@ export function useLectureIngestion({
     const videoId = activeData?.videoId;
     if (!videoId || transcriptionLoading) return;
 
+    if (!userEmail || !userEmail.trim()) {
+      setTranscriptionError("Sign in with Google is required to generate transcripts.");
+      return;
+    }
+
     transcriptionControllerRef.current?.abort();
     const controller = new AbortController();
     transcriptionControllerRef.current = controller;
@@ -284,6 +289,12 @@ export function useLectureIngestion({
   ) => {
     const rawUrl = targetUrl || urlInput;
     if (!rawUrl.trim()) return;
+
+    if (!userEmail || !userEmail.trim()) {
+      setError("Sign in with Google is required to ingest or access lecture videos.");
+      return;
+    }
+
     const vidId = extractVideoId(rawUrl);
 
     let targetSeek = seekTimestamp;
@@ -391,11 +402,13 @@ export function useLectureIngestion({
       };
 
       if (userEmail) {
-        fetch(`${API_BASE}/api/user/library/record`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        }).then(() => {
+        Promise.resolve(
+          fetch(`${API_BASE}/api/user/library/record`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          })
+        ).then(() => {
           if (typeof fetchUserLibrary === 'function') fetchUserLibrary(userEmail);
         }).catch(() => {});
       }

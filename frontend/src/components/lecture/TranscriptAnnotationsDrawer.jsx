@@ -9,9 +9,13 @@ import {
   Highlighter,
   Eraser,
   Pencil,
-  Check
+  Check,
+  Copy,
+  Loader2,
+  Bot
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
 export default function TranscriptAnnotationsDrawer({
   open,
@@ -20,13 +24,16 @@ export default function TranscriptAnnotationsDrawer({
   annotations = [],
   onDeleteAnnotation,
   onUpdateAnnotation,
-  handleCueClick
+  handleCueClick,
+  onDiscussInTutor
 }) {
   const [filterType, setFilterType] = useState('all'); // 'all' | 'note' | 'highlight' | 'ai_explanation'
   const [deleteError, setDeleteError] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editNoteText, setEditNoteText] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
+  const [explainingId, setExplainingId] = useState(null);
+  const [copiedId, setCopiedId] = useState(null);
 
   if (!open) return null;
 
@@ -91,6 +98,55 @@ export default function TranscriptAnnotationsDrawer({
     } catch (err) {
       console.error('Error deleting annotation:', err);
       setDeleteError(err.message || 'Error deleting annotation');
+    }
+  };
+
+  const handleExplainNote = async (item, promptType = 'explain') => {
+    const textToExplain = item.selectedText || item.selected_text || item.noteText || item.note_text;
+    if (!textToExplain) return;
+    setExplainingId(item.id);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/explain-selection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selected_text: textToExplain,
+          prompt_type: promptType,
+          start_seconds: item.startSeconds ?? item.start_seconds ?? 0,
+          end_seconds: item.endSeconds ?? item.end_seconds ?? 0
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to generate explanation');
+      }
+      const data = await res.json();
+      const explanation = data.explanation;
+      if (explanation) {
+        if (typeof onUpdateAnnotation === 'function') {
+          await onUpdateAnnotation(item.id, item.noteText || item.note_text || explanation, {
+            ai_response: explanation,
+            ai_prompt: promptType,
+            annotation_type: 'ai_explanation'
+          });
+        } else if (videoId) {
+          await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ai_response: explanation,
+              ai_prompt: promptType,
+              annotation_type: 'ai_explanation'
+            })
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error generating AI explanation:', err);
+      setDeleteError(err.message || 'Error generating AI explanation');
+    } finally {
+      setExplainingId(null);
     }
   };
 
@@ -297,7 +353,7 @@ export default function TranscriptAnnotationsDrawer({
                     <Volume2 size={11} /> {formattedTime}
                   </button>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
                     <span style={{
                       fontSize: '0.68rem',
                       padding: '1px 6px',
@@ -308,6 +364,86 @@ export default function TranscriptAnnotationsDrawer({
                     }}>
                       {isAi ? 'AI Explainer' : isNote ? 'Margin Note' : 'Highlight'}
                     </span>
+
+                    {/* AI Explain / Re-explain Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleExplainNote(item)}
+                      disabled={explainingId === item.id}
+                      title={aiResponse ? "Re-explain with AI" : "Explain with AI"}
+                      aria-label="Explain note with AI"
+                      style={{
+                        background: 'rgba(168, 85, 247, 0.12)',
+                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                        color: '#a855f7',
+                        borderRadius: '4px',
+                        padding: '2px 6px',
+                        fontSize: '0.68rem',
+                        fontWeight: 600,
+                        cursor: explainingId === item.id ? 'wait' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px'
+                      }}
+                    >
+                      {explainingId === item.id ? (
+                        <Loader2 size={11} className="loading-pulse" />
+                      ) : (
+                        <Sparkles size={11} />
+                      )}
+                      <span>{explainingId === item.id ? 'Explaining...' : (aiResponse ? 'Re-explain' : 'AI Explain')}</span>
+                    </button>
+
+                    {/* Copy Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const toCopy = aiResponse || noteText || selectedText;
+                        navigator.clipboard.writeText(toCopy);
+                        setCopiedId(item.id);
+                        setTimeout(() => setCopiedId(null), 1500);
+                      }}
+                      title="Copy text / explanation"
+                      aria-label="Copy annotation"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: copiedId === item.id ? '#10b981' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        display: 'flex',
+                        alignItems: 'center'
+                      }}
+                    >
+                      {copiedId === item.id ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                    </button>
+
+                    {/* Discuss in AI Tutor */}
+                    {typeof onDiscussInTutor === 'function' && (
+                      <button
+                        type="button"
+                        onClick={() => onDiscussInTutor(selectedText || noteText, formattedTime)}
+                        title="Discuss in AI Tutor"
+                        aria-label="Discuss in AI Tutor"
+                        style={{
+                          background: 'rgba(99, 102, 241, 0.1)',
+                          border: '1px solid rgba(99, 102, 241, 0.25)',
+                          color: 'var(--theme-primary, #6366f1)',
+                          borderRadius: '4px',
+                          padding: '2px 6px',
+                          fontSize: '0.68rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px'
+                        }}
+                      >
+                        <Bot size={11} />
+                        <span>Discuss</span>
+                      </button>
+                    )}
+
                     {!isAi && (
                       <button
                         type="button"
@@ -445,7 +581,7 @@ export default function TranscriptAnnotationsDrawer({
                   </div>
                 ) : (
                   noteText && (
-                    <p
+                    <div
                       onClick={() => {
                         setEditingId(item.id);
                         setEditNoteText(noteText || '');
@@ -455,26 +591,53 @@ export default function TranscriptAnnotationsDrawer({
                         fontSize: '0.82rem',
                         margin: '2px 0',
                         color: 'var(--text-primary)',
-                        fontWeight: 500,
-                        cursor: 'pointer'
+                        cursor: 'pointer',
+                        lineHeight: 1.5
                       }}
                     >
-                      {noteText}
-                    </p>
+                      <MarkdownWithTimestamps content={noteText} onCueClick={handleCueClick} />
+                    </div>
                   )
                 )}
 
                 {aiResponse && (
                   <div style={{
-                    fontSize: '0.78rem',
+                    fontSize: '0.8rem',
                     color: 'var(--text-primary)',
-                    background: 'rgba(168, 85, 247, 0.05)',
-                    border: '1px solid rgba(168, 85, 247, 0.15)',
+                    background: 'rgba(168, 85, 247, 0.06)',
+                    border: '1px solid rgba(168, 85, 247, 0.2)',
                     borderRadius: '6px',
-                    padding: '8px',
-                    lineHeight: 1.4
+                    padding: '8px 10px',
+                    lineHeight: 1.5
                   }}>
-                    {aiResponse}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#a855f7', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <Sparkles size={11} /> AI Explanation
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Copy AI explanation"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigator.clipboard.writeText(aiResponse);
+                          setCopiedId(`ai-${item.id}`);
+                          setTimeout(() => setCopiedId(null), 1500);
+                        }}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          fontSize: '0.68rem',
+                          color: copiedId === `ai-${item.id}` ? '#10b981' : 'var(--text-secondary)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px'
+                        }}
+                      >
+                        {copiedId === `ai-${item.id}` ? <><Check size={11} color="#10b981" /> Copied</> : <><Copy size={11} /> Copy</>}
+                      </button>
+                    </div>
+                    <MarkdownWithTimestamps content={aiResponse} onCueClick={handleCueClick} />
                   </div>
                 )}
               </div>

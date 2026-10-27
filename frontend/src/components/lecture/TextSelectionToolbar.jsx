@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Highlighter,
   MessageSquare,
@@ -8,9 +8,11 @@ import {
   X,
   Loader2,
   BookmarkPlus,
-  Eraser
+  Eraser,
+  Bot
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
 export default function TextSelectionToolbar({
   position,
@@ -23,16 +25,26 @@ export default function TextSelectionToolbar({
   onClose,
   onAnnotationCreated,
   onDeleteAnnotation,
-  overlappingAnnotations = []
+  overlappingAnnotations = [],
+  initialMode = 'menu',
+  onDiscussInTutor
 }) {
-  const [mode, setMode] = useState('menu'); // 'menu' | 'note' | 'ai'
+  const [mode, setMode] = useState(initialMode || 'menu'); // 'menu' | 'note' | 'ai'
   const [noteInput, setNoteInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState('');
   const [aiPromptType, setAiPromptType] = useState('explain');
   const [copied, setCopied] = useState(false);
+  const [aiCopied, setAiCopied] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (initialMode === 'ai') {
+      setMode('ai');
+      handleAskAi('explain');
+    }
+  }, [initialMode]);
 
   if (!selectedText) return null;
 
@@ -184,7 +196,8 @@ export default function TextSelectionToolbar({
           start_seconds: startSeconds || 0.0,
           end_seconds: endSeconds || 0.0,
           ai_prompt: aiPromptType,
-          ai_response: aiResponse
+          ai_response: aiResponse,
+          note_text: aiResponse
         })
       });
       if (!res.ok) {
@@ -218,12 +231,15 @@ export default function TextSelectionToolbar({
 
   const posX = position?.x ?? position?.left ?? 200;
   const posY = position?.y ?? position?.top ?? 200;
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+
   const toolbarLeft = typeof window !== 'undefined'
-    ? Math.max(10, Math.min(window.innerWidth - 320, posX - 140))
+    ? (isMobile ? '16px' : Math.max(10, Math.min(window.innerWidth - 320, posX - 140)))
     : posX;
   const toolbarTop = typeof window !== 'undefined'
-    ? Math.max(10, Math.min(window.innerHeight - 80, posY > 70 ? posY - 52 : posY + 28))
+    ? (isMobile ? 'auto' : Math.max(10, Math.min(window.innerHeight - 80, posY > 70 ? posY - 52 : posY + 28)))
     : Math.max(10, posY > 70 ? posY - 52 : posY + 28);
+  const toolbarBottom = isMobile ? 'calc(var(--safe-bottom, 0px) + 16px)' : 'auto';
 
   return (
     <div
@@ -231,18 +247,20 @@ export default function TextSelectionToolbar({
       style={{
         position: 'fixed',
         left: toolbarLeft,
+        right: isMobile ? '16px' : 'auto',
         top: toolbarTop,
+        bottom: toolbarBottom,
         zIndex: 1000,
         background: 'var(--card-bg)',
         border: '1px solid var(--border-color)',
-        borderRadius: '8px',
-        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.2)',
-        padding: '6px',
+        borderRadius: isMobile ? '14px' : '8px',
+        boxShadow: '0 8px 30px rgba(0, 0, 0, 0.35)',
+        padding: isMobile ? '10px 12px' : '6px',
         display: 'flex',
         flexDirection: 'column',
         gap: '6px',
-        maxWidth: '320px',
-        minWidth: '240px',
+        maxWidth: isMobile ? 'calc(100vw - 32px)' : (mode === 'ai' ? '380px' : '320px'),
+        minWidth: isMobile ? 'auto' : '240px',
         animation: 'fadeIn 0.15s ease'
       }}
       onClick={(e) => e.stopPropagation()}
@@ -513,16 +531,16 @@ export default function TextSelectionToolbar({
             ))}
           </div>
 
-          {/* AI Response Area */}
+          {/* AI Response Area with Markdown and LaTeX formatting */}
           <div style={{
-            maxHeight: '180px',
+            maxHeight: '220px',
             overflowY: 'auto',
-            padding: '6px 8px',
+            padding: '8px 10px',
             background: 'var(--panel-bg)',
-            borderRadius: '4px',
+            borderRadius: '6px',
             border: '1px solid var(--border-color)',
-            fontSize: '0.78rem',
-            lineHeight: 1.4,
+            fontSize: '0.8rem',
+            lineHeight: 1.5,
             color: 'var(--text-primary)'
           }}>
             {aiLoading ? (
@@ -531,20 +549,80 @@ export default function TextSelectionToolbar({
                 <span>Thinking...</span>
               </div>
             ) : (
-              aiResponse
+              <div className="ai-explainer-markdown">
+                <MarkdownWithTimestamps content={aiResponse} />
+              </div>
             )}
           </div>
 
           {aiResponse && !aiLoading && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+              {/* Copy Option */}
               <button
+                type="button"
+                aria-label="Copy AI explanation"
+                onClick={() => {
+                  navigator.clipboard.writeText(aiResponse);
+                  setAiCopied(true);
+                  setTimeout(() => setAiCopied(false), 1500);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--card-bg)',
+                  color: aiCopied ? '#10b981' : 'var(--text-secondary)',
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                {aiCopied ? <><Check size={11} color="#10b981" /> Copied!</> : <><Copy size={11} /> Copy</>}
+              </button>
+
+              {/* Discuss in AI Tutor Option */}
+              {typeof onDiscussInTutor === 'function' && (
+                <button
+                  type="button"
+                  aria-label="Discuss in AI Tutor"
+                  onClick={() => {
+                    const ts = startSeconds !== undefined
+                      ? `${Math.floor(startSeconds / 60)}:${String(Math.floor(startSeconds % 60)).padStart(2, '0')}`
+                      : '';
+                    onDiscussInTutor(selectedText, ts);
+                    onClose();
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    background: 'rgba(99, 102, 241, 0.1)',
+                    color: 'var(--theme-primary, #6366f1)',
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Bot size={11} /> Discuss in Tutor
+                </button>
+              )}
+
+              {/* Pin as Note */}
+              <button
+                type="button"
                 onClick={handlePinAiAsNote}
                 disabled={isSubmitting}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '4px',
-                  padding: '3px 8px',
+                  padding: '4px 8px',
                   borderRadius: '4px',
                   border: 'none',
                   background: 'rgba(168, 85, 247, 0.2)',

@@ -16,13 +16,15 @@ import {
   Eraser,
   Play,
   Pause,
-  Pencil
+  Pencil,
+  Bot
 } from 'lucide-react';
 import katex from 'katex';
 import { API_BASE } from '../../utils/constants';
 import TranscriptReviewDrawer from './TranscriptReviewDrawer';
 import TranscriptAnnotationsDrawer from './TranscriptAnnotationsDrawer';
 import TextSelectionToolbar from './TextSelectionToolbar';
+import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
 const parseTimeToSeconds = (timeStr) => {
   if (!timeStr || typeof timeStr !== 'string') return 0;
@@ -63,7 +65,8 @@ export default function TranscriptSearch({
   googleUser = null,
   isPlaying = false,
   handleTogglePlayPause = null,
-  handlePauseVideo = null
+  handlePauseVideo = null,
+  onDiscussInTutor = null
 }) {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(displayCues.length > 6);
@@ -158,36 +161,46 @@ export default function TranscriptSearch({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onToggleVideoPlayback]);
 
-  const handleUpdateAnnotation = async (annId, newNoteText) => {
+  const handleUpdateAnnotation = async (annId, newNoteText, extraFields = {}) => {
     if (!annId) return;
     const trimmed = (newNoteText || '').trim();
-    if (!trimmed) return;
     setIsSavingMarkNote(true);
     try {
+      const updateData = {
+        ...(trimmed ? { noteText: trimmed, note_text: trimmed } : {}),
+        ...extraFields
+      };
+      if (extraFields.annotation_type) {
+        updateData.annotationType = extraFields.annotation_type;
+      }
       setAnnotations(prev => prev.map(a =>
         a.id === annId
-          ? { ...a, noteText: trimmed, note_text: trimmed, annotationType: 'note', annotation_type: 'note' }
+          ? { ...a, ...updateData }
           : a
       ));
       if (activeMarkAction && activeMarkAction.annotation?.id === annId) {
         setActiveMarkAction(prev => prev ? {
           ...prev,
           editing: false,
-          annotation: { ...prev.annotation, noteText: trimmed, note_text: trimmed, annotationType: 'note', annotation_type: 'note' }
+          annotation: { ...prev.annotation, ...updateData }
         } : null);
       }
       if (hoveredMark && hoveredMark.annotation?.id === annId) {
         setHoveredMark(prev => prev ? {
           ...prev,
           editing: false,
-          annotation: { ...prev.annotation, noteText: trimmed, note_text: trimmed, annotationType: 'note', annotation_type: 'note' }
+          annotation: { ...prev.annotation, ...updateData }
         } : null);
       }
       if (videoId) {
+        const patchBody = {
+          ...(trimmed ? { note_text: trimmed } : {}),
+          ...extraFields
+        };
         await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${annId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ note_text: trimmed })
+          body: JSON.stringify(patchBody)
         });
       }
     } catch (err) {
@@ -690,11 +703,14 @@ export default function TranscriptSearch({
       const startSec = targetCue.seconds !== undefined
         ? Number(targetCue.seconds)
         : parseTimeToSeconds(targetCue.time);
-      const nextCue = displayCues[lastIdx + 1];
-      const nextSec = nextCue?.seconds !== undefined
-        ? Number(nextCue.seconds)
-        : (nextCue?.time ? parseTimeToSeconds(nextCue.time) : (endCue.seconds !== undefined ? Number(endCue.seconds) + 5 : startSec + 5));
-      const endSec = Math.max(startSec + 2, nextSec);
+      const isMultiCue = firstIdx !== lastIdx;
+      const endSec = isMultiCue
+        ? (endCue?.seconds !== undefined
+            ? Number(endCue.seconds) + 2
+            : (endCue?.time ? parseTimeToSeconds(endCue.time) + 2 : startSec + 4))
+        : (targetCue?.seconds !== undefined
+            ? Number(targetCue.seconds) + 2
+            : (targetCue?.time ? parseTimeToSeconds(targetCue.time) + 2 : startSec + 2));
 
       const targetClean = text.trim().toLowerCase();
       const overlapping = (annotations || []).filter(a => {
@@ -1025,6 +1041,8 @@ export default function TranscriptSearch({
             });
           }}
           onMouseEnter={(e) => {
+            const hasContent = Boolean(ann.noteText || ann.note_text || ann.aiResponse || ann.ai_response);
+            if (!hasContent) return;
             if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
             const rect = e.currentTarget.getBoundingClientRect();
             setHoveredMark(prev => {
@@ -1048,7 +1066,7 @@ export default function TranscriptSearch({
               ? `Note: "${noteText}" (Click to edit, un-highlight or view)`
               : isAi
               ? `AI Explanation: "${aiResponse.slice(0, 100)}"`
-              : `Highlight (${color}) - Click to un-highlight or view in Notes`
+              : `Highlight (${color}) - Click to ask AI, edit, or un-highlight`
           }
           style={{
             backgroundColor: bg,
@@ -1766,13 +1784,16 @@ export default function TranscriptSearch({
                         if (aType !== 'ai_explanation') return false;
                         const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
                         const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
+                        if (aCueId !== undefined && aCueId !== null) {
+                          if (aCueId === cue.id || aCueId === idx) return true;
+                        }
+                        if (aText && cue.text) {
+                          if (cue.text.toLowerCase().includes(aText)) return true;
+                        }
                         const aStartSec = Number(a.startSeconds ?? a.start_seconds ?? 0);
                         const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
                         const cueSec = cue.seconds !== undefined ? Number(cue.seconds) : parseTimeToSeconds(cue.time);
-                        const nextCueSec = displayCues[idx + 1]?.seconds !== undefined
-                          ? Number(displayCues[idx + 1].seconds)
-                          : (displayCues[idx + 1]?.time ? parseTimeToSeconds(displayCues[idx + 1].time) : cueSec + 6);
-                        return (aCueId === cue.id || aCueId === idx || (aText && (cue.text?.toLowerCase().includes(aText) || aText.includes(cue.text?.trim().toLowerCase()))) || (aEndSec > 0 && cueSec <= aEndSec && nextCueSec >= aStartSec));
+                        return aEndSec > 0 && cueSec >= aStartSec && cueSec < aEndSec;
                       }) && (
                         <button
                           onClick={(e) => {
@@ -1874,6 +1895,8 @@ export default function TranscriptSearch({
               userEmail={googleUser?.email}
               overlappingAnnotations={selectionToolbar.overlappingAnnotations}
               onDeleteAnnotation={handleDeleteAnnotation}
+              initialMode={selectionToolbar.initialMode || 'menu'}
+              onDiscussInTutor={onDiscussInTutor}
               onClose={() => setSelectionToolbar(null)}
               onAnnotationCreated={(newAnnotation) => {
                 setAnnotations(prev => [newAnnotation, ...prev]);
@@ -2039,29 +2062,23 @@ export default function TranscriptSearch({
                 <div style={{
                   fontSize: '0.82rem',
                   color: 'var(--text-primary)',
-                  lineHeight: '1.4',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  maxHeight: '140px',
+                  lineHeight: '1.5',
+                  maxHeight: '160px',
                   overflowY: 'auto'
                 }}>
-                  {hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text}
+                  <MarkdownWithTimestamps content={hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text} onCueClick={handleCueClick} />
                 </div>
               ) : (hoveredMark.annotation?.aiResponse || hoveredMark.annotation?.ai_response) ? (
                 <div style={{
                   fontSize: '0.8rem',
                   color: 'var(--text-primary)',
-                  lineHeight: '1.4',
-                  maxHeight: '140px',
+                  lineHeight: '1.5',
+                  maxHeight: '160px',
                   overflowY: 'auto'
                 }}>
-                  {hoveredMark.annotation?.aiResponse || hoveredMark.annotation?.ai_response}
+                  <MarkdownWithTimestamps content={hoveredMark.annotation?.aiResponse || hoveredMark.annotation?.ai_response} onCueClick={handleCueClick} />
                 </div>
-              ) : (
-                <div style={{ fontSize: '0.75rem', fontStyle: 'italic', color: 'var(--text-secondary)' }}>
-                  "{hoveredMark.annotation?.selectedText || hoveredMark.annotation?.selected_text}"
-                </div>
-              )}
+              ) : null}
               {!hoveredMark.editing && (
                 <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                   Click to open in Notes drawer, edit, or un-highlight
@@ -2178,6 +2195,74 @@ export default function TranscriptSearch({
                       ? `Note: ${activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text}`
                       : `Highlight (${activeMarkAction.annotation?.color || 'yellow'})`}
                   </span>
+
+                  {/* Ask AI button on already highlighted text */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ann = activeMarkAction.annotation;
+                      const text = ann?.selectedText || ann?.selected_text || '';
+                      setSelectionToolbar({
+                        position: { x: activeMarkAction.x || 200, y: activeMarkAction.y || 200 },
+                        selectedText: text,
+                        cueId: ann?.cueId ?? ann?.cue_id,
+                        startSeconds: Number(ann?.startSeconds ?? ann?.start_seconds ?? 0),
+                        endSeconds: Number(ann?.endSeconds ?? ann?.end_seconds ?? 0),
+                        overlappingAnnotations: [ann],
+                        initialMode: 'ai'
+                      });
+                      setActiveMarkAction(null);
+                    }}
+                    title="Ask AI to explain this highlighted text"
+                    aria-label="Ask AI"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '3px',
+                      padding: '3px 6px',
+                      borderRadius: '4px',
+                      background: 'rgba(168, 85, 247, 0.12)',
+                      color: '#a855f7',
+                      border: 'none',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Sparkles size={11} /> Ask AI
+                  </button>
+
+                  {/* Discuss in AI Tutor button */}
+                  {typeof onDiscussInTutor === 'function' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ann = activeMarkAction.annotation;
+                        const text = ann?.selectedText || ann?.selected_text || '';
+                        const startSec = Number(ann?.startSeconds ?? ann?.start_seconds ?? 0);
+                        const ts = startSec ? `${Math.floor(startSec / 60)}:${String(Math.floor(startSec % 60)).padStart(2, '0')}` : '';
+                        onDiscussInTutor(text, ts);
+                        setActiveMarkAction(null);
+                      }}
+                      title="Discuss this concept in AI Tutor"
+                      aria-label="Discuss in AI Tutor"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        padding: '3px 6px',
+                        borderRadius: '4px',
+                        background: 'rgba(99, 102, 241, 0.1)',
+                        color: 'var(--theme-primary, #6366f1)',
+                        border: 'none',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Bot size={11} /> Discuss
+                    </button>
+                  )}
 
                   <button
                     type="button"
@@ -2417,6 +2502,7 @@ export default function TranscriptSearch({
           }}
           onUpdateAnnotation={handleUpdateAnnotation}
           handleCueClick={handleCueClick}
+          onDiscussInTutor={onDiscussInTutor}
         />
       </div>
     </div>

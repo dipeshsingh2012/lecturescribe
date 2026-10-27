@@ -11,10 +11,11 @@
 | Phase / Milestone | Focus Area | Total Epics | Completed | In Progress | Pending | Target Status |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Phase 0** | Existing LectureScribe Baseline & Course Entity Normalization | 5 | 2 | 1 | 2 | 🟡 In Progress |
-| **Milestone 1** | Core Foundation, Tutor/Student RBAC & Access Control | 6 | 1 | 0 | 5 | 🟢 M1A Complete |
-| **Milestone 2** | Assessment, Question Bank, Assignments & Gradebook Engine | 5 | 0 | 1 | 4 | 🟡 In Progress |
-| **Milestone 3** | Engagement, Forums, Conditional Access & Completion Tracking | 4 | 0 | 0 | 4 | ⚪ Not Started |
-| **Milestone 4** | Advanced Ecosystem (Rubrics, Competencies, LTI/SCORM, Analytics) | 5 | 0 | 0 | 5 | ⚪ Not Started |
+| **Milestone 1** | Core Foundation, Tutor/Student RBAC, Enrollment Keys, AI Calendar & Syllabus Spine | 7 | 5 | 0 | 2 | 🟢 M1A + M1B + M1C + Syllabus Complete |
+| **Milestone 2** | Assessment, AI Question Bank, Assignment Submissions, SpeedGrader & Gradebook | 5 | 4 | 0 | 1 | 🟢 Question Bank + Assignments + Gradebook Complete |
+| **Milestone 3** | Engagement, Forums (Timestamp Deep-Links & AI TA), Completion & Restrict Access | 4 | 3 | 0 | 1 | 🟢 Forum + Completion + Restrict Access Complete |
+| **Milestone 4** | Advanced Ecosystem (Learning Analytics & At-Risk AI Dashboard, Rubrics, LTI/SCORM) | 5 | 1 | 0 | 4 | 🟢 AI Learning Analytics Complete |
+| **Milestone 5** | Mobile-First App Transformation & PWA (Thumb Bottom Nav, Adaptive Views, Offline Cache) | 4 | 4 | 0 | 0 | 🟢 Mobile & PWA Complete |
 
 ---
 
@@ -83,6 +84,120 @@
 - [x] **M1A-FE-03: Role-Gated Course Views ([`HomeView.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/views/HomeView.jsx) & Course Sub-views)**
   - Gated `QuickAddBar` (course & lecture creation), `Assignments` tab (`CourseAssignments.jsx`), `Delete Course`, `Delete Lecture`, `Upload File`, `Delete Resource`, `Extract Readings`, `Regenerate Summary`, and `Generate New Quiz` strictly behind `isTutor`.
   - Kept student-centric actions (`New Note`, `Take Quiz`, `Ask Course Tutor`, `Bookmark/Pin`) available to both `student` and `tutor`.
+
+---
+
+## ✅ Completed Sprint: Milestone 1B — AI-Native Academic Calendar & Schedule Engine
+
+> **Status:** ✅ Completed & Verified (Backend + Frontend + Automated Tests)  
+> **Goal:** Evolve the read-only Moodle `.ics` widget into a full Moodle-grade LMS Calendar (`lecturescribe_calendar_events`) with AI Schedule Extraction from **Semester Exam PDFs** and **Lecture Transcripts**, a **Full Calendar Page**, **Course Upcoming Events**, and **Universal Calendar Widget Injection**.
+
+### Implementation Checklist
+- [x] **M1B-DB-01: `lecturescribe_calendar_events` Schema & DAO ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py))**
+  - Supports Moodle scopes (`site`, `course`, `user`), categories (`exam`, `quiz`, `assignment`, `lab`, `lecture`, `schedule`), `source_type` (`pdf_ai`, `transcript_ai`, `moodle_ical`, `manual`), `ai_confidence`, and `source_metadata` JSONB deep links.
+- [x] **M1B-BE-01: AI PDF & Transcript Extraction Service ([`backend/calendar_ai_service.py`](file:///home/dipes/projects/lecturescribe/backend/calendar_ai_service.py))**
+  - `extract_calendar_events_from_pdf`: Combines layout-preserving `pypdf` extraction + Gemini multimodal PDF vision (`inlineData`) + Groq fallback and auto-matches known LMS courses.
+  - `extract_calendar_events_from_transcript` & `sync_predicted_quizzes_to_calendar`: Extracts verbal exam/quiz/assignment announcements from lecture cues (automatically during lecture ingestion and on-demand), storing `video_id`, `cue_time`, and `timestamp_sec`.
+- [x] **M1B-BE-02: Hybrid Calendar API & WhatsApp Integration ([`backend/calendar_parser.py`](file:///home/dipes/projects/lecturescribe/backend/calendar_parser.py) & [`backend/main.py`](file:///home/dipes/projects/lecturescribe/backend/main.py))**
+  - Added `GET/POST/PATCH/DELETE /api/calendar/events`, `POST /api/calendar/extract-pdf`, `POST /api/calendar/extract-transcript`, and `GET /api/calendar/export.ics`.
+  - Integrated approved AI/DB events into `filter_events_for_slot` for the 8 AM & 4 PM IST WhatsApp daily reminders.
+- [x] **M1B-FE-01: Full Calendar Page, AI Extractor Modal & Multi-Page Widget Injection**
+  - Built [`CalendarView.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/views/CalendarView.jsx) (`/calendar` route + Course `Calendar` tab) with Month Grid, Timeline Agenda, AI Extracted view, and 1-click lecture timestamp deep-links.
+  - Built [`CalendarAIExtractorModal.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/calendar/CalendarAIExtractorModal.jsx) for PDF uploads, transcript scans, and manual event creation.
+  - Injected [`CalendarAlertCard.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/calendar/CalendarAlertCard.jsx) across Home Hub, Course Page (Course Upcoming Events), Lecture Workspace (`Calendar` tab), and Course Notepad (`Deadlines` toggle).
+
+---
+
+## ✅ Completed Sprint: Options 1–4 — Assignments + AI SpeedGrader, Centralized Gradebook, Self-Enrollment Keys & AI Course Forum
+
+> **Status:** ✅ Completed & Verified (Backend + Frontend + Automated Tests)  
+> **Goal:** Sequentially deliver the four core Moodle LMS pillars:
+> 1. **Option 1:** Student Assignment Submissions + Automatic Calendar Deadline Sync & AI SpeedGrader
+> 2. **Option 2:** Centralized Course Gradebook Engine (`CourseGrades.jsx`)
+> 3. **Option 3:** Course Enrollment, Roster & Shareable Self-Enrollment Keys (`CourseParticipants.jsx`)
+> 4. **Option 4:** Course Discussions / Q&A Forum with Lecture Timestamp Deep-Links & Course-RAG AI TA (`CourseForum.jsx`)
+
+### Implementation Checklist
+- [x] **Option 1 — Assignment Deadlines, Submissions & AI SpeedGrader ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`backend/assignment_service.py`](file:///home/dipes/projects/lecturescribe/backend/assignment_service.py), [`CourseAssignments.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseAssignments.jsx))**
+  - Added `due_date`, `max_marks`, and `is_published` to `lecturescribe_course_assignments`, automatically upserting deadline events (`cal_asgn_<id>`) in `lecturescribe_calendar_events`.
+  - Created `lecturescribe_assignment_submissions` table and endpoints (`PATCH .../publish`, `POST .../submit`, `GET .../submissions`, `POST .../ai-grade`, `PATCH .../grade`) with LLM + heuristic rubric fallback in `evaluate_student_submission_with_ai`.
+- [x] **Option 2 — Centralized Course Gradebook Engine ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseGrades.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseGrades.jsx))**
+  - Created `lecturescribe_gradebook_overrides` table and `get_course_gradebook` aggregating Course AI Quizzes, Assignments, and Manual Viva/Exam overrides into per-student totals, percentages, letter grades, and CSV export (`GET /api/course/{course_name}/gradebook`, `POST /api/course/{course_name}/gradebook/override`).
+  - Added integrated Student Homework Submission Portal inside `CourseGrades.jsx` for learners.
+- [x] **Option 3 — Course Roster & Self-Enrollment Keys ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseParticipants.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseParticipants.jsx))**
+  - Created `lecturescribe_course_enrollment_keys` table and endpoints (`GET/POST /api/course/{course_name}/enrollment-key`, `POST /api/course/enrol-by-key`, `DELETE /api/course/{course_name}/members/{target_email}`).
+- [x] **Option 4 — Course Discussions / Q&A Forum with Timestamp Deep-Links & AI TA ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseForum.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseForum.jsx))**
+  - Created `lecturescribe_forum_threads` and `lecturescribe_forum_replies` tables and endpoints (`GET/POST /api/course/{course_name}/forum`, `POST .../reply`, `POST .../ai-reply`, `PATCH .../endorse/{reply_id}`).
+  - Supports clickable lecture timestamp chips (`@ MM:SS`), Course-RAG AI Teaching Assistant grounded replies, and Instructor Endorsement + thread resolution.
+
+---
+
+## ✅ Completed Sprint: Wave 2 Options 1–4 — Completion & Restrict Access, AI Question Bank, Modular Syllabus Spine & AI Learning Analytics
+
+> **Status:** ✅ Completed & Verified (Backend + Frontend + Automated Tests)  
+> **Goal:** Sequentially deliver the next four Moodle-grade LMS capabilities:
+> 1. **Wave 2 Option 1:** Course Activity Completion Tracking & Prerequisite Access Rules ("Restrict Access")
+> 2. **Wave 2 Option 2:** Decoupled AI Question Bank Manager & Custom Quiz Builder (`CourseQuestionBank.jsx`)
+> 3. **Wave 2 Option 3:** Modular Course Syllabus Spine (Weeks / Topics Builder + AI Auto-Organizer in `CourseSyllabusSpine.jsx`)
+> 4. **Wave 2 Option 4:** Instructor Learning Analytics & At-Risk Student AI Early-Warning Dashboard (`CourseAnalytics.jsx`)
+
+### Implementation Checklist
+- [x] **Wave 2 Option 1 — Activity Completion & Restrict Access Rules ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseSyllabusSpine.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseSyllabusSpine.jsx))**
+  - Created `lecturescribe_module_completions` and `lecturescribe_access_rules` tables (`GET /api/course/{course_name}/completion`, `POST /api/course/{course_name}/completion/toggle`, `GET/POST /api/course/{course_name}/access-rules`).
+  - Automatically computes completion across lectures (`Watched >= 80%` or manual `"Mark as Done"`), assignments (`Submitted`), and quizzes, and evaluates prerequisite locks (`required_module_ids`, `min_quiz_score_pct`).
+- [x] **Wave 2 Option 2 — Decoupled AI Question Bank & Custom Quiz Publisher ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseQuestionBank.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseQuestionBank.jsx))**
+  - Created `lecturescribe_question_bank` table (`GET/POST /api/course/{course_name}/question-bank`, `POST .../ai-generate`, `POST .../publish-quiz`, `DELETE .../{question_id}`).
+  - Supports Bloom's Taxonomy & Difficulty filtering, AI question generation from lectures, and 1-click custom exam publishing into `CourseQuiz.jsx`.
+- [x] **Wave 2 Option 3 — Modular Course Syllabus Spine & AI Auto-Organizer ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseSyllabusSpine.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseSyllabusSpine.jsx))**
+  - Created `lecturescribe_course_sections` table (`GET /api/course/{course_name}/syllabus`, `POST .../sections`, `POST .../ai-organize`, `DELETE .../sections/{section_id}`).
+  - Organizes lectures, readings, assignments, and exams into structured weekly curriculum modules with learning objectives.
+- [x] **Wave 2 Option 4 — Instructor Learning Analytics & At-Risk AI Early-Warning Dashboard ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseAnalytics.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseAnalytics.jsx))**
+  - Added `GET /api/course/{course_name}/analytics` computing per-student weighted engagement score (`0–100`), completion %, grade average, forum participation, risk classification (`high` / `medium` / `low`), and 1-click copyable AI intervention outreach messages.
+
+---
+
+## ✅ Completed Sprint: Wave 3 Options 1–4 — 2D Grading Rubrics, Competency Mastery Matrix, Peer Review Workshops & Announcements/Audit Log
+
+> **Status:** ✅ Completed & Verified (Backend + Frontend + Automated Tests)  
+> **Goal:** Sequentially deliver the four Advanced Ecosystem & Evaluation LMS capabilities:
+> 1. **Wave 3 Option 1:** 2D Criterion × Level Grading Rubrics & AI Rubric Generator (`CourseRubricsAndCompetencies.jsx`)
+> 2. **Wave 3 Option 2:** Course Competency & Skill Mastery Matrix (`CourseRubricsAndCompetencies.jsx`)
+> 3. **Wave 3 Option 3:** Multi-Phase Peer Review Workshop & AI Calibration Engine (`CourseWorkshopsAndAnnouncements.jsx`)
+> 4. **Wave 3 Option 4:** Course Announcements Broadcast & Immutable Pedagogical Event Audit Log (`CourseWorkshopsAndAnnouncements.jsx`)
+
+### Implementation Checklist
+- [x] **Wave 3 Option 1 — 2D Grading Rubrics & AI Rubric Generator ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseRubricsAndCompetencies.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseRubricsAndCompetencies.jsx))**
+  - Created `lecturescribe_rubrics` table (`GET/POST /api/course/{course_name}/rubrics`, `POST .../rubrics/ai-generate`).
+- [x] **Wave 3 Option 2 — Course Competency & Skill Mastery Matrix ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseRubricsAndCompetencies.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseRubricsAndCompetencies.jsx))**
+  - Created `lecturescribe_competencies` table (`GET/POST /api/course/{course_name}/competencies`, `POST .../competencies/ai-extract`) computing per-student mastery (`Mastered`, `Proficient`, `Developing`, `Initiating`).
+- [x] **Wave 3 Option 3 — Peer Review Workshop & AI Calibration Engine ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseWorkshopsAndAnnouncements.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseWorkshopsAndAnnouncements.jsx))**
+  - Created `lecturescribe_workshops`, `lecturescribe_workshop_submissions`, and `lecturescribe_workshop_reviews` tables (`GET/POST /api/course/{course_name}/workshops`, `POST .../submissions`, `POST .../reviews`) with AI Calibration Quality scoring.
+- [x] **Wave 3 Option 4 — Course Announcements Broadcast & Pedagogical Audit Log ([`backend/database.py`](file:///home/dipes/projects/lecturescribe/backend/database.py), [`CourseWorkshopsAndAnnouncements.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseWorkshopsAndAnnouncements.jsx))**
+  - Created `lecturescribe_announcements` and `lecturescribe_audit_logs` tables (`GET/POST /api/course/{course_name}/announcements`).
+
+---
+
+## ✅ Completed Sprint: Milestone 5 — Mobile-First App Transformation & PWA Infrastructure
+
+> **Status:** ✅ Completed & Verified (Frontend Architecture + Tests + Production Build)  
+> **Goal:** Transform LectureScribe from a desktop-centric LMS into a mobile-first, native-grade Progressive Web App (PWA) with 100% Tutor & Student feature parity, thumb-friendly navigation, adaptive views, and installable offline capabilities.
+
+### Implementation Checklist
+- [x] **M5-FE-01: Viewport & Mobile Safe-Area Foundations ([`index.html`](file:///home/dipes/projects/lecturescribe/frontend/index.html) & [`index.css`](file:///home/dipes/projects/lecturescribe/frontend/src/index.css))**
+  - Updated viewport with `viewport-fit=cover`, maximum scale support, and Apple PWA status bar meta tags.
+  - Added CSS custom variables for safe areas (`--safe-top`, `--safe-bottom`, `--safe-left`, `--safe-right`, `--mobile-bottom-nav-height`).
+- [x] **M5-FE-02: Global Mobile Bottom Navigation & Course Tool Drawer ([`MobileBottomNav.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/layout/MobileBottomNav.jsx))**
+  - Built bottom navigation bar for mobile devices (`< 900px`).
+  - Gated into Global Hub mode (`Courses`, `Calendar`, `New Note`) vs Course mode (4 Primary Tabs: `Syllabus`, `Lectures`, `AI Tutor`, `Grades` + 1 `More` button opening an interactive Slide-Up Drawer organizing all remaining 10 Student & Tutor modules).
+- [x] **M5-FE-03: Adaptive Mobile Layouts & Touch-Friendly Tools**
+  - Added Mobile Active Module banner in [`HomeView.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/views/HomeView.jsx) to eliminate wrapping pills.
+  - Added touch-friendly fixed bottom docking in [`TextSelectionToolbar.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/lecture/TextSelectionToolbar.jsx) on mobile screens.
+  - Upgraded [`CourseGrades.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseGrades.jsx) with responsive mobile cards on small screens and sticky student columns on the full matrix.
+  - Upgraded [`CourseTutor.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseTutor.jsx) with responsive dynamic height (`100dvh`).
+  - Added mobile header padding with `--safe-top` in [`Header.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/layout/Header.jsx).
+- [x] **M5-PWA-01: Web App Manifest & Service Worker ([`manifest.json`](file:///home/dipes/projects/lecturescribe/frontend/public/manifest.json) & [`sw.js`](file:///home/dipes/projects/lecturescribe/frontend/public/sw.js))**
+  - Configured installable PWA manifest with standalone display, dark blue theme `#022758`, and maskable icons.
+  - Implemented service worker with app shell caching and Stale-While-Revalidate caching for read-only course materials, transcripts, syllabus, and calendar events.
 
 ---
 

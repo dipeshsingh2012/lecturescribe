@@ -42,7 +42,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
 import socket
 import ipaddress
 from urllib.parse import urlparse
@@ -51,6 +51,11 @@ import httpx
 from contextlib import asynccontextmanager
 
 from backend.calendar_parser import calendar_service, SLOT_LABELS
+from backend.calendar_ai_service import (
+    extract_calendar_events_from_pdf,
+    extract_calendar_events_from_transcript,
+    sync_predicted_quizzes_to_calendar,
+)
 from backend.whatsapp_service import whatsapp_service
 
 # Import extraction and service modules
@@ -333,6 +338,11 @@ def transcribe_lecture(
     email: Optional[str] = Query(None, description="Signed-in user email for LMS library")
 ):
     """Generate and persist a transcript for an imported lecture without captions."""
+    if not email or not str(email).strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Please sign in with Google to transcribe lecture videos."
+        )
     if not re.fullmatch(r"\d+", video_id):
         raise HTTPException(status_code=400, detail="A valid video ID is required.")
 
@@ -1117,6 +1127,16 @@ def predict_and_store_quizzes(
         predictions = predict_quizzes_from_cues(cues, lecture_title=title, video_id=video_id)
         if predictions:
             saved = db_manager.save_predicted_quizzes(video_id, course_slug, resolved_course, predictions)
+            try:
+                sync_predicted_quizzes_to_calendar(
+                    video_id=video_id,
+                    course_slug=course_slug,
+                    course_name=resolved_course,
+                    lecture_title=title,
+                    predictions=saved or predictions,
+                )
+            except Exception as sync_err:
+                logger.warning(f"⚠️ [Calendar Sync Notice] {video_id}: {sync_err}")
             print(f"🎯 [Quiz Predictor] Successfully extracted and saved {len(saved)} predicted quizzes for '{video_id}'.")
             return saved
         else:
@@ -1297,7 +1317,14 @@ def process_lecture_import(
             saved["upload_status"] = "UPLOADING" if is_uploading else "IDLE"
         return saved
 
-    # 2. Extract video config: use provided player_config or fetch fresh from video provider
+    # 2. Ingestion of uncached video requires authenticated Google user
+    if not email or not str(email).strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: Please sign in with Google to ingest lecture videos."
+        )
+
+    # Extract video config: use provided player_config or fetch fresh from video provider
     if player_config and isinstance(player_config, dict):
         config = player_config
     else:
@@ -1453,7 +1480,12 @@ def extension_import(req: ExtensionImportRequest):
             raise HTTPException(status_code=400, detail="Missing video_id in import request")
 
         video_id = extract_video_id(str(req.video_id).strip())
-        target_email = (req.email and req.email.strip()) or "dipesh.singh2012@gmail.com"
+        target_email = req.email and str(req.email).strip()
+        if not target_email:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required: Please sign in with Google to ingest lecture videos."
+            )
         return process_lecture_import(
             video_id=video_id,
             email=target_email,
@@ -1574,7 +1606,10 @@ def delete_transcript_annotation_endpoint(
 
 
 class UpdateAnnotationRequest(BaseModel):
-    note_text: str
+    note_text: Optional[str] = None
+    ai_prompt: Optional[str] = None
+    ai_response: Optional[str] = None
+    annotation_type: Optional[str] = None
     user_email: Optional[str] = None
 
 
@@ -1584,12 +1619,17 @@ def update_transcript_annotation_endpoint(
     annotation_id: str,
     req: UpdateAnnotationRequest
 ):
-    """Update an existing margin note or annotation."""
-    if not req.note_text or not req.note_text.strip():
-        raise HTTPException(status_code=400, detail="Note text cannot be empty.")
+    """Update an existing margin note, AI response, or annotation."""
+    has_note = req.note_text is not None and req.note_text.strip() != ""
+    has_ai = req.ai_response is not None and req.ai_response.strip() != ""
+    if not has_note and not has_ai and not req.annotation_type:
+        raise HTTPException(status_code=400, detail="Updated note text or AI response cannot be empty.")
     updated = db_manager.update_annotation(
         annotation_id=annotation_id,
-        note_text=req.note_text.strip(),
+        note_text=req.note_text.strip() if req.note_text is not None else None,
+        ai_prompt=req.ai_prompt.strip() if req.ai_prompt is not None else None,
+        ai_response=req.ai_response.strip() if req.ai_response is not None else None,
+        annotation_type=req.annotation_type.strip() if req.annotation_type is not None else None,
         user_email=req.user_email
     )
     if not updated:
@@ -2439,6 +2479,21 @@ def save_custom_summary_endpoint(req: SaveCustomSummaryRequest):
     }
 
 
+@app.post("/api/lecture/{video_id}/summary/clear-outdated")
+def clear_summary_outdated_endpoint(video_id: str):
+    """Clear the outdated flag on summaries for a lecture."""
+    vid = str(video_id).strip()
+    db_manager.clear_summary_outdated(vid)
+    if redis_cache:
+        redis_cache.invalidate_video(vid)
+    return {
+        "status": "success",
+        "video_id": vid,
+        "is_outdated": False,
+        "summary_outdated": False
+    }
+
+
 # ==============================================================================
 # Lecture Podcast & Single-Narrator Audio Recap Endpoints
 # ==============================================================================
@@ -3056,8 +3111,14 @@ def get_or_generate_course_summary(
 
     # 6. Persist to Database & Cache
     db_manager.save_course_summary(canonical_title, summary_data)
+    canonical_slug = to_course_slug(canonical_title)
+    if canonical_slug and canonical_slug != course_slug:
+        db_manager.save_course_summary(clean_course, summary_data)
+
     if redis_cache:
         redis_cache.set_course_summary(course_slug, summary_data, ttl_seconds=86400)
+        if canonical_slug and canonical_slug != course_slug:
+            redis_cache.set_course_summary(canonical_slug, summary_data, ttl_seconds=86400)
 
     return {
         **summary_data,
@@ -3065,6 +3126,21 @@ def get_or_generate_course_summary(
         "course_name": summary_data.get("course_name") or canonical_title,
         "summary": summary_data
     }
+
+
+@app.post("/api/course/{course_name}/summary/regenerate")
+def regenerate_course_summary_endpoint(
+    course_name: str,
+    email: Optional[str] = Query(None, description="User email"),
+    body: Optional[CourseSummaryRequest] = None
+):
+    """Explicit convenience endpoint to force regenerate course-level executive summary."""
+    return get_or_generate_course_summary(
+        course_name=course_name,
+        regenerate=True,
+        email=email,
+        body=body
+    )
 
 
 @app.delete("/api/course/{course_name}/quiz/answers")
@@ -4534,21 +4610,204 @@ def get_cloud_job_status(job_id: str):
 
 
 # ==============================================================================
-# Moodle Calendar & Automated WhatsApp Alert Endpoints
+# Moodle Calendar, AI Schedule Extraction & Automated WhatsApp Alert Endpoints
 # ==============================================================================
 
 @app.get("/api/calendar/events")
 def get_calendar_events(
     refresh: bool = Query(False, description="Bypass cache and fetch fresh feed from Moodle"),
-    days: int = Query(7, description="Number of upcoming days to include")
+    days: int = Query(7, description="Number of upcoming days to include"),
+    course: Optional[str] = Query(None, description="Optional course name or slug filter"),
+    user_email: Optional[str] = Query(None, description="Optional user email for personal scope events"),
+    source_type: Optional[str] = Query(None, description="Filter by source: 'moodle_ical', 'pdf_ai', 'transcript_ai', 'manual'"),
+    category: Optional[str] = Query(None, description="Filter by category: 'exam', 'quiz', 'assignment', 'lab', 'lecture', 'schedule'"),
 ):
-    """Retrieve categorized today and upcoming events from Moodle iCal feed."""
+    """Retrieve categorized today, upcoming, and full calendar events from Moodle iCal + AI/DB."""
     try:
-        agenda = calendar_service.get_dashboard_agenda(days=days, refresh=refresh)
+        if any(v is not None for v in (course, user_email, source_type, category)):
+            agenda = calendar_service.get_dashboard_agenda(
+                days=days,
+                refresh=refresh,
+                course_slug=course,
+                user_email=user_email,
+                source_type=source_type,
+                category=category,
+            )
+        else:
+            agenda = calendar_service.get_dashboard_agenda(days=days, refresh=refresh)
         return agenda
     except Exception as e:
         print(f"❌ [Calendar API Error]: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch calendar agenda: {str(e)}")
+
+
+@app.post("/api/calendar/events")
+def create_or_inject_calendar_events(payload: Dict[str, Any]):
+    """
+    Create a single manual calendar event or bulk-inject AI-extracted events
+    from Exam PDFs or Lecture Transcripts into the LectureScribe calendar.
+    """
+    try:
+        events_in: List[Dict[str, Any]] = []
+        if isinstance(payload.get("events"), list):
+            events_in = payload["events"]
+        elif payload.get("title"):
+            events_in = [payload]
+        else:
+            raise HTTPException(status_code=400, detail="Payload must include 'title' or a list of 'events'.")
+
+        saved = db_manager.save_calendar_events(events_in)
+        return {
+            "status": "success",
+            "count": len(saved),
+            "events": saved,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save calendar events: {str(e)}")
+
+
+@app.patch("/api/calendar/events/{event_id}")
+def update_calendar_event_endpoint(event_id: str, payload: Dict[str, Any]):
+    """Update an existing calendar event or approve/reject a staged AI event."""
+    updated = db_manager.update_calendar_event(event_id, payload)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Calendar event '{event_id}' not found.")
+    return {
+        "status": "success",
+        "event": updated,
+    }
+
+
+@app.delete("/api/calendar/events/{event_id}")
+def delete_calendar_event_endpoint(event_id: str):
+    """Delete a calendar event by ID."""
+    deleted = db_manager.delete_calendar_event(event_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Calendar event '{event_id}' not found.")
+    return {
+        "status": "success",
+        "deleted_id": event_id,
+    }
+
+
+@app.post("/api/calendar/extract-pdf")
+async def extract_calendar_from_pdf_endpoint(
+    file: UploadFile = File(...),
+    course_name: Optional[str] = Form(None),
+    event_scope: Optional[str] = Form(None),
+    user_email: Optional[str] = Form(None),
+    auto_save: bool = Form(False),
+):
+    """
+    Upload a Semester Exam PDF, Academic Calendar PDF, or Course Syllabus PDF.
+    Extracts dates, exam times, rooms, and course mappings via LLM + layout parser.
+    If auto_save=True, immediately injects extracted events into the calendar;
+    otherwise returns candidate events for human-in-the-loop review and 1-click injection.
+    """
+    filename = file.filename or "Semester_Exam_Schedule.pdf"
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded PDF file is empty.")
+
+    try:
+        extracted = extract_calendar_events_from_pdf(
+            pdf_bytes=pdf_bytes,
+            filename=filename,
+            course_name=course_name,
+            event_scope=event_scope,
+            created_by_email=user_email or "",
+            auto_save=auto_save,
+            approval_status="approved",
+        )
+        return {
+            "status": "success",
+            "filename": filename,
+            "auto_saved": auto_save,
+            "count": len(extracted),
+            "events": extracted,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to extract dates from PDF: {str(e)}")
+
+
+@app.post("/api/calendar/extract-transcript")
+def extract_calendar_from_transcript_endpoint(payload: Dict[str, Any]):
+    """
+    Scan a specific lecture transcript (`video_id`) or all lectures in a course (`course_name`)
+    for verbal announcements of exams, quizzes, assignment deadlines, or class schedule changes.
+    """
+    video_id = str(payload.get("video_id") or "").strip()
+    course_name = str(payload.get("course_name") or "").strip()
+    user_email = str(payload.get("user_email") or "").strip()
+    auto_save = bool(payload.get("auto_save", True))
+    approval_status = str(payload.get("approval_status") or "approved").strip()
+
+    if not video_id and not course_name:
+        raise HTTPException(status_code=400, detail="Provide either 'video_id' or 'course_name' to scan transcripts.")
+
+    videos_to_scan: List[Dict[str, Any]] = []
+    if video_id:
+        saved = db_manager.get_saved_video(video_id)
+        if not saved or not saved.get("cues"):
+            raise HTTPException(status_code=404, detail=f"No transcript cues found for lecture '{video_id}'.")
+        videos_to_scan.append(saved)
+    else:
+        # Find lectures belonging to course_name
+        course_videos: List[Dict[str, Any]] = []
+        if hasattr(db_manager, "get_course_details"):
+            details = db_manager.get_course_details(course_name, user_email=user_email or None)
+            if details and isinstance(details.get("lectures"), list):
+                course_videos = details["lectures"]
+        elif hasattr(db_manager, "get_course_videos"):
+            course_videos = db_manager.get_course_videos(course_name)
+
+        for cv in course_videos[:10]:
+            vid_id = cv.get("video_id") or cv.get("videoId")
+            if vid_id:
+                full_vid = db_manager.get_saved_video(vid_id)
+                if full_vid and full_vid.get("cues"):
+                    videos_to_scan.append(full_vid)
+
+    extracted_all: List[Dict[str, Any]] = []
+    for vid_obj in videos_to_scan:
+        vid_id = str(vid_obj.get("video_id") or vid_obj.get("videoId") or "")
+        vid_title = str(vid_obj.get("title") or f"Lecture {vid_id}")
+        vid_course = str(vid_obj.get("course_name") or course_name or "")
+        cues = vid_obj.get("cues") or []
+        evts = extract_calendar_events_from_transcript(
+            video_id=vid_id,
+            title=vid_title,
+            cues=cues,
+            course_name=vid_course,
+            created_by_email=user_email,
+            auto_save=auto_save,
+            approval_status=approval_status,
+        )
+        extracted_all.extend(evts)
+
+    return {
+        "status": "success",
+        "scanned_lectures": len(videos_to_scan),
+        "auto_saved": auto_save,
+        "count": len(extracted_all),
+        "events": extracted_all,
+    }
+
+
+@app.get("/api/calendar/export.ics")
+def export_calendar_ics_endpoint(
+    course: Optional[str] = Query(None, description="Optional course slug/name filter"),
+    user_email: Optional[str] = Query(None, description="Optional user email"),
+):
+    """Download or subscribe to the unified LectureScribe + AI calendar as an RFC 5545 .ics file."""
+    ics_text = calendar_service.export_ics(course_slug=course, user_email=user_email)
+    return Response(
+        content=ics_text,
+        media_type="text/calendar",
+        headers={"Content-Disposition": 'attachment; filename="lecturescribe-calendar.ics"'},
+    )
 
 
 @app.post("/api/cron/trigger-alert")
@@ -5309,6 +5568,1070 @@ def assign_course_member_endpoint(course_name: str, req: AssignCourseMemberReque
         "course_name": clean_course,
         "member": member
     }
+
+
+# ==============================================================================
+# Option 1: Assignment Publishing, Calendar Deadline Sync, Submissions & SpeedGrader
+# ==============================================================================
+
+class PublishAssignmentSettingsRequest(BaseModel):
+    due_date: Optional[str] = None
+    max_marks: Optional[float] = 100.0
+    is_published: Optional[bool] = True
+    actor_email: Optional[str] = None
+
+
+class StudentAssignmentSubmitRequest(BaseModel):
+    student_email: str
+    student_name: Optional[str] = ""
+    submission_text: Optional[str] = ""
+    file_name: Optional[str] = ""
+    file_content_base64: Optional[str] = ""
+
+
+class GradeSubmissionRequest(BaseModel):
+    score: Optional[float] = None
+    instructor_feedback: Optional[str] = ""
+    actor_email: Optional[str] = None
+
+
+@app.patch("/api/course/{course_name}/assignments/{assignment_id}/publish")
+def publish_course_assignment_settings_endpoint(
+    course_name: str,
+    assignment_id: str,
+    req: PublishAssignmentSettingsRequest,
+):
+    """Tutor updates assignment due date, max marks, and publish status (auto-syncing deadline to Calendar)."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="publish assignment settings")
+    updated = db_manager.publish_assignment_settings(
+        assignment_id=assignment_id,
+        due_date=req.due_date,
+        max_marks=req.max_marks,
+        is_published=req.is_published,
+        updated_by_email=req.actor_email,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Assignment '{assignment_id}' not found.")
+    return {
+        "status": "success",
+        "assignment": updated,
+        "calendar_event_id": updated.get("calendar_event_id"),
+    }
+
+
+@app.post("/api/course/{course_name}/assignments/{assignment_id}/submit")
+def submit_course_assignment_endpoint(
+    course_name: str,
+    assignment_id: str,
+    req: StudentAssignmentSubmitRequest,
+):
+    """Student submits their solution text and/or attachment for a course assignment."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    clean_email = (req.student_email or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=400, detail="student_email is required.")
+
+    asgn = db_manager.get_assignment_by_id(assignment_id.strip())
+    if not asgn:
+        raise HTTPException(status_code=404, detail=f"Assignment '{assignment_id}' not found.")
+
+    blob_name = ""
+    if req.file_name and req.file_content_base64:
+        try:
+            import base64
+            raw_bytes = base64.b64decode(req.file_content_base64)
+            safe_fname = re.sub(r"[^a-zA-Z0-9._-]", "_", req.file_name.strip())
+            blob_name = f"courses/{to_course_slug(clean_course)}/submissions/{assignment_id.strip()}/{clean_email}_{safe_fname}"
+            gcs_storage_service.upload_bytes(raw_bytes, blob_name, content_type="application/octet-stream")
+        except Exception as e:
+            print(f"[Assignment Submission Upload Notice] {e}")
+
+    sub = db_manager.submit_assignment(
+        assignment_id=assignment_id.strip(),
+        course_name=clean_course,
+        student_email=clean_email,
+        student_name=req.student_name or "",
+        submission_text=req.submission_text or "",
+        file_name=req.file_name or "",
+        file_blob_name=blob_name,
+        max_marks=float(asgn.get("max_marks") or 100.0),
+    )
+    return {"status": "success", "submission": sub}
+
+
+@app.get("/api/course/{course_name}/assignments/{assignment_id}/submissions")
+def list_assignment_submissions_endpoint(
+    course_name: str,
+    assignment_id: str,
+    student_email: Optional[str] = Query(None, description="Optional student email filter"),
+):
+    """List submissions for a specific assignment."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    subs = db_manager.get_assignment_submissions(
+        course_name=clean_course,
+        assignment_id=assignment_id.strip(),
+        student_email=student_email,
+    )
+    return {
+        "status": "success",
+        "assignment_id": assignment_id.strip(),
+        "count": len(subs),
+        "submissions": subs,
+    }
+
+
+@app.get("/api/course/{course_name}/submissions")
+def list_course_submissions_endpoint(
+    course_name: str,
+    student_email: Optional[str] = Query(None, description="Optional student email filter"),
+):
+    """List all assignment submissions across a course (or for a single student)."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    subs = db_manager.get_assignment_submissions(
+        course_name=clean_course,
+        student_email=student_email,
+    )
+    return {
+        "status": "success",
+        "course_name": clean_course,
+        "count": len(subs),
+        "submissions": subs,
+    }
+
+
+@app.post("/api/course/{course_name}/assignments/{assignment_id}/submissions/{submission_id}/ai-grade")
+def ai_speedgrade_submission_endpoint(
+    course_name: str,
+    assignment_id: str,
+    submission_id: str,
+    actor_email: Optional[str] = Query(None),
+    apply_grade: bool = Query(False, description="Whether to immediately apply the AI suggested score as final grade"),
+):
+    """Run AI SpeedGrader on a student submission and store the suggested score & feedback."""
+    if actor_email:
+        require_tutor_role(actor_email, course_name, action_label="run AI SpeedGrader")
+
+    from backend.assignment_service import evaluate_student_submission_with_ai
+
+    asgn = db_manager.get_assignment_by_id(assignment_id.strip())
+    if not asgn:
+        raise HTTPException(status_code=404, detail=f"Assignment '{assignment_id}' not found.")
+
+    subs = db_manager.get_assignment_submissions(assignment_id=assignment_id.strip())
+    target_sub = next((s for s in subs if s.get("submission_id") == submission_id.strip()), None)
+    if not target_sub:
+        raise HTTPException(status_code=404, detail=f"Submission '{submission_id}' not found.")
+
+    ai_eval = evaluate_student_submission_with_ai(asgn, target_sub)
+    updated = db_manager.grade_assignment_submission(
+        submission_id=submission_id.strip(),
+        score=ai_eval["ai_suggested_score"] if apply_grade else target_sub.get("score"),
+        instructor_feedback=ai_eval["ai_feedback"] if apply_grade and not target_sub.get("instructor_feedback") else target_sub.get("instructor_feedback"),
+        ai_suggested_score=ai_eval["ai_suggested_score"],
+        ai_feedback=ai_eval["ai_feedback"],
+        graded_by_email=actor_email,
+        apply_grade=apply_grade,
+    )
+    return {
+        "status": "success",
+        "submission": updated,
+        "ai_evaluation": ai_eval,
+    }
+
+
+@app.patch("/api/course/{course_name}/assignments/{assignment_id}/submissions/{submission_id}/grade")
+def grade_assignment_submission_endpoint(
+    course_name: str,
+    assignment_id: str,
+    submission_id: str,
+    req: GradeSubmissionRequest,
+):
+    """Tutor approves or overrides the final score and feedback for a student submission."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="grade student submissions")
+
+    updated = db_manager.grade_assignment_submission(
+        submission_id=submission_id.strip(),
+        score=req.score,
+        instructor_feedback=req.instructor_feedback,
+        graded_by_email=req.actor_email,
+        apply_grade=True,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Submission '{submission_id}' not found.")
+    return {"status": "success", "submission": updated}
+
+
+# ==============================================================================
+# Option 2: Centralized Course Gradebook Engine
+# ==============================================================================
+
+class GradebookOverrideRequest(BaseModel):
+    student_email: str
+    item_id: str
+    score: float
+    max_marks: Optional[float] = 100.0
+    item_title: Optional[str] = ""
+    item_type: Optional[str] = "manual"
+    feedback: Optional[str] = ""
+    actor_email: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/gradebook")
+def get_course_gradebook_endpoint(
+    course_name: str,
+    student_email: Optional[str] = Query(None, description="Optional student email to filter personal grade report"),
+):
+    """Return the centralized Course Gradebook (Student Grade Report or Tutor Class Matrix)."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    gradebook = db_manager.get_course_gradebook(clean_course, student_email=student_email)
+    return {"status": "success", **gradebook}
+
+
+@app.post("/api/course/{course_name}/gradebook/override")
+def upsert_course_gradebook_override_endpoint(
+    course_name: str,
+    req: GradebookOverrideRequest,
+):
+    """Tutor overrides a student's score on an assessment or adds a manual grade column."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="update gradebook scores")
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    override = db_manager.upsert_gradebook_override(
+        course_name=clean_course,
+        student_email=req.student_email,
+        item_id=req.item_id,
+        score=req.score,
+        max_marks=float(req.max_marks or 100.0),
+        item_title=req.item_title or "",
+        item_type=req.item_type or "manual",
+        feedback=req.feedback or "",
+        updated_by_email=req.actor_email or "",
+    )
+    return {"status": "success", "override": override}
+
+
+# ==============================================================================
+# Option 3: Course Enrollment, Roster & Self-Enrollment Keys
+# ==============================================================================
+
+class GenerateEnrollmentKeyRequest(BaseModel):
+    actor_email: Optional[str] = None
+    custom_key: Optional[str] = None
+
+
+class SelfEnrolByKeyRequest(BaseModel):
+    enrollment_key: str
+    user_email: str
+    user_name: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/enrollment-key")
+def get_course_enrollment_key_endpoint(
+    course_name: str,
+    actor_email: Optional[str] = Query(None),
+):
+    """Retrieve the active self-enrollment key for a course (auto-generating one if Tutor requests and none exists)."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    rec = db_manager.get_course_enrollment_key(clean_course)
+    if not rec and actor_email:
+        role_info = db_manager.get_user_role_info(actor_email, course_identifier=clean_course)
+        if role_info.get("is_tutor"):
+            rec = db_manager.generate_course_enrollment_key(clean_course, created_by_email=actor_email)
+    return {"status": "success", "course_name": clean_course, "key_record": rec}
+
+
+@app.post("/api/course/{course_name}/enrollment-key")
+def generate_course_enrollment_key_endpoint(
+    course_name: str,
+    req: GenerateEnrollmentKeyRequest,
+):
+    """Tutor generates or rotates a shareable self-enrollment key for a course."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="generate enrollment keys")
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    rec = db_manager.generate_course_enrollment_key(
+        course_name=clean_course,
+        created_by_email=req.actor_email or "",
+        custom_key=req.custom_key,
+    )
+    return {"status": "success", "course_name": clean_course, "key_record": rec}
+
+
+@app.post("/api/course/enrol-by-key")
+def enrol_by_key_endpoint(req: SelfEnrolByKeyRequest):
+    """Student self-enrols in a course using a shareable enrollment key."""
+    enrolled = db_manager.enrol_user_by_key(
+        enrollment_key=req.enrollment_key,
+        user_email=req.user_email,
+        user_name=req.user_name,
+    )
+    if not enrolled:
+        raise HTTPException(status_code=404, detail="Invalid or expired enrollment key.")
+    return {"status": "success", "enrollment": enrolled}
+
+
+@app.delete("/api/course/{course_name}/members/{target_email}")
+def remove_course_member_endpoint(
+    course_name: str,
+    target_email: str,
+    actor_email: Optional[str] = Query(None),
+):
+    """Tutor removes a member from a course roster."""
+    if actor_email:
+        require_tutor_role(actor_email, course_name, action_label="remove course members")
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    removed = db_manager.remove_course_member(clean_course, target_email)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Member '{target_email}' not found in course.")
+    return {"status": "success", "removed": True, "user_email": target_email}
+
+
+# ==============================================================================
+# Option 4: Course Discussions / Q&A Forum with Timestamp Deep-Links & AI Triage
+# ==============================================================================
+
+class CreateForumThreadRequest(BaseModel):
+    title: str
+    body: str
+    author_email: str
+    author_name: Optional[str] = ""
+    author_role: Optional[str] = "student"
+    category: Optional[str] = "general"
+    video_id: Optional[str] = ""
+    lecture_title: Optional[str] = ""
+    timestamp_str: Optional[str] = ""
+    is_pinned: Optional[bool] = False
+
+
+class CreateForumReplyRequest(BaseModel):
+    author_email: str
+    author_name: Optional[str] = ""
+    author_role: Optional[str] = "student"
+    body: str
+
+
+class EndorseForumReplyRequest(BaseModel):
+    is_endorsed: bool = True
+    resolve_thread: bool = True
+    actor_email: Optional[str] = None
+
+
+class UpdateForumThreadFlagsRequest(BaseModel):
+    is_pinned: Optional[bool] = None
+    is_resolved: Optional[bool] = None
+    actor_email: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/forum")
+def list_course_forum_threads_endpoint(
+    course_name: str,
+    category: Optional[str] = Query(None),
+):
+    """List all discussion threads and nested replies for a course."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    threads = db_manager.get_forum_threads(clean_course, category=category)
+    return {
+        "status": "success",
+        "course_name": clean_course,
+        "count": len(threads),
+        "threads": threads,
+    }
+
+
+@app.post("/api/course/{course_name}/forum")
+def create_course_forum_thread_endpoint(
+    course_name: str,
+    req: CreateForumThreadRequest,
+):
+    """Create a new discussion thread (optionally linked to a lecture video & timestamp)."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    role_info = db_manager.get_user_role_info(req.author_email, course_identifier=clean_course)
+    effective_role = "tutor" if role_info.get("is_tutor") else (req.author_role or "student")
+    thread = db_manager.create_forum_thread(
+        course_name=clean_course,
+        title=req.title,
+        body=req.body,
+        author_email=req.author_email,
+        author_name=req.author_name or "",
+        author_role=effective_role,
+        category=req.category or "general",
+        video_id=req.video_id or "",
+        lecture_title=req.lecture_title or "",
+        timestamp_str=req.timestamp_str or "",
+        is_pinned=bool(req.is_pinned) if effective_role == "tutor" else False,
+    )
+    return {"status": "success", "thread": thread}
+
+
+@app.post("/api/course/{course_name}/forum/{thread_id}/reply")
+def add_course_forum_reply_endpoint(
+    course_name: str,
+    thread_id: str,
+    req: CreateForumReplyRequest,
+):
+    """Post a reply to a course discussion thread."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    role_info = db_manager.get_user_role_info(req.author_email, course_identifier=clean_course)
+    effective_role = "tutor" if role_info.get("is_tutor") else (req.author_role or "student")
+    reply = db_manager.add_forum_reply(
+        thread_id=thread_id.strip(),
+        author_email=req.author_email,
+        author_name=req.author_name or "",
+        author_role=effective_role,
+        body=req.body,
+        is_ai_generated=False,
+    )
+    if not reply:
+        raise HTTPException(status_code=400, detail="Could not create reply.")
+    return {"status": "success", "reply": reply}
+
+
+@app.post("/api/course/{course_name}/forum/{thread_id}/ai-reply")
+def generate_ai_ta_forum_reply_endpoint(
+    course_name: str,
+    thread_id: str,
+):
+    """AI TA generates a grounded answer to a student's forum thread using Course RAG and lecture transcripts."""
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    threads = db_manager.get_forum_threads(clean_course)
+    target = next((t for t in threads if t.get("thread_id") == thread_id.strip()), None)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"Forum thread '{thread_id}' not found.")
+
+    prompt_text = f"Forum Question Title: {target.get('title')}\nQuestion Details: {target.get('body')}"
+    if target.get("lecture_title") or target.get("timestamp_str"):
+        prompt_text += f"\nReferenced Lecture: {target.get('lecture_title', '')} at {target.get('timestamp_str', '')}"
+
+    ai_body = ""
+    citations: List[Dict[str, Any]] = []
+    try:
+        from backend.course_rag_service import course_rag_service
+        rag_res = course_rag_service.query_course(clean_course, prompt_text)
+        if isinstance(rag_res, dict) and rag_res.get("reply"):
+            ai_body = str(rag_res["reply"]).strip()
+            citations = rag_res.get("citations") or []
+    except Exception as e:
+        print(f"[Forum AI TA Notice] Course RAG fallback ({e}).")
+
+    if not ai_body or "error" in ai_body.lower()[:25]:
+        ref_note = (
+            f" (specifically referencing **{target['lecture_title']}** around `[{target['timestamp_str']}]`)"
+            if target.get("lecture_title") and target.get("timestamp_str")
+            else ""
+        )
+        ai_body = (
+            f"**AI Teaching Assistant Grounded Response:**\n\n"
+            f"Regarding **{target.get('title')}**{ref_note}: "
+            f"Break the problem down into the core definitions covered in the **{clean_course}** lectures, "
+            f"verify the boundary assumptions, and check the corresponding derivation in the course summary notes. "
+            f"*(An instructor can endorse or expand on this response below.)*"
+        )
+
+    reply = db_manager.add_forum_reply(
+        thread_id=thread_id.strip(),
+        author_email="ai-ta@lecturescribe.ai",
+        author_name="LectureScribe AI TA",
+        author_role="ai_ta",
+        body=ai_body,
+        is_ai_generated=True,
+        citations=citations,
+    )
+    return {"status": "success", "reply": reply}
+
+
+@app.patch("/api/course/{course_name}/forum/{thread_id}/endorse/{reply_id}")
+def endorse_forum_reply_endpoint(
+    course_name: str,
+    thread_id: str,
+    reply_id: str,
+    req: EndorseForumReplyRequest,
+):
+    """Tutor endorses a student or AI TA reply and optionally marks the thread resolved."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="endorse forum replies")
+    updated = db_manager.toggle_forum_reply_endorsement(
+        thread_id=thread_id.strip(),
+        reply_id=reply_id.strip(),
+        is_endorsed=req.is_endorsed,
+        resolve_thread=req.resolve_thread,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Reply '{reply_id}' not found.")
+    return {"status": "success", "reply": updated}
+
+
+@app.patch("/api/course/{course_name}/forum/{thread_id}/flags")
+def update_forum_thread_flags_endpoint(
+    course_name: str,
+    thread_id: str,
+    req: UpdateForumThreadFlagsRequest,
+):
+    """Update thread pinned or resolved status."""
+    if req.actor_email and req.is_pinned is not None:
+        require_tutor_role(req.actor_email, course_name, action_label="pin forum threads")
+    updated = db_manager.update_forum_thread_flags(
+        thread_id=thread_id.strip(),
+        is_pinned=req.is_pinned,
+        is_resolved=req.is_resolved,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found.")
+    return {"status": "success", "thread": updated}
+
+
+# =========================================================================
+# Next-Wave Option 1: Course Completion Tracking & Restrict Access Rules
+# =========================================================================
+
+
+class ToggleModuleCompletionRequest(BaseModel):
+    user_email: str
+    module_id: str
+    module_type: str = "lecture"
+    module_title: str = ""
+    is_completed: bool = True
+
+
+class UpsertAccessRuleRequest(BaseModel):
+    target_module_id: str
+    target_module_type: str = "quiz"
+    target_title: str = ""
+    required_module_ids: List[str] = []
+    min_quiz_score_pct: Optional[float] = None
+    unlock_date: Optional[str] = None
+    actor_email: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/completion")
+def get_course_completion_endpoint(
+    course_name: str,
+    user_email: Optional[str] = None,
+):
+    """Get Moodle-style activity completion status and prerequisite lock evaluations for a student."""
+    data = db_manager.get_course_completion_status(
+        course_name=course_name.strip(),
+        user_email=user_email,
+    )
+    return {"status": "success", **data}
+
+
+@app.post("/api/course/{course_name}/completion/toggle")
+def toggle_module_completion_endpoint(
+    course_name: str,
+    req: ToggleModuleCompletionRequest,
+):
+    """Mark a course activity or module as Done / Undone for a student."""
+    record = db_manager.toggle_module_completion(
+        course_name=course_name.strip(),
+        user_email=req.user_email,
+        module_id=req.module_id,
+        module_type=req.module_type,
+        module_title=req.module_title,
+        is_completed=req.is_completed,
+    )
+    return {"status": "success", "completion": record}
+
+
+@app.get("/api/course/{course_name}/access-rules")
+def get_course_access_rules_endpoint(course_name: str):
+    """List all Restrict Access prerequisite rules configured for a course."""
+    rules = db_manager.get_access_rules(course_name.strip())
+    return {"status": "success", "course_name": course_name.strip(), "rules": rules}
+
+
+@app.post("/api/course/{course_name}/access-rules")
+def upsert_course_access_rule_endpoint(
+    course_name: str,
+    req: UpsertAccessRuleRequest,
+):
+    """Create or update a Restrict Access prerequisite rule on a course module (Tutor)."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="configure Restrict Access prerequisite rules")
+    rule = db_manager.upsert_access_rule(
+        course_name=course_name.strip(),
+        target_module_id=req.target_module_id,
+        target_module_type=req.target_module_type,
+        target_title=req.target_title,
+        required_module_ids=req.required_module_ids,
+        min_quiz_score_pct=req.min_quiz_score_pct,
+        unlock_date=req.unlock_date,
+        created_by_email=req.actor_email or "",
+    )
+    return {"status": "success", "rule": rule}
+
+
+# =========================================================================
+# Next-Wave Option 2: Decoupled AI Question Bank & Custom Quiz Builder
+# =========================================================================
+
+
+class SaveQuestionBankRequest(BaseModel):
+    items: List[Dict[str, Any]]
+    actor_email: Optional[str] = None
+
+
+class GenerateQuestionBankRequest(BaseModel):
+    video_id: Optional[str] = None
+    lecture_title: Optional[str] = None
+    count: int = 3
+    difficulty: str = "medium"
+    bloom_level: str = "apply"
+    actor_email: Optional[str] = None
+
+
+class PublishCustomQuizRequest(BaseModel):
+    question_ids: Optional[List[str]] = None
+    title: Optional[str] = None
+    actor_email: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/question-bank")
+def get_course_question_bank_endpoint(
+    course_name: str,
+    difficulty: Optional[str] = None,
+    bloom_level: Optional[str] = None,
+    question_type: Optional[str] = None,
+    video_id: Optional[str] = None,
+):
+    """Retrieve reusable questions from the Course Question Bank with optional taxonomy filters."""
+    items = db_manager.get_question_bank(
+        course_name=course_name.strip(),
+        difficulty=difficulty,
+        bloom_level=bloom_level,
+        question_type=question_type,
+        video_id=video_id,
+    )
+    return {
+        "status": "success",
+        "course_name": course_name.strip(),
+        "count": len(items),
+        "questions": items,
+    }
+
+
+@app.post("/api/course/{course_name}/question-bank")
+def save_course_question_bank_endpoint(
+    course_name: str,
+    req: SaveQuestionBankRequest,
+):
+    """Save custom or edited questions into the Course Question Bank."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="manage the Question Bank")
+    saved = db_manager.save_question_bank_items(
+        course_name=course_name.strip(),
+        items=req.items,
+        created_by_email=req.actor_email or "",
+    )
+    return {"status": "success", "saved_count": len(saved), "questions": saved}
+
+
+@app.post("/api/course/{course_name}/question-bank/ai-generate")
+def ai_generate_question_bank_endpoint(
+    course_name: str,
+    req: GenerateQuestionBankRequest,
+):
+    """Generate Bloom's Taxonomy-aligned questions for the Question Bank from lecture transcripts."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="generate AI Question Bank items")
+    generated = db_manager.generate_questions_for_bank(
+        course_name=course_name.strip(),
+        video_id=req.video_id,
+        lecture_title=req.lecture_title,
+        count=max(1, min(req.count, 10)),
+        difficulty=req.difficulty,
+        bloom_level=req.bloom_level,
+        created_by_email=req.actor_email or "",
+    )
+    return {"status": "success", "generated_count": len(generated), "questions": generated}
+
+
+@app.post("/api/course/{course_name}/question-bank/publish-quiz")
+def publish_custom_quiz_from_bank_endpoint(
+    course_name: str,
+    req: PublishCustomQuizRequest,
+):
+    """Assemble selected Question Bank items into the active Course Quiz."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="publish custom course quizzes")
+    quiz_payload = db_manager.publish_custom_quiz_from_bank(
+        course_name=course_name.strip(),
+        question_ids=req.question_ids,
+        title=req.title,
+    )
+    return {"status": "success", "quiz": quiz_payload}
+
+
+@app.delete("/api/course/{course_name}/question-bank/{question_id}")
+def delete_question_bank_item_endpoint(
+    course_name: str,
+    question_id: str,
+    actor_email: Optional[str] = None,
+):
+    """Delete a question from the Course Question Bank."""
+    if actor_email:
+        require_tutor_role(actor_email, course_name, action_label="delete Question Bank items")
+    deleted = db_manager.delete_question_bank_item(question_id.strip())
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Question '{question_id}' not found.")
+    return {"status": "success", "deleted_id": question_id.strip()}
+
+
+# =========================================================================
+# Next-Wave Option 3: Modular Course Syllabus Spine & AI Auto-Organizer
+# =========================================================================
+
+
+class SaveCourseSectionRequest(BaseModel):
+    section_id: Optional[str] = None
+    section_number: Optional[int] = None
+    title: str
+    summary: str = ""
+    learning_objectives: List[str] = []
+    items: List[Dict[str, Any]] = []
+    actor_email: Optional[str] = None
+
+
+class AutoOrganizeSyllabusRequest(BaseModel):
+    actor_email: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/syllabus")
+def get_course_syllabus_sections_endpoint(course_name: str):
+    """Retrieve the weekly/topic curriculum modules for a course."""
+    sections = db_manager.get_course_sections(course_name.strip())
+    return {
+        "status": "success",
+        "course_name": course_name.strip(),
+        "count": len(sections),
+        "sections": sections,
+    }
+
+
+@app.post("/api/course/{course_name}/syllabus/sections")
+def save_course_syllabus_section_endpoint(
+    course_name: str,
+    req: SaveCourseSectionRequest,
+):
+    """Create or update a weekly/topic module section in the Course Syllabus Spine."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="edit the course syllabus spine")
+    section = db_manager.save_course_section(
+        course_name=course_name.strip(),
+        title=req.title,
+        summary=req.summary,
+        section_number=req.section_number,
+        learning_objectives=req.learning_objectives,
+        items=req.items,
+        section_id=req.section_id,
+    )
+    return {"status": "success", "section": section}
+
+
+@app.post("/api/course/{course_name}/syllabus/ai-organize")
+def ai_auto_organize_syllabus_endpoint(
+    course_name: str,
+    req: Optional[AutoOrganizeSyllabusRequest] = None,
+):
+    """Auto-organize course lectures, readings, assignments, and exams into weekly curriculum modules."""
+    if req and req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="auto-organize the course syllabus")
+    sections = db_manager.ai_auto_organize_course_syllabus(course_name.strip())
+    return {
+        "status": "success",
+        "course_name": course_name.strip(),
+        "count": len(sections),
+        "sections": sections,
+    }
+
+
+@app.delete("/api/course/{course_name}/syllabus/sections/{section_id}")
+def delete_course_syllabus_section_endpoint(
+    course_name: str,
+    section_id: str,
+    actor_email: Optional[str] = None,
+):
+    """Delete a section from the Course Syllabus Spine."""
+    if actor_email:
+        require_tutor_role(actor_email, course_name, action_label="delete syllabus sections")
+    deleted = db_manager.delete_course_section(section_id.strip())
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Section '{section_id}' not found.")
+    return {"status": "success", "deleted_id": section_id.strip()}
+
+
+# =========================================================================
+# Next-Wave Option 4: Instructor Learning Analytics & At-Risk AI Dashboard
+# =========================================================================
+
+
+@app.get("/api/course/{course_name}/analytics")
+def get_course_learning_analytics_endpoint(course_name: str):
+    """Compute per-student engagement telemetry, completion rates, and AI early-warning risk levels."""
+    data = db_manager.get_course_learning_analytics(course_name.strip())
+    return {"status": "success", **data}
+
+
+# =========================================================================
+# Wave 3 — Option 1: 2D Grading Rubrics & AI Rubric Generator
+# =========================================================================
+
+
+class SaveCourseRubricRequest(BaseModel):
+    rubric_id: Optional[str] = None
+    assignment_id: str = ""
+    title: str
+    criteria: List[Dict[str, Any]]
+    actor_email: Optional[str] = None
+
+
+class GenerateRubricRequest(BaseModel):
+    assignment_id: str = ""
+    title: str = ""
+    max_marks: float = 50.0
+    actor_email: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/rubrics")
+def get_course_rubrics_endpoint(
+    course_name: str,
+    assignment_id: Optional[str] = None,
+):
+    """Retrieve 2D Grading Rubrics for a course."""
+    rubrics = db_manager.get_course_rubrics(course_name.strip(), assignment_id=assignment_id)
+    return {"status": "success", "course_name": course_name.strip(), "rubrics": rubrics}
+
+
+@app.post("/api/course/{course_name}/rubrics")
+def save_course_rubric_endpoint(
+    course_name: str,
+    req: SaveCourseRubricRequest,
+):
+    """Create or update a 2D Criterion x Level Grading Rubric."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="manage grading rubrics")
+    rubric = db_manager.save_course_rubric(
+        course_name=course_name.strip(),
+        title=req.title,
+        criteria=req.criteria,
+        assignment_id=req.assignment_id,
+        created_by_email=req.actor_email or "",
+        rubric_id=req.rubric_id,
+    )
+    return {"status": "success", "rubric": rubric}
+
+
+@app.post("/api/course/{course_name}/rubrics/ai-generate")
+def ai_generate_course_rubric_endpoint(
+    course_name: str,
+    req: GenerateRubricRequest,
+):
+    """Generate a 2D Criterion x Level Grading Rubric with AI."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="generate AI grading rubrics")
+    rubric = db_manager.ai_generate_assignment_rubric(
+        course_name=course_name.strip(),
+        assignment_id=req.assignment_id,
+        title=req.title,
+        max_marks=req.max_marks,
+        created_by_email=req.actor_email or "",
+    )
+    return {"status": "success", "rubric": rubric}
+
+
+# =========================================================================
+# Wave 3 — Option 2: Course Competency & Skill Mastery Matrix
+# =========================================================================
+
+
+class SaveCompetencyRequest(BaseModel):
+    competency_id: Optional[str] = None
+    code: str
+    title: str
+    description: str = ""
+    linked_module_ids: List[str] = []
+    actor_email: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/competencies")
+def get_course_competencies_endpoint(
+    course_name: str,
+    student_email: Optional[str] = None,
+):
+    """Retrieve Course Competencies and per-student Mastery Matrix."""
+    matrix = db_manager.get_course_competency_matrix(course_name.strip(), student_email=student_email)
+    return {"status": "success", **matrix}
+
+
+@app.post("/api/course/{course_name}/competencies")
+def save_course_competency_endpoint(
+    course_name: str,
+    req: SaveCompetencyRequest,
+):
+    """Create or update a Course Learning Outcome / Competency."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="manage course competencies")
+    comp = db_manager.save_course_competency(
+        course_name=course_name.strip(),
+        code=req.code,
+        title=req.title,
+        description=req.description,
+        linked_module_ids=req.linked_module_ids,
+        competency_id=req.competency_id,
+    )
+    return {"status": "success", "competency": comp}
+
+
+@app.post("/api/course/{course_name}/competencies/ai-extract")
+def ai_extract_course_competencies_endpoint(
+    course_name: str,
+    actor_email: Optional[str] = None,
+):
+    """Auto-extract Course Learning Outcomes / Competencies from syllabus and lectures."""
+    if actor_email:
+        require_tutor_role(actor_email, course_name, action_label="extract course competencies")
+    comps = db_manager.ai_extract_course_competencies(course_name.strip())
+    return {"status": "success", "count": len(comps), "competencies": comps}
+
+
+# =========================================================================
+# Wave 3 — Option 3: Peer Review Workshop & AI Calibration Engine
+# =========================================================================
+
+
+class SaveWorkshopRequest(BaseModel):
+    workshop_id: Optional[str] = None
+    title: str
+    instructions: str = ""
+    phase: str = "submission"
+    submission_weight: float = 80.0
+    assessment_weight: float = 20.0
+    actor_email: Optional[str] = None
+
+
+class SubmitWorkshopArtifactRequest(BaseModel):
+    student_email: str
+    student_name: str = ""
+    title: str
+    content: str
+
+
+class SubmitWorkshopReviewRequest(BaseModel):
+    submission_id: str
+    reviewer_email: str
+    reviewer_name: str = ""
+    peer_score: float
+    feedback: str
+
+
+@app.get("/api/course/{course_name}/workshops")
+def get_course_workshops_endpoint(course_name: str):
+    """List Peer Review Workshops with student submissions and AI-calibrated peer reviews."""
+    workshops = db_manager.get_course_workshops(course_name.strip())
+    return {"status": "success", "course_name": course_name.strip(), "workshops": workshops}
+
+
+@app.post("/api/course/{course_name}/workshops")
+def save_course_workshop_endpoint(
+    course_name: str,
+    req: SaveWorkshopRequest,
+):
+    """Create or update a Peer Review Workshop (or advance its phase)."""
+    if req.actor_email:
+        require_tutor_role(req.actor_email, course_name, action_label="manage peer review workshops")
+    ws = db_manager.save_course_workshop(
+        course_name=course_name.strip(),
+        title=req.title,
+        instructions=req.instructions,
+        phase=req.phase,
+        submission_weight=req.submission_weight,
+        assessment_weight=req.assessment_weight,
+        created_by_email=req.actor_email or "",
+        workshop_id=req.workshop_id,
+    )
+    return {"status": "success", "workshop": ws}
+
+
+@app.post("/api/course/{course_name}/workshops/{workshop_id}/submissions")
+def submit_workshop_artifact_endpoint(
+    course_name: str,
+    workshop_id: str,
+    req: SubmitWorkshopArtifactRequest,
+):
+    """Submit a student artifact into a Peer Review Workshop."""
+    sub = db_manager.submit_workshop_artifact(
+        course_name=course_name.strip(),
+        workshop_id=workshop_id.strip(),
+        student_email=req.student_email,
+        student_name=req.student_name,
+        title=req.title,
+        content=req.content,
+    )
+    return {"status": "success", "submission": sub}
+
+
+@app.post("/api/course/{course_name}/workshops/{workshop_id}/reviews")
+def submit_workshop_peer_review_endpoint(
+    course_name: str,
+    workshop_id: str,
+    req: SubmitWorkshopReviewRequest,
+):
+    """Submit a peer review and compute AI Calibration Quality score."""
+    rev = db_manager.submit_workshop_peer_review(
+        workshop_id=workshop_id.strip(),
+        submission_id=req.submission_id,
+        reviewer_email=req.reviewer_email,
+        reviewer_name=req.reviewer_name,
+        peer_score=req.peer_score,
+        feedback=req.feedback,
+    )
+    return {"status": "success", "review": rev}
+
+
+# =========================================================================
+# Wave 3 — Option 4: Course Announcements Broadcast & Pedagogical Audit Log
+# =========================================================================
+
+
+class CreateAnnouncementRequest(BaseModel):
+    title: str
+    body: str
+    priority: str = "normal"
+    author_email: Optional[str] = None
+    author_name: Optional[str] = None
+
+
+@app.get("/api/course/{course_name}/announcements")
+def get_course_announcements_endpoint(course_name: str):
+    """Retrieve official Course Announcements and Pedagogical Activity Audit Logs."""
+    announcements = db_manager.get_course_announcements(course_name.strip())
+    audit_logs = db_manager.get_pedagogical_audit_logs(course_name.strip())
+    return {
+        "status": "success",
+        "course_name": course_name.strip(),
+        "announcements": announcements,
+        "audit_logs": audit_logs,
+    }
+
+
+@app.post("/api/course/{course_name}/announcements")
+def create_course_announcement_endpoint(
+    course_name: str,
+    req: CreateAnnouncementRequest,
+):
+    """Broadcast an official course announcement (Tutor)."""
+    if req.author_email:
+        require_tutor_role(req.author_email, course_name, action_label="broadcast course announcements")
+    ann = db_manager.create_course_announcement(
+        course_name=course_name.strip(),
+        title=req.title,
+        body=req.body,
+        priority=req.priority,
+        author_email=req.author_email or "",
+        author_name=req.author_name or "",
+    )
+    return {"status": "success", "announcement": ann}
 
 
 # -------------------------------------------------------------

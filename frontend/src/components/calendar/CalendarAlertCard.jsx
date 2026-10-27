@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -26,9 +26,14 @@ import {
   Copy,
   Check,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Sparkles,
+  Mic,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import CalendarAIExtractorModal from './CalendarAIExtractorModal';
 
 const PLATFORM_CONFIG = {
   zoom: {
@@ -205,13 +210,31 @@ const CATEGORY_STYLES = {
   }
 };
 
-export default function CalendarAlertCard({ currentTheme, googleUser }) {
+export default function CalendarAlertCard({
+  currentTheme,
+  googleUser,
+  isTutor = false,
+  selectedCourse = null,
+  courses = [],
+  videoId = '',
+  lectureTitle = '',
+  compact = false,
+  onOpenFullCalendar = null,
+  onSelectLecture = null
+}) {
   const [agenda, setAgenda] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('today'); // 'today' | 'upcoming'
+  const [activeTab, setActiveTab] = useState(selectedCourse ? 'upcoming' : 'today'); // 'today' | 'upcoming'
   const [copiedId, setCopiedId] = useState(null);
   const [expandedIds, setExpandedIds] = useState(new Set());
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalTab, setModalTab] = useState('pdf');
+
+  const openExtractorModal = (tab = 'pdf') => {
+    setModalTab(tab);
+    setModalOpen(true);
+  };
 
   const handleCopyLink = (id, linkText) => {
     if (!linkText) return;
@@ -237,11 +260,16 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
   };
 
   const fetchAgenda = useCallback(async (refresh = false) => {
-    if (!googleUser) return;
+    if (!googleUser && !selectedCourse) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/calendar/events?refresh=${refresh}&days=7`);
+      const daysWindow = selectedCourse ? 90 : 7;
+      let url = `${API_BASE}/api/calendar/events?refresh=${refresh}&days=${daysWindow}`;
+      if (selectedCourse) {
+        url += `&course=${encodeURIComponent(selectedCourse)}`;
+      }
+      const res = await fetch(url);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: Failed to load calendar feed`);
       }
@@ -253,16 +281,385 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
     } finally {
       setLoading(false);
     }
-  }, [googleUser]);
+  }, [googleUser, selectedCourse]);
+
+  const handleDeleteEvent = async (evtId) => {
+    if (!evtId) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/calendar/events/${encodeURIComponent(evtId)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchAgenda(false);
+      }
+    } catch (e) {
+      console.error('Failed to delete calendar event:', e);
+    }
+  };
 
   useEffect(() => {
-    if (googleUser) {
+    if (googleUser || selectedCourse) {
       fetchAgenda(false);
     }
-  }, [fetchAgenda, googleUser]);
+  }, [fetchAgenda, googleUser, selectedCourse]);
 
-  if (!googleUser) {
+  const courseUpcomingEvents = useMemo(() => {
+    if (!agenda || !selectedCourse) return [];
+
+    const cleanCourse = selectedCourse.replace(/^[0-9\.\s\-_]+/, '').trim();
+    const targetSlug = selectedCourse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const cleanSlug = cleanCourse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+    const targetWords = targetSlug.replace(/-/g, ' ');
+    const cleanWords = cleanSlug.replace(/-/g, ' ');
+
+    const combined = [
+      ...(agenda?.all_events || []),
+      ...(agenda?.today?.all || []),
+      ...(agenda?.upcoming || [])
+    ];
+
+    const GENERIC_SLUGS = new Set([
+      '', 'course', 'site', 'user', 'category', 'group', 'general',
+      'schedule', 'event', 'lecture', 'session', 'quiz', 'assignment', 'exam'
+    ]);
+    const STOP_WORDS = new Set([
+      'introduction', 'intro', 'advanced', 'fundamentals', 'principles', 'basics',
+      'course', 'lecture', 'session', 'lab', 'to', 'of', 'and', 'in', 'for',
+      'the', 'a', 'an', 'i', 'ii', 'iii', 'part'
+    ]);
+    const distinctiveWords = cleanWords.split(' ').filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    const courseAcronym = cleanWords.split(' ').filter(Boolean).map(w => w[0]).join('');
+
+    const seen = new Set();
+    const filtered = [];
+
+    for (const evt of combined) {
+      if (!evt || !evt.id || seen.has(evt.id)) continue;
+      seen.add(evt.id);
+
+      const evtSlug = (evt.course_slug || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const evtName = (evt.course_name || '').toLowerCase();
+      const titleDesc = `${evt.title || ''} ${evt.description || ''}`.toLowerCase();
+      const evtTitleLower = (evt.title || '').toLowerCase().trim();
+
+      let matches = false;
+      if (evtSlug && !GENERIC_SLUGS.has(evtSlug)) {
+        if (evtSlug === targetSlug || evtSlug === cleanSlug) {
+          matches = true;
+        } else if (courseAcronym && courseAcronym.length >= 3 && (evtSlug.startsWith(courseAcronym) || evtSlug.includes(courseAcronym))) {
+          matches = true;
+        }
+      }
+      
+      if (!matches && evtName && !GENERIC_SLUGS.has(evtName)) {
+        if (evtName === selectedCourse.toLowerCase() || evtName === cleanCourse.toLowerCase() || evtName.includes(cleanCourse.toLowerCase())) {
+          matches = true;
+        }
+      }
+
+      if (!matches) {
+        if (cleanWords && (titleDesc.includes(cleanWords) || cleanWords.includes(evtTitleLower) || evtTitleLower.includes(cleanWords))) {
+          matches = true;
+        } else if (targetWords && (titleDesc.includes(targetWords) || targetWords.includes(evtTitleLower) || evtTitleLower.includes(targetWords))) {
+          matches = true;
+        } else if (distinctiveWords.length > 0 && distinctiveWords.every(w => titleDesc.includes(w) || evtTitleLower.includes(w))) {
+          matches = true;
+        }
+      }
+
+      if (matches) {
+        filtered.push(evt);
+      }
+    }
+
+    filtered.sort((a, b) => (a.timestamp_start || 0) - (b.timestamp_start || 0));
+    return filtered;
+  }, [agenda, selectedCourse]);
+
+  const getBadgeDate = (evt) => {
+    if (!evt) return { day: '--', month: '---', time: '' };
+    try {
+      let day = '--';
+      let month = '---';
+      let timeStr = '';
+
+      // Direct ISO date parsing (e.g. 2026-10-27) avoids local/UTC timezone day shift
+      if (evt.date_iso && /^\d{4}-\d{2}-\d{2}$/.test(evt.date_iso)) {
+        const parts = evt.date_iso.split('-');
+        day = parseInt(parts[2], 10);
+        const mIdx = parseInt(parts[1], 10) - 1;
+        const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+        month = MONTHS[mIdx] || '---';
+      }
+
+      const raw = evt.start || evt.date_iso;
+      if (raw) {
+        const d = new Date(raw);
+        if (!isNaN(d.getTime())) {
+          if (day === '--') {
+            day = d.getDate();
+            month = d.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+          }
+          if (evt.is_all_day) {
+            timeStr = 'All day';
+          } else {
+            const hours = String(d.getHours()).padStart(2, '0');
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            timeStr = `${hours}:${minutes}`;
+          }
+        }
+      }
+
+      if (day !== '--' && month !== '---') {
+        return { day, month, time: timeStr || evt.start_time_formatted || '' };
+      }
+    } catch (e) {
+      // fallback
+    }
+
+    const monthMatch = (evt.date_formatted || '').match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
+    const dayMatch = (evt.date_formatted || '').match(/\b(\d{1,2})\b/);
+    return {
+      day: dayMatch ? dayMatch[1] : '--',
+      month: monthMatch ? monthMatch[0].toUpperCase() : 'DATE',
+      time: evt.start_time_formatted || ''
+    };
+  };
+
+  if (!googleUser && !selectedCourse) {
     return null;
+  }
+
+  // =========================================================================
+  // MOODLE-STYLE COMPACT "KEY DATES" WIDGET FOR COURSE VIEW
+  // =========================================================================
+  if (selectedCourse) {
+    return (
+      <Box
+        sx={{
+          mb: 3,
+          p: { xs: 2, sm: 2.2 },
+          borderRadius: '16px',
+          bgcolor: currentTheme?.palette?.cardBg || '#ffffff',
+          border: `1px solid ${currentTheme?.palette?.cardBorder || 'rgba(0,0,0,0.08)'}`,
+          boxShadow: currentTheme?.palette?.cardShadow || '0 2px 8px rgba(0,0,0,0.04)',
+          maxWidth: { xs: '100%', sm: 380 },
+          width: '100%',
+          transition: 'all 0.2s ease'
+        }}
+      >
+        {/* Header: Blue Dot + Key dates */}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.8 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box
+              sx={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                bgcolor: '#2563eb'
+              }}
+            />
+            <Typography
+              variant="subtitle2"
+              sx={{
+                fontWeight: 800,
+                fontSize: '0.92rem',
+                color: currentTheme?.palette?.textPrimary || '#0f172a',
+                letterSpacing: '-0.2px'
+              }}
+            >
+              Key dates
+            </Typography>
+          </Box>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {onOpenFullCalendar && (
+              <Tooltip title="View full course calendar">
+                <IconButton
+                  size="small"
+                  onClick={onOpenFullCalendar}
+                  sx={{
+                    p: 0.5,
+                    color: currentTheme?.palette?.textSecondary || '#64748b',
+                    '&:hover': { color: '#2563eb' }
+                  }}
+                  aria-label="View full course calendar"
+                >
+                  <CalendarIcon size={14} />
+                </IconButton>
+              </Tooltip>
+            )}
+            <Tooltip title="Refresh key dates">
+              <IconButton
+                size="small"
+                onClick={() => fetchAgenda(true)}
+                disabled={loading}
+                sx={{
+                  p: 0.5,
+                  color: currentTheme?.palette?.textSecondary || '#64748b'
+                }}
+                aria-label="Refresh key dates"
+              >
+                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+
+        {/* Content */}
+        {loading && !agenda ? (
+          <Box sx={{ py: 2, display: 'flex', alignItems: 'center', gap: 1.5, justifyContent: 'center' }}>
+            <CircularProgress size={16} sx={{ color: '#2563eb' }} />
+            <Typography variant="caption" sx={{ color: currentTheme?.palette?.textSecondary, fontWeight: 600 }}>
+              Syncing key dates...
+            </Typography>
+          </Box>
+        ) : error ? (
+          <Box sx={{ py: 1.5, textAlign: 'center' }}>
+            <Typography variant="caption" sx={{ color: '#ef4444', display: 'block', mb: 0.5 }}>
+              {error}
+            </Typography>
+            <Button size="small" onClick={() => fetchAgenda(true)} sx={{ fontSize: '0.7rem', textTransform: 'none', p: 0 }}>
+              Retry
+            </Button>
+          </Box>
+        ) : courseUpcomingEvents.length === 0 ? (
+          <Box sx={{ py: 1.5, px: 0.5 }}>
+            <Typography variant="body2" sx={{ fontSize: '0.84rem', color: currentTheme?.palette?.textSecondary, fontWeight: 500 }}>
+              No upcoming key dates for this course.
+            </Typography>
+          </Box>
+        ) : (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            {courseUpcomingEvents.map((evt) => {
+              const badge = getBadgeDate(evt);
+              const meetingInfo = getMeetingInfo(evt);
+
+              return (
+                <Box
+                  key={evt.id}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1.5,
+                    p: 0.8,
+                    borderRadius: '10px',
+                    transition: 'background 0.15s ease',
+                    '&:hover': {
+                      bgcolor: currentTheme?.palette?.mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)'
+                    }
+                  }}
+                >
+                  {/* Date Badge: Top day number, bottom red uppercase month */}
+                  <Box
+                    sx={{
+                      width: 46,
+                      minWidth: 46,
+                      height: 46,
+                      borderRadius: '10px',
+                      bgcolor: currentTheme?.palette?.mode === 'dark' ? 'rgba(255, 255, 255, 0.06)' : '#f3f4f6',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}
+                  >
+                    <Typography
+                      sx={{
+                        fontSize: '1.1rem',
+                        fontWeight: 800,
+                        lineHeight: 1,
+                        color: currentTheme?.palette?.textPrimary || '#0f172a'
+                      }}
+                    >
+                      {badge.day}
+                    </Typography>
+                    <Typography
+                      sx={{
+                        fontSize: '0.62rem',
+                        fontWeight: 800,
+                        lineHeight: 1,
+                        mt: '3px',
+                        color: '#ef4444',
+                        letterSpacing: '0.4px'
+                      }}
+                    >
+                      {badge.month}
+                    </Typography>
+                  </Box>
+
+                  {/* Title and Time */}
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography
+                      variant="body2"
+                      onClick={
+                        evt.source_metadata?.video_id && typeof onSelectLecture === 'function'
+                          ? () => onSelectLecture(evt.source_metadata.video_id, evt.source_metadata.cue_time || '00:00', evt.course_name || selectedCourse)
+                          : undefined
+                      }
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.9rem',
+                        color: currentTheme?.palette?.textPrimary || '#0f172a',
+                        lineHeight: 1.3,
+                        cursor: evt.source_metadata?.video_id && typeof onSelectLecture === 'function' ? 'pointer' : 'default',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        '&:hover': evt.source_metadata?.video_id && typeof onSelectLecture === 'function' ? { color: '#2563eb' } : {}
+                      }}
+                      title={evt.title}
+                    >
+                      {evt.title}
+                    </Typography>
+
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.3 }}>
+                      {badge.time && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: currentTheme?.palette?.textSecondary || '#64748b',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            letterSpacing: '0.3px'
+                          }}
+                        >
+                          {badge.time}
+                        </Typography>
+                      )}
+
+                      {meetingInfo.url && (
+                        <Button
+                          component="a"
+                          href={meetingInfo.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          size="small"
+                          startIcon={<Video size={10} />}
+                          sx={{
+                            p: 0,
+                            minWidth: 'auto',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            textTransform: 'none',
+                            color: meetingInfo.config.bg || '#2563eb',
+                            '&:hover': { bgcolor: 'transparent', textDecoration: 'underline' }
+                          }}
+                        >
+                          {meetingInfo.config.label || 'Join'}
+                        </Button>
+                      )}
+                    </Box>
+                  </Box>
+                </Box>
+              );
+            })}
+          </Box>
+        )}
+      </Box>
+    );
   }
 
   const renderEventItem = (evt) => {
@@ -309,6 +706,60 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
                 • {evt.day_slot.replace('_', ' ')}
               </Typography>
             )}
+            {evt.source_type === 'pdf_ai' && (
+              <Chip
+                size="small"
+                label="📄 AI Exam PDF"
+                sx={{
+                  height: 22,
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  bgcolor: 'rgba(16, 185, 129, 0.14)',
+                  color: '#34d399',
+                  border: '1px solid rgba(16, 185, 129, 0.35)'
+                }}
+              />
+            )}
+            {evt.source_type === 'transcript_ai' && (
+              <Chip
+                size="small"
+                label={`🎙️ AI Transcript${evt.source_metadata?.cue_time ? ` @ ${evt.source_metadata.cue_time}` : ''}`}
+                onClick={
+                  evt.source_metadata?.video_id && typeof onSelectLecture === 'function'
+                    ? (e) => {
+                        e.stopPropagation();
+                        onSelectLecture(
+                          evt.source_metadata.video_id,
+                          evt.source_metadata.cue_time || '00:00',
+                          evt.course_name || selectedCourse
+                        );
+                      }
+                    : undefined
+                }
+                sx={{
+                  height: 22,
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  bgcolor: 'rgba(168, 85, 247, 0.14)',
+                  color: '#c084fc',
+                  border: '1px solid rgba(168, 85, 247, 0.35)',
+                  cursor: evt.source_metadata?.video_id && typeof onSelectLecture === 'function' ? 'pointer' : 'default'
+                }}
+              />
+            )}
+            {evt.course_name && !selectedCourse && (
+              <Chip
+                size="small"
+                label={evt.course_name}
+                sx={{
+                  height: 22,
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  bgcolor: 'rgba(59, 130, 246, 0.12)',
+                  color: currentTheme.palette.primary
+                }}
+              />
+            )}
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, color: currentTheme.palette.textSecondary }}>
@@ -316,6 +767,21 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
             <Typography variant="caption" sx={{ fontWeight: 600, fontFamily: 'monospace' }}>
               {evt.is_all_day ? 'All Day' : `${evt.start_time_formatted} - ${evt.end_time_formatted}`}
             </Typography>
+            {evt.source_type && evt.source_type !== 'moodle_ical' && (
+              <Tooltip title="Delete event">
+                <IconButton
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteEvent(evt.id);
+                  }}
+                  sx={{ p: 0.3, color: currentTheme.palette.textSecondary, '&:hover': { color: '#ef4444' } }}
+                  aria-label="Delete calendar event"
+                >
+                  <Trash2 size={13} />
+                </IconButton>
+              </Tooltip>
+            )}
           </Box>
         </Box>
 
@@ -491,9 +957,9 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
             <CalendarIcon size={22} />
           </Box>
           <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="h6" sx={{ fontWeight: 800, fontSize: { xs: '1rem', md: '1.15rem' }, color: currentTheme.palette.textPrimary }}>
-                Academic Schedule & Alerts
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography variant="h6" sx={{ fontWeight: 800, fontSize: compact ? '0.95rem' : { xs: '1rem', md: '1.15rem' }, color: currentTheme.palette.textPrimary }}>
+                {selectedCourse ? `${selectedCourse} — Upcoming Events & Deadlines` : 'Academic Schedule & Alerts'}
               </Typography>
               <Chip
                 label="Moodle Live"
@@ -507,15 +973,111 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
                   border: '1px solid rgba(16, 185, 129, 0.3)'
                 }}
               />
+              <Chip
+                icon={<Sparkles size={11} />}
+                label="AI PDF & Transcript Sync"
+                size="small"
+                sx={{
+                  height: 20,
+                  fontSize: '0.65rem',
+                  fontWeight: 700,
+                  bgcolor: 'rgba(168, 85, 247, 0.12)',
+                  color: '#c084fc',
+                  border: '1px solid rgba(168, 85, 247, 0.3)',
+                  '& .MuiChip-icon': { color: '#c084fc', ml: '4px' }
+                }}
+              />
+              {selectedCourse && agenda && (
+                <Chip
+                  label={`${courseUpcomingEvents.length} Upcoming`}
+                  size="small"
+                  sx={{
+                    height: 20,
+                    fontSize: '0.65rem',
+                    fontWeight: 700,
+                    bgcolor: 'rgba(59, 130, 246, 0.12)',
+                    color: '#60a5fa',
+                    border: '1px solid rgba(59, 130, 246, 0.3)'
+                  }}
+                />
+              )}
             </Box>
             <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
-              IIIT Dharwad iCal Feed • Automated WhatsApp Alerts (8 AM, 4 PM IST)
+              {selectedCourse
+                ? 'Course Exams, Quiz Deadlines, Moodle Events & AI Transcript Detections'
+                : 'IIIT Dharwad iCal Feed • AI Exam PDF & Transcript Extractor • Automated WhatsApp Alerts (8 AM, 4 PM IST)'}
             </Typography>
           </Box>
         </Box>
 
         {/* Action Buttons */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<FileText size={13} />}
+            onClick={() => openExtractorModal('pdf')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.75rem',
+              borderRadius: 2,
+              color: currentTheme.palette.primary,
+              borderColor: currentTheme.palette.cardBorder
+            }}
+          >
+            Exam PDF (AI)
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<Mic size={13} />}
+            onClick={() => openExtractorModal('transcript')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.75rem',
+              borderRadius: 2,
+              color: '#c084fc',
+              borderColor: 'rgba(168, 85, 247, 0.4)'
+            }}
+          >
+            {videoId ? 'Scan Lecture (AI)' : 'Scan Transcripts (AI)'}
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<Plus size={13} />}
+            onClick={() => openExtractorModal('manual')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.75rem',
+              borderRadius: 2,
+              color: currentTheme.palette.textPrimary,
+              borderColor: currentTheme.palette.cardBorder
+            }}
+          >
+            Add Event
+          </Button>
+          {onOpenFullCalendar && (
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<CalendarIcon size={13} />}
+              onClick={onOpenFullCalendar}
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                borderRadius: 2,
+                bgcolor: currentTheme.palette.primary,
+                color: '#fff'
+              }}
+            >
+              Full Calendar
+            </Button>
+          )}
           <Tooltip title="Refresh calendar feed from Moodle">
             <IconButton
               size="small"
@@ -530,12 +1092,11 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
               <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
             </IconButton>
           </Tooltip>
-
         </Box>
       </Box>
 
-      {/* Counts Summary Bar */}
-      {agenda?.counts && (
+      {/* Counts Summary Bar (shown on general hub when no course is selected) */}
+      {!selectedCourse && agenda?.counts && (
         <Box sx={{ display: 'flex', gap: 1.5, mb: 2.5, flexWrap: 'wrap' }}>
           <Box sx={{ px: 2, py: 1, borderRadius: 2, bgcolor: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
             <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, fontWeight: 600, display: 'block' }}>
@@ -575,43 +1136,45 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
         </Box>
       )}
 
-      {/* Tabs */}
-      <Box sx={{ display: 'flex', gap: 1, mb: 2, borderBottom: `1px solid ${currentTheme.palette.cardBorder}`, pb: 1 }}>
-        <Button
-          size="small"
-          onClick={() => setActiveTab('today')}
-          sx={{
-            textTransform: 'none',
-            fontWeight: 700,
-            fontSize: '0.82rem',
-            borderRadius: 2,
-            px: 2,
-            py: 0.6,
-            ...(activeTab === 'today'
-              ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
-              : { color: currentTheme.palette.textSecondary, bgcolor: 'transparent' })
-          }}
-        >
-          Today's Timeline ({agenda?.today?.all?.length || 0})
-        </Button>
-        <Button
-          size="small"
-          onClick={() => setActiveTab('upcoming')}
-          sx={{
-            textTransform: 'none',
-            fontWeight: 700,
-            fontSize: '0.82rem',
-            borderRadius: 2,
-            px: 2,
-            py: 0.6,
-            ...(activeTab === 'upcoming'
-              ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
-              : { color: currentTheme.palette.textSecondary, bgcolor: 'transparent' })
-          }}
-        >
-          Next 7 Days ({agenda?.upcoming?.length || 0})
-        </Button>
-      </Box>
+      {/* Tabs (shown on general hub when no course is selected) */}
+      {!selectedCourse && (
+        <Box sx={{ display: 'flex', gap: 1, mb: 2, borderBottom: `1px solid ${currentTheme.palette.cardBorder}`, pb: 1 }}>
+          <Button
+            size="small"
+            onClick={() => setActiveTab('today')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.82rem',
+              borderRadius: 2,
+              px: 2,
+              py: 0.6,
+              ...(activeTab === 'today'
+                ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                : { color: currentTheme.palette.textSecondary, bgcolor: 'transparent' })
+            }}
+          >
+            Today's Timeline ({agenda?.today?.all?.length || 0})
+          </Button>
+          <Button
+            size="small"
+            onClick={() => setActiveTab('upcoming')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.82rem',
+              borderRadius: 2,
+              px: 2,
+              py: 0.6,
+              ...(activeTab === 'upcoming'
+                ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                : { color: currentTheme.palette.textSecondary, bgcolor: 'transparent' })
+            }}
+          >
+            Next 7 Days ({agenda?.upcoming?.length || 0})
+          </Button>
+        </Box>
+      )}
 
       {/* Content Area */}
       {loading && !agenda ? (
@@ -630,6 +1193,30 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
           <Button size="small" variant="outlined" color="error" onClick={() => fetchAgenda(true)}>
             Retry Feed Sync
           </Button>
+        </Box>
+      ) : selectedCourse ? (
+        /* Course-Specific Upcoming Events Only */
+        <Box>
+          {courseUpcomingEvents.length === 0 ? (
+            <Box sx={{ py: 4, textAlign: 'center', borderRadius: 2.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
+              <CheckCircle2 size={32} color="#10b981" style={{ margin: '0 auto 8px', opacity: 0.8 }} />
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
+                No upcoming events scheduled for this course
+              </Typography>
+              <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
+                No upcoming lectures, assignment deadlines, or exams found for {selectedCourse}.
+              </Typography>
+            </Box>
+          ) : (
+            courseUpcomingEvents.map((evt) => (
+              <Box key={evt.id} sx={{ mb: 1.5 }}>
+                <Typography variant="caption" sx={{ color: currentTheme.palette.primary, fontWeight: 700, mb: 0.5, display: 'block' }}>
+                  {evt.date_formatted}
+                </Typography>
+                {renderEventItem(evt)}
+              </Box>
+            ))
+          )}
         </Box>
       ) : activeTab === 'today' ? (
         <Box>
@@ -683,6 +1270,20 @@ export default function CalendarAlertCard({ currentTheme, googleUser }) {
           )}
         </Box>
       )}
+
+      <CalendarAIExtractorModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        initialTab={modalTab}
+        defaultCourse={selectedCourse || ''}
+        videoId={videoId}
+        lectureTitle={lectureTitle}
+        courses={courses}
+        googleUser={googleUser}
+        isTutor={isTutor}
+        currentTheme={currentTheme}
+        onEventsInjected={() => fetchAgenda(false)}
+      />
     </Box>
   );
 }

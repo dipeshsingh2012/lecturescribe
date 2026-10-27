@@ -751,9 +751,6 @@ class DomainRouter:
         if re.search(r'\b(clinical|patient|rct|oncology|disease|therapy|pubmed|pmcid)\b', q_lower):
             return "BIOMEDICAL"
 
-        if re.search(r'\b(transformer|neural network|algorithm|compiler|deep learning|arxiv|gpu|attention)\b', q_lower):
-            return "STEM_CS"
-
         return "INTERDISCIPLINARY"
 
     @classmethod
@@ -777,7 +774,7 @@ class DomainRouter:
             excluded = []
         else:
             # Interdisciplinary / Unconstrained
-            dispatched = ["openalex", "semantic_scholar", "crossref", "google_books"]
+            dispatched = ["openalex", "europe_pmc", "semantic_scholar", "crossref", "google_books"]
             excluded = []
 
         logger.info(f"[DomainRouter] Dispatching to: {dispatched} | Excluded: {excluded} (domain={domain})")
@@ -811,13 +808,13 @@ def compute_hybrid_relevance(record: Dict[str, Any], query: str) -> float:
 
     is_abstract_missing = not abstract or len(abstract.strip()) < 40 or "(Note: Abstract unavailable)" in abstract or bool(synthesized and not abstract)
     if is_abstract_missing:
-        w_lex = 0.40
-        w_cit = 0.40
+        w_lex = 0.25
+        w_cit = 0.55
         w_rec = 0.15
         w_oa = 0.05
     else:
-        w_lex = 0.50
-        w_cit = 0.30
+        w_lex = 0.45
+        w_cit = 0.35
         w_rec = 0.15
         w_oa = 0.05
 
@@ -1586,53 +1583,28 @@ async def _fetch_google_books_candidates_async(client: httpx.AsyncClient, query:
 async def _fetch_openalex_candidates_async(
     client: httpx.AsyncClient,
     query: str,
-    limit: int,
+    limit: int = 10,
     expanded_queries: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """
     OpenAlex fetcher supporting both exact titles, landmark citations, and broad topics:
-      - Pass 1: Author surname filter + title search sorted by citations (if author supplied)
-      - Pass 2: Direct title filter (`title.search`) sorted by `cited_by_count:desc` to surface landmark papers
-      - Pass 3: BM25 search across full text & abstracts for topic exploration
+      - Pass 1: Relevance sorted search (`relevance_score:desc`)
+      - Pass 2: Citation sorted search (`cited_by_count:desc`) to surface landmark papers
+      - Pass 3: Candidate expansion for canonical equivalents
     """
     headers = {"User-Agent": "LectureScribe/2.3 (mailto:academic-research@lecturescribe.local)"}
-    clean_title, author, _ = extract_citation_components(query)
 
-    tasks = []
+    # Protect exact keyword phrasing: wrap multi-word queries in quotes if not already quoted
+    clean_q = query.strip()
+    clean_title, author, _ = extract_citation_components(clean_q)
+    target_q = clean_title if clean_title else clean_q
+    if target_q and " " in target_q and not (target_q.startswith('"') and target_q.endswith('"')):
+        search_q = f'"{target_q}"'
+    else:
+        search_q = target_q
 
-    # Pass 1: Targeted Author filter + Title search
-    if author:
-        author_surname = author.split()[0].strip()
-        tasks.append(
-            client.get(
-                OPENALEX_API,
-                params={
-                    "filter": f"title.search:{clean_title},raw_author_name.search:{author_surname}",
-                    "per-page": max(limit, 10),
-                    "sort": "cited_by_count:desc"
-                },
-                headers=headers,
-                timeout=3.5
-            )
-        )
-
-    # Pass 2: Direct Title search sorted by citations (guarantees landmark papers like Vaswani 2017 surface)
-    tasks.append(
-        client.get(
-            OPENALEX_API,
-            params={
-                "filter": f"title.search:{clean_title}",
-                "per-page": max(limit, 10),
-                "sort": "cited_by_count:desc"
-            },
-            headers=headers,
-            timeout=3.5
-        )
-    )
-
-    # Pass 3: Broad BM25 query for topics and adjacent literature
-    search_q = f"{clean_title} {author}".strip() if author else clean_title
-    tasks.append(
+    # Pass 1 & Pass 2 for primary query
+    tasks = [
         client.get(
             OPENALEX_API,
             params={
@@ -1642,19 +1614,30 @@ async def _fetch_openalex_candidates_async(
             },
             headers=headers,
             timeout=3.5
+        ),
+        client.get(
+            OPENALEX_API,
+            params={
+                "search": search_q,
+                "per-page": max(limit, 10),
+                "sort": "cited_by_count:desc"
+            },
+            headers=headers,
+            timeout=3.5
         )
-    )
+    ]
 
-    # Pass 4: Topic expansion pass (if expanded_queries supplied)
-    if expanded_queries and len(tasks) < 4:
+    # Pass 3: Candidate expansion for canonical equivalents
+    if expanded_queries:
         for eq in expanded_queries:
             clean_eq = eq.strip()
-            if clean_eq and clean_eq.lower() not in (clean_title.lower(), search_q.lower()):
+            if clean_eq and clean_eq.lower() not in (clean_q.lower(), target_q.lower(), search_q.lower()) and len(tasks) < 3:
+                eq_search = f'"{clean_eq}"' if (" " in clean_eq and not (clean_eq.startswith('"') and clean_eq.endswith('"'))) else clean_eq
                 tasks.append(
                     client.get(
                         OPENALEX_API,
                         params={
-                            "search": clean_eq,
+                            "search": eq_search,
                             "per-page": max(limit, 10),
                             "sort": "cited_by_count:desc"
                         },
@@ -1662,7 +1645,6 @@ async def _fetch_openalex_candidates_async(
                         timeout=3.5
                     )
                 )
-                break
 
     # Cap concurrency to 4 requests
     tasks = tasks[:4]
@@ -2331,9 +2313,9 @@ class SLMReranker:
             f"You are a strict academic literature relevance evaluator for the course '{course_name or 'University Academic'}'.\n"
             f"User Query: '{query}' (Target Title/Topic: '{clean_title}', Target Author: '{author_filter}')\n\n"
             "Evaluate each numbered candidate against the following strict academic scoring rubric strictly between 0.0 and 1.0:\n"
-            "- 0.95 – 1.00 (Core Architectural Breakthrough / Direct Focus / Exact Work): The exact paper or textbook requested by the user, or seminal work defining the queried topic.\n"
-            "- 0.75 – 0.94 (Substantial Application / Integrated Module / Authoritative Textbook): The paper/textbook directly addresses the query topic or uses the queried mechanism centrally.\n"
-            "- 0.45 – 0.74 (Marginal / Variant / Derivative Usage): The paper uses a tangential, spatial-only, or non-standard variant or minor downstream evaluation.\n"
+            "- 0.90 – 1.00 (Core Architectural Breakthrough / Direct Focus / Exact Work): The exact paper or textbook requested by the user, or seminal work defining the queried topic.\n"
+            "- 0.70 – 0.89 (Substantial Application / Integrated Module / Authoritative Textbook): The paper/textbook directly addresses the query topic or uses the queried mechanism centrally.\n"
+            "- 0.45 – 0.69 (Marginal / Variant / Derivative Usage): The paper uses a tangential, spatial-only, or non-standard variant or minor downstream evaluation.\n"
             f"{disambig_note.strip()}\n\n"
             "Instruction Directive:\n"
             "Do not cluster scores around 0.80–0.85. Actively differentiate between papers whose central theoretical contribution is the queried mechanism versus those that merely apply it as a sub-component.\n\n"
@@ -2536,7 +2518,7 @@ def _format_and_interleave(
     """
     floor = min_book_relevance
     if floor is None:
-        floor = 0.40 if course_name else 0.0
+        floor = 0.50 if course_name else 0.0
 
     books = [
         r for r in records
@@ -2648,7 +2630,7 @@ async def search_academic_literature_async(query: str, limit: int = 6, course_na
     ]
 
     # Issue 5: Format and interleave enforcing monograph relevancy floor
-    floor = 0.40 if course_name else 0.0
+    floor = 0.50 if course_name else 0.0
     final_results = _format_and_interleave(filtered_reranked, limit=limit, query=query, min_book_relevance=floor, course_name=course_name)
     logger.info(f"[ReadingExtractor] search_academic_literature_async returned {len(final_results)} results for query: '{query}'")
     return final_results
@@ -2664,10 +2646,14 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
         return []
 
     clean_title, author, _ = extract_citation_components(query)
-    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{clean_title}' (author='{author}', limit={limit}, course='{course_name}')")
+    clean_q = re.sub(r'^(?:paper|book|reading|journal)\s*:\s*', '', query.strip(), flags=re.IGNORECASE).strip()
+    target_q = clean_title if clean_title else clean_q
+    logger.info(f"[ReadingExtractor] Searching academic literature & books for: '{target_q}' (author='{author}', limit={limit}, course='{course_name}')")
 
-    plan = SLMQueryPlanner.plan(query, course_name)
+    plan = SLMQueryPlanner.plan(target_q, course_name)
     dispatched = plan.get("providers", [])
+    primary_queries = plan.get("primary_queries", [target_q])
+    primary_q = primary_queries[0] if primary_queries else target_q
 
     oa_items: List[Dict[str, Any]] = []
     cr_items: List[Dict[str, Any]] = []
@@ -2677,13 +2663,13 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = {}
         if "openalex" in dispatched:
-            futures["openalex"] = executor.submit(_fetch_openalex_candidates, query, limit)
+            futures["openalex"] = executor.submit(_fetch_openalex_candidates, primary_q, limit)
         if "crossref" in dispatched:
-            futures["crossref"] = executor.submit(_fetch_crossref_candidates, query, limit)
+            futures["crossref"] = executor.submit(_fetch_crossref_candidates, primary_q, limit)
         if "europe_pmc" in dispatched:
-            futures["europe_pmc"] = executor.submit(_fetch_europe_pmc_candidates, query, limit)
+            futures["europe_pmc"] = executor.submit(_fetch_europe_pmc_candidates, primary_q, limit)
         if "google_books" in dispatched:
-            futures["google_books"] = executor.submit(_fetch_google_books_candidates, query, limit)
+            futures["google_books"] = executor.submit(_fetch_google_books_candidates, primary_q, limit)
 
         if "openalex" in futures:
             try:
@@ -2714,17 +2700,17 @@ def search_academic_literature(query: str, limit: int = 6, course_name: str = ""
         pmc_items=pmc_items,
         books_items=gb_items,
         openalex_items=oa_items,
-        query=query
+        query=primary_q
     )
 
     _impute_records_abstracts_sync(consolidated)
     for r in consolidated:
-        r["relevance_score"] = compute_hybrid_relevance(r, query)
+        r["relevance_score"] = compute_hybrid_relevance(r, primary_q)
 
     bounded = SLMReranker.prune_candidates(consolidated, max_n=8)
-    floor = 0.40 if course_name else 0.0
-    final_results = _format_and_interleave(bounded, limit=limit, query=query, min_book_relevance=floor, course_name=course_name)
-    logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{query}'")
+    floor = 0.50 if course_name else 0.0
+    final_results = _format_and_interleave(bounded, limit=limit, query=primary_q, min_book_relevance=floor, course_name=course_name)
+    logger.info(f"[ReadingExtractor] search_academic_literature returned {len(final_results)} results for query: '{primary_q}'")
     return final_results
 
 

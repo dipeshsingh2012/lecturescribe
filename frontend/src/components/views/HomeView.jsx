@@ -26,7 +26,16 @@ import {
   Plus,
   ChevronDown,
   FileText,
-  FileCode
+  FileCode,
+  Calendar as CalendarIcon,
+  Users,
+  MessageSquare,
+  BarChart3,
+  Layers,
+  Database,
+  Activity,
+  Target,
+  Megaphone
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -38,7 +47,16 @@ import CourseQuiz from '../course/CourseQuiz';
 import CourseTutor from '../course/CourseTutor';
 import CourseSummary from '../course/CourseSummary';
 import CourseAssignments from '../course/CourseAssignments';
+import CourseGrades from '../course/CourseGrades';
+import CourseParticipants from '../course/CourseParticipants';
+import CourseForum from '../course/CourseForum';
+import CourseSyllabusSpine from '../course/CourseSyllabusSpine';
+import CourseQuestionBank from '../course/CourseQuestionBank';
+import CourseAnalytics from '../course/CourseAnalytics';
+import CourseRubricsAndCompetencies from '../course/CourseRubricsAndCompetencies';
+import CourseWorkshopsAndAnnouncements from '../course/CourseWorkshopsAndAnnouncements';
 import CalendarAlertCard from '../calendar/CalendarAlertCard';
+import CalendarView from './CalendarView';
 import QuizRemindersCard from '../home/QuizRemindersCard';
 import useCourseQuiz from '../../hooks/useCourseQuiz';
 import { useCourseTutor } from '../../hooks/useCourseTutor';
@@ -103,6 +121,7 @@ export default function HomeView({
   onCreateNewNote,
   onOpenNote,
   onDeleteNote,
+  onOpenFullCalendar,
   currentTheme
 }) {
   const [newMenuAnchor, setNewMenuAnchor] = React.useState(null);
@@ -160,7 +179,7 @@ export default function HomeView({
   ]);
 
   return (
-    <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 2.5, md: 4 } }}>
+    <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 1.5, sm: 2.5, md: 4 } }}>
       {!selectedCourse && (
         <HeroBanner
           googleUser={googleUser}
@@ -315,8 +334,29 @@ export default function HomeView({
 
       {/* Course View Tabs (Lectures vs Course Quiz vs Course Materials) */}
       {selectedCourse && (
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3, flexWrap: 'wrap', gap: 1.5 }}>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Box sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 2.5,
+          flexWrap: 'wrap',
+          gap: 1.5
+        }}>
+          <Box sx={{
+            display: 'flex',
+            gap: 1,
+            flexWrap: { xs: 'nowrap', md: 'wrap' },
+            overflowX: { xs: 'auto', md: 'visible' },
+            maxWidth: '100%',
+            pb: { xs: 1, md: 0 },
+            scrollbarWidth: 'none',
+            '&::-webkit-scrollbar': { display: 'none' },
+            WebkitOverflowScrolling: 'touch',
+            '& > button': {
+              flexShrink: 0,
+              whiteSpace: 'nowrap'
+            }
+          }}>
             <Button
               variant={courseViewTab === 'lectures' ? 'contained' : 'outlined'}
               size="small"
@@ -407,25 +447,189 @@ export default function HomeView({
             >
               Library ({courseResources.length + (courseReadings?.length || 0) + (courseNotes?.length || 0)})
             </Button>
+            <Button
+              variant={courseViewTab === 'calendar' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<CalendarIcon size={15} />}
+              onClick={() => setCourseViewTab('calendar')}
+              aria-label="Course Calendar"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'calendar'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Calendar
+            </Button>
+            <Button
+              variant={courseViewTab === 'grades' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<BarChart3 size={15} />}
+              onClick={() => setCourseViewTab('grades')}
+              aria-label="Course Grades"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'grades'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Grades
+            </Button>
+            <Button
+              variant={courseViewTab === 'forum' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<MessageSquare size={15} />}
+              onClick={() => setCourseViewTab('forum')}
+              aria-label="Course Forum"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'forum'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Forum
+            </Button>
+            <Button
+              variant={courseViewTab === 'participants' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<Users size={15} />}
+              onClick={() => setCourseViewTab('participants')}
+              aria-label="Course Participants"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'participants'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Participants
+            </Button>
+            <Button
+              variant={courseViewTab === 'syllabus' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<Layers size={15} />}
+              onClick={() => setCourseViewTab('syllabus')}
+              aria-label="Course Syllabus & Progress"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'syllabus'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Syllabus & Progress
+            </Button>
+            <Button
+              variant={courseViewTab === 'rubrics' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<Target size={15} />}
+              onClick={() => setCourseViewTab('rubrics')}
+              aria-label="Course Rubrics & Competencies"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'rubrics'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Rubrics & Outcomes
+            </Button>
+            <Button
+              variant={courseViewTab === 'workshops' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<Megaphone size={15} />}
+              onClick={() => setCourseViewTab('workshops')}
+              aria-label="Course Workshops & Broadcasts"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'workshops'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Workshops & Broadcasts
+            </Button>
             {isTutor && (
-              <Button
-                variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
-                size="small"
-                startIcon={<FileCode size={15} />}
-                onClick={() => setCourseViewTab('assignments')}
-                aria-label="Course Assignments"
-                sx={{
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.82rem',
-                  borderRadius: 2,
-                  ...(courseViewTab === 'assignments'
-                    ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
-                    : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
-                }}
-              >
-                Assignments ({courseAssignments.assignments.length})
-              </Button>
+              <>
+                <Button
+                  variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
+                  size="small"
+                  startIcon={<FileCode size={15} />}
+                  onClick={() => setCourseViewTab('assignments')}
+                  aria-label="Course Assignments"
+                  sx={{
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    borderRadius: 2,
+                    ...(courseViewTab === 'assignments'
+                      ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                      : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+                  }}
+                >
+                  Assignments ({courseAssignments.assignments.length})
+                </Button>
+                <Button
+                  variant={courseViewTab === 'question-bank' ? 'contained' : 'outlined'}
+                  size="small"
+                  startIcon={<Database size={15} />}
+                  onClick={() => setCourseViewTab('question-bank')}
+                  aria-label="Course Question Bank"
+                  sx={{
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    borderRadius: 2,
+                    ...(courseViewTab === 'question-bank'
+                      ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                      : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+                  }}
+                >
+                  Question Bank
+                </Button>
+                <Button
+                  variant={courseViewTab === 'analytics' ? 'contained' : 'outlined'}
+                  size="small"
+                  startIcon={<Activity size={15} />}
+                  onClick={() => setCourseViewTab('analytics')}
+                  aria-label="Course Analytics"
+                  sx={{
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.82rem',
+                    borderRadius: 2,
+                    ...(courseViewTab === 'analytics'
+                      ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                      : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+                  }}
+                >
+                  Analytics
+                </Button>
+              </>
             )}
           </Box>
 
@@ -515,6 +719,55 @@ export default function HomeView({
         </Box>
       )}
 
+      {/* Mobile Active Course Module Banner (< 900px) */}
+      {selectedCourse && (
+        <Box sx={{
+          display: { xs: 'flex', md: 'none' },
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 2,
+          p: 1.5,
+          borderRadius: 2.5,
+          bgcolor: currentTheme.palette.cardBg,
+          border: `1px solid ${currentTheme.palette.cardBorder}`
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip
+              label={
+                courseViewTab === 'lectures' ? 'Lectures' :
+                courseViewTab === 'syllabus' ? 'Syllabus & Progress' :
+                courseViewTab === 'quiz' ? 'Course Quiz' :
+                courseViewTab === 'summary' ? 'Summary' :
+                courseViewTab === 'tutor' ? 'AI Tutor' :
+                courseViewTab === 'grades' ? 'Gradebook' :
+                courseViewTab === 'forum' ? 'Forum' :
+                courseViewTab === 'participants' ? 'Participants' :
+                courseViewTab === 'calendar' ? 'Calendar' :
+                courseViewTab === 'rubrics' ? 'Rubrics & Outcomes' :
+                courseViewTab === 'workshops' ? 'Workshops & Broadcasts' :
+                courseViewTab === 'assignments' ? 'Assignments' :
+                courseViewTab === 'question-bank' ? 'Question Bank' :
+                courseViewTab === 'analytics' ? 'Analytics' : 'Library'
+              }
+              size="small"
+              sx={{ bgcolor: currentTheme.palette.primary, color: '#fff', fontWeight: 800, fontSize: '0.75rem' }}
+            />
+            <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
+              Use bottom bar to switch modules
+            </Typography>
+          </Box>
+
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleClearCourse}
+            sx={{ textTransform: 'none', fontSize: '0.75rem', fontWeight: 700, borderRadius: 2 }}
+          >
+            All Courses
+          </Button>
+        </Box>
+      )}
+
       {/* LEVEL 1: COURSE CARDS VIEW & ACADEMIC CALENDAR & PREDICTED QUIZZES */}
       <QuizRemindersCard
         currentTheme={currentTheme}
@@ -533,7 +786,24 @@ export default function HomeView({
 
       {!selectedCourse ? (
         <>
-          {googleUser && <CalendarAlertCard currentTheme={currentTheme} googleUser={googleUser} />}
+          {googleUser && (
+            <CalendarAlertCard
+              currentTheme={currentTheme}
+              googleUser={googleUser}
+              isTutor={isTutor}
+              courses={filteredCourses}
+              onOpenFullCalendar={onOpenFullCalendar}
+              onSelectLecture={(vid, ts, cName) => {
+                if (!vid) return;
+                if (typeof handleTranscribe === 'function') {
+                  handleTranscribe(vid, true, cName || null, false, ts);
+                }
+                if (typeof handleCueClick === 'function' && ts) {
+                  setTimeout(() => handleCueClick(ts), 350);
+                }
+              }}
+            />
+          )}
           <CourseGrid
             filteredCourses={filteredCourses}
             handleSelectCourse={handleSelectCourse}
@@ -543,7 +813,51 @@ export default function HomeView({
             currentTheme={currentTheme}
           />
         </>
-      ) : courseViewTab === 'summary' ? (
+      ) : (
+        <>
+          {/* Course-Level Upcoming Events & Deadlines Widget (shown on Course Page tabs except the full Calendar tab) */}
+          {courseViewTab !== 'calendar' && (
+            <CalendarAlertCard
+              currentTheme={currentTheme}
+              googleUser={googleUser}
+              isTutor={isTutor}
+              selectedCourse={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+              courses={filteredCourses}
+              onOpenFullCalendar={() => setCourseViewTab('calendar')}
+              onSelectLecture={(vid, ts, cName) => {
+                if (!vid) return;
+                const targetCourse = cName || activeCourseData?.course_name || selectedCourse || null;
+                if (typeof handleTranscribe === 'function') {
+                  handleTranscribe(vid, true, targetCourse, false, ts);
+                }
+                if (typeof handleCueClick === 'function' && ts) {
+                  setTimeout(() => handleCueClick(ts), 350);
+                }
+              }}
+            />
+          )}
+
+          {courseViewTab === 'calendar' ? (
+            /* LEVEL 2F: COURSE FULL CALENDAR & AI EXAM/TRANSCRIPT SCHEDULE */
+            <CalendarView
+              currentTheme={currentTheme}
+              googleUser={googleUser}
+              isTutor={isTutor}
+              selectedCourse={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+              courses={filteredCourses}
+              embeddedInCourse={true}
+              onSelectLecture={(vid, ts, cName) => {
+                if (!vid) return;
+                const targetCourse = cName || activeCourseData?.course_name || selectedCourse || null;
+                if (typeof handleTranscribe === 'function') {
+                  handleTranscribe(vid, true, targetCourse, false, ts);
+                }
+                if (typeof handleCueClick === 'function' && ts) {
+                  setTimeout(() => handleCueClick(ts), 350);
+                }
+              }}
+            />
+          ) : courseViewTab === 'summary' ? (
         /* LEVEL 2E: COURSE EXECUTIVE SUMMARY */
         <CourseSummary
           courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
@@ -552,7 +866,7 @@ export default function HomeView({
           loading={courseSummary.loading}
           error={courseSummary.error}
           fetchSummary={courseSummary.fetchSummary}
-          regenerateSummary={isTutor ? courseSummary.regenerateSummary : null}
+          regenerateSummary={courseSummary.regenerateSummary}
           isTutor={isTutor}
           handleSelectLecture={(vid, cName, ts) => {
             if (vid) {
@@ -680,6 +994,98 @@ export default function HomeView({
           onRegenerateAssignment={courseAssignments.regenerateAssignment}
           onDeleteAssignment={courseAssignments.deleteAssignment}
           currentTheme={currentTheme}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          userName={googleUser?.name || ''}
+        />
+      ) : courseViewTab === 'grades' ? (
+        /* LEVEL 2G: CENTRALIZED COURSE GRADEBOOK & STUDENT SUBMISSIONS */
+        <CourseGrades
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          userName={googleUser?.name || ''}
+          currentTheme={currentTheme}
+        />
+      ) : courseViewTab === 'participants' ? (
+        /* LEVEL 2H: COURSE ROSTER, ROLES & SELF-ENROLLMENT KEYS */
+        <CourseParticipants
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          userName={googleUser?.name || ''}
+          currentTheme={currentTheme}
+        />
+      ) : courseViewTab === 'forum' ? (
+        /* LEVEL 2I: COURSE DISCUSSIONS / Q&A FORUM WITH TIMESTAMP DEEP-LINKS & AI TA */
+        <CourseForum
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          lectures={filteredCourseLectures}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          userName={googleUser?.name || ''}
+          onJumpToLecture={(vid, ts) => {
+            if (!vid) return;
+            const targetCourse = activeCourseData?.course_name || selectedCourse || null;
+            if (typeof handleTranscribe === 'function') {
+              handleTranscribe(vid, true, targetCourse, false, ts);
+            }
+            if (typeof handleCueClick === 'function' && ts) {
+              setTimeout(() => handleCueClick(ts), 350);
+            }
+          }}
+          currentTheme={currentTheme}
+        />
+      ) : courseViewTab === 'syllabus' ? (
+        /* LEVEL 2J: MODULAR COURSE SYLLABUS SPINE & COMPLETION TRACKING */
+        <CourseSyllabusSpine
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          lectures={filteredCourseLectures}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          onSelectLecture={(vid, cName) => {
+            if (vid && typeof handleTranscribe === 'function') {
+              handleTranscribe(vid, false, cName);
+            }
+          }}
+          onNavigateTab={(tab) => setCourseViewTab(tab)}
+          currentTheme={currentTheme}
+        />
+      ) : (courseViewTab === 'question-bank' && isTutor) ? (
+        /* LEVEL 2K: DECOUPLED AI QUESTION BANK & CUSTOM QUIZ BUILDER */
+        <CourseQuestionBank
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          lectures={filteredCourseLectures}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          onQuizPublished={() => {
+            courseQuiz.fetchOrGenerateQuiz(false);
+          }}
+          currentTheme={currentTheme}
+        />
+      ) : (courseViewTab === 'analytics' && isTutor) ? (
+        /* LEVEL 2L: INSTRUCTOR LEARNING ANALYTICS & AT-RISK AI EARLY-WARNING DASHBOARD */
+        <CourseAnalytics
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          currentTheme={currentTheme}
+        />
+      ) : courseViewTab === 'rubrics' ? (
+        /* LEVEL 2M: 2D GRADING RUBRICS & COURSE COMPETENCY MASTERY MATRIX */
+        <CourseRubricsAndCompetencies
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          assignments={courseAssignments.assignments}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          currentTheme={currentTheme}
+        />
+      ) : courseViewTab === 'workshops' ? (
+        /* LEVEL 2N: PEER REVIEW WORKSHOPS, OFFICIAL ANNOUNCEMENTS & AUDIT LOG */
+        <CourseWorkshopsAndAnnouncements
+          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          isTutor={isTutor}
+          userEmail={googleUser?.email || ''}
+          userName={googleUser?.name || ''}
+          currentTheme={currentTheme}
         />
       ) : (
         /* LEVEL 2A: INDIVIDUAL LECTURES IN SELECTED COURSE */
@@ -697,6 +1103,8 @@ export default function HomeView({
           statusFilter={lectureStatusFilter !== undefined ? lectureStatusFilter : statusFilter}
           onStatusFilterChange={setLectureStatusFilter || onStatusFilterChange}
         />
+      )}
+        </>
       )}
     </Box>
   );

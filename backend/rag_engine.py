@@ -15,13 +15,26 @@ import random
 import hashlib
 from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
-from dotenv import load_dotenv
-
 _env_file = Path(__file__).resolve().parent.parent / ".env"
-if _env_file.exists():
-    load_dotenv(dotenv_path=_env_file, override=True)
-else:
-    load_dotenv(override=True)
+try:
+    from dotenv import load_dotenv
+    if _env_file.exists():
+        load_dotenv(dotenv_path=_env_file, override=True)
+    else:
+        load_dotenv(override=True)
+except ImportError:
+    if _env_file.exists():
+        try:
+            with open(_env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip().strip("'\"")
+                        if k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
 
 try:
     from pinecone import Pinecone, ServerlessSpec

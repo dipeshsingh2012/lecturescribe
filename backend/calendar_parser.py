@@ -16,7 +16,11 @@ from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Optional, Tuple
 
 import requests
-from icalendar import Calendar, Event
+try:
+    from icalendar import Calendar, Event
+except ImportError:
+    Calendar = None
+    Event = None
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -161,6 +165,10 @@ def extract_meeting_info(
 
 def parse_ical_content(ics_text: str | bytes) -> List[Dict[str, Any]]:
     """Parse raw iCalendar content into standardized, categorized event dictionaries."""
+    if Calendar is None:
+        print("⚠️ [iCal Parse Error]: 'icalendar' module is not installed. Run 'pip install icalendar' or use project venv.")
+        return []
+
     if isinstance(ics_text, str):
         ics_bytes = ics_text.encode("utf-8")
     else:
@@ -222,6 +230,28 @@ def parse_ical_content(ics_text: str | bytes) -> List[Dict[str, Any]]:
             description=description
         )
 
+        # Extract optional course category from iCal CATEGORIES property
+        categories_prop = component.get("categories")
+        course_name = ""
+        if categories_prop:
+            try:
+                if hasattr(categories_prop, "cats") and categories_prop.cats:
+                    course_name = str(categories_prop.cats[0]).strip()
+                else:
+                    course_name = str(categories_prop).strip()
+            except Exception:
+                course_name = ""
+
+        # Generic Moodle/iCal category values that designate event scope rather than a specific course title
+        GENERIC_CATEGORIES = {
+            "course", "site", "user", "category", "group", "quiz", "assignment",
+            "exam", "general", "event", "schedule", "lecture", "session"
+        }
+        if course_name.lower() in GENERIC_CATEGORIES:
+            course_name = ""
+
+        course_slug = re.sub(r"[^a-z0-9]+", "-", course_name.lower()).strip("-") if course_name else ""
+
         events.append({
             "id": uid,
             "title": summary,
@@ -235,11 +265,19 @@ def parse_ical_content(ics_text: str | bytes) -> List[Dict[str, Any]]:
             "start_time_formatted": start_dt.strftime("%I:%M %p"),
             "end_time_formatted": end_dt.strftime("%I:%M %p"),
             "date_formatted": start_dt.strftime("%A, %b %d, %Y"),
+            "date_iso": start_dt.strftime("%Y-%m-%d"),
             "is_all_day": is_all_day,
             "category": category,
             "day_slot": day_slot,
             "timestamp_start": start_dt.timestamp(),
-            "timestamp_end": end_dt.timestamp()
+            "timestamp_end": end_dt.timestamp(),
+            "event_scope": "course" if course_slug else "site",
+            "course_slug": course_slug,
+            "course_name": course_name,
+            "source_type": "moodle_ical",
+            "approval_status": "approved",
+            "ai_confidence": 1.0,
+            "source_metadata": {}
         })
 
     # Sort chronologically by start time
@@ -285,7 +323,7 @@ class MoodleCalendarService:
             return ""
 
     def get_events(self, refresh: bool = False) -> List[Dict[str, Any]]:
-        """Get parsed events, utilizing Redis or in-memory cache with 12-hour TTL."""
+        """Get parsed Moodle iCal events, utilizing Redis or in-memory cache with 12-hour TTL."""
         now_ts = time.time()
 
         # 1. Check in-memory / redis cache unless refresh requested
@@ -326,9 +364,127 @@ class MoodleCalendarService:
         self._cache_timestamp = now_ts
         return events
 
-    def get_dashboard_agenda(self, days: int = 7, refresh: bool = False) -> Dict[str, Any]:
-        """Group events into today's timeline and upcoming week for the React dashboard."""
-        events = self.get_events(refresh=refresh)
+    def get_merged_events(
+        self,
+        refresh: bool = False,
+        course_slug: Optional[str] = None,
+        user_email: Optional[str] = None,
+        source_type: Optional[str] = None,
+        category: Optional[str] = None,
+        include_site: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Merge Moodle .ics events with native LectureScribe & AI-extracted events from PostgreSQL.
+        Filters by course_slug, user_email, source_type, and category if provided.
+        """
+        clean_slug = re.sub(r"[^a-z0-9]+", "-", course_slug.lower()).strip("-") if course_slug else None
+        clean_name = re.sub(r"^[0-9\.\s\-_]+", "", course_slug).strip() if course_slug else ""
+        clean_slug_stripped = re.sub(r"[^a-z0-9]+", "-", clean_name.lower()).strip("-") if clean_name else ""
+        clean_source = (source_type or "").strip().lower() if source_type else None
+        clean_cat = (category or "").strip().lower() if category else None
+
+        GENERIC_SLUGS = {
+            "", "course", "site", "user", "category", "group", "general",
+            "schedule", "event", "lecture", "session", "quiz", "assignment", "exam"
+        }
+        STOP_WORDS = {
+            "introduction", "intro", "advanced", "fundamentals", "principles", "basics",
+            "course", "lecture", "session", "lab", "to", "of", "and", "in", "for",
+            "the", "a", "an", "i", "ii", "iii", "part"
+        }
+
+        # 1. Fetch Moodle iCal events unless filtered to a non-moodle source
+        ical_events: List[Dict[str, Any]] = []
+        if not clean_source or clean_source in ("all", "moodle_ical"):
+            raw_ical = self.get_events(refresh=refresh)
+            for ev in raw_ical:
+                if clean_slug:
+                    ev_slug = (ev.get("course_slug") or "").lower().strip("-")
+                    title_desc = f"{ev.get('title', '')} {ev.get('description', '')}".lower()
+                    ev_title_lower = (ev.get("title") or "").lower().strip()
+                    slug_words = clean_slug.replace("-", " ").lower()
+                    clean_words = clean_slug_stripped.replace("-", " ").lower() if clean_slug_stripped else ""
+                    distinctive = [w for w in clean_words.split() if len(w) > 2 and w not in STOP_WORDS]
+                    course_acronym = "".join([w[0] for w in clean_words.split() if w])
+
+                    matches = False
+                    if ev_slug and ev_slug not in GENERIC_SLUGS:
+                        if ev_slug in (clean_slug, clean_slug_stripped):
+                            matches = True
+                        elif course_acronym and len(course_acronym) >= 3 and (ev_slug.startswith(course_acronym) or course_acronym in ev_slug):
+                            matches = True
+
+                    if not matches:
+                        if (clean_words and (clean_words in title_desc or title_desc in clean_words or clean_words in ev_title_lower or ev_title_lower in clean_words)):
+                            matches = True
+                        elif (slug_words and (slug_words in title_desc or title_desc in slug_words or slug_words in ev_title_lower or ev_title_lower in slug_words)):
+                            matches = True
+                        elif distinctive and all(w in title_desc or w in ev_title_lower for w in distinctive):
+                            matches = True
+
+                    if not matches:
+                        continue
+                ical_events.append(ev)
+
+        # 2. Fetch PostgreSQL / In-Memory native & AI calendar events
+        db_events: List[Dict[str, Any]] = []
+        try:
+            from backend.database import db_manager
+            db_events = db_manager.get_calendar_events(
+                course_slug=clean_slug,
+                user_email=user_email,
+                approval_status="approved",
+                source_type=clean_source,
+                include_site=False if clean_slug else include_site,
+            )
+        except Exception as e:
+            print(f"⚠️ [Calendar DB Merge Warning]: {e}")
+
+        # 3. Merge and deduplicate by event ID (prefer DB event if overridden)
+        merged_by_id: Dict[str, Dict[str, Any]] = {}
+        for ev in ical_events:
+            merged_by_id[str(ev.get("id"))] = ev
+        for ev in db_events:
+            merged_by_id[str(ev.get("id"))] = ev
+
+        merged_list = list(merged_by_id.values())
+        if clean_cat and clean_cat != "all":
+            merged_list = [e for e in merged_list if e.get("category") == clean_cat]
+
+        merged_list.sort(key=lambda x: x.get("timestamp_start", 0))
+        return merged_list
+
+    def get_dashboard_agenda(
+        self,
+        days: int = 7,
+        refresh: bool = False,
+        course_slug: Optional[str] = None,
+        user_email: Optional[str] = None,
+        source_type: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Group merged events into today's timeline, upcoming window, and full calendar list."""
+        events = self.get_merged_events(
+            refresh=refresh,
+            course_slug=course_slug,
+            user_email=user_email,
+            source_type=source_type,
+            category=category,
+            include_site=False if course_slug else True,
+        )
+
+        # Fetch pending review AI events for the banner/staging badge
+        pending_events: List[Dict[str, Any]] = []
+        try:
+            from backend.database import db_manager
+            pending_events = db_manager.get_calendar_events(
+                course_slug=course_slug,
+                user_email=user_email,
+                approval_status="pending_review",
+            )
+        except Exception:
+            pending_events = []
+
         now = datetime.datetime.now(IST)
         today_date = now.date()
         end_date = today_date + datetime.timedelta(days=days)
@@ -353,16 +509,23 @@ class MoodleCalendarService:
         assignment_count = sum(1 for e in today_events + upcoming_events if e["category"] == "assignment")
         quiz_count = sum(1 for e in today_events + upcoming_events if e["category"] == "quiz")
         exam_count = sum(1 for e in today_events + upcoming_events if e["category"] == "exam")
+        ai_count = sum(
+            1 for e in events if e.get("source_type") in ("pdf_ai", "transcript_ai")
+        )
 
         return {
             "status": "success",
             "last_synced": datetime.datetime.fromtimestamp(self._cache_timestamp, tz=IST).isoformat() if self._cache_timestamp else now.isoformat(),
+            "course_filter": course_slug,
             "counts": {
                 "today": len(today_events),
                 "upcoming": len(upcoming_events),
+                "total": len(events),
                 "assignments": assignment_count,
                 "quizzes": quiz_count,
-                "exams": exam_count
+                "exams": exam_count,
+                "ai_extracted": ai_count,
+                "pending_review": len(pending_events),
             },
             "today": {
                 "all": today_events,
@@ -370,7 +533,9 @@ class MoodleCalendarService:
                 "afternoon": afternoon,
                 "evening": evening
             },
-            "upcoming": upcoming_events
+            "upcoming": upcoming_events,
+            "all_events": events,
+            "pending_review": pending_events,
         }
 
     def filter_events_for_slot(
@@ -384,7 +549,8 @@ class MoodleCalendarService:
         Only two slots exist: '8am' and '4pm' IST. Both are reminders for the
         entire day, so they return IDENTICAL data:
         - matched: every event happening today (00:00 – 23:59:59 IST), including
-          events already past, events spanning into today, and all-day events.
+          events already past, events spanning into today, and all-day events
+          (from both Moodle iCal and approved AI/manual calendar events).
         - tomorrow_preview: every event starting tomorrow (00:00 – 23:59:59 IST).
 
         Only the slot_label differs between the two slots.
@@ -397,7 +563,7 @@ class MoodleCalendarService:
             raise ValueError(f"Invalid slot '{slot}'. Expected one of: {', '.join(SLOT_LABELS)}.")
         slot_label = SLOT_LABELS[slot_norm]
 
-        events = self.get_events(refresh=True)
+        events = self.get_merged_events(refresh=True)
         curr = (now or datetime.datetime.now(IST)).astimezone(IST)
         today = curr.date()
         tomorrow = today + datetime.timedelta(days=1)
@@ -421,6 +587,53 @@ class MoodleCalendarService:
                 tomorrow_preview.append(e)
 
         return matched, slot_label, tomorrow_preview
+
+    def export_ics(
+        self,
+        course_slug: Optional[str] = None,
+        user_email: Optional[str] = None,
+    ) -> str:
+        """Export merged calendar events as an RFC 5545 iCalendar (.ics) string."""
+        if Calendar is None or Event is None:
+            raise RuntimeError("The 'icalendar' module is required to export .ics files. Install it with 'pip install icalendar' or use project venv.")
+
+        cal = Calendar()
+        cal.add("prodid", "-//LectureScribe AI LMS//Calendar//EN")
+        cal.add("version", "2.0")
+        cal.add("x-wr-calname", f"LectureScribe Calendar{f' ({course_slug})' if course_slug else ''}")
+        cal.add("x-wr-timezone", "Asia/Kolkata")
+
+        events = self.get_merged_events(refresh=False, course_slug=course_slug, user_email=user_email)
+        for ev in events:
+            vevent = Event()
+            vevent.add("uid", str(ev.get("id") or f"ls_{int(time.time())}"))
+            vevent.add("summary", str(ev.get("title") or "Academic Event"))
+            desc = str(ev.get("description") or "")
+            meta = ev.get("source_metadata") or {}
+            if meta.get("cue_text"):
+                desc = f"{desc}\n\n[Transcript Quote @ {meta.get('cue_time', '00:00')}]: \"{meta.get('cue_text')}\"".strip()
+            if desc:
+                vevent.add("description", desc)
+            if ev.get("location"):
+                vevent.add("location", str(ev["location"]))
+            if ev.get("course_name"):
+                vevent.add("categories", [str(ev["course_name"])])
+
+            try:
+                dt_start = datetime.datetime.fromisoformat(ev["start"]).astimezone(IST)
+                dt_end = datetime.datetime.fromisoformat(ev["end"]).astimezone(IST)
+                if ev.get("is_all_day"):
+                    vevent.add("dtstart", dt_start.date())
+                    vevent.add("dtend", dt_end.date())
+                else:
+                    vevent.add("dtstart", dt_start)
+                    vevent.add("dtend", dt_end)
+            except Exception:
+                continue
+
+            cal.add_component(vevent)
+
+        return cal.to_ical().decode("utf-8")
 
 
 # Global singleton instance

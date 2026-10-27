@@ -72,7 +72,7 @@ describe('CourseLectures', () => {
     fireEvent.click(studyBtn);
     expect(handleTranscribe).toHaveBeenCalledWith('https://video.lecturescribe.local/998877', true, 'Physics 101');
 
-    const deleteBtn = screen.getByRole('button', { name: /Remove from My Library/i });
+    const deleteBtn = screen.getByRole('button', { name: /Remove from (Course|My) Library/i });
     fireEvent.click(deleteBtn);
     expect(handleDeleteFromLibrary).toHaveBeenCalledWith('998877');
   });

@@ -72,7 +72,13 @@ export default function CourseTutor({
   };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)', minHeight: '600px', gap: 2 }}>
+    <Box sx={{
+      display: 'flex',
+      flexDirection: 'column',
+      height: { xs: 'calc(100dvh - 180px)', md: 'calc(100vh - 220px)' },
+      minHeight: { xs: 'auto', md: '600px' },
+      gap: 2
+    }}>
       {/* Header Bar */}
       <Paper
         elevation={0}

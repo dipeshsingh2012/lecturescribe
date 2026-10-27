@@ -1,0 +1,20 @@
+{
+  "name": "LearnScribe LMS - AI Course & Lecture Workspace",
+  "short_name": "LearnScribe",
+  "description": "Enterprise AI-Native Learning Management System with lecture transcripts, AI speedgrader, calendar, and study tools",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#022758",
+  "theme_color": "#022758",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

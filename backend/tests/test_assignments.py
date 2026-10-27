@@ -280,6 +280,11 @@ def test_pause_and_prompt_missing_dataset_flow(tmp_path, monkeypatch):
 
     aid = "asgn_pause_test_999"
     course = "Data Science 101"
+
+    ws_init = get_assignment_workspace(aid)
+    stale_csv = os.path.join(ws_init, "housing.csv")
+    if os.path.exists(stale_csv):
+        os.remove(stale_csv)
     
     # Mock text extraction and RAG enrichment to run reliably offline
     monkeypatch.setattr(

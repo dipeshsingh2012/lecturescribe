@@ -186,5 +186,68 @@ describe('CourseSummary Component', () => {
     expect(katexHtml).toBeInTheDocument();
     expect(katexHtml.textContent).not.toContain('\\big[');
   });
+
+  it('allows student users (isTutor=false) to regenerate course summary when regenerateSummary is passed', () => {
+    const regenerateSummary = vi.fn();
+
+    render(
+      <CourseSummary
+        courseName="Linear Algebra"
+        lectureCount={5}
+        summaryData={mockSummaryData}
+        loading={false}
+        error={null}
+        isTutor={false}
+        regenerateSummary={regenerateSummary}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const regenBtn = screen.getByRole('button', { name: /regenerate/i });
+    expect(regenBtn).toBeInTheDocument();
+    fireEvent.click(regenBtn);
+    expect(regenerateSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders Retry button in error alert and invokes regenerateSummary on click', () => {
+    const regenerateSummary = vi.fn();
+
+    render(
+      <CourseSummary
+        courseName="Linear Algebra"
+        summaryData={mockSummaryData}
+        loading={false}
+        error="LLM timeout while regenerating course summary"
+        regenerateSummary={regenerateSummary}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('LLM timeout while regenerating course summary')).toBeInTheDocument();
+    const retryBtn = screen.getByRole('button', { name: /retry/i });
+    expect(retryBtn).toBeInTheDocument();
+
+    fireEvent.click(retryBtn);
+    expect(regenerateSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it('invokes regenerateSummary from initial empty state when Generate Course Summary is clicked', () => {
+    const regenerateSummary = vi.fn();
+
+    render(
+      <CourseSummary
+        courseName="Linear Algebra"
+        summaryData={null}
+        loading={false}
+        error={null}
+        regenerateSummary={regenerateSummary}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const generateBtn = screen.getByRole('button', { name: /generate course summary/i });
+    fireEvent.click(generateBtn);
+    expect(regenerateSummary).toHaveBeenCalledTimes(1);
+  });
 });
 

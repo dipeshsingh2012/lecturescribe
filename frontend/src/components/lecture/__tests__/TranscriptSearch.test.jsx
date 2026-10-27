@@ -1506,4 +1506,348 @@ describe('TranscriptSearch', () => {
 
     global.fetch = originalFetch;
   });
+
+  it('allows using Ask AI on an already highlighted text via mark action popover', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations') && (!opts || opts.method === 'GET')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_hl_1',
+                cue_id: 0,
+                selected_text: 'Probability Mass Function',
+                annotation_type: 'highlight',
+                color: 'yellow',
+                start_seconds: 10,
+                end_seconds: 15
+              }
+            ]
+          })
+        });
+      }
+      if (url.includes('/explain-selection') && opts?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            explanation: 'Welcome to your AI Lecture Tutor! A **PMF** gives probability $$P(X = x)$$.'
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const cues = [
+      { id: 'cue_0', time: '00:10', seconds: 10, text: 'We introduce the Probability Mass Function today.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_pmf' }}
+      />
+    );
+
+    const markEl = await screen.findByText('Probability Mass Function');
+    expect(markEl).toBeInTheDocument();
+
+    // Clicking the highlighted mark opens the mark action popover
+    fireEvent.click(markEl);
+
+    // The popover should have an "Ask AI" button
+    const askAiBtn = await screen.findByRole('button', { name: /Ask AI/i });
+    expect(askAiBtn).toBeInTheDocument();
+
+    fireEvent.click(askAiBtn);
+
+    // Clicking Ask AI should trigger explain-selection and show AI Selection Explainer toolbar
+    await waitFor(() => {
+      expect(screen.getByText('AI Selection Explainer')).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_pmf/explain-selection'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('Probability Mass Function')
+        })
+      );
+    });
+
+    global.fetch = originalFetch;
+  });
+
+  it('does not display redundant quotation hover tooltip on simple highlights', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_simple_1',
+                cue_id: 0,
+                selected_text: 'convex optimization',
+                annotation_type: 'highlight',
+                color: 'yellow',
+                start_seconds: 5,
+                end_seconds: 10
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const cues = [
+      { id: 'cue_0', time: '00:05', seconds: 5, text: 'This lecture covers convex optimization in detail.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_opt' }}
+      />
+    );
+
+    const markEl = await screen.findByText('convex optimization');
+    fireEvent.mouseEnter(markEl);
+
+    // Simple highlight has no note or AI response; redundant hover tooltip should NOT appear
+    expect(screen.queryByTestId('mark-hover-tooltip')).not.toBeInTheDocument();
+
+    global.fetch = originalFetch;
+  });
+
+  it('renders AI explanation badge strictly on the annotated cue and not on adjacent cues', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_ai_1',
+                cue_id: 1,
+                selected_text: 'Markov chains',
+                annotation_type: 'ai_explanation',
+                ai_response: 'Markov chains model stochastic state transitions.',
+                start_seconds: 20,
+                end_seconds: 25
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const cues = [
+      { id: 'cue_0', time: '00:10', seconds: 10, text: 'Line before the selection.' },
+      { id: 'cue_1', time: '00:20', seconds: 20, text: 'Now we discuss Markov chains and memorylessness.' },
+      { id: 'cue_2', time: '00:30', seconds: 30, text: 'Line after the selection.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={1}
+        activeData={{ videoId: 'vid_mc' }}
+      />
+    );
+
+    // Wait for annotation to load
+    await screen.findByText('Markov chains');
+
+    // Only 1 AI badge should exist across the entire transcript (on cue_1), not on cue_0 or cue_2
+    const aiBadges = screen.getAllByRole('button', { name: /View AI explanation/i });
+    expect(aiBadges.length).toBe(1);
+
+    global.fetch = originalFetch;
+  });
+
+  it('renders markdown and LaTeX in AI explainer and provides copy option', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+      }
+      if (url.includes('/explain-selection') && opts?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            explanation: '### PMF Explanation\nA **discrete random variable** satisfies $P(X = x) \\ge 0$.'
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    // Mock clipboard writeText
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    });
+
+    const cues = [
+      { id: 'cue_0', time: '00:00', seconds: 0, text: 'Definition of discrete random variables.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_pmf2' }}
+      />
+    );
+
+    const cueEl = document.querySelector('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'discrete random variable',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 }),
+        getClientRects: () => [{ top: 120, left: 150, width: 80, height: 18 }]
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    const askAiBtn = await screen.findByTitle(/Ask AI to explain selected text/i);
+    fireEvent.click(askAiBtn);
+
+    // Markdown heading and bold should be rendered
+    expect(await screen.findByRole('heading', { level: 3, name: /PMF Explanation/i })).toBeInTheDocument();
+    expect(screen.getByText('discrete random variable')).toBeInTheDocument();
+
+    // KaTeX should render the math formula
+    expect(document.querySelector('.katex')).toBeInTheDocument();
+
+    // Copy button should copy the formatted explanation
+    const copyBtn = screen.getByRole('button', { name: /Copy AI explanation/i });
+    fireEvent.click(copyBtn);
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      expect.stringContaining('### PMF Explanation')
+    );
+    expect(await screen.findByText(/Copied!/i)).toBeInTheDocument();
+
+    global.fetch = originalFetch;
+  });
+
+  it('allows generating AI explanation directly from the timestamped notes drawer with copy and discuss options', async () => {
+    const originalFetch = global.fetch;
+    const handleDiscussInTutor = vi.fn();
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations') && (!opts || opts.method === 'GET')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_note_drawer_1',
+                cue_id: 0,
+                selected_text: 'Central Limit Theorem',
+                note_text: 'Important for sampling theory',
+                annotation_type: 'note',
+                start_seconds: 45
+              }
+            ]
+          })
+        });
+      }
+      if (url.includes('/explain-selection') && opts?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            explanation: 'The **CLT** states that the sample mean approaches normal distribution $N(\\mu, \\sigma^2/n)$.'
+          })
+        });
+      }
+      if (url.includes('/annotations/ann_note_drawer_1') && opts?.method === 'PATCH') {
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const cues = [
+      { id: 'cue_0', time: '00:45', seconds: 45, text: 'Here is the Central Limit Theorem.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_clt' }}
+        onDiscussInTutor={handleDiscussInTutor}
+      />
+    );
+
+    // Open notes drawer
+    const notesBtn = await screen.findByRole('button', { name: /Notes and Highlights/i });
+    fireEvent.click(notesBtn);
+
+    expect(await screen.findByText('Reader Notes & Highlights')).toBeInTheDocument();
+
+    // Find AI Explain button in the note card
+    const explainBtn = screen.getByRole('button', { name: /Explain note with AI/i });
+    expect(explainBtn).toBeInTheDocument();
+
+    fireEvent.click(explainBtn);
+
+    // Should fetch explanation and display with markdown/KaTeX
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_clt/explain-selection'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('Central Limit Theorem')
+        })
+      );
+    });
+
+    expect(await screen.findByText('AI Explanation')).toBeInTheDocument();
+    expect(screen.getByText('CLT')).toBeInTheDocument();
+
+    // Discuss in Tutor button should trigger onDiscussInTutor callback
+    const discussBtn = screen.getByRole('button', { name: /Discuss in AI Tutor/i });
+    fireEvent.click(discussBtn);
+
+    expect(handleDiscussInTutor).toHaveBeenCalledWith(
+      expect.stringContaining('Central Limit Theorem'),
+      '00:45'
+    );
+
+    global.fetch = originalFetch;
+  });
 });

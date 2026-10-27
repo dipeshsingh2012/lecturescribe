@@ -250,7 +250,21 @@ export default function CourseSummary({
           </Typography>
 
           {error && (
-            <Alert severity="error" sx={{ mb: 3, textAlign: 'left' }}>
+            <Alert
+              severity="error"
+              sx={{ mb: 3, textAlign: 'left' }}
+              action={
+                typeof regenerateSummary === 'function' ? (
+                  <Button color="inherit" size="small" onClick={() => regenerateSummary()} disabled={loading}>
+                    Retry
+                  </Button>
+                ) : typeof fetchSummary === 'function' ? (
+                  <Button color="inherit" size="small" onClick={() => fetchSummary(true)} disabled={loading}>
+                    Retry
+                  </Button>
+                ) : null
+              }
+            >
               {error}
             </Alert>
           )}
@@ -258,8 +272,9 @@ export default function CourseSummary({
           <Button
             variant="contained"
             size="large"
-            onClick={() => fetchSummary && fetchSummary(true)}
-            startIcon={<Sparkles size={18} />}
+            onClick={() => (typeof regenerateSummary === 'function' ? regenerateSummary() : fetchSummary && fetchSummary(true))}
+            disabled={loading}
+            startIcon={loading ? <CircularProgress size={18} sx={{ color: '#fff' }} /> : <Sparkles size={18} />}
             sx={{
               bgcolor: primaryColor,
               color: '#fff',
@@ -314,21 +329,21 @@ export default function CourseSummary({
   } = summaryData || {};
 
   return (
-    <Box sx={{ width: '100%', py: 3, px: { xs: 1, sm: 2 }, maxWidth: 960, mx: 'auto' }}>
+    <Box sx={{ width: '100%', py: { xs: 1.5, sm: 3 }, px: { xs: 0.5, sm: 1 }, maxWidth: '100%' }}>
       {/* Top Action Header */}
       <Box
         sx={{
           display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: { xs: 'stretch', sm: 'center' },
           mb: 3,
-          flexWrap: 'wrap',
           gap: 1.5
         }}
       >
         <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-            <Typography variant="h5" sx={{ fontWeight: 800, color: textPrimary }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
+            <Typography variant="h5" sx={{ fontWeight: 800, color: textPrimary, fontSize: { xs: '1.25rem', sm: '1.5rem' } }}>
               Course Executive Summary
             </Typography>
             <Chip
@@ -342,18 +357,20 @@ export default function CourseSummary({
               }}
             />
           </Box>
-          <Typography variant="caption" sx={{ color: textSecondary }}>
+          <Typography variant="caption" sx={{ color: textSecondary, display: 'block', lineHeight: 1.4 }}>
             Complete thematic roadmap, formulas, and master exam checklist for {courseName}
           </Typography>
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: { xs: '100%', sm: 'auto' } }}>
           <Button
             size="small"
             variant="outlined"
             onClick={handleCopyMarkdown}
             startIcon={copied ? <Check size={14} color="#22c55e" /> : <Copy size={14} />}
             sx={{
+              flex: { xs: 1, sm: 'none' },
+              minHeight: 38,
               textTransform: 'none',
               fontWeight: 700,
               fontSize: '0.78rem',
@@ -366,14 +383,17 @@ export default function CourseSummary({
             {copied ? 'Copied Markdown' : 'Copy Summary'}
           </Button>
 
-          {isTutor && typeof regenerateSummary === 'function' && (
+          {typeof regenerateSummary === 'function' && (
             <Tooltip title="Regenerate summary from latest lecture notes">
               <Button
                 size="small"
                 variant="contained"
                 onClick={() => regenerateSummary()}
-                startIcon={<RotateCcw size={14} />}
+                disabled={loading}
+                startIcon={loading ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : <RotateCcw size={14} />}
                 sx={{
+                  flex: { xs: 1, sm: 'none' },
+                  minHeight: 38,
                   bgcolor: primaryColor,
                   color: '#fff',
                   textTransform: 'none',
@@ -383,7 +403,7 @@ export default function CourseSummary({
                   '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
                 }}
               >
-                Regenerate
+                {loading ? 'Regenerating...' : 'Regenerate'}
               </Button>
             </Tooltip>
           )}
@@ -391,7 +411,21 @@ export default function CourseSummary({
       </Box>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={
+            typeof regenerateSummary === 'function' ? (
+              <Button color="inherit" size="small" onClick={() => regenerateSummary()} disabled={loading}>
+                Retry
+              </Button>
+            ) : typeof fetchSummary === 'function' ? (
+              <Button color="inherit" size="small" onClick={() => fetchSummary(true)} disabled={loading}>
+                Retry
+              </Button>
+            ) : null
+          }
+        >
           {error}
         </Alert>
       )}
@@ -401,7 +435,7 @@ export default function CourseSummary({
         <Paper
           elevation={0}
           sx={{
-            p: { xs: 2.5, sm: 3.5 },
+            p: { xs: 2, sm: 3.5 },
             borderRadius: 3,
             bgcolor: cardBg,
             border: `1px solid ${cardBorder}`,
@@ -440,7 +474,7 @@ export default function CourseSummary({
         <Paper
           elevation={0}
           sx={{
-            p: { xs: 2.5, sm: 3.5 },
+            p: { xs: 2, sm: 3.5 },
             borderRadius: 3,
             bgcolor: cardBg,
             border: `1px solid ${cardBorder}`,
@@ -519,7 +553,7 @@ export default function CourseSummary({
         <Paper
           elevation={0}
           sx={{
-            p: { xs: 2.5, sm: 3.5 },
+            p: { xs: 2, sm: 3.5 },
             borderRadius: 3,
             bgcolor: cardBg,
             border: `1px solid ${cardBorder}`,
@@ -592,7 +626,7 @@ export default function CourseSummary({
         <Paper
           elevation={0}
           sx={{
-            p: { xs: 2.5, sm: 3.5 },
+            p: { xs: 2, sm: 3.5 },
             borderRadius: 3,
             bgcolor: cardBg,
             border: `1px solid ${cardBorder}`,
@@ -622,13 +656,24 @@ export default function CourseSummary({
                   border: `1px solid ${cardBorder}`,
                   borderRadius: '10px !important',
                   '&:before': { display: 'none' },
-                  boxShadow: 'none'
+                  boxShadow: 'none',
+                  overflow: 'hidden'
                 }}
               >
-                <AccordionSummary expandIcon={<ChevronDown size={18} color={textSecondary} />}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                <AccordionSummary
+                  expandIcon={<ChevronDown size={18} color={textSecondary} />}
+                  sx={{
+                    px: { xs: 1.5, sm: 2 },
+                    '& .MuiAccordionSummary-content': {
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      my: 1
+                    }
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, flexWrap: 'wrap', width: '100%', minWidth: 0 }}>
                     <Chip
-                      icon={<Video size={13} style={{ marginLeft: 6 }} />}
+                      icon={<Video size={13} style={{ marginLeft: 6, flexShrink: 0 }} />}
                       label={lec.lecture_title || `Lecture ${idx + 1}`}
                       size="small"
                       onClick={
@@ -645,17 +690,26 @@ export default function CourseSummary({
                         fontWeight: 700,
                         fontSize: '0.75rem',
                         cursor: lec.lecture_id && handleSelectLecture ? 'pointer' : 'default',
+                        maxWidth: '100%',
+                        height: 'auto',
+                        py: 0.5,
+                        '& .MuiChip-label': {
+                          whiteSpace: 'normal',
+                          wordBreak: 'break-word',
+                          lineHeight: 1.35,
+                          px: 1
+                        },
                         '&:hover': lec.lecture_id && handleSelectLecture ? { opacity: 0.85 } : {}
                       }}
                     />
                     {lec.lecture_id && handleSelectLecture && (
-                      <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.72rem' }}>
+                      <Typography variant="caption" sx={{ color: textSecondary, fontSize: '0.72rem', alignSelf: 'center', mt: { xs: 0.5, sm: 0 } }}>
                         (Click badge to jump to lecture)
                       </Typography>
                     )}
                   </Box>
                 </AccordionSummary>
-                <AccordionDetails sx={{ pt: 0, pb: 2.5, px: 2.5 }}>
+                <AccordionDetails sx={{ pt: 0, pb: 2.5, px: { xs: 1.5, sm: 2.5 } }}>
                   {lec.synopsis && (
                     <Typography variant="body2" sx={{ color: textPrimary, mb: 2, lineHeight: 1.6 }}>
                       {lec.synopsis}
@@ -697,7 +751,7 @@ export default function CourseSummary({
         <Paper
           elevation={0}
           sx={{
-            p: { xs: 2.5, sm: 3.5 },
+            p: { xs: 2, sm: 3.5 },
             borderRadius: 3,
             bgcolor: cardBg,
             border: `1px solid ${cardBorder}`,
@@ -728,7 +782,8 @@ export default function CourseSummary({
                   key={idx}
                   onClick={() => toggleCheck(idx)}
                   sx={{
-                    p: 1.5,
+                    p: { xs: 1.25, sm: 1.5 },
+                    minHeight: 44,
                     borderRadius: 2,
                     bgcolor: isChecked ? 'rgba(34, 197, 94, 0.08)' : 'rgba(255, 255, 255, 0.02)',
                     border: `1px solid ${isChecked ? 'rgba(34, 197, 94, 0.3)' : cardBorder}`,

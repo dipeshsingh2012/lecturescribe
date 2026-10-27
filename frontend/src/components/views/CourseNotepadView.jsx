@@ -23,8 +23,10 @@ import {
   Trash2,
   FileText,
   AlertCircle,
-  Save
+  Save,
+  Calendar as CalendarIcon
 } from 'lucide-react';
+import CalendarAlertCard from '../calendar/CalendarAlertCard';
 
 const QUILL_MODULES = {
   toolbar: [
@@ -71,6 +73,7 @@ export default function CourseNotepadView({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showCalendarWidget, setShowCalendarWidget] = useState(false);
 
   const quillRef = useRef(null);
   const initialLoadedRef = useRef(false);
@@ -381,6 +384,25 @@ export default function CourseNotepadView({
             }}
           />
 
+          {/* TOGGLE COURSE CALENDAR WIDGET */}
+          <Button
+            size="small"
+            variant={showCalendarWidget ? 'contained' : 'outlined'}
+            startIcon={<CalendarIcon size={13} />}
+            onClick={() => setShowCalendarWidget((prev) => !prev)}
+            sx={{
+              height: 28,
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.75rem',
+              borderRadius: 2,
+              px: 1.2,
+              borderColor: currentTheme?.palette?.cardBorder
+            }}
+          >
+            Deadlines
+          </Button>
+
           {/* DOWNLOAD .TXT */}
           <Tooltip title="Download as text">
             <IconButton
@@ -410,6 +432,17 @@ export default function CourseNotepadView({
           </Tooltip>
         </Box>
       </Box>
+
+      {showCalendarWidget && (
+        <Box sx={{ mt: 2 }}>
+          <CalendarAlertCard
+            currentTheme={currentTheme}
+            googleUser={googleUser || { email: 'guest@lecturescribe.local', name: 'Learner' }}
+            selectedCourse={courseName}
+            compact={true}
+          />
+        </Box>
+      )}
 
       {/* ========================================================================= */}
       {/* NOTE TITLE INPUT */}

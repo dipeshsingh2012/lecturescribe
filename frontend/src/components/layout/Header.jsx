@@ -22,7 +22,8 @@ import {
   Check,
   GraduationCap,
   ShieldCheck,
-  ArrowLeftRight
+  ArrowLeftRight,
+  Calendar as CalendarIcon
 } from 'lucide-react';
 import { ProtonThemeSelector } from '@dipesh.singh/proton';
 import { LMS_THEMES } from '../../store/themeStore';
@@ -42,6 +43,8 @@ export default function Header({
   handleGoogleSignOut,
   handleBackToHub,
   handleNavigateHome,
+  onNavigateCalendar,
+  isCalendarPage = false,
   userLibrary = [],
   userMenuAnchor,
   setUserMenuAnchor,
@@ -61,7 +64,8 @@ export default function Header({
       alignItems: 'center',
       justifyContent: 'space-between',
       height: '62px',
-      boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)'
+      boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)',
+      paddingTop: 'var(--safe-top, 0px)'
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700 }}>
         <span
@@ -183,6 +187,26 @@ export default function Header({
               >
                 <Search size={15} /> Search
               </button>
+              <button
+                aria-label="Lecture Calendar & Deadlines"
+                onClick={() => setActiveTab('calendar')}
+                style={{
+                  background: activeTab === 'calendar' ? '#ffffff' : 'transparent',
+                  color: activeTab === 'calendar' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
+                  border: 'none',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <CalendarIcon size={15} /> Calendar
+              </button>
             </Box>
 
             {(() => {
@@ -249,6 +273,34 @@ export default function Header({
               );
             })()}
           </>
+        )}
+
+        {/* Global Full Calendar Navigation Button (Desktop only, mobile has bottom bar) */}
+        {googleUser && typeof onNavigateCalendar === 'function' && (
+          <Tooltip title="Open Full Academic Calendar & AI Exam Schedule" arrow>
+            <Button
+              size="small"
+              onClick={onNavigateCalendar}
+              startIcon={<CalendarIcon size={15} />}
+              sx={{
+                display: { xs: 'none', md: 'inline-flex' },
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: '8px',
+                px: 1.4,
+                py: 0.5,
+                color: isCalendarPage ? currentTheme.palette.headerBg : '#ffffff',
+                bgcolor: isCalendarPage ? '#ffffff' : 'rgba(255, 255, 255, 0.14)',
+                border: '1px solid rgba(255, 255, 255, 0.28)',
+                '&:hover': {
+                  bgcolor: isCalendarPage ? '#f8fafc' : 'rgba(255, 255, 255, 0.24)'
+                }
+              }}
+            >
+              Calendar
+            </Button>
+          </Tooltip>
         )}
 
         {/* LMS Theme Selector from Proton (only for signed-in users) */}

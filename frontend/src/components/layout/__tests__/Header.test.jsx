@@ -180,4 +180,32 @@ describe('Header', () => {
     fireEvent.click(gdriveBtn);
     expect(openDownloadModal).toHaveBeenCalledTimes(1);
   });
+
+  it('does not render calendar buttons in the header when viewing a lecture (activeData present)', () => {
+    const onNavigateCalendar = vi.fn();
+    const activeData = { videoId: '123', title: 'Calculus 101' };
+
+    render(
+      <Header
+        activeData={activeData}
+        activeTab="transcript"
+        setActiveTab={vi.fn()}
+        openDownloadModal={vi.fn()}
+        googleUser={{ email: 'student@example.com' }}
+        onNavigateCalendar={onNavigateCalendar}
+        handleGoogleSignIn={vi.fn()}
+        handleGoogleSignOut={vi.fn()}
+        handleBackToHub={vi.fn()}
+        userLibrary={[]}
+        userMenuAnchor={null}
+        setUserMenuAnchor={vi.fn()}
+        currentThemeId="academic"
+        setTheme={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Neither the lecture calendar tab nor the global calendar button should be present in the lecture header
+    expect(screen.queryByRole('button', { name: /Calendar/i })).not.toBeInTheDocument();
+  });
 });

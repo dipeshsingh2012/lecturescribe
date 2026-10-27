@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, FileText, HelpCircle, Search, Paperclip, Calendar as CalendarIcon } from 'lucide-react';
+import { Bot, FileText, HelpCircle, Search, Paperclip } from 'lucide-react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
 import AITutor from '../lecture/AITutor';
 import LectureQuiz from '../lecture/LectureQuiz';
 import LectureSummary from '../lecture/LectureSummary';
 import LectureResourcesShelf from '../lecture/LectureResourcesShelf';
-import CalendarAlertCard from '../calendar/CalendarAlertCard';
 import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function LectureWorkspace({
@@ -163,6 +162,7 @@ export default function LectureWorkspace({
         effectiveCourses={effectiveCourses}
         setActiveData={setActiveData}
         navigateTo={navigateTo}
+        handleTranscribe={handleTranscribe}
         handleGenerateTranscript={handleGenerateTranscript}
         transcriptionLoading={transcriptionLoading}
         transcriptionError={transcriptionError}
@@ -246,17 +246,6 @@ export default function LectureWorkspace({
           <Paperclip size={14} />
           <span>Resources</span>
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-label="Calendar"
-          aria-selected={activeTab === 'calendar'}
-          className={`lecture-mobile-tab-btn ${activeTab === 'calendar' ? 'active' : ''}`}
-          onClick={() => typeof setActiveTab === 'function' && setActiveTab('calendar')}
-        >
-          <CalendarIcon size={14} />
-          <span>Calendar</span>
-        </button>
       </nav>
 
       {/* Right / Tool Panel: Summary, Instant Search Drawer, Practice Quiz, Resources, or AI Tutor */}
@@ -323,20 +312,6 @@ export default function LectureWorkspace({
               selectedCourse={selectedCourse}
               openPreviewModal={openPreviewModal}
               openUploadModal={openUploadModal}
-            />
-          </div>
-        ) : activeTab === 'calendar' ? (
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px', background: 'var(--panel-bg)', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
-            <CalendarAlertCard
-              currentTheme={currentTheme}
-              googleUser={googleUser || { email: 'guest@lecturescribe.local', name: 'Learner' }}
-              selectedCourse={activeCourseData?.course_name || selectedCourse || activeData?.course_name || null}
-              courses={effectiveCourses}
-              videoId={activeData?.videoId || ''}
-              lectureTitle={activeData?.title || ''}
-              compact={true}
-              onOpenFullCalendar={() => typeof navigateTo === 'function' && navigateTo('/calendar')}
-              onSelectLecture={(vid, ts, cName) => handleCrossLectureClick(vid, ts, cName)}
             />
           </div>
         ) : (

@@ -287,4 +287,105 @@ describe('CalendarAlertCard Component', () => {
     expect(screen.getByText('27')).toBeInTheDocument();
     expect(screen.getByText('OCT')).toBeInTheDocument();
   });
+
+  it('does not display past dates for 1-4-introduction-to-computer-vision in Key dates', async () => {
+    const agendaWithPastEvents = {
+      ...mockAgendaData,
+      all_events: [
+        {
+          id: 'cv_live_1',
+          title: 'Introduction to Computer Vision Live session -1 (19/ 9 / 2026)',
+          course_name: 'Introduction to Computer Vision',
+          course_slug: '1-4-introduction-to-computer-vision',
+          date_iso: '2026-09-19',
+          start: '2026-09-19T10:00:00+05:30',
+          start_time_formatted: '10:00 AM'
+        },
+        {
+          id: 'cv_live_2',
+          title: 'Introduction to Computer Vision Live session -2 (26/ 9 / 2026)',
+          course_name: 'Introduction to Computer Vision',
+          course_slug: '1-4-introduction-to-computer-vision',
+          date_iso: '2026-09-26',
+          start: '2026-09-26T10:00:00+05:30',
+          start_time_formatted: '10:00 AM'
+        }
+      ]
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => agendaWithPastEvents
+    });
+
+    render(
+      <CalendarAlertCard
+        currentTheme={mockTheme}
+        googleUser={mockUser}
+        selectedCourse="1-4-introduction-to-computer-vision"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Key dates' })).toBeInTheDocument();
+    });
+
+    // Past events from September must NOT be displayed
+    expect(screen.queryByText(/Live session -1/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Live session -2/i)).not.toBeInTheDocument();
+
+    // Friendly empty state should be rendered instead
+    expect(screen.getByText(/No upcoming key dates for this course/i)).toBeInTheDocument();
+  });
+
+  it('displays future events while filtering out past events for a course', async () => {
+    const agendaWithMixedEvents = {
+      ...mockAgendaData,
+      all_events: [
+        {
+          id: 'cv_past',
+          title: 'Introduction to Computer Vision Live session -1 (19/ 9 / 2026)',
+          course_name: 'Introduction to Computer Vision',
+          course_slug: '1-4-introduction-to-computer-vision',
+          date_iso: '2026-09-19',
+          start: '2026-09-19T10:00:00+05:30',
+          start_time_formatted: '10:00 AM'
+        },
+        {
+          id: 'cv_future',
+          title: 'Introduction to Computer Vision Final Project Submission',
+          course_name: 'Introduction to Computer Vision',
+          course_slug: '1-4-introduction-to-computer-vision',
+          date_iso: '2026-11-20',
+          start: '2026-11-20T23:59:00+05:30',
+          start_time_formatted: '11:59 PM'
+        }
+      ]
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => agendaWithMixedEvents
+    });
+
+    render(
+      <CalendarAlertCard
+        currentTheme={mockTheme}
+        googleUser={mockUser}
+        selectedCourse="1-4-introduction-to-computer-vision"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Key dates' })).toBeInTheDocument();
+    });
+
+    // Future event should be displayed
+    expect(screen.getByText('Introduction to Computer Vision Final Project Submission')).toBeInTheDocument();
+    expect(screen.getByText('20')).toBeInTheDocument();
+    expect(screen.getByText('NOV')).toBeInTheDocument();
+
+    // Past event should NOT be displayed
+    expect(screen.queryByText(/Live session -1/i)).not.toBeInTheDocument();
+  });
 });

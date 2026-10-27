@@ -314,10 +314,59 @@ export default function CalendarAlertCard({
     const cleanWords = cleanSlug.replace(/-/g, ' ');
 
     const combined = [
-      ...(agenda?.all_events || []),
       ...(agenda?.today?.all || []),
-      ...(agenda?.upcoming || [])
+      ...(agenda?.upcoming || []),
+      ...(agenda?.all_events || [])
     ];
+
+    const todayEventIds = new Set((agenda?.today?.all || []).map((e) => e?.id).filter(Boolean));
+
+    const isPastDate = (evt) => {
+      if (!evt) return true;
+      try {
+        const now = new Date();
+        const localTodayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const utcTodayStr = now.toISOString().slice(0, 10);
+
+        // 1. Direct date_iso check (YYYY-MM-DD)
+        if (evt.date_iso && /^\d{4}-\d{2}-\d{2}$/.test(evt.date_iso)) {
+          return evt.date_iso < localTodayStr && evt.date_iso < utcTodayStr;
+        }
+
+        const startOfTodayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
+        const startOfTodayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
+        const minTodayMs = Math.min(startOfTodayLocal, startOfTodayUtc);
+
+        // 2. Numeric epoch timestamp (seconds from backend)
+        const tsSec = evt.timestamp_end || evt.timestamp_start;
+        if (tsSec) {
+          return (tsSec * 1000) < minTodayMs;
+        }
+
+        // 3. Raw ISO start or end datetime
+        const rawDt = evt.end || evt.start;
+        if (rawDt) {
+          const d = new Date(rawDt);
+          if (!isNaN(d.getTime())) {
+            return d.getTime() < minTodayMs;
+          }
+        }
+
+        // 4. Formatted date string (e.g. "Saturday, Sep 19, 2026")
+        if (evt.date_formatted) {
+          const d = new Date(evt.date_formatted);
+          if (!isNaN(d.getTime())) {
+            return d.getTime() < minTodayMs;
+          }
+        }
+
+        // 5. If event was in today's slot without explicit date string, it is today's event
+        if (evt.id && todayEventIds.has(evt.id)) {
+          return false;
+        }
+      } catch (e) {}
+      return false;
+    };
 
     const GENERIC_SLUGS = new Set([
       '', 'course', 'site', 'user', 'category', 'group', 'general',
@@ -337,6 +386,11 @@ export default function CalendarAlertCard({
     for (const evt of combined) {
       if (!evt || !evt.id || seen.has(evt.id)) continue;
       seen.add(evt.id);
+
+      // Never show past dates in course key dates / upcoming events
+      if (isPastDate(evt)) {
+        continue;
+      }
 
       const evtSlug = (evt.course_slug || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const evtName = (evt.course_name || '').toLowerCase();
@@ -420,9 +474,19 @@ export default function CalendarAlertCard({
 
     const monthMatch = (evt.date_formatted || '').match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
     const dayMatch = (evt.date_formatted || '').match(/\b(\d{1,2})\b/);
+    if (dayMatch || monthMatch) {
+      return {
+        day: dayMatch ? dayMatch[1] : '--',
+        month: monthMatch ? monthMatch[0].toUpperCase() : 'DATE',
+        time: evt.start_time_formatted || ''
+      };
+    }
+
+    const now = new Date();
+    const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
     return {
-      day: dayMatch ? dayMatch[1] : '--',
-      month: monthMatch ? monthMatch[0].toUpperCase() : 'DATE',
+      day: now.getDate(),
+      month: MONTHS[now.getMonth()],
       time: evt.start_time_formatted || ''
     };
   };

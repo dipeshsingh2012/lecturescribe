@@ -187,26 +187,6 @@ export default function Header({
               >
                 <Search size={15} /> Search
               </button>
-              <button
-                aria-label="Lecture Calendar & Deadlines"
-                onClick={() => setActiveTab('calendar')}
-                style={{
-                  background: activeTab === 'calendar' ? '#ffffff' : 'transparent',
-                  color: activeTab === 'calendar' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
-                  border: 'none',
-                  padding: '6px 14px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem',
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <CalendarIcon size={15} /> Calendar
-              </button>
             </Box>
 
             {(() => {
@@ -276,7 +256,7 @@ export default function Header({
         )}
 
         {/* Global Full Calendar Navigation Button (Desktop only, mobile has bottom bar) */}
-        {googleUser && typeof onNavigateCalendar === 'function' && (
+        {googleUser && !activeData && typeof onNavigateCalendar === 'function' && (
           <Tooltip title="Open Full Academic Calendar & AI Exam Schedule" arrow>
             <Button
               size="small"

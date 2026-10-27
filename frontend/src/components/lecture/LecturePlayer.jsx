@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Box,
   Button,
@@ -14,6 +14,7 @@ import {
 import {
   Folder,
   ChevronRight,
+  ChevronLeft,
   ExternalLink,
   AudioLines,
   Play,
@@ -34,6 +35,7 @@ import {
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import { formatSecondsToTimestamp, parseTimestampToSeconds, isGcsSignedUrlFresh } from '../../utils/formatters';
+import { sortLectures, getLectureTitle } from '../../utils/lectureSort';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
 
@@ -46,6 +48,7 @@ export default function LecturePlayer({
   effectiveCourses = [],
   setActiveData,
   navigateTo,
+  handleTranscribe,
   iframeRef,
   copied,
   handleCopyTranscript,
@@ -78,6 +81,87 @@ export default function LecturePlayer({
   const rawGcsVideoUrl = activeData.gcs_video_url || activeData.gcsVideoUrl;
   const freshGcsVideoUrl = isGcsSignedUrlFresh(rawGcsVideoUrl) ? rawGcsVideoUrl : null;
   const [videoCollapsed, setVideoCollapsed] = useState(false);
+
+  const courseName = (
+    activeCourseData?.course_name ||
+    activeData.course_name ||
+    selectedCourse ||
+    ''
+  );
+
+  const courseLectures = useMemo(() => {
+    let list = [];
+    if (Array.isArray(activeCourseData?.lectures) && activeCourseData.lectures.length > 0) {
+      list = activeCourseData.lectures;
+    } else if (courseName && Array.isArray(effectiveCourses)) {
+      const slug = normalizeCourseSlug(courseName);
+      const matched = effectiveCourses.find(c =>
+        c.course_name === courseName ||
+        normalizeCourseSlug(c.course_name || '') === slug ||
+        c.course_slug === slug
+      );
+      if (matched && Array.isArray(matched.lectures) && matched.lectures.length > 0) {
+        list = matched.lectures;
+      }
+    }
+
+    if (list.length === 0 && courseName && Array.isArray(userLibrary)) {
+      const slug = normalizeCourseSlug(courseName);
+      list = userLibrary.filter(l =>
+        l.course_name === courseName ||
+        normalizeCourseSlug(l.course_name || '') === slug
+      );
+    }
+
+    if (list.length === 0 && Array.isArray(userLibrary) && userLibrary.length > 0) {
+      list = userLibrary;
+    }
+
+    const seen = new Set();
+    const deduped = [];
+    for (const item of list) {
+      const id = String(item?.video_id || item?.videoId || '');
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        deduped.push(item);
+      }
+    }
+
+    const activeVid = String(activeData.videoId || activeData.video_id || '');
+    if (activeVid && !seen.has(activeVid)) {
+      deduped.push({
+        video_id: activeVid,
+        title: activeData.title || activeVid,
+        course_name: courseName,
+        ...activeData
+      });
+    }
+
+    return sortLectures(deduped, 'title_asc');
+  }, [activeCourseData, courseName, effectiveCourses, userLibrary, activeData]);
+
+  const activeVid = String(activeData.videoId || activeData.video_id || '');
+  const currentIndex = courseLectures.findIndex(l => String(l.video_id || l.videoId) === activeVid);
+  const prevLecture = currentIndex > 0 ? courseLectures[currentIndex - 1] : null;
+  const nextLecture = (currentIndex >= 0 && currentIndex < courseLectures.length - 1) ? courseLectures[currentIndex + 1] : null;
+  const totalLectures = courseLectures.length;
+
+  const handleNavigateLecture = (targetLecture) => {
+    if (!targetLecture) return;
+    const targetId = targetLecture.video_id || targetLecture.videoId;
+    if (!targetId || targetId === activeData?.videoId) return;
+
+    const targetCourse = targetLecture.course_name || courseName;
+    const courseSlug = targetCourse ? normalizeCourseSlug(targetCourse) : '';
+    const path = courseSlug ? `/course/${courseSlug}/lecture/${targetId}` : `/lecture/${targetId}`;
+
+    if (typeof handleTranscribe === 'function') {
+      handleTranscribe(targetId, true, targetCourse);
+    } else if (typeof navigateTo === 'function') {
+      navigateTo(path);
+    }
+  };
+
   const [gcsUploadState, setGcsUploadState] = useState({
     isUploading: Boolean(activeData.is_uploading),
     stage: activeData.upload_stage || 'Processing video stream...',
@@ -501,6 +585,16 @@ export default function LecturePlayer({
     } else if (key === 'arrowdown') {
       e.preventDefault();
       handleVolumeChange(Math.max(0, volume - 0.1));
+    } else if (e.shiftKey && key === 'n') {
+      if (nextLecture) {
+        e.preventDefault();
+        handleNavigateLecture(nextLecture);
+      }
+    } else if (e.shiftKey && key === 'p') {
+      if (prevLecture) {
+        e.preventDefault();
+        handleNavigateLecture(prevLecture);
+      }
     }
   };
 
@@ -527,17 +621,13 @@ export default function LecturePlayer({
 
   return (
     <div className="lecture-player-panel">
-      {/* Breadcrumb Navigation */}
+      {/* Top Header Row: Breadcrumb Navigation & Prev/Next Lecture Arrows */}
       <Box
-        component="nav"
-        aria-label="Breadcrumbs"
         sx={{
           display: 'flex',
           alignItems: 'center',
-          gap: 1,
-          flexWrap: 'nowrap',
-          overflow: 'hidden',
-          minWidth: 0,
+          justifyContent: 'space-between',
+          gap: 1.5,
           width: '100%',
           flexShrink: 0,
           py: 0.75,
@@ -545,106 +635,212 @@ export default function LecturePlayer({
           zIndex: 1
         }}
       >
-        <Tooltip title="All Courses" arrow placement="top" enterDelay={200}>
-          <Button
-            variant="text"
-            size="small"
-            onClick={() => {
-              setSelectedCourse(null);
-              setActiveData(null);
-              navigateTo('/');
-            }}
-            startIcon={<Folder size={15} color={currentTheme.palette.primary} />}
-            sx={{
-              p: 0,
-              minWidth: 'auto',
-              flexShrink: 0,
-              textTransform: 'none',
-              fontWeight: 600,
-              fontSize: '0.84rem',
-              color: currentTheme.palette.textSecondary,
-              '&:hover': { color: currentTheme.palette.primary, bgcolor: 'transparent' }
-            }}
-          >
-            Courses
-          </Button>
-        </Tooltip>
+        {/* Breadcrumb Navigation */}
+        <Box
+          component="nav"
+          aria-label="Breadcrumbs"
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            flexWrap: 'nowrap',
+            overflow: 'hidden',
+            minWidth: 0,
+            flexShrink: 1
+          }}
+        >
+          <Tooltip title="All Courses" arrow placement="top" enterDelay={200}>
+            <Button
+              variant="text"
+              size="small"
+              onClick={() => {
+                setSelectedCourse(null);
+                setActiveData(null);
+                navigateTo('/');
+              }}
+              startIcon={<Folder size={15} color={currentTheme.palette.primary} />}
+              sx={{
+                p: 0,
+                minWidth: 'auto',
+                flexShrink: 0,
+                textTransform: 'none',
+                fontWeight: 600,
+                fontSize: '0.84rem',
+                color: currentTheme.palette.textSecondary,
+                '&:hover': { color: currentTheme.palette.primary, bgcolor: 'transparent' }
+              }}
+            >
+              Courses
+            </Button>
+          </Tooltip>
 
-        <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
+          <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
 
-        {(() => {
-          const displayCourseName = (
-            activeCourseData?.course_name ||
-            activeData.course_name ||
-            selectedCourse ||
-            ''
-          );
-          const courseSlug = (
-            activeCourseData?.course_slug ||
-            activeData.course_slug ||
-            normalizeCourseSlug(displayCourseName)
-          );
-          return (
-            <Tooltip title={displayCourseName} arrow placement="top" enterDelay={150}>
-              <Button
-                variant="text"
-                size="small"
-                onClick={() => {
-                  setSelectedCourse(displayCourseName);
-                  setActiveData(null);
-                  navigateTo(`/course/${courseSlug}`);
-                }}
-                sx={{
-                  p: 0,
-                  minWidth: 0,
-                  maxWidth: { xs: 130, sm: 200, md: 280 },
-                  flexShrink: 1,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.84rem',
-                  color: currentTheme.palette.primary,
-                  '&:hover': { textDecoration: 'underline', bgcolor: 'transparent' }
-                }}
-              >
-                <Box
-                  component="span"
+          {(() => {
+            const displayCourseName = (
+              activeCourseData?.course_name ||
+              activeData.course_name ||
+              selectedCourse ||
+              ''
+            );
+            const courseSlug = (
+              activeCourseData?.course_slug ||
+              activeData.course_slug ||
+              normalizeCourseSlug(displayCourseName)
+            );
+            return (
+              <Tooltip title={displayCourseName} arrow placement="top" enterDelay={150}>
+                <Button
+                  variant="text"
+                  size="small"
+                  onClick={() => {
+                    setSelectedCourse(displayCourseName);
+                    setActiveData(null);
+                    navigateTo(`/course/${courseSlug}`);
+                  }}
                   sx={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    display: 'block',
-                    maxWidth: '100%'
+                    p: 0,
+                    minWidth: 0,
+                    maxWidth: { xs: 130, sm: 200, md: 280 },
+                    flexShrink: 1,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    textTransform: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.84rem',
+                    color: currentTheme.palette.primary,
+                    '&:hover': { textDecoration: 'underline', bgcolor: 'transparent' }
                   }}
                 >
-                  {displayCourseName}
-                </Box>
-              </Button>
-            </Tooltip>
-          );
-        })()}
+                  <Box
+                    component="span"
+                    sx={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      display: 'block',
+                      maxWidth: '100%'
+                    }}
+                  >
+                    {displayCourseName}
+                  </Box>
+                </Button>
+              </Tooltip>
+            );
+          })()}
 
-        <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
+          <ChevronRight size={13} color={currentTheme.palette.textSecondary} style={{ opacity: 0.5, flexShrink: 0 }} />
 
-        <Tooltip title={activeData.title} arrow placement="top" enterDelay={150}>
-          <Typography
-            variant="body2"
+          <Tooltip title={activeData.title} arrow placement="top" enterDelay={150}>
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 700,
+                fontSize: '0.84rem',
+                color: currentTheme.palette.textPrimary,
+                minWidth: 0,
+                flexShrink: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                cursor: 'default'
+              }}
+            >
+              {activeData.title}
+            </Typography>
+          </Tooltip>
+        </Box>
+
+        {/* Previous & Next Lecture Navigation */}
+        {totalLectures > 0 && (
+          <Box
             sx={{
-              fontWeight: 700,
-              fontSize: '0.84rem',
-              color: currentTheme.palette.textPrimary,
-              minWidth: 0,
-              flexShrink: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              cursor: 'default'
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              flexShrink: 0,
+              bgcolor: 'var(--card-bg, rgba(255, 255, 255, 0.05))',
+              border: '1px solid var(--border-color, rgba(255, 255, 255, 0.1))',
+              borderRadius: '8px',
+              p: '2px 4px'
             }}
           >
-            {activeData.title}
-          </Typography>
-        </Tooltip>
+            <Tooltip
+              title={prevLecture ? `Previous: ${getLectureTitle(prevLecture)}` : 'First lecture in course'}
+              arrow
+              placement="bottom"
+            >
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="Previous Lecture"
+                  disabled={!prevLecture}
+                  onClick={() => handleNavigateLecture(prevLecture)}
+                  sx={{
+                    p: 0.5,
+                    color: currentTheme.palette.textPrimary,
+                    '&.Mui-disabled': {
+                      opacity: 0.35,
+                      color: currentTheme.palette.textSecondary
+                    },
+                    '&:hover': {
+                      bgcolor: 'var(--hover-bg, rgba(255, 255, 255, 0.08))',
+                      color: currentTheme.palette.primary
+                    }
+                  }}
+                >
+                  <ChevronLeft size={16} />
+                </IconButton>
+              </span>
+            </Tooltip>
+
+            {totalLectures > 1 && currentIndex >= 0 && (
+              <Typography
+                variant="caption"
+                sx={{
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  color: currentTheme.palette.textSecondary,
+                  px: 0.5,
+                  userSelect: 'none',
+                  whiteSpace: 'nowrap',
+                  display: { xs: 'none', sm: 'inline-block' }
+                }}
+              >
+                {currentIndex + 1} of {totalLectures}
+              </Typography>
+            )}
+
+            <Tooltip
+              title={nextLecture ? `Next: ${getLectureTitle(nextLecture)}` : 'Last lecture in course'}
+              arrow
+              placement="bottom"
+            >
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="Next Lecture"
+                  disabled={!nextLecture}
+                  onClick={() => handleNavigateLecture(nextLecture)}
+                  sx={{
+                    p: 0.5,
+                    color: currentTheme.palette.textPrimary,
+                    '&.Mui-disabled': {
+                      opacity: 0.35,
+                      color: currentTheme.palette.textSecondary
+                    },
+                    '&:hover': {
+                      bgcolor: 'var(--hover-bg, rgba(255, 255, 255, 0.08))',
+                      color: currentTheme.palette.primary
+                    }
+                  }}
+                >
+                  <ChevronRight size={16} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
 
       {/* Video Player Container with Custom Controls */}

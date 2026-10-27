@@ -1035,18 +1035,33 @@ class Llama3PineconeRAGStore:
                         except Exception as e_ws:
                             print(f"⚠️ [Autonomous Web Fallback Notice]: {e_ws}")
 
+                    is_summary_query = any(k in query.lower() for k in ("summary", "study guide", "comprehensive", "recap", "overview"))
+                    if is_summary_query:
+                        prompt_msg = (
+                            "Please synthesize an exhaustive, comprehensive academic study guide following the official LectureScribe template:\n"
+                            "- Start directly with '# Executive Summary: [Lecture Title]'.\n"
+                            "- Break down the lecture chronologically into chapters using '## [Chapter Number]. [Chapter Title] [[Start Time] - [End Time]]'.\n"
+                            "- Under each chapter, explain the core concepts in detail with LaTeX math ($...$ and $$...$$) and inline [MM:SS] timestamps.\n"
+                            "- Include bulleted key takeaways.\n"
+                            "- NEVER include conversational preamble (e.g., do NOT write 'Based on the lecture outline...', 'Here is a 10-minute read summary...', etc.).\n"
+                            "- NEVER mention internal Video IDs or metadata in the text.\n"
+                            "- Always refer to the lecturer as 'the professor', never 'the instructor'.\n"
+                            "- End directly after the final chapter without generic clichés (e.g., avoid 'Overall, the lecture provides...')."
+                        )
+                    else:
+                        prompt_msg = "Please synthesize a final, clear academic answer to the original question using the information retrieved above."
+
                     messages.append({
                         "role": "user",
-                        "content": "Please synthesize a final, clear academic answer to the original question using the information retrieved above."
+                        "content": prompt_msg
                     })
-                    is_summary_query = any(k in query.lower() for k in ("summary", "study guide", "comprehensive"))
                     payload = {
                         "model": model_name,
                         "messages": messages,
                         "tools": active_tools,
                         "tool_choice": "none",
                         "max_tokens": 4096 if is_summary_query else 1500,
-                        "temperature": 0.3
+                        "temperature": 0.2 if is_summary_query else 0.3
                     }
                     r = requests.post(endpoint, headers=headers, json=payload, timeout=60)
                     if r.status_code == 200:
@@ -1330,7 +1345,18 @@ class Llama3PineconeRAGStore:
         cleaned = re.sub(r"[\u4e00-\u9fff]", "", cleaned)
 
         # Strip conversational AI preamble or boilerplate
-        cleaned = re.sub(r"(?im)^\s*(here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*|based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*|here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*)", "", cleaned)
+        cleaned = re.sub(
+            r"(?im)^\s*(?:based\s+on\s+(?:the\s+)?(?:lecture\s+)?(?:outline|transcript|notes|cues)[^:.\n]*[:.\n]+\s*|"
+            r"here\s+(?:is|are)\s+(?:a\s+)?(?:\d+[- ]minute\s+read\s+)?(?:summary|academic\s+submission|study\s+guide|overview)[^:.\n]*[:.\n]+\s*|"
+            r"here\s+is\s+a\s+concise\s+academic\s+submission[^:.\n]*[:.\n]+\s*|"
+            r"based\s+on\s+the\s+professor('s)?\s+lecture\s+transcript[^:.\n]*[:.\n]+\s*|"
+            r"here('s|\s+is)\s+what\s+i\s+found[^:.\n]*[:.\n]*\s*)",
+            "",
+            cleaned
+        )
+
+        # Strip internal Video ID references (e.g., 'with Video ID "1228351347"')
+        cleaned = re.sub(r'\s*(?:with\s+)?(?:Video\s+ID|video_id)\s*[:"]?\s*[\w-]+["\']?\s*', " ", cleaned, flags=re.IGNORECASE)
 
         # Standardize terminology: Lecturer is always 'the professor', never 'the instructor'
         cleaned = re.sub(r"\b[tT]he\s+[iI]nstructor\b", "the professor", cleaned)
@@ -1587,7 +1613,12 @@ class Llama3PineconeRAGStore:
             "- When writing equations in markdown tables, do not use raw unescaped pipe `|` symbols (use `\\mid` or `\\vert`).\n\n"
             "STRUCTURE & RIGOR:\n"
             "- For every technical topic covered, explain the 'why', the 'how', the formal definition, and the concrete example or counter-example used in class.\n"
-            "- Include bulleted key takeaways, comparison tables where appropriate, and synthesis sections."
+            "- Include bulleted key takeaways, comparison tables where appropriate, and synthesis sections.\n\n"
+            "PROHIBITED PATTERNS & ANTI-BOILERPLATE:\n"
+            "- NEVER start with conversational preamble or meta-introductions (e.g., 'Based on the lecture outline...', 'Here is a summary...', 'In this lecture...'). Begin immediately with the top title '# Executive Summary: ...' followed by the first chapter header '## 1. ...'.\n"
+            "- NEVER include internal database or pipeline identifiers like 'Video ID', video URLs, or file paths in the generated study guide.\n"
+            "- Always refer to the lecturer as 'the professor', never 'the instructor'.\n"
+            "- NEVER conclude with generic essay sign-offs (e.g., avoid 'Overall, the lecture provides a comprehensive...'). Conclude cleanly after the final chapter's key takeaways."
         )
         user_prompt = (
             f"Generate a full, exhaustive academic summary and study guide for this lecture based on the complete transcript.\n"

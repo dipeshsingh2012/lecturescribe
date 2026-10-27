@@ -347,5 +347,75 @@ describe('LecturePlayer', () => {
     expect(screen.getByText(/Transferring video stream to Cloud Storage\.\.\./i)).toBeInTheDocument();
     expect(screen.getByText(/Uploading to Cloud Storage\.\.\./i)).toBeInTheDocument();
   });
+
+  it('renders previous and next lecture navigation buttons in the top header row and navigates properly', () => {
+    const handleTranscribe = vi.fn();
+    const lectures = [
+      { video_id: 'lec-1', title: 'Lecture 1: Introduction', course_name: 'CS229' },
+      { video_id: 'lec-2', title: 'Lecture 2: Linear Regression', course_name: 'CS229' },
+      { video_id: 'lec-3', title: 'Lecture 3: Deep Learning', course_name: 'CS229' }
+    ];
+
+    const { rerender } = render(
+      <LecturePlayer
+        activeData={{ videoId: 'lec-2', title: 'Lecture 2: Linear Regression', course_name: 'CS229' }}
+        activeCourseData={{ course_name: 'CS229', lectures }}
+        selectedCourse="CS229"
+        setSelectedCourse={vi.fn()}
+        handleTranscribe={handleTranscribe}
+        currentTheme={mockTheme}
+        iframeRef={{ current: null }}
+      />
+    );
+
+    // Counter shows 2 of 3
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+
+    const prevBtn = screen.getByRole('button', { name: /Previous Lecture/i });
+    const nextBtn = screen.getByRole('button', { name: /Next Lecture/i });
+
+    expect(prevBtn).not.toBeDisabled();
+    expect(nextBtn).not.toBeDisabled();
+
+    fireEvent.click(prevBtn);
+    expect(handleTranscribe).toHaveBeenCalledWith('lec-1', true, 'CS229');
+
+    fireEvent.click(nextBtn);
+    expect(handleTranscribe).toHaveBeenCalledWith('lec-3', true, 'CS229');
+
+    // Rerender at the first lecture: Prev button should be disabled
+    rerender(
+      <LecturePlayer
+        activeData={{ videoId: 'lec-1', title: 'Lecture 1: Introduction', course_name: 'CS229' }}
+        activeCourseData={{ course_name: 'CS229', lectures }}
+        selectedCourse="CS229"
+        setSelectedCourse={vi.fn()}
+        handleTranscribe={handleTranscribe}
+        currentTheme={mockTheme}
+        iframeRef={{ current: null }}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Previous Lecture/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Next Lecture/i })).not.toBeDisabled();
+    expect(screen.getByText('1 of 3')).toBeInTheDocument();
+
+    // Rerender at the last lecture: Next button should be disabled
+    rerender(
+      <LecturePlayer
+        activeData={{ videoId: 'lec-3', title: 'Lecture 3: Deep Learning', course_name: 'CS229' }}
+        activeCourseData={{ course_name: 'CS229', lectures }}
+        selectedCourse="CS229"
+        setSelectedCourse={vi.fn()}
+        handleTranscribe={handleTranscribe}
+        currentTheme={mockTheme}
+        iframeRef={{ current: null }}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Previous Lecture/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /Next Lecture/i })).toBeDisabled();
+    expect(screen.getByText('3 of 3')).toBeInTheDocument();
+  });
 });
 

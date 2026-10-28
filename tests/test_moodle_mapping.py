@@ -77,3 +77,4 @@ def test_database_update_video_source_url_memory_fallback():
         res = db_manager.update_video_source_url(video_id, moodle_page)
         assert res is True
         assert db_manager._memory_cache[video_id]["sourceUrl"] == moodle_page
+

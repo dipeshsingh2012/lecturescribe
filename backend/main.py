@@ -286,6 +286,14 @@ class ExtensionImportRequest(BaseModel):
     email: Optional[str] = None
 
 
+class MoodleVideoMapRequest(BaseModel):
+    video_id: str = Field(..., min_length=1, max_length=128)
+    moodle_url: str = Field(..., min_length=5, max_length=1024)
+    course_name: Optional[str] = Field(None, max_length=255)
+    title: Optional[str] = Field(None, max_length=255)
+    user_email: Optional[str] = Field(None, max_length=255)
+
+
 class UpdateQuizReminderRequest(BaseModel):
     status: str
 
@@ -1234,12 +1242,20 @@ def process_lecture_import(
         saved["course_slug"] = to_course_slug(course_title)
         clean_email = email.strip() if isinstance(email, str) else None
 
+        if lms_page_url and str(lms_page_url).strip().startswith("http"):
+            cand_url = str(lms_page_url).strip()
+            existing_src = saved.get("sourceUrl") or saved.get("source_url") or ""
+            if not existing_src or "video.lecturescribe.local" in existing_src:
+                saved["sourceUrl"] = cand_url
+                saved["source_url"] = cand_url
+                db_manager.update_video_source_url(clean_vid, cand_url, clean_email, course_title)
+
         def _db_work():
             # Drive URL lookup -> progress lookup -> user library upsert -> targeted Redis course update (order matters).
             d_url = db_manager.get_drive_folder_url(clean_vid, clean_email)
             prog = db_manager.get_lecture_progress(clean_vid, user_email=clean_email)
             if clean_email:
-                src_url = saved.get("sourceUrl", f"https://video.lecturescribe.local/{clean_vid}")
+                src_url = saved.get("sourceUrl") or saved.get("source_url") or f"https://video.lecturescribe.local/{clean_vid}"
                 dur_val = saved.get("duration", "Unknown")
                 db_manager.record_user_lecture(
                     user_email=clean_email,
@@ -1357,7 +1373,7 @@ def process_lecture_import(
         transcript_message = None
     # Chapters/summaries are generated in the background worker to prevent blocking HTTP ingestion
     summary_sections = []
-    source_url = f"https://video.lecturescribe.local/{clean_vid}"
+    source_url = (lms_page_url and str(lms_page_url).strip()) or f"https://video.lecturescribe.local/{clean_vid}"
     caption_label = (track.get("label") or "Caption track") if transcript_available and track else "Unavailable"
     raw_course = course_name if isinstance(course_name, str) else None
     candidate_course = ((raw_course and raw_course.strip()) or extract_course_name(title)).strip()
@@ -1488,6 +1504,51 @@ def extension_import(req: ExtensionImportRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to import lecture: {str(e)}")
+
+
+@app.post("/api/moodle/map-video")
+def map_moodle_video_endpoint(req: MoodleVideoMapRequest):
+    """
+    Auto-save or update the Moodle page source URL for a lecture video.
+    Synchronizes across lecturescribe_videos, user library, and memory cache.
+    """
+    try:
+        if not req.video_id or not str(req.video_id).strip():
+            raise HTTPException(status_code=400, detail="Missing video_id in mapping request")
+
+        raw_vid = str(req.video_id).strip()
+        try:
+            clean_vid = extract_video_id(raw_vid)
+        except ValueError:
+            clean_vid = raw_vid
+        clean_url = str(req.moodle_url).strip()
+        if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
+            raise HTTPException(status_code=400, detail="moodle_url must be a valid HTTP or HTTPS URL")
+
+        updated = db_manager.update_video_source_url(
+            video_id=clean_vid,
+            source_url=clean_url,
+            user_email=req.user_email,
+            course_name=req.course_name
+        )
+
+        if redis_cache:
+            try:
+                redis_cache.invalidate_video(clean_vid)
+            except Exception as e:
+                print(f"[Redis Notice] Invalidate video cache failed: {e}")
+
+        return {
+            "status": "success",
+            "video_id": clean_vid,
+            "source_url": clean_url,
+            "moodle_url": clean_url,
+            "updated": updated
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to map moodle video: {str(e)}")
 
 
 # ==============================================================================

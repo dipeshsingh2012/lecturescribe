@@ -2,16 +2,16 @@
 
 ## Priority 1: Moodle Source URL & Cloud Storage Deep-Linking
 
-- [ ] **Extension: Auto-Save Moodle Source URL to Database**
+- [x] **Extension: Auto-Save Moodle Source URL to Database**
   - In `extension/content/content.js`: When a video is detected on Moodle (`learning.iiitdwd.ac.in`), capture the current page URL (`window.location.href`) and Moodle breadcrumb course title.
   - Automatically sync this mapping to LectureScribe via a background call to `POST /api/moodle/map-video` (or during `UPLOAD_TO_GCS`).
   - Store `moodle_url` / `source_url` in the PostgreSQL database (`lecturescribe_videos` and `lecturescribe_user_library`).
 
-- [ ] **Backend: Moodle URL Mapping Endpoint**
+- [x] **Backend: Moodle URL Mapping Endpoint**
   - Add `POST /api/moodle/map-video` in `backend/main.py`.
   - Update `lecturescribe_videos` schema/table to ensure `source_url` or `moodle_url` stores the actual Moodle page link (e.g., `https://learning.iiitdwd.ac.in/mod/page/view.php?id=3111`) rather than raw `https://video.lecturescribe.local/<id>`.
 
-- [ ] **Frontend: Deep-Link & Broken Video Indicator**
+- [x] **Frontend: Deep-Link & Broken Video Indicator**
   - In `LecturePlayer.jsx`: Detect when a lecture video only has a broken external embed and is not yet in GCS.
   - Render an actionable placeholder with the linking strategy below.
 
@@ -41,7 +41,7 @@
    - Once the user visits the page or Strategy C runs once, the extension stores the exact `https://learning.iiitdwd.ac.in/mod/page/view.php?id=...` URL in PostgreSQL.
    - Future deep-links go straight to the video sub-page: `mod/page/view.php?id={id}#ls-sync=1`.
 
-- [ ] **Frontend: Native GCS Video Player**
+- [x] **Frontend: Native GCS Video Player**
   - In `LecturePlayer.jsx`: If `gcs_video_url` exists in the lecture payload, switch from external `<iframe>` to native HTML5 `<video>` player with WebVTT subtitle track.
   - Adapt `useLecturePlayer` to sync transcript cues using standard `video.ontimeupdate` and `video.currentTime`.
 

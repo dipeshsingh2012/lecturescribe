@@ -30,7 +30,10 @@ import {
   PictureInPicture,
   Check,
   CloudUpload,
-  Loader2
+  Loader2,
+  AlertCircle,
+  Copy,
+  Search
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
@@ -83,6 +86,13 @@ export default function LecturePlayer({
   const rawGcsVideoUrl = activeData.gcs_video_url || activeData.gcsVideoUrl;
   const freshGcsVideoUrl = isGcsSignedUrlFresh(rawGcsVideoUrl) ? rawGcsVideoUrl : null;
   const [videoCollapsed, setVideoCollapsed] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+  const [copiedTitle, setCopiedTitle] = useState(false);
+
+  useEffect(() => {
+    setVideoError(false);
+    setCopiedTitle(false);
+  }, [activeData?.videoId]);
 
   const courseName = (
     activeCourseData?.course_name ||
@@ -968,6 +978,161 @@ export default function LecturePlayer({
             );
           }
 
+          if (videoError && !freshGcsVideoUrl && !gcsUploadState.isUploading) {
+            const rawSource = activeData.source_url || activeData.sourceUrl || activeData.moodle_url || activeData.moodleUrl || '';
+            const isDirectMoodle = rawSource.includes('learning.iiitdwd.ac.in') || (rawSource.startsWith('http') && !rawSource.includes('video.lecturescribe.local'));
+            const moodleDirectUrl = isDirectMoodle ? rawSource : null;
+            const moodleSearchUrl = courseName ? `https://learning.iiitdwd.ac.in/course/search.php?search=${encodeURIComponent(courseName)}` : 'https://learning.iiitdwd.ac.in/';
+
+            return (
+              <Box
+                data-testid="broken-video-moodle-fallback"
+                sx={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'radial-gradient(circle at center, rgba(30, 41, 59, 0.98) 0%, rgba(15, 23, 42, 1) 100%)',
+                  color: '#fff',
+                  p: { xs: 2, sm: 3 },
+                  textAlign: 'center',
+                  userSelect: 'none',
+                  zIndex: 10
+                }}
+              >
+                <Box
+                  sx={{
+                    width: 54,
+                    height: 54,
+                    borderRadius: '50%',
+                    bgcolor: 'rgba(245, 158, 11, 0.15)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    mb: 1.5,
+                    color: '#f59e0b'
+                  }}
+                >
+                  <AlertCircle size={28} />
+                </Box>
+
+                <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '0.95rem', sm: '1.15rem' }, mb: 0.75 }}>
+                  Video Stream Not Synced to Cloud Storage
+                </Typography>
+
+                <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.7)', maxWidth: 480, mb: 2.5, fontSize: '0.82rem', lineHeight: 1.5 }}>
+                  This recording is hosted on Moodle LMS. You can view the original stream directly on Moodle, or sync it to Cloud Storage for native in-app playback.
+                </Typography>
+
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, justifyContent: 'center', alignItems: 'center' }}>
+                  {moodleDirectUrl && (
+                    <Button
+                      variant="contained"
+                      size="small"
+                      component="a"
+                      href={moodleDirectUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      startIcon={<ExternalLink size={14} />}
+                      sx={{
+                        bgcolor: '#f59e0b',
+                        color: '#000',
+                        fontWeight: 700,
+                        textTransform: 'none',
+                        fontSize: '0.78rem',
+                        '&:hover': { bgcolor: '#d97706' }
+                      }}
+                    >
+                      Open Video on Moodle
+                    </Button>
+                  )}
+
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    component="a"
+                    href={moodleSearchUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    startIcon={<Search size={14} />}
+                    sx={{
+                      borderColor: 'rgba(255, 255, 255, 0.3)',
+                      color: '#fff',
+                      fontWeight: 600,
+                      textTransform: 'none',
+                      fontSize: '0.78rem',
+                      '&:hover': { borderColor: '#fff', bgcolor: 'rgba(255, 255, 255, 0.05)' }
+                    }}
+                  >
+                    Search Course on Moodle
+                  </Button>
+
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => {
+                      if (activeData?.title) {
+                        navigator.clipboard?.writeText(activeData.title);
+                        setCopiedTitle(true);
+                        setTimeout(() => setCopiedTitle(false), 2500);
+                      }
+                    }}
+                    startIcon={copiedTitle ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
+                    sx={{
+                      borderColor: 'rgba(255, 255, 255, 0.3)',
+                      color: copiedTitle ? '#10b981' : '#fff',
+                      fontWeight: 600,
+                      textTransform: 'none',
+                      fontSize: '0.78rem',
+                      '&:hover': { borderColor: '#fff', bgcolor: 'rgba(255, 255, 255, 0.05)' }
+                    }}
+                  >
+                    {copiedTitle ? 'Title Copied!' : 'Copy Session Title'}
+                  </Button>
+
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={handleTriggerGcsSync}
+                    disabled={triggeringSync}
+                    startIcon={<CloudUpload size={14} />}
+                    sx={{
+                      bgcolor: 'var(--theme-primary, #3b82f6)',
+                      fontWeight: 600,
+                      textTransform: 'none',
+                      fontSize: '0.78rem',
+                      '&:hover': { bgcolor: '#2563eb' }
+                    }}
+                  >
+                    {triggeringSync ? 'Starting Sync…' : 'Sync to Cloud Storage'}
+                  </Button>
+
+                  <Button
+                    variant="text"
+                    size="small"
+                    onClick={() => {
+                      setVideoError(false);
+                      const v = iframeRef?.current;
+                      if (v) v.load();
+                    }}
+                    startIcon={<RotateCcw size={14} />}
+                    sx={{
+                      color: 'rgba(255, 255, 255, 0.65)',
+                      textTransform: 'none',
+                      fontSize: '0.78rem',
+                      '&:hover': { color: '#fff' }
+                    }}
+                  >
+                    Retry Stream
+                  </Button>
+                </Box>
+              </Box>
+            );
+          }
+
           const streamUrl = freshGcsVideoUrl || `${API_BASE || ''}/api/videos/${encodeURIComponent(activeData.videoId)}/stream`;
           const rawCaptionsUrl = activeData.captions_vtt_url || activeData.captionsUrl;
           const freshCaptionsUrl = isGcsSignedUrlFresh(rawCaptionsUrl) ? rawCaptionsUrl : null;
@@ -989,11 +1154,13 @@ export default function LecturePlayer({
                 src={streamUrl}
                 playsInline
                 preload="metadata"
+                onLoadedData={() => setVideoError(false)}
                 onTimeUpdate={handleTimeUpdate}
                 onSeeked={handleTimeUpdate}
                 onSeeking={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
                 onCanPlay={() => {
+                  setVideoError(false);
                   const v = iframeRef?.current;
                   if (v && wantPlayRef.current && v.paused) {
                     const p = v.play();
@@ -1007,6 +1174,8 @@ export default function LecturePlayer({
                       gcs_video_url: null,
                       gcsVideoUrl: null
                     } : prev);
+                  } else {
+                    setVideoError(true);
                   }
                 }}
                 onPlay={() => handlePlayStateChange(true)}
@@ -1543,6 +1712,41 @@ export default function LecturePlayer({
               <ExternalLink size={12} style={{ opacity: 0.8 }} />
             </a>
           )}
+          {(() => {
+            const rawSource = activeData.source_url || activeData.sourceUrl || activeData.moodle_url || activeData.moodleUrl || '';
+            const isDirectMoodle = rawSource.includes('learning.iiitdwd.ac.in') || (rawSource.startsWith('http') && !rawSource.includes('video.lecturescribe.local'));
+            const moodleUrl = isDirectMoodle
+              ? rawSource
+              : (courseName ? `https://learning.iiitdwd.ac.in/course/search.php?search=${encodeURIComponent(courseName)}` : null);
+            if (!moodleUrl) return null;
+            return (
+              <a
+                href={moodleUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="View on Moodle LMS"
+                title="Open original lecture session on Moodle LMS"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 12px',
+                  borderRadius: '16px',
+                  background: 'rgba(245, 158, 11, 0.1)',
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  color: '#f59e0b',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  textDecoration: 'none',
+                  flexShrink: 0,
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <span>Moodle LMS</span>
+                <ExternalLink size={12} style={{ opacity: 0.8 }} />
+              </a>
+            );
+          })()}
         </div>
       </div>
 

@@ -2822,6 +2822,64 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
+    def update_video_source_url(
+        self,
+        video_id: str,
+        source_url: str,
+        user_email: Optional[str] = None,
+        course_name: Optional[str] = None
+    ) -> bool:
+        """
+        Update the primary source URL (e.g. Moodle page link) for a video in PostgreSQL
+        across lecturescribe_videos and lecturescribe_user_library.
+        """
+        if not video_id or not source_url:
+            return False
+
+        clean_vid = str(video_id).strip()
+        clean_url = str(source_url).strip()
+        clean_email = user_email.strip().lower() if user_email and str(user_email).strip() else None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_videos
+                        SET source_url = %s
+                        WHERE video_id = %s;
+                    """, (clean_url, clean_vid))
+
+                    if clean_email:
+                        cursor.execute("""
+                            UPDATE lecturescribe_user_library
+                            SET source_url = %s
+                            WHERE video_id = %s AND user_email = %s;
+                        """, (clean_url, clean_vid, clean_email))
+                    else:
+                        cursor.execute("""
+                            UPDATE lecturescribe_user_library
+                            SET source_url = %s
+                            WHERE video_id = %s;
+                        """, (clean_url, clean_vid))
+
+                    conn.commit()
+
+            if clean_vid in self._memory_cache:
+                self._memory_cache[clean_vid]["sourceUrl"] = clean_url
+                self._memory_cache[clean_vid]["source_url"] = clean_url
+                if course_name and not self._memory_cache[clean_vid].get("course_name"):
+                    self._memory_cache[clean_vid]["course_name"] = course_name
+
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Error updating source_url for {clean_vid}]: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
     def save_chat_log(
         self,
         video_id: str,

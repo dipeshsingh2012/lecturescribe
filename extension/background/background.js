@@ -128,6 +128,32 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "MAP_MOODLE_VIDEO") {
+    (async () => {
+      const settings = await getSettings();
+      const apiBase = settings.apiUrl.replace(/\/+$/, "");
+      try {
+        const resp = await fetch(`${apiBase}/api/moodle/map-video`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_id: message.videoId,
+            moodle_url: message.moodleUrl,
+            course_name: message.courseName || null,
+            title: message.title || null,
+            user_email: message.userEmail || settings.userEmail || "dipesh.singh2012@gmail.com"
+          })
+        });
+        const data = await resp.json().catch(() => ({}));
+        sendResponse({ success: resp.ok, data });
+      } catch (err) {
+        console.debug("MAP_MOODLE_VIDEO notice:", err);
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === "GET_DETECTED_VIDEOS") {
     (async () => {
       const targetTabId = message.tabId || tabId;

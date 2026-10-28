@@ -574,6 +574,23 @@
         videos: Array.from(detectedVideos.values())
       }).catch(() => {});
     }
+
+    // Auto-map Moodle source URL for videos found on Moodle LMS
+    const isMoodlePage = window.location.hostname.includes("learning.iiitdwd.ac.in") ||
+                         window.location.pathname.includes("/mod/page/view.php") ||
+                         window.location.pathname.includes("/mod/url/view.php");
+    if (isMoodlePage && newlyDetected.length > 0) {
+      const lmsCourse = extractLmsCourseContext();
+      for (const nv of newlyDetected) {
+        ext.runtime.sendMessage({
+          type: "MAP_MOODLE_VIDEO",
+          videoId: nv.videoId,
+          moodleUrl: window.location.href,
+          courseName: lmsCourse || nv.courseName,
+          title: nv.title
+        }).catch(() => {});
+      }
+    }
   }
 
   // Run initial scan

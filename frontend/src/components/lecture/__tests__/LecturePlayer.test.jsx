@@ -421,5 +421,87 @@ describe('LecturePlayer', () => {
     expect(screen.getByRole('button', { name: /Next Lecture/i })).toBeDisabled();
     expect(screen.getByText('3 of 3')).toBeInTheDocument();
   });
+
+  it('renders Moodle LMS badge linking to Moodle when source_url is present', () => {
+    const activeData = {
+      videoId: '1234158181',
+      title: 'Machine Learning Paradigms Live session -3',
+      course_name: 'Machine Learning Paradigms',
+      source_url: 'https://learning.iiitdwd.ac.in/mod/page/view.php?id=3111',
+      duration: '1:00:00',
+      cues: [{ time: '00:00', text: 'Welcome' }]
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={{ course_name: 'Machine Learning Paradigms' }}
+        selectedCourse="Machine Learning Paradigms"
+        currentTheme={mockTheme}
+        iframeRef={{ current: null }}
+      />
+    );
+
+    const moodleLink = screen.getByRole('link', { name: /View on Moodle LMS/i });
+    expect(moodleLink).toBeInTheDocument();
+    expect(moodleLink).toHaveAttribute('href', 'https://learning.iiitdwd.ac.in/mod/page/view.php?id=3111');
+    expect(moodleLink).toHaveAttribute('target', '_blank');
+  });
+
+  it('renders broken-video-moodle-fallback card when video stream errors and allows copying session title', async () => {
+    const activeData = {
+      videoId: '1234158181',
+      title: 'Machine Learning Paradigms Live session -3',
+      course_name: 'Machine Learning Paradigms',
+      source_url: 'https://learning.iiitdwd.ac.in/mod/page/view.php?id=3111',
+      duration: '1:00:00',
+      cues: [{ time: '00:00', text: 'Welcome' }]
+    };
+
+    const mockIframeRef = { current: null };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={{ course_name: 'Machine Learning Paradigms' }}
+        selectedCourse="Machine Learning Paradigms"
+        currentTheme={mockTheme}
+        iframeRef={mockIframeRef}
+      />
+    );
+
+    const videoEl = screen.getByTitle('Machine Learning Paradigms Live session -3');
+    expect(videoEl).toBeInTheDocument();
+
+    // Trigger video error (e.g. stream failure)
+    fireEvent.error(videoEl);
+
+    // Fallback card should appear
+    const fallback = await screen.findByTestId('broken-video-moodle-fallback');
+    expect(fallback).toBeInTheDocument();
+    expect(screen.getByText(/Video Stream Not Synced to Cloud Storage/i)).toBeInTheDocument();
+
+    // Strategy D direct link
+    const directMoodleBtn = screen.getByRole('link', { name: /Open Video on Moodle/i });
+    expect(directMoodleBtn).toHaveAttribute('href', 'https://learning.iiitdwd.ac.in/mod/page/view.php?id=3111');
+
+    // Strategy A course search link
+    const searchMoodleBtn = screen.getByRole('link', { name: /Search Course on Moodle/i });
+    expect(searchMoodleBtn).toHaveAttribute('href', 'https://learning.iiitdwd.ac.in/course/search.php?search=Machine%20Learning%20Paradigms');
+
+    // Copy session title button
+    const copyTitleBtn = screen.getByRole('button', { name: /Copy Session Title/i });
+    expect(copyTitleBtn).toBeInTheDocument();
+
+    // Mock clipboard API
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    });
+
+    fireEvent.click(copyTitleBtn);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Machine Learning Paradigms Live session -3');
+  });
 });
 

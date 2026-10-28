@@ -313,21 +313,79 @@ li .katex::-webkit-scrollbar-thumb {
   background: var(--bg-dark);
 }
 
+.lecture-workspace-layout.is-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.lecture-workspace-layout.is-resizing * {
+  user-select: none;
+  pointer-events: none;
+}
+
+.lecture-workspace-layout.is-resizing .workspace-split-resizer {
+  pointer-events: auto;
+}
+
+.lecture-workspace-layout.is-resizing .lecture-tool-panel {
+  transition: none;
+}
+
 /* Left panel: Lecture Player & info */
 .lecture-player-panel {
-  flex: 1.2;
+  flex: 0 0 var(--workspace-player-width, 55%);
+  width: var(--workspace-player-width, 55%);
+  max-width: var(--workspace-player-width, 55%);
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
-  border-right: 1px solid var(--border-color);
+  border-right: none;
   min-width: 0;
+}
+
+/* Split Resizer (VS Code Style Sash) */
+.workspace-split-resizer {
+  width: 12px;
+  margin: 0 -6px;
+  position: relative;
+  cursor: col-resize;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  outline: none;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.workspace-split-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background-color: var(--border-color);
+  transition: background-color 0.2s ease, width 0.2s ease, left 0.2s ease, box-shadow 0.2s ease;
+}
+
+.workspace-split-resizer:hover::after,
+.workspace-split-resizer.active::after,
+.workspace-split-resizer:focus-visible::after {
+  width: 3px;
+  left: 4px;
+  background-color: var(--theme-primary, #0075ed);
+  box-shadow: 0 0 8px rgba(0, 117, 237, 0.45);
 }
 
 /* Right panel: Tool container (Summary, Tutor, Quiz, Transcript) */
 .lecture-tool-panel {
-  flex: 1;
+  flex: 1 1 var(--workspace-tool-width, 45%);
+  width: var(--workspace-tool-width, 45%);
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -431,11 +489,16 @@ li .katex::-webkit-scrollbar-thumb {
   .lecture-player-panel {
     flex: none;
     width: 100%;
+    max-width: 100%;
     padding: 10px 14px 10px 14px;
     gap: 10px;
     border-right: none;
     border-bottom: 1px solid var(--border-color);
     overflow: visible;
+  }
+
+  .workspace-split-resizer {
+    display: none !important;
   }
 
   .desktop-only-shelf {

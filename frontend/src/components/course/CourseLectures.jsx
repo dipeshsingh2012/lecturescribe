@@ -579,7 +579,7 @@ export default function CourseLectures({
                       />
                     )}
                     <Chip
-                      label="Transcript Search"
+                      label="Transcript"
                       size="small"
                       sx={{
                         bgcolor: currentTheme.palette.badgeBg,

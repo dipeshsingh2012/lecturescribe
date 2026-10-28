@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Search,
   Copy,
@@ -17,7 +17,8 @@ import {
   Play,
   Pause,
   Pencil,
-  Bot
+  Bot,
+  SlidersHorizontal
 } from 'lucide-react';
 import katex from 'katex';
 import { API_BASE } from '../../utils/constants';
@@ -25,6 +26,8 @@ import TranscriptReviewDrawer from './TranscriptReviewDrawer';
 import TranscriptAnnotationsDrawer from './TranscriptAnnotationsDrawer';
 import TextSelectionToolbar from './TextSelectionToolbar';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import TranscriptAppearanceMenu from './TranscriptAppearanceMenu';
+import { useTranscriptAppearanceStore, computeAppearanceCssVariables } from '../../store/transcriptAppearanceStore';
 
 const parseTimeToSeconds = (timeStr) => {
   if (!timeStr || typeof timeStr !== 'string') return 0;
@@ -83,6 +86,21 @@ export default function TranscriptSearch({
   const [isSavingCue, setIsSavingCue] = useState(false);
   const [hoveredCueIdx, setHoveredCueIdx] = useState(null);
 
+  // Transcript Appearance Menu state
+  const [showAppearanceMenu, setShowAppearanceMenu] = useState(false);
+  const appearanceBtnRef = useRef(null);
+  const appearanceFontFamily = useTranscriptAppearanceStore((s) => s.fontFamily);
+  const appearanceFontColor = useTranscriptAppearanceStore((s) => s.fontColor);
+  const appearanceFontSize = useTranscriptAppearanceStore((s) => s.fontSize);
+  const appearanceLineSpacing = useTranscriptAppearanceStore((s) => s.lineSpacing);
+
+  const appearanceCssVars = useMemo(() => computeAppearanceCssVariables({
+    fontFamily: appearanceFontFamily,
+    fontColor: appearanceFontColor,
+    fontSize: appearanceFontSize,
+    lineSpacing: appearanceLineSpacing
+  }), [appearanceFontFamily, appearanceFontColor, appearanceFontSize, appearanceLineSpacing]);
+
   // Drawers and Annotations state
   const [showReviewDrawer, setShowReviewDrawer] = useState(false);
   const [showAnnotationsDrawer, setShowAnnotationsDrawer] = useState(false);
@@ -111,6 +129,7 @@ export default function TranscriptSearch({
   const justDismissedToolbarRef = useRef(false);
   const mouseDownPosRef = useRef({ x: 0, y: 0 });
   const hoverCloseTimeoutRef = useRef(null);
+  const userScrolledManuallyRef = useRef(false);
 
   const videoId = activeData?.videoId || activeData?.video_id || (typeof window !== 'undefined' ? window.location.pathname.match(/\/lecture\/([^/?#]+)/)?.[1] : null);
 
@@ -335,11 +354,12 @@ export default function TranscriptSearch({
   // Auto-scroll active cue into center view as video plays or resumes on page load (Webex style)
   useEffect(() => {
     if (!autoScroll) return;
-    const performScrollToActive = () => {
+    const performScrollToActive = (forceInstant = false) => {
       if (activeCueIdx >= 0 && cueRefs.current[activeCueIdx] && scrollContainerRef.current) {
         const activeEl = cueRefs.current[activeCueIdx];
         const container = scrollContainerRef.current;
-        const isJump = Math.abs(activeCueIdx - (prevActiveCueRef.current ?? 0)) > 1;
+        const isHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+        const isJump = forceInstant || isHidden || Math.abs(activeCueIdx - (prevActiveCueRef.current ?? 0)) > 1;
         const scrollBehavior = isJump ? 'auto' : 'smooth';
         prevActiveCueRef.current = activeCueIdx;
 
@@ -381,8 +401,56 @@ export default function TranscriptSearch({
     };
   }, [activeCueIdx, autoScroll, displayCues.length]);
 
+  // Instantly re-align active cue when user switches back to this window or tab becomes visible
+  useEffect(() => {
+    const handleWindowSync = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && autoScroll && activeCueIdx >= 0) {
+        userScrolledManuallyRef.current = false;
+        if (cueRefs.current[activeCueIdx] && scrollContainerRef.current) {
+          const activeEl = cueRefs.current[activeCueIdx];
+          const container = scrollContainerRef.current;
+          isProgrammaticScrollRef.current = true;
+          if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+
+          const targetTop = activeEl.offsetTop - (container.clientHeight / 2) + (activeEl.clientHeight / 2);
+          const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+          const clampedTarget = Math.min(maxScroll, Math.max(0, targetTop));
+
+          if (typeof container.scrollTo === 'function') {
+            container.scrollTo({ top: clampedTarget, behavior: 'auto' });
+          } else {
+            container.scrollTop = clampedTarget;
+          }
+          if (typeof activeEl?.scrollIntoView === 'function') {
+            activeEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+          }
+
+          scrollTimeoutRef.current = setTimeout(() => {
+            isProgrammaticScrollRef.current = false;
+          }, 400);
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', handleWindowSync);
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleWindowSync);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', handleWindowSync);
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleWindowSync);
+      }
+    };
+  }, [autoScroll, activeCueIdx]);
+
   const handleRecenter = useCallback(() => {
     setAutoScroll(true);
+    userScrolledManuallyRef.current = false;
     if (activeCueIdx >= 0 && cueRefs.current[activeCueIdx] && scrollContainerRef.current) {
       const activeEl = cueRefs.current[activeCueIdx];
       const container = scrollContainerRef.current;
@@ -461,7 +529,7 @@ export default function TranscriptSearch({
     setShowScrollBottom(isUp);
 
     // If user scrolled manually away from center while autoScroll was active, pause auto-scroll
-    if (!isProgrammaticScrollRef.current && autoScroll && activeCueIdx >= 0 && cueRefs.current[activeCueIdx]) {
+    if (userScrolledManuallyRef.current && !isProgrammaticScrollRef.current && autoScroll && activeCueIdx >= 0 && cueRefs.current[activeCueIdx]) {
       const activeEl = cueRefs.current[activeCueIdx];
       const targetTop = activeEl.offsetTop - (el.clientHeight / 2) + (activeEl.clientHeight / 2);
       const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
@@ -1125,10 +1193,12 @@ export default function TranscriptSearch({
         <span
           className="transcript-cue"
           style={{
-            fontSize: '0.84rem',
-            color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+            fontFamily: 'var(--cue-font-family, inherit)',
+            fontVariant: 'var(--cue-font-variant, normal)',
+            fontSize: 'var(--cue-font-size, 0.84rem)',
+            color: isActive ? 'var(--text-primary)' : 'var(--cue-color, var(--text-secondary))',
             fontWeight: isActive ? 600 : 400,
-            lineHeight: 1.35
+            lineHeight: 'var(--cue-line-height, 1.35)'
           }}
           dangerouslySetInnerHTML={{ __html: cue.highlightHtml }}
         />
@@ -1139,10 +1209,12 @@ export default function TranscriptSearch({
       <span
         className="transcript-cue"
         style={{
-          fontSize: '0.84rem',
-          color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+          fontFamily: 'var(--cue-font-family, inherit)',
+          fontVariant: 'var(--cue-font-variant, normal)',
+          fontSize: 'var(--cue-font-size, 0.84rem)',
+          color: isActive ? 'var(--text-primary)' : 'var(--cue-color, var(--text-secondary))',
           fontWeight: isActive ? 600 : 400,
-          lineHeight: 1.35
+          lineHeight: 'var(--cue-line-height, 1.35)'
         }}
       >
         {renderAnnotatedCue(cue.text, cueAnnotations, isActive, cueSec, nextCueSec)}
@@ -1181,10 +1253,7 @@ export default function TranscriptSearch({
           gap: '8px',
           flexShrink: 0
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Search size={15} color="var(--theme-primary)" /> Instant Transcript Search
-            </span>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               {/* Review Drawer Button */}
               {videoId && (
@@ -1300,7 +1369,6 @@ export default function TranscriptSearch({
                 <span>Sync {autoScroll ? 'ON' : 'OFF'}</span>
               </button>
 
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Showing {displayCues.length} hits</span>
               {displayCues.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
                   <button
@@ -1439,6 +1507,39 @@ export default function TranscriptSearch({
                 <span>{copied ? 'Copied Transcript!' : 'Copy Transcript'}</span>
               </button>
             )}
+
+            {/* Transcript Appearance Customization Menu */}
+            <div style={{ position: 'relative' }}>
+              <button
+                ref={appearanceBtnRef}
+                type="button"
+                onClick={() => setShowAppearanceMenu(prev => !prev)}
+                title="Customize transcript font, size, and color"
+                aria-label="Transcript Appearance"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '5px',
+                  background: showAppearanceMenu ? 'rgba(0, 117, 237, 0.15)' : 'var(--card-bg)',
+                  color: showAppearanceMenu ? 'var(--theme-primary)' : 'var(--text-secondary)',
+                  border: showAppearanceMenu ? '1px solid var(--theme-primary)' : '1px solid var(--border-color)',
+                  padding: '7px 9px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  transition: 'all 0.2s ease',
+                  flexShrink: 0
+                }}
+              >
+                <SlidersHorizontal size={14} />
+              </button>
+              <TranscriptAppearanceMenu
+                open={showAppearanceMenu}
+                onClose={() => setShowAppearanceMenu(false)}
+                anchorRef={appearanceBtnRef}
+              />
+            </div>
           </div>
           {!searchAvailable && (
             <div
@@ -1468,9 +1569,11 @@ export default function TranscriptSearch({
           ref={scrollContainerRef}
           onScroll={handleScroll}
           onWheel={() => {
+            userScrolledManuallyRef.current = true;
             if (autoScroll) setAutoScroll(false);
           }}
           onTouchMove={() => {
+            userScrolledManuallyRef.current = true;
             if (autoScroll) setAutoScroll(false);
           }}
           onMouseUp={handleTextSelection}
@@ -1478,6 +1581,7 @@ export default function TranscriptSearch({
           onTouchEnd={handleTextSelection}
           tabIndex={0}
           style={{
+            ...appearanceCssVars,
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',

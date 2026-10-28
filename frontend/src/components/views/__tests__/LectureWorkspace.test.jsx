@@ -57,7 +57,7 @@ describe('LectureWorkspace', () => {
     render(<LectureWorkspace {...baseProps} activeTab="transcript" />);
 
     expect(screen.getAllByText('Operating Systems').length).toBeGreaterThan(0);
-    expect(screen.getByText('Instant Transcript Search')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search transcript/i)).toBeInTheDocument();
     expect(screen.getByText('Kernel architecture.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Copy Transcript/i })).toBeInTheDocument();
   });
@@ -231,6 +231,46 @@ describe('LectureWorkspace', () => {
     // Press Escape to restore
     fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' });
     expect(layout).not.toHaveClass('panel-expanded');
+  });
+
+  it('renders resizable split separator and supports dragging and resetting', () => {
+    const { container } = render(
+      <LectureWorkspace
+        {...baseProps}
+        activeTab="transcript"
+      />
+    );
+
+    const separator = screen.getByRole('separator', { name: /Resize workspace panels/i });
+    expect(separator).toBeInTheDocument();
+    expect(separator).toHaveAttribute('aria-valuenow', '55');
+
+    // Test keyboard navigation on separator
+    fireEvent.keyDown(separator, { key: 'ArrowRight' });
+    expect(separator).toHaveAttribute('aria-valuenow', '57');
+
+    fireEvent.keyDown(separator, { key: 'ArrowLeft' });
+    expect(separator).toHaveAttribute('aria-valuenow', '55');
+
+    // Test Home key (min width)
+    fireEvent.keyDown(separator, { key: 'Home' });
+    expect(separator).toHaveAttribute('aria-valuenow', '25');
+
+    // Test End key (max width)
+    fireEvent.keyDown(separator, { key: 'End' });
+    expect(separator).toHaveAttribute('aria-valuenow', '75');
+
+    // Test double click to reset
+    fireEvent.doubleClick(separator);
+    expect(separator).toHaveAttribute('aria-valuenow', '55');
+
+    // Test mouse down initiates resizing state
+    const layout = container.querySelector('.lecture-workspace-layout');
+    fireEvent.mouseDown(separator);
+    expect(layout).toHaveClass('is-resizing');
+
+    fireEvent.mouseUp(window);
+    expect(layout).not.toHaveClass('is-resizing');
   });
 });
 

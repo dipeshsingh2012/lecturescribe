@@ -59,7 +59,7 @@ export default function HeroBanner({
           <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', mt: 0.5, fontSize: '0.88rem' }}>
             {googleUser
               ? 'Personal Learning Management System • Verified Study History & Cloud Backups'
-              : 'Personal Learning Management System • Instant transcript search, summaries & interactive AI Tutor'}
+              : 'Personal Learning Management System • Transcripts, summaries & interactive AI Tutor'}
           </Typography>
         </Box>
       </Box>

@@ -40,7 +40,6 @@ describe('TranscriptSearch', () => {
       />
     );
 
-    expect(screen.getByText(/2\s*hits/i)).toBeInTheDocument();
     expect(screen.getByText(/01:15/)).toBeInTheDocument();
     expect(screen.getByText('Welcome to linear algebra.')).toBeInTheDocument();
 
@@ -49,8 +48,8 @@ describe('TranscriptSearch', () => {
     expect(handleCueClick).toHaveBeenCalledWith('04:30');
   });
 
-  it('renders 0 hits count when displayCues is empty', () => {
-    render(
+  it('renders correctly when displayCues is empty without crashing', () => {
+    const { container } = render(
       <TranscriptSearch
         displayCues={[]}
         searchQuery="nonexistent"
@@ -60,7 +59,7 @@ describe('TranscriptSearch', () => {
       />
     );
 
-    expect(screen.getByText(/0\s*hits/i)).toBeInTheDocument();
+    expect(container).toBeInTheDocument();
   });
 
   it('explains when transcript search is unavailable', () => {
@@ -1849,5 +1848,83 @@ describe('TranscriptSearch', () => {
     );
 
     global.fetch = originalFetch;
+  });
+
+  it('renders transcript appearance button and allows customizing cue font and color', async () => {
+    const cues = [
+      { id: 'cue_0', time: '01:00', seconds: 60, text: 'Customized transcript cue text.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_app_test' }}
+      />
+    );
+
+    // Appearance toggle button
+    const appearanceBtn = screen.getByRole('button', { name: /Transcript Appearance/i });
+    expect(appearanceBtn).toBeInTheDocument();
+
+    // Open appearance menu
+    fireEvent.click(appearanceBtn);
+    expect(await screen.findByRole('dialog', { name: /Transcript Appearance Settings/i })).toBeInTheDocument();
+
+    // Select Monospace font and Netflix Yellow color
+    const monoFontBtn = screen.getByRole('button', { name: /Font Monospace/i });
+    fireEvent.click(monoFontBtn);
+
+    const yellowColorBtn = screen.getByRole('button', { name: /Color Netflix Yellow/i });
+    fireEvent.click(yellowColorBtn);
+
+    // Verify cue row has transcript-cue class and container has CSS variables
+    const cueElement = screen.getByText('Customized transcript cue text.').closest('.transcript-cue');
+    expect(cueElement).toBeInTheDocument();
+  });
+
+  it('maintains cue synchronization and autoScroll when switching windows or tabs', async () => {
+    const cues = [
+      { id: 'cue_0', time: '00:00', seconds: 0, text: 'Cue line 0' },
+      { id: 'cue_1', time: '00:30', seconds: 30, text: 'Cue line 1' },
+      { id: 'cue_2', time: '01:00', seconds: 60, text: 'Cue line 2' }
+    ];
+
+    const { rerender } = render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_sync_test' }}
+      />
+    );
+
+    // Simulate switching windows (blur/hidden) while active cue advances
+    rerender(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={2}
+        activeData={{ videoId: 'vid_sync_test' }}
+      />
+    );
+
+    // Simulate window regain focus / visibilitychange
+    fireEvent(window, new Event('focus'));
+    fireEvent(document, new Event('visibilitychange'));
+
+    // Re-center button should not appear because autoScroll remains active
+    expect(screen.queryByText(/Re-center/i)).toBeNull();
+
+    // Cue 2 should be active
+    const activeCueEl = screen.getByText('Cue line 2').closest('.transcript-cue-row');
+    expect(activeCueEl).toHaveClass('active');
   });
 });

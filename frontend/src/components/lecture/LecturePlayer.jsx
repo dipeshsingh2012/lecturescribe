@@ -39,6 +39,8 @@ import { sortLectures, getLectureTitle } from '../../utils/lectureSort';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
 
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5];
+
 export default function LecturePlayer({
   activeData,
   activeCourseData,
@@ -335,6 +337,13 @@ export default function LecturePlayer({
 
   useEffect(() => {
     const video = iframeRef?.current;
+    if (video && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('lecturescribe:videomounted', { detail: { element: video } }));
+    }
+  }, [activeData?.videoId, gcsUploadState.isUploading]);
+
+  useEffect(() => {
+    const video = iframeRef?.current;
     if (!video || typeof video.addEventListener !== 'function') return;
     const onCustomSeek = (e) => {
       const sec = e?.detail?.seconds;
@@ -353,6 +362,30 @@ export default function LecturePlayer({
       video.removeEventListener('lecturescribe:wantplay', onWantPlay);
     };
   }, [activeData?.videoId, gcsUploadState.isUploading, isScrubbing]);
+
+  // Re-sync video playback time when window regains focus or tab becomes visible
+  useEffect(() => {
+    const handleSyncOnVisible = () => {
+      const video = iframeRef?.current;
+      if (video && !video.paused) {
+        handleTimeUpdate();
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', handleSyncOnVisible);
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleSyncOnVisible);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', handleSyncOnVisible);
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleSyncOnVisible);
+      }
+    };
+  }, []);
 
   // Video event handlers
   const handleTimeUpdate = () => {
@@ -1316,7 +1349,7 @@ export default function LecturePlayer({
                         }
                       }}
                     >
-                      {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => (
+                      {PLAYBACK_RATES.map((rate) => (
                         <MenuItem
                           key={rate}
                           selected={playbackRate === rate}
@@ -1481,26 +1514,6 @@ export default function LecturePlayer({
               <CloudUpload size={13} />
               <span>{triggeringSync ? 'Starting Sync…' : 'Sync to Cloud Storage'}</span>
             </button>
-          )}
-          {(activeData.gcs_video_url || activeData.gcsVideoUrl) && !gcsUploadState.isUploading && (
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '4px 10px',
-                borderRadius: '16px',
-                background: 'rgba(34, 197, 94, 0.1)',
-                border: '1px solid rgba(34, 197, 94, 0.3)',
-                color: '#16a34a',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                flexShrink: 0
-              }}
-              title="Streaming high-speed video directly from Google Cloud Storage"
-            >
-              <span>● Cloud Storage Video</span>
-            </span>
           )}
           {driveFolderUrl && (
             <a

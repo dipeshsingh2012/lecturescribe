@@ -5,6 +5,9 @@ import { useLecturePlayer } from '../useLecturePlayer';
 describe('useLecturePlayer hook functionality', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    if (typeof document !== 'undefined') {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    }
   });
 
   it('provides default displayCues from activeData when searchQuery is empty', () => {
@@ -450,6 +453,314 @@ describe('useLecturePlayer hook functionality', () => {
 
     expect(internalTime).toBe(860);
     expect(playSpy).toHaveBeenCalled();
+  });
+
+  it('re-syncs activeCueIdx when window gains focus or tab becomes visible', async () => {
+    const videoEl = document.createElement('video');
+    Object.defineProperty(videoEl, 'paused', { value: false, writable: true });
+    Object.defineProperty(videoEl, 'currentTime', { value: 0, writable: true });
+
+    const activeData = {
+      videoId: 'v_window_sync',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '01:00', text: 'Topic 1' },
+        { time: '02:00', text: 'Topic 2' }
+      ]
+    };
+
+    const { result } = renderHook(() => {
+      const hook = useLecturePlayer(activeData);
+      hook.iframeRef.current = videoEl;
+      return hook;
+    });
+
+    expect(result.current.activeCueIdx).toBe(0);
+
+    // Simulate video playing in background to 02:15 while user is on another window
+    videoEl.currentTime = 135;
+
+    // Window focus occurs when user switches back
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(result.current.activeCueIdx).toBe(2);
+  });
+
+  it('dynamically detects video element mounting after initial render and restores progress from DB', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        progress: {
+          last_timestamp: '05:30',
+          last_seconds: 330,
+          duration_seconds: 1800,
+          progress_percent: 18.3,
+          active_cue_idx: 1
+        }
+      })
+    });
+
+    const activeData = {
+      videoId: 'v_dynamic_mount',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '05:30', text: 'Section 2' }
+      ]
+    };
+
+    // Render hook with no element initially attached (iframeRef.current is null)
+    const { result } = renderHook(() => useLecturePlayer(activeData, 'user@test.com'));
+
+    // Video mounts late in DOM
+    const videoEl = document.createElement('video');
+    Object.defineProperty(videoEl, 'readyState', { value: 1, configurable: true });
+    Object.defineProperty(videoEl, 'duration', { value: 1800, configurable: true });
+    videoEl.currentTime = 0;
+    videoEl.play = vi.fn().mockResolvedValue(undefined);
+    videoEl.pause = vi.fn();
+
+    await act(async () => {
+      result.current.iframeRef.current = videoEl;
+      window.dispatchEvent(new CustomEvent('lecturescribe:videomounted'));
+      await new Promise(r => setTimeout(r, 50));
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/progress/lecture?video_id=v_dynamic_mount&user_email=user%40test.com')
+    );
+    expect(result.current.activeCueIdx).toBe(1);
+    expect(videoEl.currentTime).toBe(330);
+  });
+
+  it('periodically saves progress to backend during continuous playback every 10 seconds', async () => {
+    const postCalls = [];
+    global.fetch = vi.fn((url, options) => {
+      if (options?.method === 'POST') {
+        postCalls.push(JSON.parse(options.body));
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ status: 'success' })
+      });
+    });
+
+    const activeData = {
+      videoId: 'v_playback_save',
+      duration: 600,
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '00:10', text: 'Ten Sec' },
+        { time: '00:20', text: 'Twenty Sec' }
+      ]
+    };
+
+    const videoEl = document.createElement('video');
+    videoEl.currentTime = 0;
+    Object.defineProperty(videoEl, 'paused', { value: false, writable: true });
+    Object.defineProperty(videoEl, 'duration', { value: 600, configurable: true });
+
+    const { result } = renderHook(() => {
+      const hook = useLecturePlayer(activeData, 'student@playback.com');
+      hook.iframeRef.current = videoEl;
+      return hook;
+    });
+
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    // Simulate playback timeupdate at 5s (less than 10s difference from 0s)
+    act(() => {
+      videoEl.currentTime = 5;
+      videoEl.dispatchEvent(new Event('timeupdate'));
+    });
+    expect(postCalls.length).toBe(0);
+
+    // Simulate playback reaching 10s (>= 10s difference)
+    act(() => {
+      videoEl.currentTime = 10;
+      videoEl.dispatchEvent(new Event('timeupdate'));
+    });
+    expect(postCalls.length).toBe(1);
+    expect(postCalls[0].last_seconds).toBe(10);
+    expect(postCalls[0].video_id).toBe('v_playback_save');
+
+    // Simulate playback reaching 20s (>= 10s difference from 10s)
+    act(() => {
+      videoEl.currentTime = 20;
+      videoEl.dispatchEvent(new Event('timeupdate'));
+    });
+    expect(postCalls.length).toBe(2);
+    expect(postCalls[1].last_seconds).toBe(20);
+  });
+
+  it('saves progress immediately on pause and seeked events', async () => {
+    const postCalls = [];
+    global.fetch = vi.fn((url, options) => {
+      if (options?.method === 'POST') {
+        postCalls.push(JSON.parse(options.body));
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ status: 'success' })
+      });
+    });
+
+    const activeData = {
+      videoId: 'v_pause_seek',
+      duration: 300,
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '00:45', text: 'Point 1' }
+      ]
+    };
+
+    const videoEl = document.createElement('video');
+    videoEl.currentTime = 45;
+    Object.defineProperty(videoEl, 'paused', { value: false, writable: true });
+    Object.defineProperty(videoEl, 'duration', { value: 300, configurable: true });
+
+    const { result } = renderHook(() => {
+      const hook = useLecturePlayer(activeData, 'student@test.com');
+      hook.iframeRef.current = videoEl;
+      return hook;
+    });
+
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    // User pauses video at 45s
+    act(() => {
+      videoEl.paused = true;
+      videoEl.dispatchEvent(new Event('pause'));
+    });
+
+    expect(postCalls.some(c => c.last_seconds === 45 && c.video_id === 'v_pause_seek')).toBe(true);
+
+    // User seeks to 75s
+    act(() => {
+      videoEl.currentTime = 75;
+      videoEl.dispatchEvent(new Event('seeked'));
+    });
+
+    expect(postCalls.some(c => c.last_seconds === 75 && c.video_id === 'v_pause_seek')).toBe(true);
+  });
+
+  it('saves progress with keepalive when visibilitychange is hidden', async () => {
+    let capturedOptions = null;
+    global.fetch = vi.fn((url, options) => {
+      if (options?.method === 'POST') {
+        capturedOptions = options;
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ status: 'success' })
+      });
+    });
+
+    const activeData = {
+      videoId: 'v_visibility',
+      duration: 400,
+      cues: [{ time: '00:00', text: 'Intro' }, { time: '01:00', text: 'Main' }]
+    };
+
+    const videoEl = document.createElement('video');
+    videoEl.currentTime = 60;
+    Object.defineProperty(videoEl, 'paused', { value: false, writable: true });
+    Object.defineProperty(videoEl, 'duration', { value: 400, configurable: true });
+
+    const { result } = renderHook(() => {
+      const hook = useLecturePlayer(activeData, 'student@visibility.com');
+      hook.iframeRef.current = videoEl;
+      return hook;
+    });
+
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    // Simulate tab being minimized / hidden
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(capturedOptions).not.toBeNull();
+    expect(capturedOptions.keepalive).toBe(true);
+    expect(capturedOptions.body).toContain('"last_seconds":60');
+    expect(capturedOptions.body).toContain('"video_id":"v_visibility"');
+
+    // Reset visibilityState
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+  });
+
+  it('does not repeatedly fetch progress in a loop when activeData reference changes or component re-renders', async () => {
+    let getCallCount = 0;
+    const callTraces = [];
+    global.fetch = vi.fn((url, options) => {
+      if (!options || options.method === 'GET' || !options.method) {
+        if (url.includes('/api/progress/lecture') && url.includes('v_no_loop_123')) {
+          getCallCount++;
+          callTraces.push(new Error().stack);
+        }
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          progress: {
+            last_timestamp: '02:00',
+            last_seconds: 120,
+            duration_seconds: 600,
+            progress_percent: 20,
+            active_cue_idx: 1
+          }
+        })
+      });
+    });
+
+    const activeData = {
+      videoId: 'v_no_loop_123',
+      cues: [{ time: '00:00', text: 'Intro' }, { time: '02:00', text: 'Next' }]
+    };
+
+    const videoEl = document.createElement('video');
+    Object.defineProperty(videoEl, 'readyState', { value: 1, configurable: true });
+    Object.defineProperty(videoEl, 'duration', { value: 600, configurable: true });
+    videoEl.currentTime = 0;
+
+    const { result, rerender } = renderHook(
+      ({ data }) => {
+        const hook = useLecturePlayer(data, 'student@loopcheck.com');
+        hook.iframeRef.current = videoEl;
+        return hook;
+      },
+      { initialProps: { data: activeData } }
+    );
+
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 30));
+    });
+
+    expect(getCallCount).toBe(1);
+
+    // Simulate multiple re-renders with new object references for activeData (e.g. state updates elsewhere)
+    for (let i = 0; i < 5; i++) {
+      act(() => {
+        rerender({ data: { ...activeData, dummy: i } });
+      });
+    }
+
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 30));
+    });
+
+    // Must still be exactly 1 call, NEVER looping!
+    expect(getCallCount).toBe(1);
   });
 });
 

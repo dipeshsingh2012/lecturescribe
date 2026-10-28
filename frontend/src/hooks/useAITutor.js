@@ -151,7 +151,7 @@ export function useAITutor(activeData, googleUser) {
           query: textToSend,
           video_id: activeData.videoId,
           video_title: activeData.title,
-          cues: activeData.cues || [],
+          cues: activeData.videoId ? undefined : (activeData.cues || []),
           enable_web_search: webSearchEnabled,
           user_email: googleUser?.email || null,
           chat_history: newMessages.slice(-6)
@@ -171,9 +171,17 @@ export function useAITutor(activeData, googleUser) {
         setChatMessages([...newMessages, botMsg]);
       } else {
         const errJson = await res.json().catch(() => ({}));
+        let errMsg = 'Failed to generate response. Please verify the AI engine is configured.';
+        if (typeof errJson.detail === 'string') {
+          errMsg = errJson.detail;
+        } else if (Array.isArray(errJson.detail)) {
+          errMsg = errJson.detail.map(d => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join(', ');
+        } else if (errJson.message) {
+          errMsg = errJson.message;
+        }
         setChatMessages([...newMessages, {
           sender: 'bot',
-          text: `⚠️ **AI Tutor Error:** ${errJson.detail || 'Failed to generate response. Please verify the AI engine is configured.'}`
+          text: `⚠️ **AI Tutor Error:** ${errMsg}`
         }]);
       }
     } catch (err) {
@@ -233,7 +241,7 @@ export function useAITutor(activeData, googleUser) {
           query: promptText,
           video_id: activeData.videoId,
           video_title: activeData.title,
-          cues: activeData.cues || [],
+          cues: activeData.videoId ? undefined : (activeData.cues || []),
           enable_web_search: webSearchEnabled,
           bypass_cache: true,
           enforce_regenerate: true,

@@ -779,7 +779,7 @@ class Llama3PineconeRAGStore:
         query: str,
         video_id: Optional[str] = None,
         video_title: Optional[str] = None,
-        cues: Optional[List[Dict[str, str]]] = None,
+        cues: Optional[List[Dict[str, Any]]] = None,
         top_k: int = 10,
         enable_web_search: bool = True,
         chat_history: Optional[List[Dict[str, Any]]] = None,
@@ -890,10 +890,22 @@ class Llama3PineconeRAGStore:
             display_model = prov["display"]
 
             print(f"🤖 [Agentic RAG] Initializing query: '{query}' using {display_model}")
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Student Request: {query}"}
-            ]
+            messages = [{"role": "system", "content": system_prompt}]
+
+            # Append conversational context if available
+            if chat_history:
+                prior_history = (
+                    chat_history[:-1]
+                    if (chat_history and chat_history[-1].get("sender") in ("user", "student") and (chat_history[-1].get("text") or "").strip() == query.strip())
+                    else chat_history
+                )
+                for h in prior_history[-6:]:
+                    r = "assistant" if h.get("sender") in ("bot", "assistant") else "user"
+                    txt = (h.get("text") or "").strip()
+                    if txt:
+                        messages.append({"role": r, "content": txt})
+
+            messages.append({"role": "user", "content": f"Student Request: {query}"})
 
             all_citations = []
             all_web_sources = []

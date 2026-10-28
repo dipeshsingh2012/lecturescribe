@@ -202,6 +202,13 @@ export function useLecturePlayer(activeData, userEmail = null) {
   const [copied, setCopied] = useState(false);
 
   const iframeRef = useRef(null);
+  const [mediaMounted, setMediaMounted] = useState(0);
+  const fetchedProgressVidRef = useRef(null);
+  const activeDataRef = useRef(activeData);
+  useEffect(() => {
+    activeDataRef.current = activeData;
+  }, [activeData]);
+
   const playerRef = useRef(null);
   const lastSavedSecRef = useRef(0);
   const currentSecRef = useRef(0);
@@ -210,6 +217,18 @@ export function useLecturePlayer(activeData, userEmail = null) {
   const saveDebounceTimerRef = useRef(null);
   const targetResumeSecRef = useRef(0);
   const prevVideoIdRef = useRef(null);
+
+  // Listen for video mount notifications
+  useEffect(() => {
+    const handleMounted = () => {
+      setMediaMounted(prev => prev + 1);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('lecturescribe:videomounted', handleMounted);
+      return () => window.removeEventListener('lecturescribe:videomounted', handleMounted);
+    }
+  }, []);
 
   // Instant Search Handler strictly via Algolia Cloud
   useEffect(() => {
@@ -259,11 +278,14 @@ export function useLecturePlayer(activeData, userEmail = null) {
     const vidId = activeData?.videoId;
     if (vidId && prevVideoIdRef.current !== vidId) {
       prevVideoIdRef.current = vidId;
+      fetchedProgressVidRef.current = null;
       targetResumeSecRef.current = 0;
       currentSecRef.current = 0;
       lastSavedSecRef.current = 0;
       durationRef.current = 0;
     }
+
+    const currentMediaEl = iframeRef.current || (typeof document !== 'undefined' ? (document.querySelector('video') || document.querySelector('iframe')) : null);
 
     const updateCueFromSeconds = (currentSec) => {
       if (typeof currentSec !== 'number' || isNaN(currentSec)) return 0;
@@ -313,22 +335,23 @@ export function useLecturePlayer(activeData, userEmail = null) {
       }
 
       const activePlayer = playerInstance || playerRef.current;
+      const targetEl = playerInstance?.element || currentMediaEl || iframeRef.current;
       if (activePlayer && typeof activePlayer.setCurrentTime === 'function') {
         activePlayer.setCurrentTime(sec).catch(() => {});
-      } else if (iframeRef.current && iframeRef.current.tagName === 'VIDEO') {
+      } else if (targetEl && targetEl.tagName === 'VIDEO') {
         try {
-          iframeRef.current.__targetResumeSec = sec;
-          if (iframeRef.current.readyState >= 1 || typeof iframeRef.current.readyState !== 'number') {
-            iframeRef.current.__pendingResumeSec = null;
-            iframeRef.current.currentTime = sec;
+          targetEl.__targetResumeSec = sec;
+          if (targetEl.readyState >= 1 || typeof targetEl.readyState !== 'number') {
+            targetEl.__pendingResumeSec = null;
+            targetEl.currentTime = sec;
           } else {
-            iframeRef.current.__pendingResumeSec = sec;
+            targetEl.__pendingResumeSec = sec;
             try {
-              iframeRef.current.currentTime = sec;
+              targetEl.currentTime = sec;
             } catch (_) {}
           }
           if (typeof CustomEvent === 'function') {
-            iframeRef.current.dispatchEvent(new CustomEvent('lecturescribe:seek', { detail: { seconds: sec } }));
+            targetEl.dispatchEvent(new CustomEvent('lecturescribe:seek', { detail: { seconds: sec } }));
           }
         } catch (_) {}
       }
@@ -357,7 +380,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
       }
     }
 
-    if (iframeRef.current && activeData) {
+    if (currentMediaEl && activeData) {
       try {
         if (!durationRef.current) {
           if (typeof activeData.duration === 'number' && activeData.duration > 0) {
@@ -365,6 +388,8 @@ export function useLecturePlayer(activeData, userEmail = null) {
           } else if (typeof activeData.duration === 'string') {
             const parsed = parseTimestampToSeconds(activeData.duration);
             if (parsed > 0) durationRef.current = parsed;
+          } else if (currentMediaEl.duration && !isNaN(currentMediaEl.duration) && currentMediaEl.duration > 0) {
+            durationRef.current = currentMediaEl.duration;
           } else if (activeData.cues && activeData.cues.length > 0) {
             const lastCue = activeData.cues[activeData.cues.length - 1];
             if (lastCue?.time) {
@@ -374,9 +399,9 @@ export function useLecturePlayer(activeData, userEmail = null) {
           }
         }
 
-        const player = iframeRef.current.tagName === 'VIDEO'
-          ? createHtml5VideoAdapter(iframeRef.current)
-          : createIframeVideoAdapter(iframeRef.current);
+        const player = currentMediaEl.tagName === 'VIDEO'
+          ? createHtml5VideoAdapter(currentMediaEl)
+          : createIframeVideoAdapter(currentMediaEl);
         playerRef.current = player;
 
         // If we already resolved a target resume timestamp (e.g. from activeData.progress or previous render before GCS URL updated), apply it to the player immediately
@@ -392,12 +417,19 @@ export function useLecturePlayer(activeData, userEmail = null) {
           lastSavedSecRef.current = safeSec;
 
           const timestampStr = formatSecondsToTimestamp(safeSec);
-          const dur = durationRef.current || 0;
+          const dur = durationRef.current ||
+            (currentMediaEl?.duration && !isNaN(currentMediaEl.duration) && currentMediaEl.duration > 0 ? currentMediaEl.duration : 0) ||
+            (typeof activeData.duration === 'number' ? activeData.duration : parseTimestampToSeconds(activeData.duration)) ||
+            0;
+          if (dur > 0 && !durationRef.current) {
+            durationRef.current = dur;
+          }
 
           try {
             await fetch(`${API_BASE}/api/progress/lecture`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              keepalive: true,
               body: JSON.stringify({
                 video_id: activeData.videoId,
                 user_email: effectiveUserEmail || 'anonymous',
@@ -407,18 +439,23 @@ export function useLecturePlayer(activeData, userEmail = null) {
                 active_cue_idx: safeIdx
               })
             });
+
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('lecturescribe:progressupdated', {
+                detail: {
+                  video_id: activeData.videoId,
+                  progress: {
+                    last_timestamp: timestampStr,
+                    last_seconds: safeSec,
+                    duration_seconds: dur,
+                    active_cue_idx: safeIdx
+                  }
+                }
+              }));
+            }
           } catch (err) {
             console.warn("Failed to persist lecture progress:", err);
           }
-        };
-
-        const scheduleProgressSave = (sec, cueIdx) => {
-          if (saveDebounceTimerRef.current) {
-            clearTimeout(saveDebounceTimerRef.current);
-          }
-          saveDebounceTimerRef.current = setTimeout(() => {
-            saveProgressToDb(sec, cueIdx);
-          }, 3000);
         };
 
         const handleTimeChange = (data) => {
@@ -428,15 +465,29 @@ export function useLecturePlayer(activeData, userEmail = null) {
             if (sec < 1 && targetResumeSecRef.current > 2) {
               return;
             }
-            const isVideoPlaying = iframeRef.current?.tagName === 'VIDEO' ? !iframeRef.current.paused : false;
+            const isVideoPlaying = currentMediaEl?.tagName === 'VIDEO' ? !currentMediaEl.paused : false;
             if (isVideoPlaying && targetResumeSecRef.current > 0 && sec >= 1) {
-              if (iframeRef.current) iframeRef.current.__pendingResumeSec = null;
+              if (currentMediaEl) currentMediaEl.__pendingResumeSec = null;
               targetResumeSecRef.current = 0;
             }
             currentSecRef.current = sec;
             const newCueIdx = updateCueFromSeconds(sec);
-            if (Math.abs(sec - lastSavedSecRef.current) >= 5) {
-              scheduleProgressSave(sec, newCueIdx);
+
+            // Periodically persist progress every 10 seconds of active playback
+            if (Math.abs(sec - lastSavedSecRef.current) >= 10) {
+              lastSavedSecRef.current = sec;
+              saveProgressToDb(sec, newCueIdx);
+            } else {
+              // Debounced fallback to save when stopping or pausing on short segments
+              if (saveDebounceTimerRef.current) {
+                clearTimeout(saveDebounceTimerRef.current);
+              }
+              saveDebounceTimerRef.current = setTimeout(() => {
+                if (Math.abs(currentSecRef.current - lastSavedSecRef.current) >= 2) {
+                  lastSavedSecRef.current = currentSecRef.current;
+                  saveProgressToDb(currentSecRef.current, activeCueIdxRef.current);
+                }
+              }, 4000);
             }
           } else if (player && typeof player.getCurrentTime === 'function') {
             player.getCurrentTime().then(s => {
@@ -457,7 +508,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
           if (sec > 0) {
             if (targetResumeSecRef.current > 0 && Math.abs(sec - targetResumeSecRef.current) > 2) {
               targetResumeSecRef.current = 0;
-              if (iframeRef.current) iframeRef.current.__pendingResumeSec = null;
+              if (currentMediaEl) currentMediaEl.__pendingResumeSec = null;
             }
             currentSecRef.current = sec;
             updateCueFromSeconds(sec);
@@ -470,6 +521,52 @@ export function useLecturePlayer(activeData, userEmail = null) {
         player.on('seeked', handlePauseOrSeeked);
         player.on('play', handleTimeChange);
         player.on('pause', handlePauseOrSeeked);
+
+        // Instantly re-sync cue with current video playback time when window regains focus or tab becomes visible,
+        // and instantly persist progress when tab is hidden or page is about to unload
+        const handleWindowSync = () => {
+          if (currentMediaEl && currentMediaEl.tagName === 'VIDEO') {
+            const isPlaying = !currentMediaEl.paused;
+            const sec = currentMediaEl.currentTime;
+            if (isPlaying && typeof sec === 'number' && !isNaN(sec) && sec >= 0) {
+              currentSecRef.current = sec;
+              updateCueFromSeconds(sec);
+            }
+          }
+        };
+
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'hidden') {
+            const sec = (currentMediaEl && typeof currentMediaEl.currentTime === 'number' && currentMediaEl.currentTime > 0)
+              ? currentMediaEl.currentTime
+              : currentSecRef.current;
+            if (activeData?.videoId && sec > 2) {
+              currentSecRef.current = sec;
+              saveProgressToDb(sec, activeCueIdxRef.current);
+            }
+          } else {
+            handleWindowSync();
+          }
+        };
+
+        const handlePageUnload = () => {
+          const sec = (currentMediaEl && typeof currentMediaEl.currentTime === 'number' && currentMediaEl.currentTime > 0)
+            ? currentMediaEl.currentTime
+            : currentSecRef.current;
+          if (activeData?.videoId && sec > 2) {
+            currentSecRef.current = sec;
+            saveProgressToDb(sec, activeCueIdxRef.current);
+          }
+        };
+
+        if (typeof window !== 'undefined') {
+          window.addEventListener('focus', handleWindowSync);
+          window.addEventListener('beforeunload', handlePageUnload);
+          window.addEventListener('pagehide', handlePageUnload);
+        }
+        if (typeof document !== 'undefined') {
+          document.addEventListener('visibilitychange', handleVisibilityChange);
+        }
 
         if (typeof player.ready === 'function') {
           player.ready().then(async () => {
@@ -493,11 +590,12 @@ export function useLecturePlayer(activeData, userEmail = null) {
             }
 
             // Silent auto-resume from database if not explicitly set via URL
-            if (!restored && activeData?.videoId) {
+            if (!restored && activeData?.videoId && fetchedProgressVidRef.current !== activeData.videoId) {
+              fetchedProgressVidRef.current = activeData.videoId;
               try {
                 const emailParam = effectiveUserEmail ? `&user_email=${encodeURIComponent(effectiveUserEmail)}` : '';
                 const res = await fetch(`${API_BASE}/api/progress/lecture?video_id=${encodeURIComponent(activeData.videoId)}${emailParam}`);
-                if (res.ok) {
+                if (res && res.ok) {
                   const resData = await res.json();
                   const prog = resData?.progress;
                   const progSec = resolveResumeFromProgress(prog);
@@ -526,8 +624,16 @@ export function useLecturePlayer(activeData, userEmail = null) {
           if (saveDebounceTimerRef.current) {
             clearTimeout(saveDebounceTimerRef.current);
           }
-          if (activeData?.videoId && currentSecRef.current > 2) {
+          if (activeData?.videoId && currentSecRef.current > 2 && Math.abs(currentSecRef.current - lastSavedSecRef.current) >= 1) {
             saveProgressToDb(currentSecRef.current, activeCueIdxRef.current);
+          }
+          if (typeof window !== 'undefined') {
+            window.removeEventListener('focus', handleWindowSync);
+            window.removeEventListener('beforeunload', handlePageUnload);
+            window.removeEventListener('pagehide', handlePageUnload);
+          }
+          if (typeof document !== 'undefined') {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
           }
           if (typeof player.off === 'function') {
             player.off('timeupdate', handleTimeChange);
@@ -544,26 +650,25 @@ export function useLecturePlayer(activeData, userEmail = null) {
         console.warn("Video Player SDK init warning:", err);
       }
     }
-  }, [activeData, effectiveUserEmail]);
+  }, [activeData?.videoId, effectiveUserEmail, mediaMounted]);
 
   const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
-    if (!iframeRef?.current) return;
-    const el = iframeRef.current;
-    if (el.tagName === 'VIDEO') {
-      const onPlay = () => setIsPlaying(true);
-      const onPause = () => setIsPlaying(false);
-      el.addEventListener('play', onPlay);
-      el.addEventListener('pause', onPause);
-      el.addEventListener('ended', onPause);
-      return () => {
-        el.removeEventListener('play', onPlay);
-        el.removeEventListener('pause', onPause);
-        el.removeEventListener('ended', onPause);
-      };
-    }
-  }, [activeData]);
+    const el = iframeRef.current || (typeof document !== 'undefined' ? (document.querySelector('video') || document.querySelector('iframe')) : null);
+    if (!el || el.tagName !== 'VIDEO') return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    el.addEventListener('play', onPlay);
+    el.addEventListener('pause', onPause);
+    el.addEventListener('ended', onPause);
+    setIsPlaying(!el.paused);
+    return () => {
+      el.removeEventListener('play', onPlay);
+      el.removeEventListener('pause', onPause);
+      el.removeEventListener('ended', onPause);
+    };
+  }, [activeData?.videoId, mediaMounted]);
 
   const handleTogglePlayPause = useCallback(() => {
     const video = (iframeRef?.current && iframeRef.current.tagName === 'VIDEO')
@@ -663,20 +768,35 @@ export function useLecturePlayer(activeData, userEmail = null) {
     // Persist progress immediately on manual cue click
     if (activeData?.videoId) {
       try {
+        const dur = durationRef.current || 0;
         const p = fetch(`${API_BASE}/api/progress/lecture`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          keepalive: true,
           body: JSON.stringify({
             video_id: activeData.videoId,
             user_email: effectiveUserEmail || 'anonymous',
             last_timestamp: timestampStr,
             last_seconds: secs,
-            duration_seconds: durationRef.current || 0,
+            duration_seconds: dur,
             active_cue_idx: targetIdx
           })
         });
         if (p && typeof p.catch === 'function') {
           p.catch(e => console.warn("Could not save progress on cue click:", e));
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('lecturescribe:progressupdated', {
+            detail: {
+              video_id: activeData.videoId,
+              progress: {
+                last_timestamp: timestampStr,
+                last_seconds: secs,
+                duration_seconds: dur,
+                active_cue_idx: targetIdx
+              }
+            }
+          }));
         }
       } catch (e) {
         console.warn("Could not save progress on cue click:", e);

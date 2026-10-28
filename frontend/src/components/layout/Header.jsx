@@ -291,6 +291,12 @@ export default function Header({
             onSelectTheme={(themeId) => setTheme(themeId)}
             title="LMS Theme Selector"
             subtitle="Authentic campus & higher-ed LMS palettes"
+            triggerSx={{
+              '& .MuiTypography-root': { display: 'none !important' },
+              minWidth: 'auto',
+              px: 1,
+              py: 0.6
+            }}
           />
         )}
 

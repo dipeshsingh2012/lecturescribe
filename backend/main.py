@@ -178,7 +178,7 @@ class ChatRequest(BaseModel):
     message: str
     video_id: Optional[str] = None
     video_title: Optional[str] = None
-    cues: Optional[List[Dict[str, str]]] = None
+    cues: Optional[List[Dict[str, Any]]] = None
     user_email: Optional[str] = None
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
@@ -188,7 +188,7 @@ class RAGQueryRequest(BaseModel):
     query: str
     video_id: Optional[str] = ""
     video_title: Optional[str] = None
-    cues: Optional[List[Dict[str, str]]] = None
+    cues: Optional[List[Dict[str, Any]]] = None
     top_k: Optional[int] = 10
     user_email: Optional[str] = None
     enable_web_search: Optional[bool] = True
@@ -1976,15 +1976,20 @@ def rag_query(req: RAGQueryRequest):
         else:
             raise HTTPException(status_code=500, detail=f"{err_type}: {err_msg}")
 
-    # Auto-generate academic submission version
-    sub_res = pinecone_rag_engine.generate_submission_version(
-        original_text=result.get("answer", ""),
-        video_id=req.video_id,
-        word_count=120,
-        query=req.query
-    )
-    result["submission_text"] = sub_res.get("submission_text", "")
-    result["submission_word_count"] = sub_res.get("word_count", 0)
+    # Auto-generate academic submission version safely without failing main tutor answer
+    try:
+        sub_res = pinecone_rag_engine.generate_submission_version(
+            original_text=result.get("answer", ""),
+            video_id=req.video_id,
+            word_count=120,
+            query=req.query
+        )
+        result["submission_text"] = sub_res.get("submission_text", "")
+        result["submission_word_count"] = sub_res.get("word_count", 0)
+    except Exception as sub_err:
+        print(f"⚠️ [Submission Generator Notice] Failed to create submission writeup: {sub_err}")
+        result["submission_text"] = ""
+        result["submission_word_count"] = 0
 
     if req.video_id:
         try:

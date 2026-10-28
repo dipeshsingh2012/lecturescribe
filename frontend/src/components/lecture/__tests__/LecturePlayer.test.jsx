@@ -232,7 +232,7 @@ describe('LecturePlayer', () => {
     expect(mockSetSelectedCourse).toHaveBeenCalledWith('Machine Learning Paradigms');
   });
 
-  it('renders native video tag and "Cloud Storage Video" badge when gcs_video_url is present', () => {
+  it('renders native video tag when gcs_video_url is present', () => {
     const activeData = {
       videoId: '1234158181',
       title: 'Introduction to AI in Healthcare Live session -3',
@@ -265,9 +265,6 @@ describe('LecturePlayer', () => {
         currentTheme={mockTheme}
       />
     );
-
-    // Verify Cloud Storage Video badge is rendered
-    expect(screen.getByText(/Cloud Storage Video/i)).toBeInTheDocument();
 
     // Verify video tag is rendered instead of iframe
     const videoEl = document.querySelector('video');
@@ -316,6 +313,13 @@ describe('LecturePlayer', () => {
     const speedBtn = screen.getByRole('button', { name: /Playback speed/i });
     expect(speedBtn).toBeInTheDocument();
     expect(speedBtn).toHaveTextContent('1x');
+
+    // Open speed menu and select 2.5x playback speed
+    fireEvent.click(speedBtn);
+    const speedOption25 = screen.getByRole('menuitem', { name: /2\.5x/i });
+    expect(speedOption25).toBeInTheDocument();
+    fireEvent.click(speedOption25);
+    expect(speedBtn).toHaveTextContent('2.5x');
 
     // Subtitles and Fullscreen buttons
     expect(screen.getByRole('button', { name: /Disable Subtitles/i })).toBeInTheDocument();

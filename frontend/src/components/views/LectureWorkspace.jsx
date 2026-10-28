@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Bot, FileText, HelpCircle, Search, Paperclip } from 'lucide-react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
@@ -82,6 +82,91 @@ export default function LectureWorkspace({
 }) {
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
 
+  // VS Code-style resizable panels
+  const DEFAULT_SPLIT_RATIO = 55;
+  const MIN_SPLIT_RATIO = 25;
+  const MAX_SPLIT_RATIO = 75;
+
+  const [splitRatio, setSplitRatio] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('lecturescribe_workspace_split');
+        if (saved) {
+          const val = parseFloat(saved);
+          if (!isNaN(val) && val >= MIN_SPLIT_RATIO && val <= MAX_SPLIT_RATIO) {
+            return val;
+          }
+        }
+      } catch (_) {}
+    }
+    return DEFAULT_SPLIT_RATIO;
+  });
+
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
+  const workspaceRef = useRef(null);
+
+  const handleMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsDraggingSplit(true);
+  }, []);
+
+  const handleResetSplit = useCallback(() => {
+    setSplitRatio(DEFAULT_SPLIT_RATIO);
+    try {
+      localStorage.setItem('lecturescribe_workspace_split', String(DEFAULT_SPLIT_RATIO));
+    } catch (_) {}
+  }, []);
+
+  const handleSeparatorKeyDown = useCallback((e) => {
+    let next = splitRatio;
+    if (e.key === 'ArrowLeft') {
+      next = Math.max(MIN_SPLIT_RATIO, splitRatio - 2);
+    } else if (e.key === 'ArrowRight') {
+      next = Math.min(MAX_SPLIT_RATIO, splitRatio + 2);
+    } else if (e.key === 'Home') {
+      next = MIN_SPLIT_RATIO;
+    } else if (e.key === 'End') {
+      next = MAX_SPLIT_RATIO;
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      next = DEFAULT_SPLIT_RATIO;
+    } else {
+      return;
+    }
+    e.preventDefault();
+    setSplitRatio(next);
+    try {
+      localStorage.setItem('lecturescribe_workspace_split', String(next));
+    } catch (_) {}
+  }, [splitRatio]);
+
+  useEffect(() => {
+    if (!isDraggingSplit) return;
+
+    const handleMouseMove = (e) => {
+      if (!workspaceRef.current) return;
+      const rect = workspaceRef.current.getBoundingClientRect();
+      if (rect.width <= 0) return;
+
+      const rawPct = ((e.clientX - rect.left) / rect.width) * 100;
+      const clamped = Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, Math.round(rawPct * 10) / 10));
+      setSplitRatio(clamped);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingSplit(false);
+      try {
+        localStorage.setItem('lecturescribe_workspace_split', String(splitRatio));
+      } catch (_) {}
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingSplit, splitRatio]);
+
   // Allow pressing Esc to restore split view
   useEffect(() => {
     if (!isPanelExpanded) return;
@@ -151,7 +236,14 @@ export default function LectureWorkspace({
   };
 
   return (
-    <div className={`lecture-workspace-layout ${isPanelExpanded ? 'panel-expanded' : ''}`}>
+    <div
+      ref={workspaceRef}
+      className={`lecture-workspace-layout ${isPanelExpanded ? 'panel-expanded' : ''} ${isDraggingSplit ? 'is-resizing' : ''}`}
+      style={{
+        '--workspace-player-width': `${splitRatio}%`,
+        '--workspace-tool-width': `${100 - splitRatio}%`
+      }}
+    >
       {/* Left Panel: Real Embedded Video Player */}
       <LecturePlayer
         activeData={activeData}
@@ -178,6 +270,24 @@ export default function LectureWorkspace({
         handleDeleteResource={handleDeleteResource}
         currentTheme={currentTheme}
       />
+
+      {/* VS Code Style Horizontal Split Resizer */}
+      {!isPanelExpanded && (
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-orientation="vertical"
+          aria-label="Resize workspace panels"
+          aria-valuenow={Math.round(splitRatio)}
+          aria-valuemin={MIN_SPLIT_RATIO}
+          aria-valuemax={MAX_SPLIT_RATIO}
+          title="Drag to resize video and tools panels (Double-click to reset)"
+          className={`workspace-split-resizer ${isDraggingSplit ? 'active' : ''}`}
+          onMouseDown={handleMouseDown}
+          onDoubleClick={handleResetSplit}
+          onKeyDown={handleSeparatorKeyDown}
+        />
+      )}
 
       {/* Mobile Tab Navigation Bar (Visible only on mobile / screens < 900px) */}
       <nav className="lecture-mobile-nav" role="tablist" aria-label="Lecture Navigation Tabs">

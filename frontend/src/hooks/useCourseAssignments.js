@@ -157,7 +157,8 @@ export function useCourseAssignments(courseName, userEmail = null) {
   const deleteAssignment = useCallback(async (assignmentId) => {
     if (!assignmentId || !courseSlug) return;
     try {
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}`, {
+      const emailQuery = userEmail ? `?user_email=${encodeURIComponent(userEmail)}` : '';
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}${emailQuery}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -166,7 +167,7 @@ export function useCourseAssignments(courseName, userEmail = null) {
     } catch (err) {
       console.error('[useCourseAssignments] delete error:', err);
     }
-  }, [courseSlug]);
+  }, [courseSlug, userEmail]);
 
   // Skip missing dataset prompt and proceed with synthetic/in-code data
   const skipDataset = useCallback(async (assignmentId) => {

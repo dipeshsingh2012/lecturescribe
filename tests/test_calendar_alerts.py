@@ -188,6 +188,12 @@ class TestCalendarAlerts(unittest.TestCase):
         self.assertIn(res.status_code, (404, 405))
 
     def test_api_cron_trigger_endpoint_security(self):
+        # 0. When CRON_SECRET is not configured -> fail closed with 500
+        with patch.dict(os.environ, {"CRON_SECRET": ""}):
+            res_no_secret = self.client.post("/api/cron/trigger-alert?slot=8am")
+            self.assertEqual(res_no_secret.status_code, 500)
+            self.assertIn("CRON_SECRET is not configured", res_no_secret.json()["detail"])
+
         with patch.dict(os.environ, {"CRON_SECRET": "my_super_secret_cron_key"}):
             # 1. No auth header -> 401
             res_no_auth = self.client.post("/api/cron/trigger-alert?slot=8am")

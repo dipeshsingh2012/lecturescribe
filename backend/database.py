@@ -18,6 +18,10 @@ from typing import List, Dict, Any, Optional, Mapping
 from collections import OrderedDict
 
 from backend.gcs_storage import to_gcs_course_slug
+try:
+    from backend.video_client import parse_timestamp_to_seconds
+except ImportError:
+    from video_client import parse_timestamp_to_seconds
 
 def extract_course_name(title: str) -> str:
     """Extract canonical course name from lecture title."""
@@ -6201,12 +6205,7 @@ class RelationalDBManager:
 
     def _ts_to_secs(self, ts: str) -> int:
         """Convert MM:SS or HH:MM:SS to total seconds."""
-        parts = ts.split(":")
-        if len(parts) == 3:
-            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2].split(".")[0])
-        elif len(parts) == 2:
-            return int(parts[0]) * 60 + int(parts[1].split(".")[0])
-        return 0
+        return int(parse_timestamp_to_seconds(ts))
 
     # =====================================================================
     # LMS RBAC v1: Users & Course Memberships (Tutor / Student Roles)
@@ -6278,6 +6277,7 @@ class RelationalDBManager:
                 "active_view_role": None,
                 "last_login_at": now_iso,
             }
+        user_record["_cached_at"] = time.time()
         self._users_memory_cache[clean_email] = user_record
 
         conn = None
@@ -6322,6 +6322,7 @@ class RelationalDBManager:
                             if row.get("active_view_role")
                             else None
                         )
+                        user_record["_cached_at"] = time.time()
                         self._users_memory_cache[clean_email] = user_record
         except Exception as e:
             print(f"[PostgreSQL RBAC Notice] upsert_user_session fallback to memory ({e}).")
@@ -6343,7 +6344,7 @@ class RelationalDBManager:
             "course_roles": course_roles,
         }
 
-    def get_user_role_info(self, email: Optional[str], course_identifier: Optional[str] = None) -> Dict[str, Any]:
+    def get_user_role_info(self, email: Optional[str], course_identifier: Optional[str] = None, bypass_cache: bool = False) -> Dict[str, Any]:
         """Resolve effective role for a user globally or within a specific course context."""
         clean_email = (email or "").strip().lower()
         if not clean_email:
@@ -6357,9 +6358,15 @@ class RelationalDBManager:
                 "is_student": False,
             }
 
-        profile = self._users_memory_cache.get(clean_email)
-        if not profile:
+        cached_entry = self._users_memory_cache.get(clean_email)
+        now_ts = time.time()
+        if cached_entry and (now_ts - cached_entry.get("_cached_at", 0) < 60) and not bypass_cache:
+            profile = cached_entry
+        else:
             profile = self.upsert_user_session(clean_email)
+            if profile:
+                profile["_cached_at"] = now_ts
+                self._users_memory_cache[clean_email] = profile
 
         system_role = profile.get("system_role", "student")
         active_view_role = profile.get("active_view_role")
@@ -6406,6 +6413,7 @@ class RelationalDBManager:
             profile["active_view_role"] = target_role
         else:
             profile["active_view_role"] = target_role
+        profile["_cached_at"] = time.time()
         self._users_memory_cache[clean_email] = profile
 
         conn = None
@@ -6443,6 +6451,12 @@ class RelationalDBManager:
                 conn.close()
 
         return self.get_user_role_info(clean_email)
+
+    def invalidate_user_cache(self, email: str) -> None:
+        """Invalidate in-memory cache for a user profile across cache-aware callers."""
+        clean_email = (email or "").strip().lower()
+        if clean_email:
+            self._users_memory_cache.pop(clean_email, None)
 
     def assign_course_role(
         self,

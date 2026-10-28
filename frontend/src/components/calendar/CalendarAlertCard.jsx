@@ -33,6 +33,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import { normalizeCourseSlug } from '../../utils/routing';
 import CalendarAIExtractorModal from './CalendarAIExtractorModal';
 
 const PLATFORM_CONFIG = {
@@ -307,8 +308,8 @@ export default function CalendarAlertCard({
     if (!agenda || !selectedCourse) return [];
 
     const cleanCourse = selectedCourse.replace(/^[0-9\.\s\-_]+/, '').trim();
-    const targetSlug = selectedCourse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const cleanSlug = cleanCourse.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const targetSlug = normalizeCourseSlug(selectedCourse);
+    const cleanSlug = normalizeCourseSlug(cleanCourse);
 
     const targetWords = targetSlug.replace(/-/g, ' ');
     const cleanWords = cleanSlug.replace(/-/g, ' ');
@@ -392,7 +393,7 @@ export default function CalendarAlertCard({
         continue;
       }
 
-      const evtSlug = (evt.course_slug || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const evtSlug = normalizeCourseSlug(evt.course_slug || '');
       const evtName = (evt.course_name || '').toLowerCase();
       const titleDesc = `${evt.title || ''} ${evt.description || ''}`.toLowerCase();
       const evtTitleLower = (evt.title || '').toLowerCase().trim();

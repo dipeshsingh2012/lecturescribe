@@ -271,7 +271,61 @@ export function useLecturePlayer(activeData, userEmail = null) {
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, activeData]);
+  }, [searchQuery, activeData?.videoId]);
+
+  // Centralized progress persistence helper to avoid duplicated fetch and event dispatching
+  const persistProgressToDb = useCallback(async (sec, cueIdx, force = false) => {
+    if (!activeData?.videoId) return;
+    const safeSec = typeof sec === 'number' && !isNaN(sec) ? Math.max(0, sec) : currentSecRef.current;
+    if (!force && safeSec <= 1 && targetResumeSecRef.current > 2) return;
+    const safeIdx = typeof cueIdx === 'number' ? cueIdx : activeCueIdxRef.current;
+    lastSavedSecRef.current = safeSec;
+
+    const timestampStr = formatSecondsToTimestamp(safeSec);
+    const mediaEl = iframeRef.current?.querySelector?.('video') || (iframeRef.current?.tagName === 'VIDEO' ? iframeRef.current : null);
+    const dur = durationRef.current ||
+      (mediaEl?.duration && !isNaN(mediaEl.duration) && mediaEl.duration > 0 ? mediaEl.duration : 0) ||
+      (typeof activeData?.duration === 'number' ? activeData.duration : parseTimestampToSeconds(activeData?.duration)) ||
+      0;
+    if (dur > 0 && !durationRef.current) {
+      durationRef.current = dur;
+    }
+
+    try {
+      const p = fetch(`${API_BASE}/api/progress/lecture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
+        body: JSON.stringify({
+          video_id: activeData.videoId,
+          user_email: effectiveUserEmail || 'anonymous',
+          last_timestamp: timestampStr,
+          last_seconds: safeSec,
+          duration_seconds: dur,
+          active_cue_idx: safeIdx
+        })
+      });
+      if (p && typeof p.catch === 'function') {
+        p.catch(err => console.warn("Failed to persist lecture progress:", err));
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('lecturescribe:progressupdated', {
+          detail: {
+            video_id: activeData.videoId,
+            progress: {
+              last_timestamp: timestampStr,
+              last_seconds: safeSec,
+              duration_seconds: dur,
+              active_cue_idx: safeIdx
+            }
+          }
+        }));
+      }
+    } catch (err) {
+      console.warn("Failed to persist lecture progress:", err);
+    }
+  }, [activeData?.videoId, activeData?.duration, effectiveUserEmail]);
 
   // Connect Video Player SDK or HTML5 Video adapter to track current playhead timestamp and sync progress
   useEffect(() => {
@@ -409,54 +463,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
           applyResumePosition(targetResumeSecRef.current, activeCueIdxRef.current, player);
         }
 
-        const saveProgressToDb = async (sec, cueIdx) => {
-          if (!activeData?.videoId) return;
-          const safeSec = typeof sec === 'number' && !isNaN(sec) ? Math.max(0, sec) : currentSecRef.current;
-          if (safeSec <= 1 && targetResumeSecRef.current > 2) return;
-          const safeIdx = typeof cueIdx === 'number' ? cueIdx : activeCueIdxRef.current;
-          lastSavedSecRef.current = safeSec;
-
-          const timestampStr = formatSecondsToTimestamp(safeSec);
-          const dur = durationRef.current ||
-            (currentMediaEl?.duration && !isNaN(currentMediaEl.duration) && currentMediaEl.duration > 0 ? currentMediaEl.duration : 0) ||
-            (typeof activeData.duration === 'number' ? activeData.duration : parseTimestampToSeconds(activeData.duration)) ||
-            0;
-          if (dur > 0 && !durationRef.current) {
-            durationRef.current = dur;
-          }
-
-          try {
-            await fetch(`${API_BASE}/api/progress/lecture`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              keepalive: true,
-              body: JSON.stringify({
-                video_id: activeData.videoId,
-                user_email: effectiveUserEmail || 'anonymous',
-                last_timestamp: timestampStr,
-                last_seconds: safeSec,
-                duration_seconds: dur,
-                active_cue_idx: safeIdx
-              })
-            });
-
-            if (typeof window !== 'undefined') {
-              window.dispatchEvent(new CustomEvent('lecturescribe:progressupdated', {
-                detail: {
-                  video_id: activeData.videoId,
-                  progress: {
-                    last_timestamp: timestampStr,
-                    last_seconds: safeSec,
-                    duration_seconds: dur,
-                    active_cue_idx: safeIdx
-                  }
-                }
-              }));
-            }
-          } catch (err) {
-            console.warn("Failed to persist lecture progress:", err);
-          }
-        };
+        const saveProgressToDb = (sec, cueIdx) => persistProgressToDb(sec, cueIdx);
 
         const handleTimeChange = (data) => {
           const sec = (data && typeof data.seconds === 'number') ? data.seconds : null;
@@ -535,21 +542,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
           }
         };
 
-        const handleVisibilityChange = () => {
-          if (document.visibilityState === 'hidden') {
-            const sec = (currentMediaEl && typeof currentMediaEl.currentTime === 'number' && currentMediaEl.currentTime > 0)
-              ? currentMediaEl.currentTime
-              : currentSecRef.current;
-            if (activeData?.videoId && sec > 2) {
-              currentSecRef.current = sec;
-              saveProgressToDb(sec, activeCueIdxRef.current);
-            }
-          } else {
-            handleWindowSync();
-          }
-        };
-
-        const handlePageUnload = () => {
+        const handleSaveOnExit = () => {
           const sec = (currentMediaEl && typeof currentMediaEl.currentTime === 'number' && currentMediaEl.currentTime > 0)
             ? currentMediaEl.currentTime
             : currentSecRef.current;
@@ -557,6 +550,18 @@ export function useLecturePlayer(activeData, userEmail = null) {
             currentSecRef.current = sec;
             saveProgressToDb(sec, activeCueIdxRef.current);
           }
+        };
+
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'hidden') {
+            handleSaveOnExit();
+          } else {
+            handleWindowSync();
+          }
+        };
+
+        const handlePageUnload = () => {
+          handleSaveOnExit();
         };
 
         if (typeof window !== 'undefined') {
@@ -767,40 +772,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
 
     // Persist progress immediately on manual cue click
     if (activeData?.videoId) {
-      try {
-        const dur = durationRef.current || 0;
-        const p = fetch(`${API_BASE}/api/progress/lecture`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          keepalive: true,
-          body: JSON.stringify({
-            video_id: activeData.videoId,
-            user_email: effectiveUserEmail || 'anonymous',
-            last_timestamp: timestampStr,
-            last_seconds: secs,
-            duration_seconds: dur,
-            active_cue_idx: targetIdx
-          })
-        });
-        if (p && typeof p.catch === 'function') {
-          p.catch(e => console.warn("Could not save progress on cue click:", e));
-        }
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('lecturescribe:progressupdated', {
-            detail: {
-              video_id: activeData.videoId,
-              progress: {
-                last_timestamp: timestampStr,
-                last_seconds: secs,
-                duration_seconds: dur,
-                active_cue_idx: targetIdx
-              }
-            }
-          }));
-        }
-      } catch (e) {
-        console.warn("Could not save progress on cue click:", e);
-      }
+      persistProgressToDb(secs, targetIdx, true);
     }
   };
 

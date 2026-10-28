@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
+import { getUserDisplayName } from '../../utils/formatters';
 
 export default function CourseParticipants({
   courseName = 'Active Course',
@@ -170,7 +171,7 @@ export default function CourseParticipants({
         body: JSON.stringify({
           enrollment_key: studentKeyInput.trim(),
           user_email: userEmail || 'student@iiitdwd.ac.in',
-          user_name: userName || (userEmail ? userEmail.split('@')[0] : 'Student')
+          user_name: getUserDisplayName(userName, userEmail, 'Student')
         })
       });
       if (!res.ok) {
@@ -399,7 +400,7 @@ export default function CourseParticipants({
                     </Avatar>
                     <Box>
                       <Typography variant="subtitle2" sx={{ fontWeight: 700, color: palette.textPrimary }}>
-                        {m.name || m.user_email.split('@')[0]}
+                        {getUserDisplayName(m.name, m.user_email, 'Student')}
                       </Typography>
                       <Typography variant="caption" sx={{ color: palette.textSecondary }}>
                         {m.user_email} • Joined via {m.enrol_method || 'manual'}

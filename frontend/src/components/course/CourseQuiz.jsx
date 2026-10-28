@@ -38,6 +38,7 @@ import {
   X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import { formatSecondsToTimestamp } from '../../utils/formatters';
 
 export default function CourseQuiz({
   courseName = 'Active Course',
@@ -138,12 +139,7 @@ export default function CourseQuiz({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [totalQuestions]);
 
-  const formatTime = (secs) => {
-    const s = Math.max(0, Math.floor(secs || 0));
-    const m = Math.floor(s / 60);
-    const rem = s % 60;
-    return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
-  };
+  const formatTime = formatSecondsToTimestamp;
 
   const primaryColor = currentTheme?.palette?.primary || '#6366f1';
   const cardBg = currentTheme?.palette?.cardBg || '#1e293b';

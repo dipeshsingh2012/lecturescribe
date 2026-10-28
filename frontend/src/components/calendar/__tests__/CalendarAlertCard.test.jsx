@@ -105,6 +105,8 @@ const mockUser = { email: 'student@iiitdwd.ac.in', name: 'Test Student' };
 describe('CalendarAlertCard Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-27T12:00:00Z'));
     global.fetch = vi.fn().mockImplementation((url, options) => {
       if (url.includes('/api/calendar/events')) {
         return Promise.resolve({
@@ -114,6 +116,10 @@ describe('CalendarAlertCard Component', () => {
       }
       return Promise.reject(new Error(`Unhandled URL: ${url}`));
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('does not render and does not fetch calendar events when user is not signed in', () => {

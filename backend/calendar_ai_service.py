@@ -31,21 +31,17 @@ from backend.database import db_manager, to_course_slug, extract_course_name
 from backend.calendar_parser import categorize_event, IST
 from backend.llm_router import llm_router, TaskType
 from backend.assignment_service import extract_text_from_pdf, _safe_json_loads
+try:
+    from backend.video_client import parse_timestamp_to_seconds
+except ImportError:
+    from video_client import parse_timestamp_to_seconds
 
 logger = logging.getLogger("lecturescribe.calendar_ai_service")
 
 
 def _cue_time_to_seconds(cue_time: str) -> int:
     """Convert 'MM:SS' or 'HH:MM:SS' timestamp string to integer seconds."""
-    clean = re.sub(r"[^0-9:]", "", str(cue_time or "00:00"))
-    parts = [int(p) for p in clean.split(":") if p.isdigit()]
-    if len(parts) == 3:
-        return parts[0] * 3600 + parts[1] * 60 + parts[2]
-    if len(parts) == 2:
-        return parts[0] * 60 + parts[1]
-    if len(parts) == 1:
-        return parts[0]
-    return 0
+    return int(parse_timestamp_to_seconds(cue_time))
 
 
 def _build_ist_iso(

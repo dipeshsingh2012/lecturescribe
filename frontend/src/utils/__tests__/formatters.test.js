@@ -7,6 +7,8 @@ import {
   normalizeTimestamp,
   parseTimestampToSeconds,
   formatSecondsToTimestamp,
+  getUserDisplayName,
+  getUserFirstName,
   cleanSubmissionFallback,
   truncateEnd
 } from '../formatters';
@@ -230,6 +232,28 @@ describe('formatters utility functions', () => {
       expect(formatSecondsToTimestamp(65)).toBe('01:05');
       expect(formatSecondsToTimestamp(860)).toBe('14:20');
       expect(formatSecondsToTimestamp(3665)).toBe('1:01:05');
+      expect(formatSecondsToTimestamp("125")).toBe('02:05');
+    });
+  });
+
+  describe('getUserDisplayName & getUserFirstName', () => {
+    it('extracts direct username when present', () => {
+      expect(getUserDisplayName('Alice')).toBe('Alice');
+      expect(getUserDisplayName({ name: 'Bob Smith' })).toBe('Bob Smith');
+      expect(getUserFirstName('Alice Jones')).toBe('Alice');
+      expect(getUserFirstName({ name: 'Bob Smith' })).toBe('Bob');
+    });
+
+    it('falls back to email username when name is missing', () => {
+      expect(getUserDisplayName('', 'charlie@test.edu')).toBe('charlie');
+      expect(getUserDisplayName({ email: 'david@test.edu' })).toBe('david');
+      expect(getUserFirstName(null, 'elena@school.edu')).toBe('elena');
+      expect(getUserFirstName({ email: 'frank@school.edu' })).toBe('frank');
+    });
+
+    it('falls back to default fallback when both are missing', () => {
+      expect(getUserDisplayName(null, null, 'CustomFallback')).toBe('CustomFallback');
+      expect(getUserFirstName(null, null, 'Scholar')).toBe('Scholar');
     });
   });
 });

@@ -10,7 +10,7 @@ import os
 import re
 import json
 import urllib.request
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 
 def extract_video_id(url: str) -> str:
@@ -126,6 +126,45 @@ def format_timestamp(ts: str) -> str:
             return f"{int(h)}:{m}:{s}"
         return f"{m}:{s}"
     return ts.split(".")[0]
+
+
+def parse_timestamp_to_seconds(ts: Union[str, int, float, None]) -> float:
+    """Convert timestamp string ('MM:SS', 'HH:MM:SS', 'HMM:SS') or number to total seconds."""
+    if ts is None:
+        return 0.0
+    if isinstance(ts, (int, float)):
+        return float(ts) if not (isinstance(ts, float) and (ts != ts)) else 0.0
+
+    raw = str(ts).strip().replace("[", "").replace("]", "")
+    if not raw:
+        return 0.0
+
+    if ":" in raw:
+        parts = raw.split(":")
+        try:
+            if len(parts) == 3:
+                h = float(parts[0])
+                m = float(parts[1])
+                s = float(parts[2].split(".")[0]) if "." in parts[2] else float(parts[2])
+                return h * 3600.0 + m * 60.0 + s
+            elif len(parts) == 2:
+                p0 = parts[0].strip()
+                s = float(parts[1].split(".")[0]) if "." in parts[1] else float(parts[1])
+                # Handle merged 3-digit HMM:SS format like 108:04 -> 1h 08m 04s
+                if len(p0) == 3 and p0.isdigit():
+                    h = float(p0[0])
+                    m = float(p0[1:])
+                    return h * 3600.0 + m * 60.0 + s
+                return float(parts[0]) * 60.0 + s
+            elif len(parts) == 1 and parts[0]:
+                return float(parts[0])
+        except (ValueError, TypeError):
+            return 0.0
+
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def format_duration(seconds: int | float | None) -> str:

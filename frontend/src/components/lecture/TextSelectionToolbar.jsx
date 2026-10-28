@@ -12,6 +12,7 @@ import {
   Bot
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import { formatSecondsToTimestamp } from '../../utils/formatters';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
 export default function TextSelectionToolbar({
@@ -590,7 +591,7 @@ export default function TextSelectionToolbar({
                   aria-label="Discuss in AI Tutor"
                   onClick={() => {
                     const ts = startSeconds !== undefined
-                      ? `${Math.floor(startSeconds / 60)}:${String(Math.floor(startSeconds % 60)).padStart(2, '0')}`
+                      ? formatSecondsToTimestamp(startSeconds)
                       : '';
                     onDiscussInTutor(selectedText, ts);
                     onClose();

@@ -351,6 +351,7 @@ class TestServices(unittest.TestCase):
             "deleted_blobs": ["courses/ml/notes/n1.txt", "courses/ml/resources/slides.pdf"],
         }
         with (
+            patch("backend.main.require_tutor_role") as mock_require_tutor,
             patch("backend.main.db_manager.delete_course", return_value=mock_result) as mock_del_course,
             patch("backend.main.gcs_storage_service.delete_blob") as mock_del_blob,
             patch("backend.main.redis_cache.update_user_course") as mock_redis_course,
@@ -358,6 +359,9 @@ class TestServices(unittest.TestCase):
         ):
             resp = client.delete("/api/course/1.2%20Machine%20Learning%20Paradigms?email=student@example.com")
             self.assertEqual(resp.status_code, 200)
+            mock_require_tutor.assert_called_once_with(
+                "student@example.com", "1.2 Machine Learning Paradigms", action_label="delete courses"
+            )
             data = resp.json()
             self.assertEqual(data["status"], "success")
             self.assertTrue(data["deleted"])

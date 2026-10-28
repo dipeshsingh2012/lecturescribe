@@ -84,14 +84,14 @@ export default function Header({
         </span>
       </div>
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 1.5 } }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 0.75 } }}>
         {activeData && (
           <>
             <Box sx={{
               display: { xs: 'none', md: 'flex' },
-              gap: '4px',
+              gap: '3px',
               background: 'rgba(0, 0, 0, 0.2)',
-              padding: '4px',
+              padding: '3px',
               borderRadius: '8px',
               border: '1px solid rgba(255, 255, 255, 0.15)'
             }}>
@@ -102,14 +102,14 @@ export default function Header({
                   background: activeTab === 'summary' ? '#ffffff' : 'transparent',
                   color: activeTab === 'summary' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                   border: 'none',
-                  padding: '6px 14px',
+                  padding: '5px 10px',
                   borderRadius: '6px',
                   cursor: 'pointer',
                   fontSize: '0.85rem',
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
+                  gap: '5px',
                   transition: 'all 0.2s ease'
                 }}
               >
@@ -135,14 +135,14 @@ export default function Header({
                   background: activeTab === 'tutor' ? '#ffffff' : 'transparent',
                   color: activeTab === 'tutor' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                   border: 'none',
-                  padding: '6px 14px',
+                  padding: '5px 10px',
                   borderRadius: '6px',
                   cursor: 'pointer',
                   fontSize: '0.85rem',
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
+                  gap: '5px',
                   transition: 'all 0.2s ease'
                 }}
               >
@@ -154,14 +154,14 @@ export default function Header({
                   background: activeTab === 'quiz' ? '#ffffff' : 'transparent',
                   color: activeTab === 'quiz' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                   border: 'none',
-                  padding: '6px 14px',
+                  padding: '5px 10px',
                   borderRadius: '6px',
                   cursor: 'pointer',
                   fontSize: '0.85rem',
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
+                  gap: '5px',
                   transition: 'all 0.2s ease'
                 }}
               >
@@ -174,14 +174,14 @@ export default function Header({
                   background: activeTab === 'transcript' ? '#ffffff' : 'transparent',
                   color: activeTab === 'transcript' ? currentTheme.palette.headerBg : 'rgba(255, 255, 255, 0.85)',
                   border: 'none',
-                  padding: '6px 14px',
+                  padding: '5px 10px',
                   borderRadius: '6px',
                   cursor: 'pointer',
                   fontSize: '0.85rem',
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
+                  gap: '5px',
                   transition: 'all 0.2s ease'
                 }}
               >
@@ -213,7 +213,7 @@ export default function Header({
                       background: driveFolderUrl ? 'rgba(16, 185, 129, 0.22)' : 'rgba(255, 255, 255, 0.16)',
                       color: '#ffffff',
                       border: driveFolderUrl ? '1px solid rgba(16, 185, 129, 0.6)' : '1px solid rgba(255, 255, 255, 0.3)',
-                      padding: '6px 10px',
+                      padding: '5px 8px',
                       borderRadius: '6px',
                       cursor: 'pointer',
                       transition: 'all 0.2s ease',
@@ -268,8 +268,8 @@ export default function Header({
                 fontWeight: 700,
                 fontSize: '0.82rem',
                 borderRadius: '8px',
-                px: 1.4,
-                py: 0.5,
+                px: 1,
+                py: 0.4,
                 color: isCalendarPage ? currentTheme.palette.headerBg : '#ffffff',
                 bgcolor: isCalendarPage ? '#ffffff' : 'rgba(255, 255, 255, 0.14)',
                 border: '1px solid rgba(255, 255, 255, 0.28)',
@@ -294,8 +294,8 @@ export default function Header({
             triggerSx={{
               '& .MuiTypography-root': { display: 'none !important' },
               minWidth: 'auto',
-              px: 1,
-              py: 0.6
+              px: 0.6,
+              py: 0.4
             }}
           />
         )}
@@ -313,7 +313,7 @@ export default function Header({
               fontWeight: 600,
               fontSize: '0.84rem',
               borderRadius: '20px',
-              padding: '5px 14px',
+              padding: '4px 10px',
               boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
               '&:hover': { background: '#f3f4f6' }
             }}
@@ -331,8 +331,8 @@ export default function Header({
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  padding: '4px 10px',
+                  gap: '4px',
+                  padding: '3px 8px',
                   borderRadius: '16px',
                   fontSize: '0.75rem',
                   fontWeight: 700,
@@ -351,7 +351,7 @@ export default function Header({
             <Tooltip title={`${googleUser.name || 'Google User'} (${googleUser.email})`}>
               <IconButton
                 onClick={(e) => setUserMenuAnchor(e.currentTarget)}
-                sx={{ p: 0.5, border: '2px solid rgba(255, 255, 255, 0.6)', '&:hover': { borderColor: '#ffffff' } }}
+                sx={{ p: 0.35, border: '2px solid rgba(255, 255, 255, 0.6)', '&:hover': { borderColor: '#ffffff' } }}
               >
                 <Avatar
                   alt={googleUser.name || googleUser.email}

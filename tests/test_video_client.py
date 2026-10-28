@@ -1,5 +1,5 @@
 import unittest
-from backend.video_client import extract_video_id, format_timestamp, parse_vtt
+from backend.video_client import extract_video_id, format_timestamp, parse_vtt, parse_timestamp_to_seconds
 
 class TestVideoClient(unittest.TestCase):
     def test_extract_video_id_from_raw_id(self):
@@ -46,6 +46,17 @@ class TestVideoClient(unittest.TestCase):
         self.assertEqual(format_timestamp("00:01:23.456"), "01:23")
         self.assertEqual(format_timestamp("01:05:30.000"), "1:05:30")
         self.assertEqual(format_timestamp("00:00:15.100"), "00:15")
+
+    def test_parse_timestamp_to_seconds(self):
+        self.assertEqual(parse_timestamp_to_seconds("00:00"), 0.0)
+        self.assertEqual(parse_timestamp_to_seconds("01:30"), 90.0)
+        self.assertEqual(parse_timestamp_to_seconds("1:05:30"), 3930.0)
+        self.assertEqual(parse_timestamp_to_seconds("108:04"), 4084.0)
+        self.assertEqual(parse_timestamp_to_seconds("00:01:23.456"), 83.0)
+        self.assertEqual(parse_timestamp_to_seconds("[14:20]"), 860.0)
+        self.assertEqual(parse_timestamp_to_seconds(120), 120.0)
+        self.assertEqual(parse_timestamp_to_seconds(None), 0.0)
+        self.assertEqual(parse_timestamp_to_seconds(""), 0.0)
 
     def test_parse_vtt(self):
         sample_vtt = """WEBVTT

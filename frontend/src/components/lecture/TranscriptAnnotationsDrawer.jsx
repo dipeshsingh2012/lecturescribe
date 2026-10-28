@@ -15,6 +15,7 @@ import {
   Bot
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import { formatSecondsToTimestamp } from '../../utils/formatters';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
 export default function TranscriptAnnotationsDrawer({
@@ -43,12 +44,7 @@ export default function TranscriptAnnotationsDrawer({
     return aType === filterType;
   });
 
-  const formatSeconds = (sec) => {
-    const s = Math.max(0, Math.floor(sec || 0));
-    const m = Math.floor(s / 60);
-    const rem = s % 60;
-    return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
-  };
+  const formatSeconds = formatSecondsToTimestamp;
 
   const handleSaveEdit = async (annotationId) => {
     const trimmed = (editNoteText || '').trim();

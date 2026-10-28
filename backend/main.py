@@ -47,6 +47,7 @@ import socket
 import ipaddress
 from urllib.parse import urlparse
 import httpx
+from starlette.concurrency import run_in_threadpool
 
 from contextlib import asynccontextmanager
 
@@ -66,6 +67,7 @@ from backend.video_client import (
     fetch_vtt,
     parse_vtt,
     format_timestamp,
+    parse_timestamp_to_seconds,
     get_video_download_streams,
 )
 from backend.rag_engine import pinecone_rag_engine
@@ -175,48 +177,48 @@ app.add_middleware(
 )
 
 class ChatRequest(BaseModel):
-    message: str
-    video_id: Optional[str] = None
-    video_title: Optional[str] = None
+    message: str = Field(..., min_length=1, max_length=20000, description="Chat message prompt")
+    video_id: Optional[str] = Field(default=None, max_length=100)
+    video_title: Optional[str] = Field(default=None, max_length=500)
     cues: Optional[List[Dict[str, Any]]] = None
-    user_email: Optional[str] = None
+    user_email: Optional[str] = Field(default=None, max_length=320)
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
     chat_history: Optional[List[Dict[str, Any]]] = None
 
 class RAGQueryRequest(BaseModel):
-    query: str
-    video_id: Optional[str] = ""
-    video_title: Optional[str] = None
+    query: str = Field(..., min_length=1, max_length=10000, description="RAG query text")
+    video_id: Optional[str] = Field(default="", max_length=100)
+    video_title: Optional[str] = Field(default=None, max_length=500)
     cues: Optional[List[Dict[str, Any]]] = None
-    top_k: Optional[int] = 10
-    user_email: Optional[str] = None
+    top_k: Optional[int] = Field(default=10, ge=1, le=100)
+    user_email: Optional[str] = Field(default=None, max_length=320)
     enable_web_search: Optional[bool] = True
     bypass_cache: Optional[bool] = False
     chat_history: Optional[List[Dict[str, Any]]] = None
     enforce_regenerate: Optional[bool] = False
 
 class SubmissionRequest(BaseModel):
-    original_text: str
-    video_id: Optional[str] = None
-    word_count: Optional[int] = 100
-    user_email: Optional[str] = None
+    original_text: str = Field(..., min_length=1, max_length=50000)
+    video_id: Optional[str] = Field(default=None, max_length=100)
+    word_count: Optional[int] = Field(default=100, ge=10, le=5000)
+    user_email: Optional[str] = Field(default=None, max_length=320)
 
 class AlgoliaSearchRequest(BaseModel):
-    query: str
-    video_id: Optional[str] = None
-    limit: Optional[int] = 20
+    query: str = Field(..., min_length=1, max_length=1000)
+    video_id: Optional[str] = Field(default=None, max_length=100)
+    limit: Optional[int] = Field(default=20, ge=1, le=100)
 
 class RegenerateSummaryRequest(BaseModel):
-    video_id: str
+    video_id: str = Field(..., min_length=1, max_length=100)
 
 
 class GenerateLectureSummaryRequest(BaseModel):
-    video_id: str
-    summary_type: str = "comprehensive"
-    video_title: Optional[str] = None
+    video_id: str = Field(..., min_length=1, max_length=100)
+    summary_type: str = Field(default="comprehensive", max_length=50)
+    video_title: Optional[str] = Field(default=None, max_length=500)
     cues: Optional[List[Dict[str, Any]]] = None
-    user_email: Optional[str] = None
+    user_email: Optional[str] = Field(default=None, max_length=320)
     bypass_cache: Optional[bool] = False
 
 
@@ -232,12 +234,12 @@ class SaveLectureProgressRequest(BaseModel):
 
 
 class TranscriptionDispatchRequest(BaseModel):
-    job_id: str
+    job_id: str = Field(..., min_length=1, max_length=100)
 
 
 class CourseTutorChatRequest(BaseModel):
-    message: str
-    user_email: Optional[str] = None
+    message: str = Field(..., min_length=1, max_length=20000)
+    user_email: Optional[str] = Field(default=None, max_length=320)
     chat_history: Optional[List[Dict[str, Any]]] = None
 
 
@@ -537,19 +539,10 @@ def determine_lecture_quiz_count(cues: Optional[List[Dict[str, Any]]] = None, du
             total_mins = h * 60 + m
             if total_mins > 0:
                 duration_minutes = total_mins
-        elif ":" in d_str:
-            parts = [int(p) for p in d_str.split(":") if p.isdigit()]
-            if len(parts) == 3:
-                duration_minutes = parts[0] * 60 + parts[1]
-            elif len(parts) == 2:
-                duration_minutes = parts[0] + parts[1] / 60.0
         else:
-            try:
-                secs = float(d_str)
-                if secs > 0:
-                    duration_minutes = secs / 60.0
-            except ValueError:
-                pass
+            sec_val = parse_timestamp_to_seconds(d_str)
+            if sec_val > 0:
+                duration_minutes = sec_val / 60.0
 
     # 2. Try inferring from cues if duration_minutes not resolved
     if (duration_minutes is None or duration_minutes <= 0) and cues:
@@ -559,12 +552,9 @@ def determine_lecture_quiz_count(cues: Optional[List[Dict[str, Any]]] = None, du
             if "start" in last_cue and isinstance(last_cue["start"], (int, float)):
                 duration_minutes = float(last_cue["start"]) / 60.0
             elif "time" in last_cue:
-                ts = str(last_cue["time"]).strip().replace("[", "").replace("]", "")
-                parts = [int(p) for p in ts.split(":") if p.isdigit()]
-                if len(parts) == 3:
-                    duration_minutes = parts[0] * 60 + parts[1]
-                elif len(parts) == 2:
-                    duration_minutes = parts[0] + parts[1] / 60.0
+                sec_val = parse_timestamp_to_seconds(last_cue["time"])
+                if sec_val > 0:
+                    duration_minutes = sec_val / 60.0
 
     # 3. Determine count from duration
     if duration_minutes is not None and duration_minutes > 0:
@@ -2789,8 +2779,7 @@ def delete_course_endpoint(
     if not clean_name or not clean_email:
         raise HTTPException(status_code=400, detail="course_name and email are required.")
 
-    if clean_email in db_manager._users_memory_cache:
-        require_tutor_role(clean_email, clean_name, action_label="delete courses")
+    require_tutor_role(clean_email, clean_name, action_label="delete courses")
 
     result = db_manager.delete_course(clean_name, clean_email)
 
@@ -4131,7 +4120,7 @@ async def search_course_literature(course_name: str, payload: SearchLiteratureRe
     query = (payload.query or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="Search query is required.")
-    cname = db_manager.resolve_course_canonical_name(raw_name)
+    cname = await run_in_threadpool(db_manager.resolve_course_canonical_name, raw_name)
     results = await search_academic_literature_async(query, limit=payload.limit or 6, course_name=raw_name)
     return {
         "status": "success",
@@ -4698,7 +4687,7 @@ def delete_calendar_event_endpoint(event_id: str):
 
 
 @app.post("/api/calendar/extract-pdf")
-async def extract_calendar_from_pdf_endpoint(
+def extract_calendar_from_pdf_endpoint(
     file: UploadFile = File(...),
     course_name: Optional[str] = Form(None),
     event_scope: Optional[str] = Form(None),
@@ -4712,7 +4701,7 @@ async def extract_calendar_from_pdf_endpoint(
     otherwise returns candidate events for human-in-the-loop review and 1-click injection.
     """
     filename = file.filename or "Semester_Exam_Schedule.pdf"
-    pdf_bytes = await file.read()
+    pdf_bytes = file.file.read()
     if not pdf_bytes:
         raise HTTPException(status_code=400, detail="Uploaded PDF file is empty.")
 
@@ -4826,10 +4815,14 @@ def trigger_cron_alert(
     Secured with Bearer token authentication matching CRON_SECRET.
     """
     cron_secret = os.getenv("CRON_SECRET", "").strip()
-    if cron_secret:
-        expected_bearer = f"Bearer {cron_secret}"
-        if not authorization or authorization.strip() != expected_bearer:
-            raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing Bearer token for cron trigger.")
+    if not cron_secret:
+        raise HTTPException(
+            status_code=500,
+            detail="Server security misconfiguration: CRON_SECRET is not configured on server."
+        )
+    expected_bearer = f"Bearer {cron_secret}"
+    if not authorization or authorization.strip() != expected_bearer:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing Bearer token for cron trigger.")
 
     clean_slot = slot.strip().lower()
     if clean_slot not in SLOT_LABELS:
@@ -5067,7 +5060,7 @@ def stream_video_direct(video_id: str):
 # ==============================================================================
 
 @app.post("/api/course/{course_name}/assignments/upload")
-async def upload_course_assignment(
+def upload_course_assignment(
     course_name: str,
     file: UploadFile = File(...),
     dataset_file: Optional[UploadFile] = File(None),
@@ -5081,15 +5074,16 @@ async def upload_course_assignment(
     clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
     course_slug = to_course_slug(clean_course)
     clean_email = (user_email or "").strip().lower() if user_email else None
-    if clean_email and clean_email in db_manager._users_memory_cache:
-        require_tutor_role(clean_email, clean_course, action_label="upload and solve assignments")
+    if not clean_email:
+        raise HTTPException(status_code=403, detail="Tutor email is required to upload and solve assignments.")
+    require_tutor_role(clean_email, clean_course, action_label="upload and solve assignments")
 
     # Validate filename and PDF extension
     fname = file.filename or "assignment.pdf"
     if not fname.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF assignment documents (.pdf) are supported.")
 
-    pdf_bytes = await file.read()
+    pdf_bytes = file.file.read()
     if not pdf_bytes or len(pdf_bytes) < 10:
         raise HTTPException(status_code=400, detail="Uploaded PDF file is empty or unreadable.")
 
@@ -5109,7 +5103,7 @@ async def upload_course_assignment(
     if dataset_file and dataset_file.filename:
         ds_name = dataset_file.filename
         try:
-            ds_bytes = await dataset_file.read()
+            ds_bytes = dataset_file.file.read()
             if ds_bytes:
                 ws = get_assignment_workspace(assignment_id)
                 with open(os.path.join(ws, ds_name), "wb") as f:
@@ -5153,7 +5147,7 @@ async def upload_course_assignment(
 
 
 @app.post("/api/course/{course_name}/assignments/{assignment_id}/provide-dataset")
-async def provide_assignment_dataset(
+def provide_assignment_dataset(
     course_name: str,
     assignment_id: str,
     file: UploadFile = File(...),
@@ -5171,7 +5165,7 @@ async def provide_assignment_dataset(
     course_slug = to_course_slug(clean_course)
     fname = file.filename or "dataset.csv"
 
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded dataset file is empty.")
 
@@ -5231,7 +5225,7 @@ async def provide_assignment_dataset(
 
 
 @app.post("/api/course/{course_name}/assignments/{assignment_id}/skip-dataset")
-async def skip_assignment_dataset(
+def skip_assignment_dataset(
     course_name: str,
     assignment_id: str,
     background_tasks: BackgroundTasks = BackgroundTasks()
@@ -5385,7 +5379,7 @@ def download_assignment_file(assignment_id: str, file_type: str):
 
 
 @app.post("/api/course/{course_name}/assignments/{assignment_id}/regenerate")
-async def regenerate_course_assignment_endpoint(
+def regenerate_course_assignment_endpoint(
     course_name: str,
     assignment_id: str,
     background_tasks: BackgroundTasks = BackgroundTasks()
@@ -5429,11 +5423,12 @@ async def regenerate_course_assignment_endpoint(
 def delete_course_assignment_route(
     course_name: str,
     assignment_id: str,
-    user_email: Optional[str] = Query(None, description="Optional user email for role verification")
+    user_email: Optional[str] = Query(None, description="User email for role verification")
 ):
     """Delete an assignment and its generated files."""
-    if user_email:
-        require_tutor_role(user_email, course_name, action_label="delete assignments")
+    if not user_email or not user_email.strip():
+        raise HTTPException(status_code=403, detail="Tutor role is required to delete assignments.")
+    require_tutor_role(user_email.strip(), course_name, action_label="delete assignments")
     clean_id = assignment_id.strip()
     record = db_manager.get_assignment_by_id(clean_id)
     if not record:
@@ -5532,6 +5527,8 @@ def switch_user_role_endpoint(req: SwitchRoleRequest):
         role=target_role,
         update_system_role=bool(req.update_system_role)
     )
+    if redis_cache:
+        redis_cache.invalidate_user(clean_email)
     return {"status": "success", **updated}
 
 
@@ -5568,6 +5565,9 @@ def assign_course_member_endpoint(course_name: str, req: AssignCourseMemberReque
         course_role=target_role,
         enrol_method=req.enrol_method or "manual"
     )
+    db_manager.invalidate_user_cache(clean_email)
+    if redis_cache:
+        redis_cache.invalidate_user(clean_email)
     return {
         "status": "success",
         "course_name": clean_course,

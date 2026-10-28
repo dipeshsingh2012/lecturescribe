@@ -21,7 +21,10 @@ import {
   SlidersHorizontal
 } from 'lucide-react';
 import katex from 'katex';
+import DOMPurify from 'dompurify';
+import MathRenderer from '../common/MathRenderer';
 import { API_BASE } from '../../utils/constants';
+import { parseTimestampToSeconds, formatSecondsToTimestamp } from '../../utils/formatters';
 import TranscriptReviewDrawer from './TranscriptReviewDrawer';
 import TranscriptAnnotationsDrawer from './TranscriptAnnotationsDrawer';
 import TextSelectionToolbar from './TextSelectionToolbar';
@@ -29,14 +32,7 @@ import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 import TranscriptAppearanceMenu from './TranscriptAppearanceMenu';
 import { useTranscriptAppearanceStore, computeAppearanceCssVariables } from '../../store/transcriptAppearanceStore';
 
-const parseTimeToSeconds = (timeStr) => {
-  if (!timeStr || typeof timeStr !== 'string') return 0;
-  const parts = timeStr.trim().split(':').map(Number);
-  if (parts.some(isNaN)) return 0;
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  return 0;
-};
+const parseTimeToSeconds = parseTimestampToSeconds;
 
 const isWordChar = (ch) => {
   if (!ch) return false;
@@ -49,6 +45,14 @@ const checkWordBoundary = (fullText, startIdx, endIdx) => {
   if (prevChar && isWordChar(prevChar)) return false;
   if (nextChar && isWordChar(nextChar)) return false;
   return true;
+};
+
+const sanitizeCueHighlight = (dirtyHtml) => {
+  if (!dirtyHtml || typeof dirtyHtml !== 'string') return '';
+  return DOMPurify.sanitize(dirtyHtml, {
+    ALLOWED_TAGS: ['mark', 'b', 'strong', 'em', 'span'],
+    ALLOWED_ATTR: ['class']
+  });
 };
 
 export default function TranscriptSearch({
@@ -843,46 +847,7 @@ export default function TranscriptSearch({
 
   // Helper to render mathematical formulas via KaTeX inside cue strings
   const renderMathText = (text, isActive) => {
-    if (!text || typeof text !== 'string') return text;
-    if (!text.includes('$')) {
-      return text;
-    }
-
-    const parts = [];
-    const regex = /\$([^\$]+)\$/g;
-    let lastIndex = 0;
-    let match;
-
-    while ((match = regex.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push(text.slice(lastIndex, match.index));
-      }
-      const formula = match[1];
-      try {
-        const rendered = katex.renderToString(formula, { throwOnError: false });
-        parts.push(
-          <span
-            key={`katex-${match.index}`}
-            className="cue-math-expression"
-            style={{
-              padding: '0 2px',
-              color: isActive ? 'var(--theme-primary)' : 'inherit',
-              fontWeight: 600
-            }}
-            dangerouslySetInnerHTML={{ __html: rendered }}
-          />
-        );
-      } catch {
-        parts.push(`$${formula}$`);
-      }
-      lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < text.length) {
-      parts.push(text.slice(lastIndex));
-    }
-
-    return parts;
+    return <MathRenderer text={text} isActive={isActive} />;
   };
 
   // Helper to find matching spans of an annotation string within cue text
@@ -1200,7 +1165,7 @@ export default function TranscriptSearch({
             fontWeight: isActive ? 600 : 400,
             lineHeight: 'var(--cue-line-height, 1.35)'
           }}
-          dangerouslySetInnerHTML={{ __html: cue.highlightHtml }}
+          dangerouslySetInnerHTML={{ __html: sanitizeCueHighlight(cue.highlightHtml) }}
         />
       );
     }
@@ -2344,7 +2309,7 @@ export default function TranscriptSearch({
                         const ann = activeMarkAction.annotation;
                         const text = ann?.selectedText || ann?.selected_text || '';
                         const startSec = Number(ann?.startSeconds ?? ann?.start_seconds ?? 0);
-                        const ts = startSec ? `${Math.floor(startSec / 60)}:${String(Math.floor(startSec % 60)).padStart(2, '0')}` : '';
+                        const ts = startSec ? formatSecondsToTimestamp(startSec) : '';
                         onDiscussInTutor(text, ts);
                         setActiveMarkAction(null);
                       }}

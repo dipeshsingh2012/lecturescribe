@@ -10,7 +10,6 @@ import base64
 import json
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional

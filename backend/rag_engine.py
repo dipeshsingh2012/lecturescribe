@@ -52,9 +52,22 @@ try:
 except ImportError:
     redis_cache = None
 
+try:
+    from backend.video_client import parse_timestamp_to_seconds
+except ImportError:
+    from video_client import parse_timestamp_to_seconds
+
 
 class Llama3PineconeRAGStore:
     """RAG Engine powered by Hybrid Search + Agentic LLM Tool Execution."""
+
+    DEFAULT_GROQ_MODELS: List[str] = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+    DEFAULT_GEMINI_MODELS: List[str] = [
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.8-flash"
+    ]
 
     def __init__(self):
         self.api_key = os.getenv("PINECONE_API_KEY", "")
@@ -216,20 +229,7 @@ class Llama3PineconeRAGStore:
 
     def _parse_timestamp(self, ts: str) -> float:
         """Convert timestamp string to total seconds."""
-        if not ts:
-            return 0.0
-        parts = ts.split(':')
-        if len(parts) == 3:
-            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-        elif len(parts) == 2:
-            p0 = parts[0].strip()
-            # Handle 3-digit HMM:SS format like 108:04 -> 1h 08m 04s
-            if len(p0) == 3 and p0.isdigit():
-                h = float(p0[0])
-                m = float(p0[1:])
-                return h * 3600 + m * 60 + float(parts[1])
-            return float(parts[0]) * 60 + float(parts[1])
-        return 0.0
+        return parse_timestamp_to_seconds(ts)
 
     def _filter_and_deduplicate_citations(
         self,
@@ -1766,17 +1766,7 @@ class Llama3PineconeRAGStore:
     @staticmethod
     def _parse_time_to_seconds(time_str: str) -> float:
         """Parse HH:MM:SS or MM:SS to seconds."""
-        if not time_str:
-            return 0.0
-        parts = str(time_str).strip().split(":")
-        try:
-            if len(parts) == 3:
-                return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-            elif len(parts) == 2:
-                return float(parts[0]) * 60 + float(parts[1])
-            return float(parts[0])
-        except (ValueError, TypeError):
-            return 0.0
+        return parse_timestamp_to_seconds(time_str)
 
     @classmethod
     def _is_conversational_filler(cls, text: str, time_str: str = "") -> bool:
@@ -1941,6 +1931,29 @@ class Llama3PineconeRAGStore:
             new_c_idx = 0
         return shuffled, new_c_idx
 
+    @classmethod
+    def _validate_and_sanitize_question(
+        cls, q: Dict[str, Any]
+    ) -> Optional[Tuple[str, List[str], int]]:
+        """
+        Validate question structure, discard filler/trivial questions,
+        sanitize question stem, and balance/shuffle options.
+        Returns (sanitized_question_text, shuffled_options, balanced_correct_index) or None if invalid.
+        """
+        if not isinstance(q, dict):
+            return None
+        if cls._is_trivial_or_greeting_question(q):
+            return None
+        q_text = cls._sanitize_quiz_question_text(str(q.get("question") or ""))
+        if not q_text or len(q_text) < 8:
+            return None
+        opts = [str(opt).strip() for opt in (q.get("options") or [])]
+        if len(opts) != 4 or any(len(opt) == 0 for opt in opts):
+            return None
+        raw_correct_idx = q.get("correct_index", 0)
+        shuffled_opts, balanced_idx = cls._balance_and_shuffle_options(opts, raw_correct_idx)
+        return q_text, shuffled_opts, balanced_idx
+
     def generate_lecture_quiz(
         self,
         video_id: str,
@@ -2038,18 +2051,10 @@ class Llama3PineconeRAGStore:
 
             cleaned_qs = []
             for q in raw_qs:
-                if not isinstance(q, dict):
+                validated = self._validate_and_sanitize_question(q)
+                if not validated:
                     continue
-                if self._is_trivial_or_greeting_question(q):
-                    continue
-                q_text = self._sanitize_quiz_question_text(str(q.get("question") or ""))
-                if not q_text or len(q_text) < 8:
-                    continue
-                opts = [str(opt).strip() for opt in (q.get("options") or [])]
-                if len(opts) != 4 or any(len(opt) == 0 for opt in opts):
-                    continue
-                raw_correct_idx = q.get("correct_index", 0)
-                shuffled_opts, balanced_idx = self._balance_and_shuffle_options(opts, raw_correct_idx)
+                q_text, shuffled_opts, balanced_idx = validated
 
                 ts = str(q.get("timestamp") or "00:00").strip().replace("[", "").replace("]", "")
                 explanation = str(q.get("explanation") or f"Discussed at [{ts}].").strip()
@@ -2071,7 +2076,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+            for model_name in self.DEFAULT_GROQ_MODELS:
                 try:
                     payload = {
                         "model": model_name,
@@ -2106,7 +2111,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash"]:
+            for model_name in self.DEFAULT_GEMINI_MODELS:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2321,18 +2326,10 @@ class Llama3PineconeRAGStore:
 
             cleaned_qs = []
             for q in raw_qs:
-                if not isinstance(q, dict):
+                validated = self._validate_and_sanitize_question(q)
+                if not validated:
                     continue
-                if self._is_trivial_or_greeting_question(q):
-                    continue
-                q_text = self._sanitize_quiz_question_text(str(q.get("question") or ""))
-                if not q_text or len(q_text) < 8:
-                    continue
-                opts = [str(opt).strip() for opt in (q.get("options") or [])]
-                if len(opts) != 4 or any(len(opt) == 0 for opt in opts):
-                    continue
-                raw_correct_idx = q.get("correct_index", 0)
-                shuffled_opts, balanced_idx = self._balance_and_shuffle_options(opts, raw_correct_idx)
+                q_text, shuffled_opts, balanced_idx = validated
 
                 q_type = str(q.get("type") or "").strip().lower()
                 if q_type not in ("mcq", "fill_in_the_blank"):
@@ -2375,7 +2372,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+            for model_name in self.DEFAULT_GROQ_MODELS:
                 try:
                     payload = {
                         "model": model_name,
@@ -2414,7 +2411,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash"]:
+            for model_name in self.DEFAULT_GEMINI_MODELS:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2651,7 +2648,7 @@ class Llama3PineconeRAGStore:
 
         # 1. Groq
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+            for model_name in self.DEFAULT_GROQ_MODELS:
                 try:
                     payload = {
                         "model": model_name,
@@ -2681,7 +2678,7 @@ class Llama3PineconeRAGStore:
 
         # 2. Gemini
         if gemini_key:
-            for model_name in ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3.8-flash"]:
+            for model_name in self.DEFAULT_GEMINI_MODELS:
                 try:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -2835,7 +2832,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
 
         # Try Groq first
         if groq_key:
-            for model_name in ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+            for model_name in self.DEFAULT_GROQ_MODELS:
                 try:
                     payload = {
                         "model": model_name,

@@ -493,6 +493,19 @@ Today we discuss forward kinematics.
         self.assertEqual(response.status_code, 400)
         self.assertIn("detail", response.json())
 
+    def test_pydantic_field_constraints_enforced(self):
+        # 1. Empty message in ChatRequest -> 422
+        chat_resp = self.client.post("/api/chat", json={"message": ""})
+        self.assertEqual(chat_resp.status_code, 422)
+
+        # 2. Out-of-bounds top_k (> 100) in RAGQueryRequest -> 422
+        rag_resp_high = self.client.post("/api/rag/query", json={"query": "test query", "top_k": 500})
+        self.assertEqual(rag_resp_high.status_code, 422)
+
+        # 3. Out-of-bounds top_k (< 1) in RAGQueryRequest -> 422
+        rag_resp_low = self.client.post("/api/rag/query", json={"query": "test query", "top_k": 0})
+        self.assertEqual(rag_resp_low.status_code, 422)
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
+import { getUserDisplayName } from '../../utils/formatters';
 
 export default function CourseForum({
   courseName = 'Active Course',
@@ -95,7 +96,7 @@ export default function CourseForum({
           body: body.trim(),
           category,
           author_email: userEmail || 'student@iiitdwd.ac.in',
-          author_name: userName || (userEmail ? userEmail.split('@')[0] : 'Student'),
+          author_name: getUserDisplayName(userName, userEmail, 'Student'),
           author_role: isTutor ? 'tutor' : 'student',
           video_id: selectedVideoId || '',
           lecture_title: matchedLec?.title || '',
@@ -129,7 +130,7 @@ export default function CourseForum({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             author_email: userEmail || 'student@iiitdwd.ac.in',
-            author_name: userName || (userEmail ? userEmail.split('@')[0] : 'Student'),
+            author_name: getUserDisplayName(userName, userEmail, 'Student'),
             author_role: isTutor ? 'tutor' : 'student',
             body: text
           })

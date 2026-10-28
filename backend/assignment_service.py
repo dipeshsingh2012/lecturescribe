@@ -22,7 +22,6 @@ import time
 import logging
 import datetime
 import traceback
-import subprocess
 import html
 from typing import List, Dict, Any, Optional, Tuple
 

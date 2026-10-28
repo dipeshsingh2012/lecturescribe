@@ -31,6 +31,11 @@ try:
 except ImportError:
     HAS_ALGOLIA = False
 
+try:
+    from backend.video_client import parse_timestamp_to_seconds
+except ImportError:
+    from video_client import parse_timestamp_to_seconds
+
 
 def generate_dual_representation(text: str) -> str:
     """
@@ -135,14 +140,7 @@ class AlgoliaSearchService:
             return True
 
     def parse_timestamp_seconds(self, ts: str) -> int:
-        if not ts:
-            return 0
-        parts = ts.split(":")
-        if len(parts) == 3:
-            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2].split(".")[0])
-        elif len(parts) == 2:
-            return int(parts[0]) * 60 + int(parts[1].split(".")[0])
-        return 0
+        return int(parse_timestamp_to_seconds(ts))
 
     def build_transcript_chunks(
         self,

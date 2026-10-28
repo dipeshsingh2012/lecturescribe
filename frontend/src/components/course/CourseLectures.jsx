@@ -36,7 +36,8 @@ import {
   STATUS_FILTERS,
   filterAndSortLectures,
   isLectureCompleted,
-  isLectureInProgress
+  isLectureInProgress,
+  getLectureProgress
 } from '../../utils/lectureSort';
 
 export default function CourseLectures({
@@ -442,13 +443,10 @@ export default function CourseLectures({
           {displayedLectures.map((item) => {
             const driveUrl = item.drive_folder_url || item.driveFolderUrl;
             const prog = item.progress;
-            const rawPct = prog?.progress_percent;
-            const hasPct = typeof rawPct === 'number' && !isNaN(rawPct) && rawPct > 0;
-            const hasSec = typeof prog?.last_seconds === 'number' && prog.last_seconds > 2;
-            const hasTs = Boolean(prog?.last_timestamp && prog.last_timestamp !== '00:00' && prog.last_timestamp !== '0:00');
-            const hasProgress = Boolean(prog && (hasPct || hasSec || hasTs));
-            const progressPct = hasPct ? Math.min(100, Math.max(0, Math.round(rawPct))) : (hasProgress ? 5 : 0);
-            const isCompleted = hasPct && rawPct >= 90;
+            const progressPct = Math.min(100, Math.max(0, Math.round(getLectureProgress(item))));
+            const isCompleted = isLectureCompleted(item);
+            const hasProgress = isLectureInProgress(item) || isCompleted;
+            const hasPct = typeof prog?.progress_percent === 'number' && prog.progress_percent > 0;
             const resumeTimestamp = prog?.last_timestamp || '00:00';
 
             return (

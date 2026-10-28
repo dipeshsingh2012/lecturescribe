@@ -1927,4 +1927,35 @@ describe('TranscriptSearch', () => {
     const activeCueEl = screen.getByText('Cue line 2').closest('.transcript-cue-row');
     expect(activeCueEl).toHaveClass('active');
   });
+
+  it('sanitizes malicious script and onerror tags in highlightHtml while preserving safe mark tags', () => {
+    const maliciousCues = [
+      {
+        time: '01:00',
+        text: 'Clean text',
+        highlightHtml: '<mark class="algolia-highlight">Important</mark> <script>alert("xss")</script><img src="x" onerror="evil()" /> concept'
+      }
+    ];
+
+    const { container } = render(
+      <TranscriptSearch
+        displayCues={maliciousCues}
+        searchQuery="Important"
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+      />
+    );
+
+    // Verify safe mark tag with class is rendered
+    const markTag = container.querySelector('mark.algolia-highlight');
+    expect(markTag).toBeInTheDocument();
+    expect(markTag.textContent).toBe('Important');
+
+    // Verify malicious script and onerror img tags are stripped
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.innerHTML).not.toContain('onerror');
+    expect(container.innerHTML).not.toContain('alert("xss")');
+  });
 });

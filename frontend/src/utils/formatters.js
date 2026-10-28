@@ -130,8 +130,9 @@ export const isGcsSignedUrlFresh = (url) => {
 };
 
 export const formatSecondsToTimestamp = (sec) => {
-  if (typeof sec !== 'number' || isNaN(sec) || sec <= 0) return '00:00';
-  const total = Math.floor(sec);
+  const num = typeof sec === 'number' ? sec : Number(sec);
+  if (isNaN(num) || num <= 0) return '00:00';
+  const total = Math.floor(num);
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
@@ -139,6 +140,31 @@ export const formatSecondsToTimestamp = (sec) => {
     return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+export const getUserDisplayName = (userOrName, email = null, fallback = 'Student') => {
+  if (typeof userOrName === 'string' && userOrName.trim()) {
+    return userOrName.trim();
+  }
+  if (userOrName && typeof userOrName === 'object') {
+    if (userOrName.name && String(userOrName.name).trim()) {
+      return String(userOrName.name).trim();
+    }
+    const e = userOrName.email || email;
+    if (e && String(e).includes('@')) {
+      return String(e).split('@')[0];
+    }
+  }
+  if (email && String(email).includes('@')) {
+    return String(email).split('@')[0];
+  }
+  return fallback;
+};
+
+export const getUserFirstName = (userOrName, email = null, fallback = 'Scholar') => {
+  const full = getUserDisplayName(userOrName, email, fallback);
+  if (!full || full === fallback) return fallback;
+  return full.split(' ')[0] || fallback;
 };
 
 export const cleanSubmissionFallback = (text, targetWords = 120, query = '') => {

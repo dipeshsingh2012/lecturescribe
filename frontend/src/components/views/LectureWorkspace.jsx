@@ -6,6 +6,7 @@ import AITutor from '../lecture/AITutor';
 import LectureQuiz from '../lecture/LectureQuiz';
 import LectureSummary from '../lecture/LectureSummary';
 import LectureResourcesShelf from '../lecture/LectureResourcesShelf';
+import ErrorBoundary from '../common/ErrorBoundary';
 import { normalizeCourseSlug } from '../../utils/routing';
 
 export default function LectureWorkspace({
@@ -360,6 +361,7 @@ export default function LectureWorkspace({
 
       {/* Right / Tool Panel: Summary, Instant Search Drawer, Practice Quiz, Resources, or AI Tutor */}
       <div className="lecture-tool-panel">
+        <ErrorBoundary title="Workspace Panel Error">
         {activeTab === 'summary' ? (
           <LectureSummary
             summaryHook={summaryHook}
@@ -450,6 +452,7 @@ export default function LectureWorkspace({
             videoId={activeData?.videoId}
           />
         )}
+        </ErrorBoundary>
       </div>
     </div>
   );

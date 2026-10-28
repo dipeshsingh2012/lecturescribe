@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
+import { getUserDisplayName } from '../../utils/formatters';
 
 export default function CourseAssignments({
   courseName = 'Active Course',
@@ -160,7 +161,7 @@ export default function CourseAssignments({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             student_email: userEmail || 'student@iiitdwd.ac.in',
-            student_name: userName || (userEmail ? userEmail.split('@')[0] : 'Student'),
+            student_name: getUserDisplayName(userName, userEmail, 'Student'),
             submission_text: draft.text || '',
             file_name: draft.fileName || ''
           })

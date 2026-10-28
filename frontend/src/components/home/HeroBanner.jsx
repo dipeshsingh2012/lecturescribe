@@ -5,6 +5,7 @@ import {
   Avatar,
   Typography
 } from '@mui/material';
+import { getUserFirstName } from '../../utils/formatters';
 
 export default function HeroBanner({
   googleUser,
@@ -54,7 +55,7 @@ export default function HeroBanner({
         )}
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
-            Welcome back, {googleUser ? (googleUser.name ? googleUser.name.split(' ')[0] : (googleUser.email ? googleUser.email.split('@')[0] : 'Scholar')) : 'Scholar'}! 🎓
+            Welcome back, {getUserFirstName(googleUser, null, 'Scholar')}! 🎓
           </Typography>
           <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', mt: 0.5, fontSize: '0.88rem' }}>
             {googleUser

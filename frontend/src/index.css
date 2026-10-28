@@ -450,7 +450,7 @@ li .katex::-webkit-scrollbar-thumb {
 
 /* Header layout & brand classes */
 .app-header {
-  padding: 0 24px;
+  padding: 0 16px;
 }
 
 .app-brand-title {
@@ -469,7 +469,7 @@ li .katex::-webkit-scrollbar-thumb {
 /* Mobile Responsive Breakpoint (< 900px, aligns with MUI 'md' breakpoint) */
 @media (max-width: 899px) {
   .app-header {
-    padding: 0 14px;
+    padding: 0 10px;
   }
 
   .app-brand-title {

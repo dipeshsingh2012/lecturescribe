@@ -294,13 +294,73 @@ class MoodleVideoMapRequest(BaseModel):
     user_email: Optional[str] = Field(None, max_length=255)
 
 
+class MoodleVideoMapResponse(BaseModel):
+    status: str
+    video_id: str
+    source_url: str
+    moodle_url: str
+    updated: bool
+
+
+class HealthCheckResponse(BaseModel):
+    status: str
+    service: str
+    database: str
+    algolia_index: str
+    pinecone_index: str
+    pinecone_namespace: str
+    redis_cache: Dict[str, Any]
+    llm_providers: Dict[str, Any]
+
+
+class VideoStatusResponse(BaseModel):
+    videoId: str
+    cached_in_db: bool
+    synced_to_gcs: bool
+    is_uploading: bool
+    upload_status: str
+    upload_stage: Optional[str] = None
+    video_source: str
+    blob_name: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    view_url: Optional[str] = None
+    size_mb: Optional[float] = None
+    title: Optional[str] = None
+    course_name: Optional[str] = None
+    tracking_status: Optional[str] = None
+
+
+class LectureProgressResponse(BaseModel):
+    status: str
+    video_id: str
+    progress: Optional[Dict[str, Any]] = None
+
+
+class SaveLectureProgressResponse(BaseModel):
+    status: str
+    video_id: str
+    progress: Optional[Dict[str, Any]] = None
+
+
+class UserProgressResponse(BaseModel):
+    status: str
+    count: int
+    progress: Dict[str, Any]
+
+
+class CourseListResponse(BaseModel):
+    status: str
+    count: int
+    courses: List[Dict[str, Any]]
+
+
 class UpdateQuizReminderRequest(BaseModel):
     status: str
 
 
 
 
-@app.get("/health")
+@app.get("/health", response_model=HealthCheckResponse)
 def health_check():
     db_status = "PostgreSQL Ready" if (db_manager and db_manager.postgres_url) else "Pending Configuration"
     algolia_idx = getattr(algolia_service, "index_name", "lecturescribe_transcripts_v1")
@@ -1506,7 +1566,7 @@ def extension_import(req: ExtensionImportRequest):
         raise HTTPException(status_code=400, detail=f"Failed to import lecture: {str(e)}")
 
 
-@app.post("/api/moodle/map-video")
+@app.post("/api/moodle/map-video", response_model=MoodleVideoMapResponse)
 def map_moodle_video_endpoint(req: MoodleVideoMapRequest):
     """
     Auto-save or update the Moodle page source URL for a lecture video.
@@ -2666,7 +2726,7 @@ def stream_lecture_podcast_endpoint(
 # Lecture Playback Progress Endpoints
 # ==============================================================================
 
-@app.get("/api/progress/lecture")
+@app.get("/api/progress/lecture", response_model=LectureProgressResponse)
 def get_lecture_progress_endpoint(
     video_id: str = Query(..., description="Lecture video ID"),
     user_email: Optional[str] = Query(None, description="User email")
@@ -2683,7 +2743,7 @@ def get_lecture_progress_endpoint(
     }
 
 
-@app.post("/api/progress/lecture")
+@app.post("/api/progress/lecture", response_model=SaveLectureProgressResponse)
 def save_lecture_progress_endpoint(req: SaveLectureProgressRequest):
     """Save or update the playback progress for a lecture."""
     vid = str(req.video_id).strip()
@@ -2707,7 +2767,7 @@ def save_lecture_progress_endpoint(req: SaveLectureProgressRequest):
     }
 
 
-@app.get("/api/progress/user")
+@app.get("/api/progress/user", response_model=UserProgressResponse)
 def get_user_progress_endpoint(
     user_email: Optional[str] = Query(None, description="User email"),
     video_ids: Optional[str] = Query(None, description="Comma-separated video IDs")
@@ -2763,6 +2823,17 @@ def get_user_library(email: str = Query(..., description="User Google email")):
     if redis_cache:
         redis_cache.set_user_library(clean_email, lectures, ttl_seconds=300)
     return {"status": "success", "lectures": lectures, "library": lectures, "count": len(lectures)}
+
+
+@app.get("/api/courses", response_model=CourseListResponse)
+def list_courses_endpoint():
+    """List all normalized course entities in the system."""
+    courses = db_manager.list_courses()
+    return {
+        "status": "success",
+        "count": len(courses),
+        "courses": courses
+    }
 
 
 @app.get("/api/user/courses")
@@ -4935,7 +5006,7 @@ def get_videos_sync_status():
     }
 
 
-@app.get("/api/videos/{video_id}/status")
+@app.get("/api/videos/{video_id}/status", response_model=VideoStatusResponse)
 def get_single_video_status(video_id: str):
     """Fast, lightweight endpoint to query database and GCS sync status for a single video."""
     vid = str(video_id).strip()

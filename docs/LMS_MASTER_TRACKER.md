@@ -10,7 +10,7 @@
 
 | Phase / Milestone | Focus Area | Total Epics | Completed | In Progress | Pending | Target Status |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Phase 0** | Existing LectureScribe Baseline & Course Entity Normalization | 5 | 2 | 1 | 2 | 🟡 In Progress |
+| **Phase 0** | Existing LectureScribe Baseline & Course Entity Normalization | 4 | 4 | 0 | 0 | 🟢 Complete |
 | **Milestone 1** | Core Foundation, Tutor/Student RBAC, Enrollment Keys, AI Calendar & Syllabus Spine | 7 | 5 | 0 | 2 | 🟢 M1A + M1B + M1C + Syllabus Complete |
 | **Milestone 2** | Assessment, AI Question Bank, Assignment Submissions, SpeedGrader & Gradebook | 5 | 4 | 0 | 1 | 🟢 Question Bank + Assignments + Gradebook Complete |
 | **Milestone 3** | Engagement, Forums (Timestamp Deep-Links & AI TA), Completion & Restrict Access | 4 | 3 | 0 | 1 | 🟢 Forum + Completion + Restrict Access Complete |
@@ -259,7 +259,7 @@ This index serves as the domain benchmark for all capabilities tracked in this d
 | ID | Subsystem / Feature | Moodle Benchmark Standard | Current LectureScribe Baseline | Gap Severity | Target Milestone |
 | :--- | :--- | :--- | :--- | :---: | :---: |
 | **GAP-01** | **Contextual RBAC** | Hierarchical contexts (`SYSTEM` $\rightarrow$ `CATEGORY` $\rightarrow$ `COURSE` $\rightarrow$ `MODULE`) with 400+ capabilities. | Basic user authentication & guest isolation (`ANONYMOUS_REMOVAL_AND_GUEST_ISOLATION_PLAN.md`); no contextual role assignments. | 🔴 **High** | Milestone 1 |
-| **GAP-02** | **First-Class Course Hierarchy** | Nested course categories (`ltree`) and normalized course entities. | Denormalized `course_name` strings across tables; normalization planned in `docs/course-entity-migration-plan.md`. | 🟠 **Medium** | Milestone 1 |
+| **GAP-02** | **First-Class Course Hierarchy** | Nested course categories (`ltree`) and normalized course entities. | Normalized `lecturescribe_courses` entity live with dual-write (`course_id`, `course_slug`, `course_name`); category tree planned in Milestone 1. | 🟢 **Normalized** | Phase 0 (Done) |
 | **GAP-03** | **Enrollment Subsystem** | Pluggable enrollment plugins (Manual, Self + Key, Cohort Sync, Paid) with time windows. | Library mapping (`lecturescribe_user_library`) without formal enrollment methods, keys, or roles. | 🔴 **High** | Milestone 1 |
 | **GAP-04** | **Polymorphic Course Spine** | Unified `course_sections` & `course_modules` hosting 20+ activity types. | Separate tabs/tables for Videos, Readings (`lecturescribe_course_readings`), Resources, and Course Quiz. | 🔴 **High** | Milestone 1 |
 | **GAP-05** | **Conditional Access Rules** | Boolean rule trees gating modules/sections by date, grade, or completion. | All course items are immediately accessible without prerequisite gating. | 🔴 **High** | Milestone 3 |
@@ -284,13 +284,13 @@ This index serves as the domain benchmark for all capabilities tracked in this d
 
 - [x] **P0-1: GCS Video & HLS Pipeline** — Stream progressive MP4 & adaptive HLS into `gs://lecturescribe-resources` (`backend/gcs_storage.py`).
 - [x] **P0-2: Course Quiz Exam Mode UI & AI Explanations** — Interactive exam timer, question palette, replay mode, and AI explanations in [`CourseQuiz.jsx`](file:///home/dipes/projects/lecturescribe/frontend/src/components/course/CourseQuiz.jsx).
-- [ ] **P0-3: Execute First-Class Course Entity Migration** (`docs/course-entity-migration-plan.md`)
-  - [ ] Create `lecturescribe_courses` table (`id UUID PK`, `slug UNIQUE`, `name`, `created_at`, `updated_at`).
-  - [ ] Backfill `course_id` and `course_slug` across `lecturescribe_videos`, `lecturescribe_user_library`, `lecturescribe_resources`, `lecturescribe_course_readings`, `lecturescribe_course_quizzes`, `lecturescribe_course_quiz_history`, `lecturescribe_course_quiz_explanations`, and `lecturescribe_course_chat_logs`.
-  - [ ] Update `backend/database.py` DAO methods to dual-write `course_id`, `course_slug`, and `course_name`.
-- [ ] **P0-4: Moodle Source URL Mapping & Native GCS Video Player** (`TODO.md`)
-  - [ ] Add `POST /api/moodle/map-video` in `backend/main.py` and store `moodle_url` on `lecturescribe_videos`.
-  - [ ] Upgrade `LecturePlayer.jsx` to switch from external `<iframe>` to native HTML5 `<video>` when `gcs_video_url` is present.
+- [x] **P0-3: Execute First-Class Course Entity Migration** (`docs/course-entity-migration-plan.md`)
+  - [x] Create `lecturescribe_courses` table (`id UUID PK`, `slug UNIQUE`, `name`, `created_at`, `updated_at`).
+  - [x] Backfill `course_id` and `course_slug` across `lecturescribe_videos`, `lecturescribe_user_library`, `lecturescribe_resources`, `lecturescribe_course_readings`, `lecturescribe_course_quizzes`, `lecturescribe_course_quiz_history`, `lecturescribe_course_quiz_explanations`, and `lecturescribe_course_chat_logs`.
+  - [x] Update `backend/database.py` DAO methods to dual-write `course_id`, `course_slug`, and `course_name`.
+- [x] **P0-4: Moodle Source URL Mapping & Native GCS Video Player** (`TODO.md`)
+  - [x] Add `POST /api/moodle/map-video` in `backend/main.py` and store `moodle_url` on `lecturescribe_videos`.
+  - [x] Upgrade `LecturePlayer.jsx` to switch from external `<iframe>` to native HTML5 `<video>` when `gcs_video_url` is present.
 
 ---
 

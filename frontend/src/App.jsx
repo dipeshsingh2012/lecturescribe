@@ -267,27 +267,6 @@ export default function App() {
     }
   }, [auth.googleUser?.email, activeData]);
 
-  // When user is on or switches to Summary tab, ensure summary is loaded if empty
-  useEffect(() => {
-    if (activeTab === 'summary' && activeData?.videoId && Object.keys(summary.summaries).length === 0 && !summary.loading) {
-      summary.fetchSummaries(activeData.videoId, auth.googleUser?.email);
-    }
-  }, [activeTab, activeData?.videoId, auth.googleUser?.email, summary.loading]);
-
-  // When user is on or switches to AI Tutor tab, ensure chat history / autopopulate runs if empty
-  useEffect(() => {
-    if (activeTab === 'tutor' && activeData?.videoId && tutor.chatMessages.length === 0 && !tutor.chatLoading) {
-      tutor.fetchChatHistory(activeData.videoId, auth.googleUser?.email);
-    }
-  }, [activeTab, activeData?.videoId, auth.googleUser?.email, tutor.chatLoading]);
-
-  // When user is on or switches to Quiz tab, ensure existing quiz is loaded without auto-generating
-  useEffect(() => {
-    if (activeTab === 'quiz' && activeData?.videoId && !quiz.quizData && !quiz.quizLoading) {
-      quiz.fetchExistingQuiz();
-    }
-  }, [activeTab, activeData?.videoId, quiz.quizLoading]);
-
   // Theme Management
   const { currentThemeId, setTheme } = useThemeStore();
   const currentTheme = LMS_THEMES[currentThemeId] || LMS_THEMES.academic;

@@ -13,9 +13,15 @@ export default function useLectureQuiz(activeData, userEmail = null) {
   const [explanationLoading, setExplanationLoading] = useState({});
 
   const lastVidRef = useRef(videoId);
+  const inFlightFetchRef = useRef(null);
+  const fetchedVidRef = useRef(null);
 
-  const fetchExistingQuiz = useCallback(async () => {
+  const fetchExistingQuiz = useCallback(async (bypassCache = false) => {
     if (!videoId) return;
+
+    const fetchKey = `${videoId}:${email || ''}`;
+    if (!bypassCache && inFlightFetchRef.current === fetchKey) return;
+    inFlightFetchRef.current = fetchKey;
 
     setQuizLoading(true);
     setQuizError(null);
@@ -39,6 +45,9 @@ export default function useLectureQuiz(activeData, userEmail = null) {
       console.error('Failed to retrieve lecture quiz from database:', err);
       setQuizError(err.message || 'Unable to load quiz. Please try again.');
     } finally {
+      if (inFlightFetchRef.current === fetchKey) {
+        inFlightFetchRef.current = null;
+      }
       setQuizLoading(false);
     }
   }, [videoId, email]);
@@ -90,15 +99,21 @@ export default function useLectureQuiz(activeData, userEmail = null) {
     }
   }, [videoId, email]);
 
-  // Reset/switch quiz state when switching to a different lecture
+  // Synchronize existing quiz on video or email change
   useEffect(() => {
-    if (lastVidRef.current !== videoId) {
-      lastVidRef.current = videoId;
+    if (videoId) {
+      const fetchKey = `${videoId}:${email || ''}`;
+      if (fetchedVidRef.current !== fetchKey) {
+        fetchedVidRef.current = fetchKey;
+        fetchExistingQuiz();
+      }
+    } else {
+      fetchedVidRef.current = null;
       setQuizData(null);
       setSelectedAnswers({});
       setQuizError(null);
     }
-  }, [videoId]);
+  }, [videoId, email, fetchExistingQuiz]);
 
   const selectAnswer = useCallback((questionId, optionIndex) => {
     setSelectedAnswers((prev) => {

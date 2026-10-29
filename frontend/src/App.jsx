@@ -406,6 +406,7 @@ export default function App() {
             handleSelectCourse={handleSelectCourse}
             courseResourcesLoading={resources.courseResourcesLoading}
             handleDeleteResource={resources.handleDeleteResource}
+            handleRenameResource={resources.handleRenameResource}
             courseReadings={resources.courseReadings}
             courseReadingsLoading={resources.courseReadingsLoading}
             isExtractingReadings={resources.isExtractingReadings}
@@ -455,6 +456,7 @@ export default function App() {
             lectureResources={resources.lectureResources}
             lectureResourcesLoading={resources.lectureResourcesLoading}
             handleDeleteResource={resources.handleDeleteResource}
+            handleRenameResource={resources.handleRenameResource}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             displayCues={player.displayCues}

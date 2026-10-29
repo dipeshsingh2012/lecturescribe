@@ -11,7 +11,8 @@ import {
   isLectureUnwatched,
   filterLecturesByStatus,
   sortLectures,
-  filterAndSortLectures
+  filterAndSortLectures,
+  sortResources
 } from '../lectureSort';
 
 describe('lectureSort utilities', () => {
@@ -142,6 +143,54 @@ describe('lectureSort utilities', () => {
       });
       expect(filtered.length).toBe(3);
       expect(filtered[0].video_title).toBe('Lecture 10: Dynamic Programming');
+    });
+  });
+
+  describe('sortResources', () => {
+    const resources = [
+      { id: '1', title: 'Chapter 1 Slides', created_at: '2026-09-01T10:00:00Z', file_size_bytes: 1000 },
+      { id: '2', title: 'Chapter 10 Notes', created_at: '2026-09-10T10:00:00Z', file_size_bytes: 5000 },
+      { id: '3', title: 'Chapter 2 Homework', created_at: '2026-09-05T10:00:00Z', file_size_bytes: 2000 }
+    ];
+
+    it('defaults to sorting by name descending (Z - A)', () => {
+      const sorted = sortResources(resources);
+      expect(sorted.map(r => r.title)).toEqual([
+        'Chapter 10 Notes',
+        'Chapter 2 Homework',
+        'Chapter 1 Slides'
+      ]);
+    });
+
+    it('sorts by name ascending (A - Z)', () => {
+      const sorted = sortResources(resources, 'title_asc');
+      expect(sorted.map(r => r.title)).toEqual([
+        'Chapter 1 Slides',
+        'Chapter 2 Homework',
+        'Chapter 10 Notes'
+      ]);
+    });
+
+    it('sorts by date descending and ascending', () => {
+      const newest = sortResources(resources, 'date_desc');
+      expect(newest[0].id).toBe('2'); // Sep 10
+      expect(newest[2].id).toBe('1'); // Sep 1
+
+      const oldest = sortResources(resources, 'date_asc');
+      expect(oldest[0].id).toBe('1'); // Sep 1
+      expect(oldest[2].id).toBe('2'); // Sep 10
+    });
+
+    it('sorts by size descending', () => {
+      const largest = sortResources(resources, 'size_desc');
+      expect(largest[0].id).toBe('2'); // 5000
+      expect(largest[1].id).toBe('3'); // 2000
+      expect(largest[2].id).toBe('1'); // 1000
+    });
+
+    it('handles empty or non-array inputs safely', () => {
+      expect(sortResources(null)).toEqual([]);
+      expect(sortResources([])).toEqual([]);
     });
   });
 });

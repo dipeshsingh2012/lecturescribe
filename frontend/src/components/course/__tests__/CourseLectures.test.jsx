@@ -7,6 +7,13 @@ import { LMS_THEMES } from '../../../store/themeStore';
 const mockTheme = LMS_THEMES.academic;
 
 describe('CourseLectures', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ today: { all: [] }, upcoming: { all: [] }, quizzes: [] })
+    });
+  });
   it('renders loading state when courseLoading is true', () => {
     render(
       <CourseLectures
@@ -68,8 +75,8 @@ describe('CourseLectures', () => {
 
     expect(screen.getByText('Classical Mechanics Lecture 1')).toBeInTheDocument();
 
-    const studyBtn = screen.getByRole('button', { name: /Study Lecture →/i });
-    fireEvent.click(studyBtn);
+    const lectureCard = screen.getByRole('button', { name: /Study Classical Mechanics Lecture 1/i });
+    fireEvent.click(lectureCard);
     expect(handleTranscribe).toHaveBeenCalledWith('https://video.lecturescribe.local/998877', true, 'Physics 101');
 
     const deleteBtn = screen.getByRole('button', { name: /Remove from (Course|My) Library/i });
@@ -77,7 +84,7 @@ describe('CourseLectures', () => {
     expect(handleDeleteFromLibrary).toHaveBeenCalledWith('998877');
   });
 
-  it('renders Google Drive badges (header icon, chip, and action button) when drive_folder_url is present', () => {
+  it('renders Google Drive action button when drive_folder_url is present', () => {
     const lectures = [
       {
         video_id: '998877',
@@ -101,34 +108,20 @@ describe('CourseLectures', () => {
       />
     );
 
-    const chip = screen.getByRole('link', { name: /^In Google Drive$/i });
-    expect(chip).toBeInTheDocument();
-    expect(chip).toHaveAttribute('href', 'https://drive.google.com/drive/folders/test-folder-123');
-    expect(chip).toHaveAttribute('target', '_blank');
-
     const actionDriveBtn = screen.getByRole('link', { name: /^Open in Google Drive$/i });
     expect(actionDriveBtn).toBeInTheDocument();
     expect(actionDriveBtn).toHaveAttribute('href', 'https://drive.google.com/drive/folders/test-folder-123');
-
-    const headerDriveBadge = screen.getByRole('link', { name: /^Saved in Google Drive$/i });
-    expect(headerDriveBadge).toBeInTheDocument();
-    expect(headerDriveBadge).toHaveAttribute('href', 'https://drive.google.com/drive/folders/test-folder-123');
+    expect(actionDriveBtn).toHaveAttribute('target', '_blank');
   });
 
-  it('renders progress bar and resume button when playback progress exists', () => {
+  it('makes the entire card clickable to transcribe/open the lecture', () => {
     const handleTranscribe = vi.fn();
     const lectures = [
       {
         video_id: '998877',
         video_url: 'https://video.lecturescribe.local/998877',
         video_title: 'Classical Mechanics Lecture 1',
-        total_duration_seconds: 3600,
-        progress: {
-          last_timestamp: '24:15',
-          last_seconds: 1455,
-          duration_seconds: 3600,
-          progress_percent: 40.4
-        }
+        total_duration_seconds: 3600
       }
     ];
 
@@ -144,12 +137,9 @@ describe('CourseLectures', () => {
       />
     );
 
-    expect(screen.getByText(/Resume at 24:15/i)).toBeInTheDocument();
-    expect(screen.getByText('40%')).toBeInTheDocument();
-
-    const resumeBtn = screen.getByRole('button', { name: /Resume \(24:15\) →/i });
-    expect(resumeBtn).toBeInTheDocument();
-    fireEvent.click(resumeBtn);
+    const lectureCard = screen.getByRole('button', { name: /Study Classical Mechanics Lecture 1/i });
+    expect(lectureCard).toBeInTheDocument();
+    fireEvent.click(lectureCard);
     expect(handleTranscribe).toHaveBeenCalledWith('https://video.lecturescribe.local/998877', true, 'Physics 101');
   });
 
@@ -275,5 +265,196 @@ describe('CourseLectures', () => {
     // Click Show All Lectures to reset filter
     fireEvent.click(showAllBtn);
     expect(screen.getByText('Lecture 1: Course Overview')).toBeInTheDocument();
+  });
+
+  it('renders overall course progress overview card and individual lecture progress indicators', () => {
+    const lectures = [
+      {
+        video_id: 'l1',
+        video_title: 'Lecture 1: Completed Lecture',
+        progress: { progress_percent: 100, last_timestamp: '45:00' }
+      },
+      {
+        video_id: 'l2',
+        video_title: 'Lecture 2: In Progress Lecture',
+        progress: { progress_percent: 40, last_timestamp: '18:25' }
+      },
+      {
+        video_id: 'l3',
+        video_title: 'Lecture 3: Unstarted Lecture',
+        progress: null
+      }
+    ];
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={lectures}
+        handleTranscribe={vi.fn()}
+        handleDeleteFromLibrary={vi.fn()}
+        handleClearCourse={vi.fn()}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Course Progress header card
+    expect(screen.getByText('Course Progress')).toBeInTheDocument();
+    expect(screen.getByText(/1 of 3 lectures completed • 1 in progress/i)).toBeInTheDocument();
+    // Overall progress: (100 + 40 + 0) / 3 = 47%
+    expect(screen.getByText('47%')).toBeInTheDocument();
+
+    // Lecture-level progress
+    expect(screen.getByText(/⏱️ Completed/i)).toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
+
+    expect(screen.getByText(/⏱️ Resume at 18:25/i)).toBeInTheDocument();
+    expect(screen.getByText('40%')).toBeInTheDocument();
+
+    expect(screen.getByText(/⏱️ Not started/i)).toBeInTheDocument();
+    expect(screen.getByText('0%')).toBeInTheDocument();
+  });
+
+  it('renders combined Course Pulse card with Key Dates date badge and Predicted Quiz', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-27T08:00:00Z'));
+
+    const mockLectures = [
+      {
+        video_id: 'v101',
+        video_title: 'Quantum Physics Lecture 1',
+        progress: { progress_percent: 50, last_timestamp: '25:00' }
+      }
+    ];
+
+    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (String(url).includes('/api/calendar/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            today: { all: [] },
+            upcoming: [
+              {
+                id: 'evt-1',
+                title: 'Midterm Exam: Quantum Mechanics',
+                course_name: 'Physics 101',
+                date_iso: '2026-10-27',
+                date_formatted: 'Tuesday, Oct 27, 2026',
+                start_time_formatted: '10:00 AM'
+              }
+            ],
+            all_events: [
+              {
+                id: 'evt-past',
+                title: 'Old Classical Physics Lecture (Past)',
+                course_name: 'Physics 101',
+                date_iso: '2025-01-10',
+                date_formatted: 'Friday, Jan 10, 2025',
+                start_time_formatted: '09:00 AM'
+              }
+            ]
+          })
+        });
+      }
+      if (String(url).includes('/api/reminders/upcoming-quizzes')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            quizzes: [
+              {
+                id: 'q-1',
+                quiz_title: 'Pop Quiz: Wave-Particle Duality',
+                course_name: 'Physics 101',
+                predicted_date: 'Friday',
+                confidence: 0.95,
+                cue_time: '12:40'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.reject(new Error('Unknown URL'));
+    });
+
+    try {
+      render(
+        <CourseLectures
+          courseLoading={false}
+          filteredCourseLectures={mockLectures}
+          handleTranscribe={vi.fn()}
+          handleDeleteFromLibrary={vi.fn()}
+          handleClearCourse={vi.fn()}
+          selectedCourse="Physics 101"
+          currentTheme={mockTheme}
+        />
+      );
+
+      expect(screen.getByText('Course Progress')).toBeInTheDocument();
+      expect(screen.getByText('Key Dates')).toBeInTheDocument();
+      expect(screen.getByText('Predicted Quiz')).toBeInTheDocument();
+
+      // Verify true upcoming event is shown, not the past one
+      expect(await screen.findByText('Midterm Exam: Quantum Mechanics')).toBeInTheDocument();
+      expect(screen.queryByText('Old Classical Physics Lecture (Past)')).not.toBeInTheDocument();
+
+      // Verify date badge: day 27, month OCT, and time 10:00 AM
+      expect(screen.getByText('27')).toBeInTheDocument();
+      expect(screen.getByText('OCT')).toBeInTheDocument();
+      expect(screen.getByText(/10:00 AM/i)).toBeInTheDocument();
+
+      expect(screen.getByText('Pop Quiz: Wave-Particle Duality')).toBeInTheDocument();
+      expect(screen.getByText(/95% match/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Jump to Cue/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders "No upcoming key dates for this course." when course has no upcoming calendar events', async () => {
+    const mockLectures = [
+      {
+        video_id: 'v101',
+        video_title: 'Quantum Physics Lecture 1',
+        progress: { progress_percent: 50, last_timestamp: '25:00' }
+      }
+    ];
+
+    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (String(url).includes('/api/calendar/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            today: { all: [] },
+            upcoming: [],
+            all_events: [
+              {
+                id: 'past-evt',
+                title: 'Past Event for Chemistry',
+                course_name: 'Chemistry 101',
+                date_iso: '2024-05-01'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ quizzes: [] })
+      });
+    });
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={mockLectures}
+        handleTranscribe={vi.fn()}
+        handleDeleteFromLibrary={vi.fn()}
+        handleClearCourse={vi.fn()}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(await screen.findByText(/No upcoming key dates for this course\./i)).toBeInTheDocument();
   });
 });

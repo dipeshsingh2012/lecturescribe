@@ -3546,6 +3546,10 @@ class CreateLinkResourceRequest(BaseModel):
     video_id: Optional[str] = None
     user_email: str
 
+class RenameResourceRequest(BaseModel):
+    title: str
+    user_email: Optional[str] = None
+
 class CreateCourseNoteRequest(BaseModel):
     user_email: str
     title: Optional[str] = "Untitled Note"
@@ -3701,6 +3705,18 @@ def delete_resource(resource_id: int, user_email: str = Query(..., description="
         return {"status": "success", "resource_id": resource_id}
     except PermissionError as pe:
         raise HTTPException(status_code=403, detail=str(pe))
+
+
+@app.patch("/api/resources/{resource_id}")
+def rename_resource_endpoint(resource_id: int, req: RenameResourceRequest):
+    """Rename a resource by ID. Both tutors and students can rename uploaded slides/resources."""
+    clean_title = (req.title or "").strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="title cannot be empty.")
+    updated = db_manager.rename_resource(resource_id, clean_title)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Resource not found.")
+    return {"status": "success", "resource": updated}
 
 
 # ==============================================================================

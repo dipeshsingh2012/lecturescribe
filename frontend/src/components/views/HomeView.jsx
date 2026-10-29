@@ -112,6 +112,7 @@ export default function HomeView({
   handleSelectCourse,
   courseResourcesLoading,
   handleDeleteResource,
+  handleRenameResource,
   courseLoading,
   handleDeleteFromLibrary,
   handleDeleteCourse,
@@ -633,89 +634,92 @@ export default function HomeView({
             )}
           </Box>
 
-          {/* "+ NEW" MINI DROPBOX ACTION BUTTON & MENU */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Tooltip title={!googleUser ? "Sign in with Google to create notes or upload files" : (isTutor ? "Create a new note or upload files" : "Create a new personal study note")}>
-              <span>
-                <Button
-                  variant="contained"
-                  size="small"
-                  disabled={!googleUser}
-                  startIcon={<Plus size={15} />}
-                  endIcon={<ChevronDown size={14} />}
-                  onClick={(e) => setNewMenuAnchor(e.currentTarget)}
-                  sx={{
-                    textTransform: 'none',
-                    fontWeight: 700,
-                    fontSize: '0.82rem',
-                    borderRadius: 2,
-                    bgcolor: currentTheme.palette.primary,
-                    color: '#fff',
-                    boxShadow: 'none',
-                    '&:hover': { bgcolor: currentTheme.palette.primary, opacity: 0.9 }
-                  }}
-                >
-                  New
-                </Button>
-              </span>
-            </Tooltip>
+          {/* "+ NEW" MINI DROPBOX ACTION BUTTON & MENU (ONLY AVAILABLE INSIDE THE LIBRARY) */}
+          {(courseViewTab === 'resources' || courseViewTab === 'library') && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Tooltip title={!googleUser ? "Sign in with Google to create notes or upload files" : (isTutor ? "Create a new note or upload files" : "Create a new personal study note")}>
+                <span>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    disabled={!googleUser}
+                    startIcon={<Plus size={15} />}
+                    endIcon={<ChevronDown size={14} />}
+                    onClick={(e) => setNewMenuAnchor(e.currentTarget)}
+                    aria-label="New resource or note"
+                    sx={{
+                      textTransform: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.82rem',
+                      borderRadius: 2,
+                      bgcolor: currentTheme.palette.primary,
+                      color: '#fff',
+                      boxShadow: 'none',
+                      '&:hover': { bgcolor: currentTheme.palette.primary, opacity: 0.9 }
+                    }}
+                  >
+                    New
+                  </Button>
+                </span>
+              </Tooltip>
 
-            <Menu
-              anchorEl={newMenuAnchor}
-              open={Boolean(newMenuAnchor)}
-              onClose={() => setNewMenuAnchor(null)}
-              PaperProps={{
-                sx: {
-                  borderRadius: 2.5,
-                  minWidth: 190,
-                  bgcolor: currentTheme.palette.cardBg,
-                  border: `1px solid ${currentTheme.palette.cardBorder}`,
-                  boxShadow: currentTheme.palette.cardShadow
-                }
-              }}
-            >
-              <MenuItem
-                onClick={() => {
-                  setNewMenuAnchor(null);
-                  if (onCreateNewNote) onCreateNewNote();
+              <Menu
+                anchorEl={newMenuAnchor}
+                open={Boolean(newMenuAnchor)}
+                onClose={() => setNewMenuAnchor(null)}
+                PaperProps={{
+                  sx: {
+                    borderRadius: 2.5,
+                    minWidth: 190,
+                    bgcolor: currentTheme.palette.cardBg,
+                    border: `1px solid ${currentTheme.palette.cardBorder}`,
+                    boxShadow: currentTheme.palette.cardShadow
+                  }
                 }}
-                sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
               >
-                <FileText size={17} color={currentTheme.palette.primary} />
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
-                    New Note
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
-                    Plain text scratchpad
-                  </Typography>
-                </Box>
-              </MenuItem>
-
-              {isTutor && (
                 <MenuItem
                   onClick={() => {
                     setNewMenuAnchor(null);
-                    openUploadModal({
-                      courseName: activeCourseData?.course_name || selectedCourse,
-                      videoId: null
-                    });
+                    if (onCreateNewNote) onCreateNewNote();
                   }}
                   sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
                 >
-                  <Upload size={17} color={currentTheme.palette.primary} />
+                  <FileText size={17} color={currentTheme.palette.primary} />
                   <Box>
                     <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
-                      Upload File
+                      New Note
                     </Typography>
                     <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
-                      Slides (.pptx, .pdf), docs
+                      Plain text scratchpad
                     </Typography>
                   </Box>
                 </MenuItem>
-              )}
-            </Menu>
-          </Box>
+
+                {isTutor && (
+                  <MenuItem
+                    onClick={() => {
+                      setNewMenuAnchor(null);
+                      openUploadModal({
+                        courseName: activeCourseData?.course_name || selectedCourse,
+                        videoId: null
+                      });
+                    }}
+                    sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                  >
+                    <Upload size={17} color={currentTheme.palette.primary} />
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
+                        Upload File
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
+                        Slides (.pptx, .pdf), docs
+                      </Typography>
+                    </Box>
+                  </MenuItem>
+                )}
+              </Menu>
+            </Box>
+          )}
         </Box>
       )}
 
@@ -769,20 +773,22 @@ export default function HomeView({
       )}
 
       {/* LEVEL 1: COURSE CARDS VIEW & ACADEMIC CALENDAR & PREDICTED QUIZZES */}
-      <QuizRemindersCard
-        currentTheme={currentTheme}
-        onSelectLecture={(vid, ts, cName) => {
-          if (!vid) return;
-          const targetCourse = cName || activeCourseData?.course_name || selectedCourse || null;
-          if (typeof handleTranscribe === 'function') {
-            handleTranscribe(vid, true, targetCourse, false, ts);
-          }
-          if (typeof handleCueClick === 'function' && ts) {
-            setTimeout(() => handleCueClick(ts), 350);
-          }
-        }}
-        selectedCourse={selectedCourse}
-      />
+      {!selectedCourse && (
+        <QuizRemindersCard
+          currentTheme={currentTheme}
+          onSelectLecture={(vid, ts, cName) => {
+            if (!vid) return;
+            const targetCourse = cName || activeCourseData?.course_name || selectedCourse || null;
+            if (typeof handleTranscribe === 'function') {
+              handleTranscribe(vid, true, targetCourse, false, ts);
+            }
+            if (typeof handleCueClick === 'function' && ts) {
+              setTimeout(() => handleCueClick(ts), 350);
+            }
+          }}
+          selectedCourse={selectedCourse}
+        />
+      )}
 
       {!selectedCourse ? (
         <>
@@ -815,8 +821,8 @@ export default function HomeView({
         </>
       ) : (
         <>
-          {/* Course-Level Upcoming Events & Deadlines Widget (shown on Course Page tabs except the full Calendar tab) */}
-          {courseViewTab !== 'calendar' && (
+          {/* Course-Level Upcoming Events & Deadlines Widget (shown on Course Page tabs except the full Calendar tab and lectures tab where it is integrated into the Course Pulse card) */}
+          {courseViewTab !== 'calendar' && courseViewTab !== 'lectures' && (
             <CalendarAlertCard
               currentTheme={currentTheme}
               googleUser={googleUser}
@@ -972,6 +978,7 @@ export default function HomeView({
           openUploadModal={isTutor ? openUploadModal : null}
           openPreviewModal={openPreviewModal}
           handleDeleteResource={isTutor ? handleDeleteResource : null}
+          handleRenameResource={handleRenameResource}
           courseNotes={courseNotes}
           courseNotesLoading={courseNotesLoading}
           onCreateNewNote={onCreateNewNote}
@@ -1102,6 +1109,8 @@ export default function HomeView({
           onSortChange={setLectureSortBy || onSortChange}
           statusFilter={lectureStatusFilter !== undefined ? lectureStatusFilter : statusFilter}
           onStatusFilterChange={setLectureStatusFilter || onStatusFilterChange}
+          onOpenFullCalendar={() => setCourseViewTab('calendar')}
+          googleUser={googleUser}
         />
       )}
         </>

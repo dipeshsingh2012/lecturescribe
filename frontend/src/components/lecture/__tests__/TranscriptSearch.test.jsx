@@ -475,6 +475,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -537,6 +538,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -568,6 +570,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -635,6 +638,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -719,6 +723,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -820,6 +825,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -870,6 +876,11 @@ describe('TranscriptSearch', () => {
       );
     });
 
+    // Toolbar retains options of Copy and Discuss in Tutor, and button updates to Saved to Notes
+    expect(await screen.findByRole('button', { name: /Saved to Notes/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy AI explanation/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Discuss in AI Tutor/i })).toBeInTheDocument();
+
     vi.unstubAllGlobals();
   });
 
@@ -888,6 +899,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -930,6 +942,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={handleCueClick}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -968,6 +981,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -1143,6 +1157,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -1239,6 +1254,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -1291,6 +1307,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -1345,6 +1362,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -1454,6 +1472,7 @@ describe('TranscriptSearch', () => {
         handleCueClick={vi.fn()}
         activeCueIdx={0}
         activeData={activeData}
+        onDiscussInTutor={vi.fn()}
       />
     );
 
@@ -1848,6 +1867,123 @@ describe('TranscriptSearch', () => {
     );
 
     global.fetch = originalFetch;
+  });
+
+  it('retains copy and discuss options after pinning AI explainer to notes and in hover tooltip', async () => {
+    const originalFetch = global.fetch;
+    const handleDiscussInTutor = vi.fn();
+
+    // Mock clipboard writeText
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    });
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations') && opts?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotation: {
+              id: 'ann_pinned_123',
+              cue_id: 'cue_0',
+              selected_text: 'convex optimization',
+              annotation_type: 'ai_explanation',
+              ai_response: 'Optimization problem where the objective function is convex.',
+              note_text: 'Optimization problem where the objective function is convex.',
+              start_seconds: 15,
+              end_seconds: 20
+            }
+          })
+        });
+      }
+      if (url.includes('/annotations')) {
+        return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+      }
+      if (url.includes('/explain-selection') && opts?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            explanation: 'Optimization problem where the objective function is convex.'
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const cues = [
+      { id: 'cue_0', time: '00:15', seconds: 15, text: 'We will study convex optimization today.' }
+    ];
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_opt' }}
+        onDiscussInTutor={handleDiscussInTutor}
+      />
+    );
+
+    const cueEl = document.querySelector('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'convex optimization',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 }),
+        getClientRects: () => [{ top: 120, left: 150, width: 80, height: 18 }]
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    const askAiBtn = await screen.findByTitle(/Ask AI to explain selected text/i);
+    fireEvent.click(askAiBtn);
+
+    expect(await screen.findByText(/Optimization problem where the objective function is convex/i)).toBeInTheDocument();
+
+    // Pin as Note
+    const pinBtn = screen.getByRole('button', { name: /Pin as Note/i });
+    fireEvent.click(pinBtn);
+
+    // After pinning to notes, Saved to Notes state appears and Copy / Discuss options are RETAINED
+    expect(await screen.findByRole('button', { name: /Saved to Notes/i })).toBeInTheDocument();
+
+    const copyBtn = screen.getByRole('button', { name: /Copy AI explanation/i });
+    expect(copyBtn).toBeInTheDocument();
+    fireEvent.click(copyBtn);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      expect.stringContaining('Optimization problem where the objective function is convex')
+    );
+
+    const discussBtn = screen.getByRole('button', { name: /Discuss in AI Tutor/i });
+    expect(discussBtn).toBeInTheDocument();
+    fireEvent.click(discussBtn);
+    expect(handleDiscussInTutor).toHaveBeenCalledWith(
+      'convex optimization',
+      '00:15'
+    );
+
+    // Hovering over the AI note mark does not display "Click to open in Notes drawer, edit, or un-highlight"
+    const markEl = document.querySelector('mark');
+    if (markEl) {
+      fireEvent.mouseEnter(markEl);
+      expect(screen.queryByText(/Click to open in Notes drawer, edit, or un-highlight/i)).not.toBeInTheDocument();
+    }
+
+    global.fetch = originalFetch;
+    vi.unstubAllGlobals();
   });
 
   it('renders transcript appearance button and allows customizing cue font and color', async () => {

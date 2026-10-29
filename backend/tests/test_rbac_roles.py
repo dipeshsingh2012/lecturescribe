@@ -122,3 +122,36 @@ def test_student_blocked_from_deleting_course_or_uploading_assignments():
     assert res_upload.status_code == 403
     assert "Only Tutors" in res_upload.json()["detail"]
 
+
+def test_rename_resource_by_tutor_and_student():
+    # 1. Create a link resource
+    res_create = client.post(
+        "/api/resources/link",
+        json={
+            "title": "Initial Slides Deck",
+            "url": "https://example.com/slides.pdf",
+            "course_name": "CS101",
+            "user_email": "tutor@iiitdwd.ac.in",
+        },
+    )
+    assert res_create.status_code == 200
+    res_data = res_create.json()["resource"]
+    res_id = res_data["id"]
+
+    # 2. Student renames resource
+    res_rename_student = client.patch(
+        f"/api/resources/{res_id}",
+        json={"title": "Updated Slides Deck by Student", "user_email": "student@iiitdwd.ac.in"},
+    )
+    assert res_rename_student.status_code == 200
+    assert res_rename_student.json()["resource"]["title"] == "Updated Slides Deck by Student"
+
+    # 3. Tutor renames resource
+    res_rename_tutor = client.patch(
+        f"/api/resources/{res_id}",
+        json={"title": "Final Lecture Deck by Tutor", "user_email": "tutor@iiitdwd.ac.in"},
+    )
+    assert res_rename_tutor.status_code == 200
+    assert res_rename_tutor.json()["resource"]["title"] == "Final Lecture Deck by Tutor"
+
+

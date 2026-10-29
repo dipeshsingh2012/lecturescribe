@@ -262,5 +262,45 @@ describe('HomeView', () => {
     expect(screen.queryByRole('button', { name: /Course Assignments/i })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/Add video URL or ID to this course/i)).not.toBeInTheDocument();
   });
+
+  it('shows the New button (to upload or create new notes) only inside the library and hides it on other tabs', () => {
+    const mockTutor = { email: 'tutor@iiitdwd.ac.in', name: 'Test Tutor' };
+    const { rerender } = render(
+      <HomeView
+        {...baseProps}
+        googleUser={mockTutor}
+        userRole="tutor"
+        isTutor={true}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        courseViewTab="lectures"
+      />
+    );
+
+    // On lectures tab, the "New" button with upload/note options must NOT be rendered
+    expect(screen.queryByRole('button', { name: /New resource or note/i })).not.toBeInTheDocument();
+
+    // Switch to library tab
+    rerender(
+      <HomeView
+        {...baseProps}
+        googleUser={mockTutor}
+        userRole="tutor"
+        isTutor={true}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        courseViewTab="library"
+      />
+    );
+
+    // Inside library, the "New" button must be available
+    const newBtn = screen.getByRole('button', { name: /New resource or note/i });
+    expect(newBtn).toBeInTheDocument();
+
+    // Clicking New opens menu with New Note and Upload File
+    fireEvent.click(newBtn);
+    expect(screen.getByText('New Note')).toBeInTheDocument();
+    expect(screen.getByText('Upload File')).toBeInTheDocument();
+  });
 });
 

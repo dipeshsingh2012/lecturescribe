@@ -418,7 +418,7 @@ export default function TranscriptAnnotationsDrawer({
                     {typeof onDiscussInTutor === 'function' && (
                       <button
                         type="button"
-                        onClick={() => onDiscussInTutor(selectedText || noteText, formattedTime)}
+                        onClick={() => onDiscussInTutor(selectedText || noteText || aiResponse, formattedTime)}
                         title="Discuss in AI Tutor"
                         aria-label="Discuss in AI Tutor"
                         style={{
@@ -576,7 +576,7 @@ export default function TranscriptAnnotationsDrawer({
                     </div>
                   </div>
                 ) : (
-                  noteText && (
+                  noteText && noteText !== aiResponse && (
                     <div
                       onClick={() => {
                         setEditingId(item.id);
@@ -610,28 +610,52 @@ export default function TranscriptAnnotationsDrawer({
                       <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#a855f7', display: 'flex', alignItems: 'center', gap: '3px' }}>
                         <Sparkles size={11} /> AI Explanation
                       </span>
-                      <button
-                        type="button"
-                        aria-label="Copy AI explanation"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigator.clipboard.writeText(aiResponse);
-                          setCopiedId(`ai-${item.id}`);
-                          setTimeout(() => setCopiedId(null), 1500);
-                        }}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '0.68rem',
-                          color: copiedId === `ai-${item.id}` ? '#10b981' : 'var(--text-secondary)',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '3px'
-                        }}
-                      >
-                        {copiedId === `ai-${item.id}` ? <><Check size={11} color="#10b981" /> Copied</> : <><Copy size={11} /> Copy</>}
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {typeof onDiscussInTutor === 'function' && (
+                          <button
+                            type="button"
+                            aria-label="Discuss AI explanation in Tutor"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDiscussInTutor(selectedText || aiResponse, formattedTime);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              fontSize: '0.68rem',
+                              color: 'var(--theme-primary, #6366f1)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px'
+                            }}
+                          >
+                            <Bot size={11} /> Discuss
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-label="Copy AI explanation"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(aiResponse);
+                            setCopiedId(`ai-${item.id}`);
+                            setTimeout(() => setCopiedId(null), 1500);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '0.68rem',
+                            color: copiedId === `ai-${item.id}` ? '#10b981' : 'var(--text-secondary)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}
+                        >
+                          {copiedId === `ai-${item.id}` ? <><Check size={11} color="#10b981" /> Copied</> : <><Copy size={11} /> Copy</>}
+                        </button>
+                      </div>
                     </div>
                     <MarkdownWithTimestamps content={aiResponse} onCueClick={handleCueClick} />
                   </div>

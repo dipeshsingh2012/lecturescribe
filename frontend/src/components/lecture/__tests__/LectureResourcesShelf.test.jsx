@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import LectureResourcesShelf from '../LectureResourcesShelf';
 
 describe('LectureResourcesShelf', () => {
@@ -142,5 +142,114 @@ describe('LectureResourcesShelf', () => {
 
     expect(screen.getByText('Full Course Syllabus')).toBeInTheDocument();
     expect(screen.getByText('Course Material')).toBeInTheDocument();
+  });
+
+  it('defaults to Z - A sorting for lecture resources and allows switching order', () => {
+    const resources = [
+      {
+        id: 'res-1',
+        title: 'Alpha Introduction',
+        filename: 'alpha.pdf',
+        file_type: 'pdf',
+        created_at: '2026-01-01T00:00:00Z'
+      },
+      {
+        id: 'res-2',
+        title: 'Zeta Summary',
+        filename: 'zeta.pdf',
+        file_type: 'pdf',
+        created_at: '2026-01-02T00:00:00Z'
+      },
+      {
+        id: 'res-3',
+        title: 'Beta Exercises',
+        filename: 'beta.pdf',
+        file_type: 'pdf',
+        created_at: '2026-01-03T00:00:00Z'
+      }
+    ];
+
+    render(
+      <LectureResourcesShelf
+        lectureResources={resources}
+        lectureResourcesLoading={false}
+        googleUser={{ email: 'student@example.com' }}
+        handleDeleteResource={vi.fn()}
+        activeData={{ videoId: '123' }}
+        selectedCourse="Math"
+      />
+    );
+
+    // Verify sort controls are visible
+    const sortSelect = screen.getByRole('combobox', { name: /Sort resources/i });
+    expect(sortSelect).toBeInTheDocument();
+    expect(sortSelect.value).toBe('title_desc'); // Z - A is default
+
+    // Verify default Z - A order: Zeta Summary, Beta Exercises, Alpha Introduction
+    let titles = screen.getAllByText(/(Alpha Introduction|Beta Exercises|Zeta Summary)/);
+    expect(titles.map(t => t.textContent)).toEqual([
+      'Zeta Summary',
+      'Beta Exercises',
+      'Alpha Introduction'
+    ]);
+
+    // Change sort to A - Z via select
+    fireEvent.change(sortSelect, { target: { value: 'title_asc' } });
+    titles = screen.getAllByText(/(Alpha Introduction|Beta Exercises|Zeta Summary)/);
+    expect(titles.map(t => t.textContent)).toEqual([
+      'Alpha Introduction',
+      'Beta Exercises',
+      'Zeta Summary'
+    ]);
+
+    // Toggle back to Z - A using toggle button
+    const toggleBtn = screen.getByRole('button', { name: /Toggle sort order/i });
+    fireEvent.click(toggleBtn);
+    titles = screen.getAllByText(/(Alpha Introduction|Beta Exercises|Zeta Summary)/);
+    expect(titles.map(t => t.textContent)).toEqual([
+      'Zeta Summary',
+      'Beta Exercises',
+      'Alpha Introduction'
+    ]);
+  });
+
+  it('supports renaming a resource inline', async () => {
+    const handleRenameResource = vi.fn().mockResolvedValue(true);
+    const resources = [
+      {
+        id: 'res-1',
+        title: 'Original Title',
+        filename: 'notes.pdf',
+        file_type: 'pdf',
+        created_at: '2026-01-01T00:00:00Z',
+        user_email: 'student@example.com'
+      }
+    ];
+
+    render(
+      <LectureResourcesShelf
+        lectureResources={resources}
+        lectureResourcesLoading={false}
+        googleUser={{ email: 'student@example.com' }}
+        handleDeleteResource={vi.fn()}
+        handleRenameResource={handleRenameResource}
+        activeData={{ videoId: '123' }}
+        selectedCourse="Math"
+      />
+    );
+
+    const renameBtn = screen.getByRole('button', { name: /Rename resource/i });
+    fireEvent.click(renameBtn);
+
+    const input = screen.getByPlaceholderText('Resource title');
+    expect(input).toHaveValue('Original Title');
+
+    fireEvent.change(input, { target: { value: 'Updated Title' } });
+    const saveBtn = screen.getByRole('button', { name: /Save title/i });
+    await act(async () => {
+      fireEvent.click(saveBtn);
+    });
+
+    expect(handleRenameResource).toHaveBeenCalledWith('res-1', 'Updated Title');
   });
 });

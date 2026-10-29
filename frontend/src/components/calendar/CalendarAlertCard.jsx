@@ -211,6 +211,194 @@ const CATEGORY_STYLES = {
   }
 };
 
+export function filterCourseUpcomingEvents(agenda, selectedCourse) {
+  if (!agenda || !selectedCourse) return [];
+
+  const cleanCourse = selectedCourse.replace(/^[0-9\.\s\-_]+/, '').trim();
+  const targetSlug = normalizeCourseSlug(selectedCourse);
+  const cleanSlug = normalizeCourseSlug(cleanCourse);
+
+  const targetWords = targetSlug.replace(/-/g, ' ');
+  const cleanWords = cleanSlug.replace(/-/g, ' ');
+
+  const combined = [
+    ...(agenda?.today?.all || []),
+    ...(Array.isArray(agenda?.upcoming) ? agenda.upcoming : (agenda?.upcoming?.all || [])),
+    ...(agenda?.all_events || [])
+  ];
+
+  const todayEventIds = new Set((agenda?.today?.all || []).map((e) => e?.id).filter(Boolean));
+
+  const isPastDate = (evt) => {
+    if (!evt) return true;
+    try {
+      const now = new Date();
+      const localTodayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const utcTodayStr = now.toISOString().slice(0, 10);
+
+      // 1. Direct date_iso check (YYYY-MM-DD)
+      if (evt.date_iso && /^\d{4}-\d{2}-\d{2}$/.test(evt.date_iso)) {
+        return evt.date_iso < localTodayStr && evt.date_iso < utcTodayStr;
+      }
+
+      const startOfTodayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
+      const startOfTodayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
+      const minTodayMs = Math.min(startOfTodayLocal, startOfTodayUtc);
+
+      // 2. Numeric epoch timestamp (seconds from backend)
+      const tsSec = evt.timestamp_end || evt.timestamp_start;
+      if (tsSec) {
+        return (tsSec * 1000) < minTodayMs;
+      }
+
+      // 3. Raw ISO start or end datetime
+      const rawDt = evt.end || evt.start;
+      if (rawDt) {
+        const d = new Date(rawDt);
+        if (!isNaN(d.getTime())) {
+          return d.getTime() < minTodayMs;
+        }
+      }
+
+      // 4. Formatted date string (e.g. "Saturday, Sep 19, 2026")
+      if (evt.date_formatted) {
+        const d = new Date(evt.date_formatted);
+        if (!isNaN(d.getTime())) {
+          return d.getTime() < minTodayMs;
+        }
+      }
+
+      // 5. If event was in today's slot without explicit date string, it is today's event
+      if (evt.id && todayEventIds.has(evt.id)) {
+        return false;
+      }
+    } catch (e) {}
+    return false;
+  };
+
+  const GENERIC_SLUGS = new Set([
+    '', 'course', 'site', 'user', 'category', 'group', 'general',
+    'schedule', 'event', 'lecture', 'session', 'quiz', 'assignment', 'exam'
+  ]);
+  const STOP_WORDS = new Set([
+    'introduction', 'intro', 'advanced', 'fundamentals', 'principles', 'basics',
+    'course', 'lecture', 'session', 'lab', 'to', 'of', 'and', 'in', 'for',
+    'the', 'a', 'an', 'i', 'ii', 'iii', 'part'
+  ]);
+  const distinctiveWords = cleanWords.split(' ').filter(w => w.length > 2 && !STOP_WORDS.has(w));
+  const courseAcronym = cleanWords.split(' ').filter(Boolean).map(w => w[0]).join('');
+
+  const seen = new Set();
+  const filtered = [];
+
+  for (const evt of combined) {
+    if (!evt || !evt.id || seen.has(evt.id)) continue;
+    seen.add(evt.id);
+
+    // Never show past dates in course key dates / upcoming events
+    if (isPastDate(evt)) {
+      continue;
+    }
+
+    const evtSlug = normalizeCourseSlug(evt.course_slug || '');
+    const evtName = (evt.course_name || '').toLowerCase();
+    const titleDesc = `${evt.title || ''} ${evt.description || ''}`.toLowerCase();
+    const evtTitleLower = (evt.title || '').toLowerCase().trim();
+
+    let matches = false;
+    if (evtSlug && !GENERIC_SLUGS.has(evtSlug)) {
+      if (evtSlug === targetSlug || evtSlug === cleanSlug) {
+        matches = true;
+      } else if (courseAcronym && courseAcronym.length >= 3 && (evtSlug.startsWith(courseAcronym) || evtSlug.includes(courseAcronym))) {
+        matches = true;
+      }
+    }
+    
+    if (!matches && evtName && !GENERIC_SLUGS.has(evtName)) {
+      if (evtName === selectedCourse.toLowerCase() || evtName === cleanCourse.toLowerCase() || evtName.includes(cleanCourse.toLowerCase())) {
+        matches = true;
+      }
+    }
+
+    if (!matches) {
+      if (cleanWords && (titleDesc.includes(cleanWords) || cleanWords.includes(evtTitleLower) || evtTitleLower.includes(cleanWords))) {
+        matches = true;
+      } else if (targetWords && (titleDesc.includes(targetWords) || targetWords.includes(evtTitleLower) || evtTitleLower.includes(targetWords))) {
+        matches = true;
+      } else if (distinctiveWords.length > 0 && distinctiveWords.every(w => titleDesc.includes(w) || evtTitleLower.includes(w))) {
+        matches = true;
+      }
+    }
+
+    if (matches) {
+      filtered.push(evt);
+    }
+  }
+
+  filtered.sort((a, b) => (a.timestamp_start || 0) - (b.timestamp_start || 0));
+  return filtered;
+}
+
+export function getEventBadgeDate(evt) {
+  if (!evt) return { day: '--', month: '---', time: '' };
+  try {
+    let day = '--';
+    let month = '---';
+    let timeStr = evt.start_time_formatted || '';
+
+    // Direct ISO date parsing (e.g. 2026-10-27) avoids local/UTC timezone day shift
+    if (evt.date_iso && /^\d{4}-\d{2}-\d{2}$/.test(evt.date_iso)) {
+      const parts = evt.date_iso.split('-');
+      day = parseInt(parts[2], 10);
+      const mIdx = parseInt(parts[1], 10) - 1;
+      const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      month = MONTHS[mIdx] || '---';
+    }
+
+    const raw = evt.start || evt.date_iso;
+    if (raw) {
+      const d = new Date(raw);
+      if (!isNaN(d.getTime())) {
+        if (day === '--') {
+          day = d.getDate();
+          month = d.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+        }
+        if (evt.is_all_day) {
+          timeStr = 'All day';
+        } else if (!timeStr && (evt.start || (evt.date_iso && evt.date_iso.includes('T')))) {
+          const hours = String(d.getHours()).padStart(2, '0');
+          const minutes = String(d.getMinutes()).padStart(2, '0');
+          timeStr = `${hours}:${minutes}`;
+        }
+      }
+    }
+
+    if (day !== '--' && month !== '---') {
+      return { day, month, time: timeStr || evt.start_time_formatted || '' };
+    }
+  } catch (e) {
+    // fallback
+  }
+
+  const monthMatch = (evt.date_formatted || '').match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
+  const dayMatch = (evt.date_formatted || '').match(/\b(\d{1,2})\b/);
+  if (dayMatch || monthMatch) {
+    return {
+      day: dayMatch ? dayMatch[1] : '--',
+      month: monthMatch ? monthMatch[0].toUpperCase() : 'DATE',
+      time: evt.start_time_formatted || ''
+    };
+  }
+
+  const now = new Date();
+  const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  return {
+    day: now.getDate(),
+    month: MONTHS[now.getMonth()],
+    time: evt.start_time_formatted || ''
+  };
+}
+
 export default function CalendarAlertCard({
   currentTheme,
   googleUser,
@@ -305,192 +493,10 @@ export default function CalendarAlertCard({
   }, [fetchAgenda, googleUser, selectedCourse]);
 
   const courseUpcomingEvents = useMemo(() => {
-    if (!agenda || !selectedCourse) return [];
-
-    const cleanCourse = selectedCourse.replace(/^[0-9\.\s\-_]+/, '').trim();
-    const targetSlug = normalizeCourseSlug(selectedCourse);
-    const cleanSlug = normalizeCourseSlug(cleanCourse);
-
-    const targetWords = targetSlug.replace(/-/g, ' ');
-    const cleanWords = cleanSlug.replace(/-/g, ' ');
-
-    const combined = [
-      ...(agenda?.today?.all || []),
-      ...(agenda?.upcoming || []),
-      ...(agenda?.all_events || [])
-    ];
-
-    const todayEventIds = new Set((agenda?.today?.all || []).map((e) => e?.id).filter(Boolean));
-
-    const isPastDate = (evt) => {
-      if (!evt) return true;
-      try {
-        const now = new Date();
-        const localTodayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        const utcTodayStr = now.toISOString().slice(0, 10);
-
-        // 1. Direct date_iso check (YYYY-MM-DD)
-        if (evt.date_iso && /^\d{4}-\d{2}-\d{2}$/.test(evt.date_iso)) {
-          return evt.date_iso < localTodayStr && evt.date_iso < utcTodayStr;
-        }
-
-        const startOfTodayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
-        const startOfTodayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
-        const minTodayMs = Math.min(startOfTodayLocal, startOfTodayUtc);
-
-        // 2. Numeric epoch timestamp (seconds from backend)
-        const tsSec = evt.timestamp_end || evt.timestamp_start;
-        if (tsSec) {
-          return (tsSec * 1000) < minTodayMs;
-        }
-
-        // 3. Raw ISO start or end datetime
-        const rawDt = evt.end || evt.start;
-        if (rawDt) {
-          const d = new Date(rawDt);
-          if (!isNaN(d.getTime())) {
-            return d.getTime() < minTodayMs;
-          }
-        }
-
-        // 4. Formatted date string (e.g. "Saturday, Sep 19, 2026")
-        if (evt.date_formatted) {
-          const d = new Date(evt.date_formatted);
-          if (!isNaN(d.getTime())) {
-            return d.getTime() < minTodayMs;
-          }
-        }
-
-        // 5. If event was in today's slot without explicit date string, it is today's event
-        if (evt.id && todayEventIds.has(evt.id)) {
-          return false;
-        }
-      } catch (e) {}
-      return false;
-    };
-
-    const GENERIC_SLUGS = new Set([
-      '', 'course', 'site', 'user', 'category', 'group', 'general',
-      'schedule', 'event', 'lecture', 'session', 'quiz', 'assignment', 'exam'
-    ]);
-    const STOP_WORDS = new Set([
-      'introduction', 'intro', 'advanced', 'fundamentals', 'principles', 'basics',
-      'course', 'lecture', 'session', 'lab', 'to', 'of', 'and', 'in', 'for',
-      'the', 'a', 'an', 'i', 'ii', 'iii', 'part'
-    ]);
-    const distinctiveWords = cleanWords.split(' ').filter(w => w.length > 2 && !STOP_WORDS.has(w));
-    const courseAcronym = cleanWords.split(' ').filter(Boolean).map(w => w[0]).join('');
-
-    const seen = new Set();
-    const filtered = [];
-
-    for (const evt of combined) {
-      if (!evt || !evt.id || seen.has(evt.id)) continue;
-      seen.add(evt.id);
-
-      // Never show past dates in course key dates / upcoming events
-      if (isPastDate(evt)) {
-        continue;
-      }
-
-      const evtSlug = normalizeCourseSlug(evt.course_slug || '');
-      const evtName = (evt.course_name || '').toLowerCase();
-      const titleDesc = `${evt.title || ''} ${evt.description || ''}`.toLowerCase();
-      const evtTitleLower = (evt.title || '').toLowerCase().trim();
-
-      let matches = false;
-      if (evtSlug && !GENERIC_SLUGS.has(evtSlug)) {
-        if (evtSlug === targetSlug || evtSlug === cleanSlug) {
-          matches = true;
-        } else if (courseAcronym && courseAcronym.length >= 3 && (evtSlug.startsWith(courseAcronym) || evtSlug.includes(courseAcronym))) {
-          matches = true;
-        }
-      }
-      
-      if (!matches && evtName && !GENERIC_SLUGS.has(evtName)) {
-        if (evtName === selectedCourse.toLowerCase() || evtName === cleanCourse.toLowerCase() || evtName.includes(cleanCourse.toLowerCase())) {
-          matches = true;
-        }
-      }
-
-      if (!matches) {
-        if (cleanWords && (titleDesc.includes(cleanWords) || cleanWords.includes(evtTitleLower) || evtTitleLower.includes(cleanWords))) {
-          matches = true;
-        } else if (targetWords && (titleDesc.includes(targetWords) || targetWords.includes(evtTitleLower) || evtTitleLower.includes(targetWords))) {
-          matches = true;
-        } else if (distinctiveWords.length > 0 && distinctiveWords.every(w => titleDesc.includes(w) || evtTitleLower.includes(w))) {
-          matches = true;
-        }
-      }
-
-      if (matches) {
-        filtered.push(evt);
-      }
-    }
-
-    filtered.sort((a, b) => (a.timestamp_start || 0) - (b.timestamp_start || 0));
-    return filtered;
+    return filterCourseUpcomingEvents(agenda, selectedCourse);
   }, [agenda, selectedCourse]);
 
-  const getBadgeDate = (evt) => {
-    if (!evt) return { day: '--', month: '---', time: '' };
-    try {
-      let day = '--';
-      let month = '---';
-      let timeStr = '';
-
-      // Direct ISO date parsing (e.g. 2026-10-27) avoids local/UTC timezone day shift
-      if (evt.date_iso && /^\d{4}-\d{2}-\d{2}$/.test(evt.date_iso)) {
-        const parts = evt.date_iso.split('-');
-        day = parseInt(parts[2], 10);
-        const mIdx = parseInt(parts[1], 10) - 1;
-        const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-        month = MONTHS[mIdx] || '---';
-      }
-
-      const raw = evt.start || evt.date_iso;
-      if (raw) {
-        const d = new Date(raw);
-        if (!isNaN(d.getTime())) {
-          if (day === '--') {
-            day = d.getDate();
-            month = d.toLocaleString('en-US', { month: 'short' }).toUpperCase();
-          }
-          if (evt.is_all_day) {
-            timeStr = 'All day';
-          } else {
-            const hours = String(d.getHours()).padStart(2, '0');
-            const minutes = String(d.getMinutes()).padStart(2, '0');
-            timeStr = `${hours}:${minutes}`;
-          }
-        }
-      }
-
-      if (day !== '--' && month !== '---') {
-        return { day, month, time: timeStr || evt.start_time_formatted || '' };
-      }
-    } catch (e) {
-      // fallback
-    }
-
-    const monthMatch = (evt.date_formatted || '').match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
-    const dayMatch = (evt.date_formatted || '').match(/\b(\d{1,2})\b/);
-    if (dayMatch || monthMatch) {
-      return {
-        day: dayMatch ? dayMatch[1] : '--',
-        month: monthMatch ? monthMatch[0].toUpperCase() : 'DATE',
-        time: evt.start_time_formatted || ''
-      };
-    }
-
-    const now = new Date();
-    const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    return {
-      day: now.getDate(),
-      month: MONTHS[now.getMonth()],
-      time: evt.start_time_formatted || ''
-    };
-  };
+  const getBadgeDate = getEventBadgeDate;
 
   if (!googleUser && !selectedCourse) {
     return null;

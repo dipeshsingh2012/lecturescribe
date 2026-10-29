@@ -5041,6 +5041,43 @@ class RelationalDBManager:
             self._resources_memory_cache = [r for r in self._resources_memory_cache if r.get("id") != resource_id]
         return target
 
+    def rename_resource(self, resource_id: int, new_title: str) -> Optional[Dict[str, Any]]:
+        """Rename a resource's title (accessible to both tutors and students)."""
+        clean_title = (new_title or "").strip()
+        if not clean_title:
+            return None
+        conn = None
+        updated = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_resources
+                        SET title = %s
+                        WHERE id = %s
+                        RETURNING id, video_id, course_name, user_email, title, filename, blob_name, file_type, file_size_bytes, file_url, created_at;
+                    """, (clean_title, resource_id))
+                    row = cursor.fetchone()
+                    if row:
+                        updated = dict(row)
+                    conn.commit()
+        except Exception as e:
+            print(f"[PostgreSQL Resources Warning] Could not rename resource in DB: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+        # Update in-memory cache as well
+        for r in self._resources_memory_cache:
+            if r.get("id") == resource_id:
+                r["title"] = clean_title
+                if not updated:
+                    updated = dict(r)
+                break
+
+        return updated
+
     def create_course_note(
         self,
         course_name: str,

@@ -511,6 +511,34 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     }
   };
 
+  const handleRenameResource = async (resourceId, newTitle) => {
+    if (!resourceId || !newTitle || !newTitle.trim()) return false;
+    const cleanTitle = newTitle.trim();
+    try {
+      const res = await fetch(`${API_BASE}/api/resources/${resourceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: cleanTitle,
+          user_email: googleUser?.email || ''
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updatedTitle = data.resource?.title || cleanTitle;
+        setRawLectureResources(prev => prev.map(r => r.id === resourceId ? { ...r, title: updatedTitle } : r));
+        setCourseResources(prev => prev.map(r => r.id === resourceId ? { ...r, title: updatedTitle } : r));
+        return true;
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.detail || "Failed to rename resource.");
+      }
+    } catch (err) {
+      console.error("Error renaming resource:", err);
+    }
+    return false;
+  };
+
   const [previewResource, setPreviewResource] = useState(null);
 
   const openPreviewModal = (resource) => {
@@ -577,6 +605,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     openUploadModal,
     handleUploadResource,
     handleDeleteResource,
+    handleRenameResource,
     previewResource,
     setPreviewResource,
     openPreviewModal,

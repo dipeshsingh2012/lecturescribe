@@ -39,6 +39,7 @@ export default function TextSelectionToolbar({
   const [aiCopied, setAiCopied] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
 
   useEffect(() => {
     if (initialMode === 'ai') {
@@ -155,6 +156,7 @@ export default function TextSelectionToolbar({
     setAiPromptType(promptType);
     setAiLoading(true);
     setAiResponse('');
+    setIsPinned(false);
     setActionError(null);
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/explain-selection`, {
@@ -206,13 +208,13 @@ export default function TextSelectionToolbar({
         throw new Error(errData.detail || 'Failed to pin AI explanation.');
       }
       const data = await res.json();
+      setIsPinned(true);
       if (typeof onAnnotationCreated === 'function') {
-        onAnnotationCreated(data.annotation);
+        onAnnotationCreated(data.annotation, false);
       }
       if (typeof window !== 'undefined') {
         window.getSelection()?.removeAllRanges();
       }
-      onClose();
     } catch (err) {
       console.error('Error pinning AI explanation:', err);
       setActionError(err.message || 'Error pinning AI explanation');
@@ -614,11 +616,12 @@ export default function TextSelectionToolbar({
                 </button>
               )}
 
-              {/* Pin as Note */}
+              {/* Pin as Note / Saved to Notes */}
               <button
                 type="button"
                 onClick={handlePinAiAsNote}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isPinned}
+                aria-label={isPinned ? "Saved to Notes" : "Pin as Note"}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -626,15 +629,27 @@ export default function TextSelectionToolbar({
                   padding: '4px 8px',
                   borderRadius: '4px',
                   border: 'none',
-                  background: 'rgba(168, 85, 247, 0.2)',
-                  color: '#a855f7',
+                  background: isPinned ? 'rgba(16, 185, 129, 0.15)' : 'rgba(168, 85, 247, 0.2)',
+                  color: isPinned ? '#10b981' : '#a855f7',
                   fontSize: '0.7rem',
                   fontWeight: 700,
-                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                  cursor: (isSubmitting || isPinned) ? 'default' : 'pointer',
                   opacity: isSubmitting ? 0.6 : 1
                 }}
               >
-                <BookmarkPlus size={11} /> {isSubmitting ? 'Pinning...' : 'Pin as Note'}
+                {isSubmitting ? (
+                  <>
+                    <Loader2 size={11} className="loading-pulse" /> Pinning...
+                  </>
+                ) : isPinned ? (
+                  <>
+                    <Check size={11} color="#10b981" /> Saved to Notes
+                  </>
+                ) : (
+                  <>
+                    <BookmarkPlus size={11} /> Pin as Note
+                  </>
+                )}
               </button>
             </div>
           )}

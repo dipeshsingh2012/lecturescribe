@@ -192,12 +192,13 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
                 href={viewUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="Open in new browser tab"
+                title="New Tab"
+                aria-label="New Tab"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 12px',
+                  justifyContent: 'center',
+                  padding: '7px 10px',
                   borderRadius: '8px',
                   background: 'var(--highlight-bg)',
                   color: 'var(--theme-primary)',
@@ -210,7 +211,6 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
                 }}
               >
                 <ExternalLink size={14} />
-                <span>New Tab</span>
               </a>
             )}
 
@@ -218,12 +218,13 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
               <a
                 href={downloadUrl}
                 download={resource.filename || true}
-                title="Download original file"
+                title="Download"
+                aria-label="Download"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 12px',
+                  justifyContent: 'center',
+                  padding: '7px 10px',
                   borderRadius: '8px',
                   background: 'var(--button-secondary-bg, rgba(255, 255, 255, 0.08))',
                   color: 'var(--text-primary)',
@@ -236,7 +237,6 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
                 }}
               >
                 <Download size={14} />
-                <span>Download</span>
               </a>
             )}
 
@@ -432,40 +432,40 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{
-                      padding: '8px 16px',
+                      padding: '8px 12px',
                       borderRadius: '8px',
                       background: 'var(--theme-primary)',
                       color: '#ffffff',
                       textDecoration: 'none',
-                      fontWeight: 600,
-                      fontSize: '0.85rem',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '6px'
+                      justifyContent: 'center'
                     }}
+                    title="Open in New Tab"
+                    aria-label="Open in New Tab"
                   >
-                    <ExternalLink size={15} /> Open in New Tab
+                    <ExternalLink size={16} />
                   </a>
                 )}
                 {downloadUrl && (
                   <a
                     href={downloadUrl}
                     download={resource.filename || true}
+                    title="Download"
+                    aria-label="Download"
                     style={{
-                      padding: '8px 16px',
+                      padding: '8px 12px',
                       borderRadius: '8px',
                       background: 'var(--highlight-bg)',
                       color: 'var(--theme-primary)',
                       border: '1px solid rgba(0, 117, 237, 0.25)',
                       textDecoration: 'none',
-                      fontWeight: 600,
-                      fontSize: '0.85rem',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '6px'
+                      justifyContent: 'center'
                     }}
                   >
-                    <Download size={15} /> Download File
+                    <Download size={16} />
                   </a>
                 )}
               </div>

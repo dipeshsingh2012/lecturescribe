@@ -39,6 +39,7 @@ import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import { formatSecondsToTimestamp, parseTimestampToSeconds, isGcsSignedUrlFresh } from '../../utils/formatters';
 import { sortLectures, getLectureTitle } from '../../utils/lectureSort';
+import { getVideoSourceInfo } from '../../utils/publisherDetect';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
 
@@ -980,8 +981,9 @@ export default function LecturePlayer({
 
           if (videoError && !freshGcsVideoUrl && !gcsUploadState.isUploading) {
             const rawSource = activeData.source_url || activeData.sourceUrl || activeData.moodle_url || activeData.moodleUrl || '';
-            const isDirectMoodle = rawSource.includes('learning.iiitdwd.ac.in') || (rawSource.startsWith('http') && !rawSource.includes('video.lecturescribe.local'));
-            const moodleDirectUrl = isDirectMoodle ? rawSource : null;
+            const sourceInfo = getVideoSourceInfo(rawSource, courseName);
+            const sourceDirectUrl = (sourceInfo && sourceInfo.url && !sourceInfo.url.includes('video.lecturescribe.local')) ? sourceInfo.url : null;
+            const sourcePlatformLabel = sourceInfo?.label || 'Original Platform';
             const moodleSearchUrl = courseName ? `https://learning.iiitdwd.ac.in/course/search.php?search=${encodeURIComponent(courseName)}` : 'https://learning.iiitdwd.ac.in/';
 
             return (
@@ -1024,29 +1026,29 @@ export default function LecturePlayer({
                 </Typography>
 
                 <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.7)', maxWidth: 480, mb: 2.5, fontSize: '0.82rem', lineHeight: 1.5 }}>
-                  This recording is hosted on Moodle LMS. You can view the original stream directly on Moodle, or sync it to Cloud Storage for native in-app playback.
+                  This recording is hosted on {sourcePlatformLabel}. You can view the original stream directly on {sourcePlatformLabel}, or sync it to Cloud Storage for native in-app playback.
                 </Typography>
 
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, justifyContent: 'center', alignItems: 'center' }}>
-                  {moodleDirectUrl && (
+                  {sourceDirectUrl && (
                     <Button
                       variant="contained"
                       size="small"
                       component="a"
-                      href={moodleDirectUrl}
+                      href={sourceDirectUrl}
                       target="_blank"
                       rel="noreferrer"
                       startIcon={<ExternalLink size={14} />}
                       sx={{
-                        bgcolor: '#f59e0b',
-                        color: '#000',
+                        bgcolor: sourceInfo?.color || '#f59e0b',
+                        color: sourceInfo?.platform === 'youtube' ? '#fff' : '#000',
                         fontWeight: 700,
                         textTransform: 'none',
                         fontSize: '0.78rem',
-                        '&:hover': { bgcolor: '#d97706' }
+                        '&:hover': { filter: 'brightness(0.9)' }
                       }}
                     >
-                      Open Video on Moodle
+                      {sourceInfo?.platform === 'moodle' ? 'Open Video on Moodle' : `Open Video on ${sourcePlatformLabel}`}
                     </Button>
                   )}
 
@@ -1714,27 +1716,24 @@ export default function LecturePlayer({
           )}
           {(() => {
             const rawSource = activeData.source_url || activeData.sourceUrl || activeData.moodle_url || activeData.moodleUrl || '';
-            const isDirectMoodle = rawSource.includes('learning.iiitdwd.ac.in') || (rawSource.startsWith('http') && !rawSource.includes('video.lecturescribe.local'));
-            const moodleUrl = isDirectMoodle
-              ? rawSource
-              : (courseName ? `https://learning.iiitdwd.ac.in/course/search.php?search=${encodeURIComponent(courseName)}` : null);
-            if (!moodleUrl) return null;
+            const sourceInfo = getVideoSourceInfo(rawSource, courseName);
+            if (!sourceInfo?.url) return null;
             return (
               <a
-                href={moodleUrl}
+                href={sourceInfo.url}
                 target="_blank"
                 rel="noreferrer"
-                aria-label="View on Moodle LMS"
-                title="Open original lecture session on Moodle LMS"
+                aria-label={`View on ${sourceInfo.label}`}
+                title={sourceInfo.title || `Open original lecture session on ${sourceInfo.label}`}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '6px',
                   padding: '4px 12px',
                   borderRadius: '16px',
-                  background: 'rgba(245, 158, 11, 0.1)',
-                  border: '1px solid rgba(245, 158, 11, 0.35)',
-                  color: '#f59e0b',
+                  background: sourceInfo.bg || 'rgba(245, 158, 11, 0.1)',
+                  border: `1px solid ${sourceInfo.border || 'rgba(245, 158, 11, 0.35)'}`,
+                  color: sourceInfo.color || '#f59e0b',
                   fontSize: '0.78rem',
                   fontWeight: 600,
                   textDecoration: 'none',
@@ -1742,7 +1741,7 @@ export default function LecturePlayer({
                   transition: 'all 0.2s ease'
                 }}
               >
-                <span>Moodle LMS</span>
+                <span>{sourceInfo.label}</span>
                 <ExternalLink size={12} style={{ opacity: 0.8 }} />
               </a>
             );

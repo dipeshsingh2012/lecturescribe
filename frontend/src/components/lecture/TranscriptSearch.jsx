@@ -121,6 +121,8 @@ export default function TranscriptSearch({
   const [hoveredMark, setHoveredMark] = useState(null); // { annotation, x, y }
   const [editingMarkNoteText, setEditingMarkNoteText] = useState('');
   const [isSavingMarkNote, setIsSavingMarkNote] = useState(false);
+  const [copiedMarkId, setCopiedMarkId] = useState(null);
+  const [copiedActiveMark, setCopiedActiveMark] = useState(false);
 
   const scrollContainerRef = useRef(null);
   const transcriptStartRef = useRef(null);
@@ -1967,194 +1969,277 @@ export default function TranscriptSearch({
               initialMode={selectionToolbar.initialMode || 'menu'}
               onDiscussInTutor={onDiscussInTutor}
               onClose={() => setSelectionToolbar(null)}
-              onAnnotationCreated={(newAnnotation) => {
+              onAnnotationCreated={(newAnnotation, shouldClose = true) => {
                 setAnnotations(prev => [newAnnotation, ...prev]);
-                setSelectionToolbar(null);
+                if (shouldClose) {
+                  setSelectionToolbar(null);
+                }
               }}
             />
           )}
 
           {/* Rich Hover Card for Notes / Highlights (supports inline editing) */}
-          {hoveredMark && !activeMarkAction && (
-            <div
-              data-testid="mark-hover-tooltip"
-              onMouseEnter={() => {
-                if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
-              }}
-              onMouseLeave={() => {
-                if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
-                hoverCloseTimeoutRef.current = setTimeout(() => {
-                  setHoveredMark(prev => (prev?.editing ? prev : null));
-                }, 150);
-              }}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                position: 'fixed',
-                left: Math.max(10, Math.min(typeof window !== 'undefined' ? window.innerWidth - 320 : 300, (hoveredMark.x || 200) - 140)),
-                top: Math.max(10, (hoveredMark.y || 200) > 110 ? (hoveredMark.y || 200) - (hoveredMark.editing ? 120 : 84) : (hoveredMark.y || 200) + 26),
-                zIndex: 1200,
-                background: 'var(--card-bg, #1e293b)',
-                border: '1px solid rgba(129, 140, 248, 0.35)',
-                borderRadius: '8px',
-                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
-                padding: '8px 12px',
-                maxWidth: '300px',
-                minWidth: '210px',
-                pointerEvents: 'auto',
-                animation: 'fadeIn 0.12s ease'
-              }}
-            >
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '6px',
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                color: (hoveredMark.annotation?.annotationType || hoveredMark.annotation?.annotation_type) === 'note' ? '#3b82f6' : 'var(--theme-primary, #6366f1)',
-                marginBottom: '4px'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  {(hoveredMark.annotation?.annotationType || hoveredMark.annotation?.annotation_type) === 'note' ? (
-                    <>
-                      <MessageSquare size={12} />
-                      <span>Margin Note</span>
-                    </>
-                  ) : (hoveredMark.annotation?.annotationType || hoveredMark.annotation?.annotation_type) === 'ai_explanation' ? (
-                    <>
-                      <Sparkles size={12} />
-                      <span>AI Explanation</span>
-                    </>
-                  ) : (
-                    <span>Highlight ({hoveredMark.annotation?.color || 'yellow'})</span>
+          {hoveredMark && !activeMarkAction && (() => {
+            const ann = hoveredMark.annotation;
+            const annType = ann?.annotationType || ann?.annotation_type;
+            const isAi = annType === 'ai_explanation';
+            const isNote = annType === 'note';
+
+            return (
+              <div
+                data-testid="mark-hover-tooltip"
+                onMouseEnter={() => {
+                  if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+                }}
+                onMouseLeave={() => {
+                  if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+                  hoverCloseTimeoutRef.current = setTimeout(() => {
+                    setHoveredMark(prev => (prev?.editing ? prev : null));
+                  }, 150);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: 'fixed',
+                  left: Math.max(10, Math.min(typeof window !== 'undefined' ? window.innerWidth - 320 : 300, (hoveredMark.x || 200) - 140)),
+                  top: Math.max(10, (hoveredMark.y || 200) > 110 ? (hoveredMark.y || 200) - (hoveredMark.editing ? 120 : 84) : (hoveredMark.y || 200) + 26),
+                  zIndex: 1200,
+                  background: 'var(--card-bg, #1e293b)',
+                  border: isAi ? '1px solid rgba(168, 85, 247, 0.35)' : '1px solid rgba(129, 140, 248, 0.35)',
+                  borderRadius: '8px',
+                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+                  padding: '8px 12px',
+                  maxWidth: '300px',
+                  minWidth: '210px',
+                  pointerEvents: 'auto',
+                  animation: 'fadeIn 0.12s ease'
+                }}
+              >
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '6px',
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  color: isAi ? '#a855f7' : isNote ? '#3b82f6' : 'var(--theme-primary, #6366f1)',
+                  marginBottom: '4px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    {isNote ? (
+                      <>
+                        <MessageSquare size={12} />
+                        <span>Margin Note</span>
+                      </>
+                    ) : isAi ? (
+                      <>
+                        <Sparkles size={12} />
+                        <span>AI Explanation</span>
+                      </>
+                    ) : (
+                      <span>Highlight ({ann?.color || 'yellow'})</span>
+                    )}
+                  </div>
+                  {!hoveredMark.editing && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {/* Copy Button */}
+                      <button
+                        type="button"
+                        aria-label="Copy note or explanation"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const textToCopy = ann?.aiResponse || ann?.ai_response || ann?.noteText || ann?.note_text || ann?.selectedText || ann?.selected_text || '';
+                          navigator.clipboard.writeText(textToCopy);
+                          setCopiedMarkId(ann?.id);
+                          setTimeout(() => setCopiedMarkId(null), 1500);
+                        }}
+                        title="Copy note or explanation"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '2px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: copiedMarkId === ann?.id ? '#10b981' : 'var(--text-secondary)',
+                          fontSize: '0.68rem',
+                          cursor: 'pointer',
+                          padding: '2px 4px'
+                        }}
+                      >
+                        {copiedMarkId === ann?.id ? <Check size={11} color="#10b981" /> : <Copy size={11} />}
+                      </button>
+
+                      {/* Discuss in AI Tutor Button */}
+                      {typeof onDiscussInTutor === 'function' && (
+                        <button
+                          type="button"
+                          aria-label="Discuss in AI Tutor"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const topic = ann?.selectedText || ann?.selected_text || ann?.noteText || ann?.note_text || ann?.aiResponse || ann?.ai_response || '';
+                            const startSec = Number(ann?.startSeconds ?? ann?.start_seconds ?? 0);
+                            const ts = startSec ? formatSecondsToTimestamp(startSec) : '';
+                            onDiscussInTutor(topic, ts);
+                            setHoveredMark(null);
+                          }}
+                          title="Discuss in AI Tutor"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '2px',
+                            background: 'rgba(99, 102, 241, 0.1)',
+                            border: '1px solid rgba(99, 102, 241, 0.25)',
+                            borderRadius: '4px',
+                            color: 'var(--theme-primary, #6366f1)',
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            padding: '1px 5px'
+                          }}
+                        >
+                          <Bot size={11} /> Discuss
+                        </button>
+                      )}
+
+                      {!isAi && (
+                        <button
+                          type="button"
+                          aria-label="Edit note in tooltip"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingMarkNoteText(ann?.noteText || ann?.note_text || '');
+                            setHoveredMark(prev => prev ? { ...prev, editing: true } : null);
+                          }}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            background: 'rgba(59, 130, 246, 0.12)',
+                            color: '#3b82f6',
+                            border: 'none',
+                            borderRadius: '4px',
+                            padding: '2px 6px',
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Pencil size={10} /> Edit
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
-                {!hoveredMark.editing && (
-                  <button
-                    type="button"
-                    aria-label="Edit note in tooltip"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingMarkNoteText(hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text || '');
-                      setHoveredMark(prev => prev ? { ...prev, editing: true } : null);
-                    }}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '3px',
-                      background: 'rgba(59, 130, 246, 0.12)',
-                      color: '#3b82f6',
-                      border: 'none',
-                      borderRadius: '4px',
-                      padding: '2px 6px',
-                      fontSize: '0.68rem',
-                      fontWeight: 600,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <Pencil size={10} /> Edit
-                  </button>
-                )}
-              </div>
 
-              {hoveredMark.editing ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
-                  <textarea
-                    autoFocus
-                    aria-label="Edit margin note text"
-                    value={editingMarkNoteText}
-                    onChange={(e) => setEditingMarkNoteText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        if (editingMarkNoteText.trim()) {
-                          handleUpdateAnnotation(hoveredMark.annotation?.id, editingMarkNoteText);
+                {hoveredMark.editing ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
+                    <textarea
+                      autoFocus
+                      aria-label="Edit margin note text"
+                      value={editingMarkNoteText}
+                      onChange={(e) => setEditingMarkNoteText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          if (editingMarkNoteText.trim()) {
+                            handleUpdateAnnotation(ann?.id, editingMarkNoteText);
+                          }
+                        } else if (e.key === 'Escape') {
+                          setHoveredMark(prev => prev ? { ...prev, editing: false } : null);
                         }
-                      } else if (e.key === 'Escape') {
-                        setHoveredMark(prev => prev ? { ...prev, editing: false } : null);
-                      }
-                    }}
-                    rows={2}
-                    placeholder="Write note... (Press Enter to save)"
-                    style={{
-                      width: '100%',
-                      boxSizing: 'border-box',
-                      padding: '5px 7px',
-                      borderRadius: '5px',
-                      border: '1px solid var(--border-color)',
-                      background: 'var(--panel-bg)',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.78rem',
-                      resize: 'none',
-                      outline: 'none'
-                    }}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)' }}>Enter to save</span>
-                    <div style={{ display: 'flex', gap: '4px' }}>
-                      <button
-                        type="button"
-                        onClick={() => setHoveredMark(prev => prev ? { ...prev, editing: false } : null)}
-                        style={{
-                          padding: '2px 6px',
-                          fontSize: '0.68rem',
-                          borderRadius: '4px',
-                          border: '1px solid var(--border-color)',
-                          background: 'transparent',
-                          color: 'var(--text-secondary)',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!editingMarkNoteText.trim() || isSavingMarkNote}
-                        onClick={() => handleUpdateAnnotation(hoveredMark.annotation?.id, editingMarkNoteText)}
-                        style={{
-                          padding: '2px 8px',
-                          fontSize: '0.68rem',
-                          fontWeight: 600,
-                          borderRadius: '4px',
-                          border: 'none',
-                          background: 'var(--theme-primary)',
-                          color: '#fff',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Save
-                      </button>
+                      }}
+                      rows={2}
+                      placeholder="Write note... (Press Enter to save)"
+                      style={{
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        padding: '5px 7px',
+                        borderRadius: '5px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--panel-bg)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.78rem',
+                        resize: 'none',
+                        outline: 'none'
+                      }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)' }}>Enter to save</span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setHoveredMark(prev => prev ? { ...prev, editing: false } : null)}
+                          style={{
+                            padding: '2px 6px',
+                            fontSize: '0.68rem',
+                            borderRadius: '4px',
+                            border: '1px solid var(--border-color)',
+                            background: 'transparent',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!editingMarkNoteText.trim() || isSavingMarkNote}
+                          onClick={() => handleUpdateAnnotation(ann?.id, editingMarkNoteText)}
+                          style={{
+                            padding: '2px 8px',
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            borderRadius: '4px',
+                            border: 'none',
+                            background: 'var(--theme-primary)',
+                            color: '#fff',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Save
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : (hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text) ? (
-                <div style={{
-                  fontSize: '0.82rem',
-                  color: 'var(--text-primary)',
-                  lineHeight: '1.5',
-                  maxHeight: '160px',
-                  overflowY: 'auto'
-                }}>
-                  <MarkdownWithTimestamps content={hoveredMark.annotation?.noteText || hoveredMark.annotation?.note_text} onCueClick={handleCueClick} />
-                </div>
-              ) : (hoveredMark.annotation?.aiResponse || hoveredMark.annotation?.ai_response) ? (
-                <div style={{
-                  fontSize: '0.8rem',
-                  color: 'var(--text-primary)',
-                  lineHeight: '1.5',
-                  maxHeight: '160px',
-                  overflowY: 'auto'
-                }}>
-                  <MarkdownWithTimestamps content={hoveredMark.annotation?.aiResponse || hoveredMark.annotation?.ai_response} onCueClick={handleCueClick} />
-                </div>
-              ) : null}
-              {!hoveredMark.editing && (
-                <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  Click to open in Notes drawer, edit, or un-highlight
-                </div>
-              )}
-            </div>
-          )}
+                ) : isAi ? (
+                  <div style={{
+                    fontSize: '0.8rem',
+                    color: 'var(--text-primary)',
+                    lineHeight: '1.5',
+                    maxHeight: '180px',
+                    overflowY: 'auto'
+                  }}>
+                    <MarkdownWithTimestamps content={ann?.aiResponse || ann?.ai_response || ann?.noteText || ann?.note_text || ''} onCueClick={handleCueClick} />
+                  </div>
+                ) : (ann?.noteText || ann?.note_text) ? (
+                  <div style={{
+                    fontSize: '0.82rem',
+                    color: 'var(--text-primary)',
+                    lineHeight: '1.5',
+                    maxHeight: '160px',
+                    overflowY: 'auto'
+                  }}>
+                    <MarkdownWithTimestamps content={ann?.noteText || ann?.note_text} onCueClick={handleCueClick} />
+                  </div>
+                ) : (ann?.aiResponse || ann?.ai_response) ? (
+                  <div style={{
+                    fontSize: '0.8rem',
+                    color: 'var(--text-primary)',
+                    lineHeight: '1.5',
+                    maxHeight: '160px',
+                    overflowY: 'auto'
+                  }}>
+                    <MarkdownWithTimestamps content={ann?.aiResponse || ann?.ai_response} onCueClick={handleCueClick} />
+                  </div>
+                ) : null}
+
+                {!hoveredMark.editing && !isAi && (
+                  <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                    Click to open in Notes drawer, edit, or un-highlight
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Inline Active Mark Un-highlight / Edit / Notes Popover */}
           {activeMarkAction && (
@@ -2254,51 +2339,85 @@ export default function TranscriptSearch({
                   <span style={{
                     fontSize: '0.72rem',
                     fontWeight: 600,
-                    color: 'var(--text-secondary)',
+                    color: (activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) === 'ai_explanation' ? '#a855f7' : 'var(--text-secondary)',
                     maxWidth: '120px',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
                   }}>
-                    {activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text
-                      ? `Note: ${activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text}`
-                      : `Highlight (${activeMarkAction.annotation?.color || 'yellow'})`}
+                    {(activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) === 'ai_explanation'
+                      ? 'AI Explanation'
+                      : (activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text
+                        ? `Note: ${activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text}`
+                        : `Highlight (${activeMarkAction.annotation?.color || 'yellow'})`)}
                   </span>
 
-                  {/* Ask AI button on already highlighted text */}
+                  {/* Ask AI button on already highlighted text (only for non-AI notes/highlights) */}
+                  {(activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) !== 'ai_explanation' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ann = activeMarkAction.annotation;
+                        const text = ann?.selectedText || ann?.selected_text || '';
+                        setSelectionToolbar({
+                          position: { x: activeMarkAction.x || 200, y: activeMarkAction.y || 200 },
+                          selectedText: text,
+                          cueId: ann?.cueId ?? ann?.cue_id,
+                          startSeconds: Number(ann?.startSeconds ?? ann?.start_seconds ?? 0),
+                          endSeconds: Number(ann?.endSeconds ?? ann?.end_seconds ?? 0),
+                          overlappingAnnotations: [ann],
+                          initialMode: 'ai'
+                        });
+                        setActiveMarkAction(null);
+                      }}
+                      title="Ask AI to explain this highlighted text"
+                      aria-label="Ask AI"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        padding: '3px 6px',
+                        borderRadius: '4px',
+                        background: 'rgba(168, 85, 247, 0.12)',
+                        color: '#a855f7',
+                        border: 'none',
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Sparkles size={11} /> Ask AI
+                    </button>
+                  )}
+
+                  {/* Copy button on highlighted/note mark */}
                   <button
                     type="button"
+                    aria-label="Copy note or explanation"
                     onClick={() => {
                       const ann = activeMarkAction.annotation;
-                      const text = ann?.selectedText || ann?.selected_text || '';
-                      setSelectionToolbar({
-                        position: { x: activeMarkAction.x || 200, y: activeMarkAction.y || 200 },
-                        selectedText: text,
-                        cueId: ann?.cueId ?? ann?.cue_id,
-                        startSeconds: Number(ann?.startSeconds ?? ann?.start_seconds ?? 0),
-                        endSeconds: Number(ann?.endSeconds ?? ann?.end_seconds ?? 0),
-                        overlappingAnnotations: [ann],
-                        initialMode: 'ai'
-                      });
-                      setActiveMarkAction(null);
+                      const textToCopy = ann?.aiResponse || ann?.ai_response || ann?.noteText || ann?.note_text || ann?.selectedText || ann?.selected_text || '';
+                      navigator.clipboard.writeText(textToCopy);
+                      setCopiedActiveMark(true);
+                      setTimeout(() => setCopiedActiveMark(false), 1500);
                     }}
-                    title="Ask AI to explain this highlighted text"
-                    aria-label="Ask AI"
+                    title="Copy note or explanation"
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '3px',
                       padding: '3px 6px',
                       borderRadius: '4px',
-                      background: 'rgba(168, 85, 247, 0.12)',
-                      color: '#a855f7',
-                      border: 'none',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      color: copiedActiveMark ? '#10b981' : 'var(--text-secondary)',
+                      border: '1px solid var(--border-color)',
                       fontSize: '0.72rem',
-                      fontWeight: 700,
+                      fontWeight: 600,
                       cursor: 'pointer'
                     }}
                   >
-                    <Sparkles size={11} /> Ask AI
+                    {copiedActiveMark ? <Check size={11} color="#10b981" /> : <Copy size={11} />}
+                    <span>{copiedActiveMark ? 'Copied' : 'Copy'}</span>
                   </button>
 
                   {/* Discuss in AI Tutor button */}
@@ -2307,10 +2426,10 @@ export default function TranscriptSearch({
                       type="button"
                       onClick={() => {
                         const ann = activeMarkAction.annotation;
-                        const text = ann?.selectedText || ann?.selected_text || '';
+                        const topic = ann?.selectedText || ann?.selected_text || ann?.noteText || ann?.note_text || ann?.aiResponse || ann?.ai_response || '';
                         const startSec = Number(ann?.startSeconds ?? ann?.start_seconds ?? 0);
                         const ts = startSec ? formatSecondsToTimestamp(startSec) : '';
-                        onDiscussInTutor(text, ts);
+                        onDiscussInTutor(topic, ts);
                         setActiveMarkAction(null);
                       }}
                       title="Discuss this concept in AI Tutor"
@@ -2333,35 +2452,37 @@ export default function TranscriptSearch({
                     </button>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingMarkNoteText(activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text || '');
-                      setActiveMarkAction(prev => prev ? { ...prev, editing: true } : null);
-                    }}
-                    title="Edit margin note"
-                    aria-label="Edit note"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '3px',
-                      padding: '3px 6px',
-                      borderRadius: '4px',
-                      background: 'rgba(59, 130, 246, 0.12)',
-                      color: '#3b82f6',
-                      border: 'none',
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <Pencil size={11} /> Edit
-                  </button>
+                  {(activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) !== 'ai_explanation' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingMarkNoteText(activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text || '');
+                        setActiveMarkAction(prev => prev ? { ...prev, editing: true } : null);
+                      }}
+                      title="Edit margin note"
+                      aria-label="Edit note"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        padding: '3px 6px',
+                        borderRadius: '4px',
+                        background: 'rgba(59, 130, 246, 0.12)',
+                        color: '#3b82f6',
+                        border: 'none',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Pencil size={11} /> Edit
+                    </button>
+                  )}
 
                   <button
                     onClick={() => handleDeleteAnnotation(activeMarkAction.annotation?.id, activeMarkAction.annotation?.allAnnotations)}
-                    title="Un-highlight and remove this note/highlight"
-                    aria-label="Un-highlight"
+                    title={(activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) === 'ai_explanation' ? "Delete AI explanation" : "Un-highlight and remove this note/highlight"}
+                    aria-label={(activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) === 'ai_explanation' ? "Delete AI explanation" : "Un-highlight"}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -2376,7 +2497,7 @@ export default function TranscriptSearch({
                       cursor: 'pointer'
                     }}
                   >
-                    <Eraser size={11} /> Un-highlight
+                    <Eraser size={11} /> {(activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) === 'ai_explanation' ? 'Remove' : 'Un-highlight'}
                   </button>
 
                   <button

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { isRestrictedPublisherUrl, getPublisherInfo, isOpenAccessDirectPdf } from '../publisherDetect';
+import {
+  isRestrictedPublisherUrl,
+  getPublisherInfo,
+  isOpenAccessDirectPdf,
+  getVideoSourceInfo
+} from '../publisherDetect';
 
 describe('publisherDetect utility', () => {
   it('correctly identifies JAMA Network as restricted', () => {
@@ -31,6 +36,44 @@ describe('publisherDetect utility', () => {
     expect(isRestrictedPublisherUrl('')).toBe(false);
     expect(isRestrictedPublisherUrl(undefined)).toBe(false);
     expect(isOpenAccessDirectPdf(null)).toBe(false);
+  });
+
+  describe('getVideoSourceInfo', () => {
+    it('detects YouTube lecture URLs', () => {
+      const info = getVideoSourceInfo('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+      expect(info.platform).toBe('youtube');
+      expect(info.label).toBe('YouTube');
+      expect(info.url).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    });
+
+    it('detects Udemy lecture URLs', () => {
+      const info = getVideoSourceInfo('https://www.udemy.com/course/machinelearning/learn/lecture/12345');
+      expect(info.platform).toBe('udemy');
+      expect(info.label).toBe('Udemy');
+    });
+
+    it('detects Coursera and Vimeo URLs', () => {
+      expect(getVideoSourceInfo('https://www.coursera.org/learn/deep-neural-networks/lecture/abc').label).toBe('Coursera');
+      expect(getVideoSourceInfo('https://vimeo.com/987654321').label).toBe('Vimeo');
+    });
+
+    it('detects Moodle LMS URLs', () => {
+      const info = getVideoSourceInfo('https://learning.iiitdwd.ac.in/mod/page/view.php?id=3111');
+      expect(info.platform).toBe('moodle');
+      expect(info.label).toBe('Moodle LMS');
+    });
+
+    it('detects generic external lecture sources and formats domain label', () => {
+      const info = getVideoSourceInfo('https://ocw.mit.edu/courses/physics/lecture-1');
+      expect(info.platform).toBe('generic');
+      expect(info.label).toBe('Ocw.mit.edu');
+    });
+
+    it('falls back to course portal when URL is empty or internal video.lecturescribe.local with courseName', () => {
+      const info = getVideoSourceInfo('https://video.lecturescribe.local/123', 'Machine Learning');
+      expect(info.label).toBe('Course Portal');
+      expect(info.url).toContain('Machine%20Learning');
+    });
   });
 });
 

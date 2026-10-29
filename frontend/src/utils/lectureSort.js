@@ -18,6 +18,15 @@ export const STATUS_FILTERS = [
   { value: 'unwatched', label: 'Not Started' }
 ];
 
+export const RESOURCE_SORT_OPTIONS = [
+  { value: 'title_desc', label: 'Name (Z → A)' },
+  { value: 'title_asc', label: 'Name (A → Z)' },
+  { value: 'date_desc', label: 'Newest First' },
+  { value: 'date_asc', label: 'Oldest First' },
+  { value: 'size_desc', label: 'Size (Largest)' },
+  { value: 'size_asc', label: 'Size (Smallest)' }
+];
+
 export const getLectureTitle = (item) => {
   if (!item) return '';
   return (item.video_title || item.title || (item.video_id ? String(item.video_id) : '')).trim();
@@ -157,5 +166,39 @@ export const filterAndSortLectures = (lectures, { search = '', status = 'all', s
 
   // Sort
   return sortLectures(result, sortBy);
+};
+
+export const sortResources = (resources, sortBy = 'title_desc') => {
+  if (!Array.isArray(resources)) return [];
+  const list = [...resources];
+
+  return list.sort((a, b) => {
+    const titleA = String(a.title || a.filename || '').trim();
+    const titleB = String(b.title || b.filename || '').trim();
+
+    switch (sortBy) {
+      case 'title_asc':
+        return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' }) ||
+          String(a.id || '').localeCompare(String(b.id || ''));
+      case 'date_desc': {
+        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return timeB - timeA || titleB.localeCompare(titleA, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      case 'date_asc': {
+        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return timeA - timeB || titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      case 'size_desc':
+        return (b.file_size_bytes || 0) - (a.file_size_bytes || 0) || titleB.localeCompare(titleA, undefined, { numeric: true, sensitivity: 'base' });
+      case 'size_asc':
+        return (a.file_size_bytes || 0) - (b.file_size_bytes || 0) || titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
+      case 'title_desc':
+      default:
+        return titleB.localeCompare(titleA, undefined, { numeric: true, sensitivity: 'base' }) ||
+          String(b.id || '').localeCompare(String(a.id || ''));
+    }
+  });
 };
 

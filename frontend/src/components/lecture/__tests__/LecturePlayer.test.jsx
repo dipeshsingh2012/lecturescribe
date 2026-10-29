@@ -448,6 +448,56 @@ describe('LecturePlayer', () => {
     expect(moodleLink).toHaveAttribute('target', '_blank');
   });
 
+  it('renders generic video source badge for YouTube and Udemy sources', () => {
+    const youtubeData = {
+      videoId: 'yt-123',
+      title: 'Deep Learning Lecture 1',
+      course_name: 'Deep Learning',
+      source_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      duration: '45:00',
+      cues: [{ time: '00:00', text: 'Intro' }]
+    };
+
+    const { unmount } = render(
+      <LecturePlayer
+        activeData={youtubeData}
+        activeCourseData={{ course_name: 'Deep Learning' }}
+        selectedCourse="Deep Learning"
+        currentTheme={mockTheme}
+        iframeRef={{ current: null }}
+      />
+    );
+
+    const ytLink = screen.getByRole('link', { name: /View on YouTube/i });
+    expect(ytLink).toBeInTheDocument();
+    expect(ytLink).toHaveAttribute('href', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(ytLink).toHaveAttribute('target', '_blank');
+    unmount();
+
+    const udemyData = {
+      videoId: 'udemy-456',
+      title: 'Python for Data Science',
+      course_name: 'Python',
+      source_url: 'https://www.udemy.com/course/python-ds/lecture/1234',
+      duration: '30:00',
+      cues: [{ time: '00:00', text: 'Intro' }]
+    };
+
+    render(
+      <LecturePlayer
+        activeData={udemyData}
+        activeCourseData={{ course_name: 'Python' }}
+        selectedCourse="Python"
+        currentTheme={mockTheme}
+        iframeRef={{ current: null }}
+      />
+    );
+
+    const udemyLink = screen.getByRole('link', { name: /View on Udemy/i });
+    expect(udemyLink).toBeInTheDocument();
+    expect(udemyLink).toHaveAttribute('href', 'https://www.udemy.com/course/python-ds/lecture/1234');
+  });
+
   it('renders broken-video-moodle-fallback card when video stream errors and allows copying session title', async () => {
     const activeData = {
       videoId: '1234158181',

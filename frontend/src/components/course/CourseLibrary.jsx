@@ -24,6 +24,9 @@ import {
   Trash2,
   Upload,
   Eye,
+  Edit2,
+  Check,
+  X,
   Sparkles,
   Globe,
   Search,
@@ -67,9 +70,38 @@ export default function CourseLibrary({
   activeCourseData,
   openUploadModal,
   handleDeleteResource,
+  handleRenameResource,
   openPreviewModal,
   currentTheme
 }) {
+  const [editingResourceId, setEditingResourceId] = useState(null);
+  const [renameTitleInput, setRenameTitleInput] = useState('');
+  const [isRenaming, setIsRenaming] = useState(false);
+
+  const startRenaming = (res) => {
+    setEditingResourceId(res.id);
+    setRenameTitleInput(res.title || res.filename || '');
+  };
+
+  const cancelRenaming = () => {
+    setEditingResourceId(null);
+    setRenameTitleInput('');
+  };
+
+  const saveRename = async (resId) => {
+    if (!renameTitleInput.trim() || !handleRenameResource) {
+      cancelRenaming();
+      return;
+    }
+    setIsRenaming(true);
+    try {
+      await handleRenameResource(resId, renameTitleInput.trim());
+      setEditingResourceId(null);
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
   const [researchModalOpen, setResearchModalOpen] = useState(false);
   const [webSearchOpen, setWebSearchOpen] = useState(false);
   const [activeSearchBook, setActiveSearchBook] = useState(null);
@@ -297,6 +329,26 @@ export default function CourseLibrary({
             />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {googleUser && onCreateNewNote && (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<Plus size={13} />}
+                onClick={onCreateNewNote}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.74rem',
+                  borderRadius: 2,
+                  borderColor: currentTheme.palette.cardBorder,
+                  color: currentTheme.palette.primary,
+                  bgcolor: currentTheme.palette.cardBg,
+                  '&:hover': { borderColor: currentTheme.palette.primary, bgcolor: 'var(--highlight-bg)' }
+                }}
+              >
+                New Note
+              </Button>
+            )}
             {renderSectionOrderControls('notes')}
             <Button
               size="small"
@@ -590,9 +642,74 @@ export default function CourseLibrary({
                       {badge.label}
                     </Box>
                     <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary, mb: 0.2 }}>
-                        {res.title || res.filename}
-                      </Typography>
+                      {editingResourceId === res.id ? (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, my: 0.5 }}>
+                          <TextField
+                            size="small"
+                            autoFocus
+                            value={renameTitleInput}
+                            onChange={(e) => setRenameTitleInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') saveRename(res.id);
+                              if (e.key === 'Escape') cancelRenaming();
+                            }}
+                            placeholder="Slide / Resource title"
+                            sx={{
+                              '& .MuiInputBase-input': {
+                                py: 0.5,
+                                px: 1,
+                                fontSize: '0.85rem',
+                                fontWeight: 600,
+                                color: currentTheme.palette.textPrimary
+                              }
+                            }}
+                          />
+                          <Tooltip title="Save title">
+                            <IconButton
+                              size="small"
+                              disabled={isRenaming}
+                              onClick={() => saveRename(res.id)}
+                              sx={{ color: '#10b981' }}
+                              aria-label="Save title"
+                            >
+                              <Check size={14} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Cancel">
+                            <IconButton
+                              size="small"
+                              onClick={cancelRenaming}
+                              sx={{ color: '#ef4444' }}
+                              aria-label="Cancel"
+                            >
+                              <X size={14} />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      ) : (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary, mb: 0.2 }}>
+                            {res.title || res.filename}
+                          </Typography>
+                          {typeof handleRenameResource === 'function' && (
+                            <Tooltip title="Rename slide">
+                              <IconButton
+                                size="small"
+                                aria-label="Rename slide"
+                                onClick={() => startRenaming(res)}
+                                sx={{
+                                  p: '3px',
+                                  color: currentTheme.palette.textSecondary,
+                                  opacity: 0.7,
+                                  '&:hover': { opacity: 1, color: currentTheme.palette.primary }
+                                }}
+                              >
+                                <Edit2 size={13} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
+                      )}
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', fontSize: '0.75rem', color: currentTheme.palette.textSecondary }}>
                         {associatedLecture && (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: currentTheme.palette.primary }}>
@@ -608,67 +725,76 @@ export default function CourseLibrary({
 
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
                     {isLink ? (
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        component="a"
-                        href={res.view_url || res.download_url || res.file_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        startIcon={<ExternalLink size={14} />}
-                        sx={{
-                          textTransform: 'none',
-                          fontWeight: 600,
-                          fontSize: '0.78rem',
-                          borderRadius: 2,
-                          color: currentTheme.palette.textPrimary,
-                          borderColor: currentTheme.palette.cardBorder
-                        }}
-                      >
-                        Open
-                      </Button>
-                    ) : (
-                      <>
-                        <Button
-                          variant="outlined"
+                      <Tooltip title="Open">
+                        <IconButton
                           size="small"
-                          onClick={() => {
-                            if (typeof openPreviewModal === 'function') {
-                              openPreviewModal(res);
-                            } else {
-                              window.open(res.view_url || res.download_url || res.file_url, '_blank', 'noopener,noreferrer');
+                          aria-label="Open"
+                          component="a"
+                          href={res.view_url || res.download_url || res.file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          sx={{
+                            color: currentTheme.palette.textPrimary,
+                            border: `1px solid ${currentTheme.palette.cardBorder}`,
+                            borderRadius: 2,
+                            p: '6px',
+                            '&:hover': {
+                              borderColor: currentTheme.palette.primary,
+                              bgcolor: 'var(--highlight-bg)'
                             }
                           }}
-                          startIcon={<Eye size={14} />}
-                          sx={{
-                            textTransform: 'none',
-                            fontWeight: 600,
-                            fontSize: '0.78rem',
-                            borderRadius: 2,
-                            color: currentTheme.palette.textPrimary,
-                            borderColor: currentTheme.palette.cardBorder
-                          }}
                         >
-                          View
-                        </Button>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          component="a"
-                          href={res.download_url || res.view_url}
-                          download={res.filename}
-                          startIcon={<Download size={14} />}
-                          sx={{
-                            textTransform: 'none',
-                            fontWeight: 600,
-                            fontSize: '0.78rem',
-                            borderRadius: 2,
-                            color: currentTheme.palette.textPrimary,
-                            borderColor: currentTheme.palette.cardBorder
-                          }}
-                        >
-                          Download
-                        </Button>
+                          <ExternalLink size={15} />
+                        </IconButton>
+                      </Tooltip>
+                    ) : (
+                      <>
+                        <Tooltip title="View">
+                          <IconButton
+                            size="small"
+                            aria-label="View"
+                            onClick={() => {
+                              if (typeof openPreviewModal === 'function') {
+                                openPreviewModal(res);
+                              } else {
+                                window.open(res.view_url || res.download_url || res.file_url, '_blank', 'noopener,noreferrer');
+                              }
+                            }}
+                            sx={{
+                              color: currentTheme.palette.textPrimary,
+                              border: `1px solid ${currentTheme.palette.cardBorder}`,
+                              borderRadius: 2,
+                              p: '6px',
+                              '&:hover': {
+                                borderColor: currentTheme.palette.primary,
+                                bgcolor: 'var(--highlight-bg)'
+                              }
+                            }}
+                          >
+                            <Eye size={15} />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Download">
+                          <IconButton
+                            size="small"
+                            aria-label="Download"
+                            component="a"
+                            href={res.download_url || res.view_url}
+                            download={res.filename}
+                            sx={{
+                              color: currentTheme.palette.textPrimary,
+                              border: `1px solid ${currentTheme.palette.cardBorder}`,
+                              borderRadius: 2,
+                              p: '6px',
+                              '&:hover': {
+                                borderColor: currentTheme.palette.primary,
+                                bgcolor: 'var(--highlight-bg)'
+                              }
+                            }}
+                          >
+                            <Download size={15} />
+                          </IconButton>
+                        </Tooltip>
                       </>
                     )}
 

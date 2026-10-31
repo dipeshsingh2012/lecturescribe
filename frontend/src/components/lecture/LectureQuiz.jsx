@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -24,6 +24,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import QuestionFeedback from '../quiz/QuestionFeedback';
 
 export default function LectureQuiz({
   quizData,
@@ -42,7 +43,8 @@ export default function LectureQuiz({
   detailedExplanations = {},
   explanationLoading = {},
   fetchDetailedExplanation,
-  transcriptAvailable = true
+  transcriptAvailable = true,
+  userEmail = 'anonymous'
 }) {
   const primaryColor = currentTheme?.palette?.primary || '#6366f1';
   const cardBg = currentTheme?.palette?.cardBg || '#1e293b';
@@ -52,6 +54,26 @@ export default function LectureQuiz({
 
   const OPTION_LABELS = ['A', 'B', 'C', 'D'];
   const [expandedExplanation, setExpandedExplanation] = useState({});
+  const containerRef = useRef(null);
+  const prevCompletedRef = useRef(isCompleted);
+
+  const scrollToTop = () => {
+    if (containerRef.current) {
+      if (typeof containerRef.current.scrollTo === 'function') {
+        containerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        containerRef.current.scrollTop = 0;
+      }
+    }
+  };
+
+  // When submitting or completing quiz, automatically scroll to top / Question 1 for review
+  useEffect(() => {
+    if (isCompleted && !prevCompletedRef.current) {
+      scrollToTop();
+    }
+    prevCompletedRef.current = isCompleted;
+  }, [isCompleted]);
 
   // 1. Initial State: No quiz generated yet
   if (!quizData && !quizLoading) {
@@ -176,6 +198,7 @@ export default function LectureQuiz({
 
   return (
     <Box
+      ref={containerRef}
       sx={{
         flex: 1,
         height: '100%',
@@ -309,6 +332,27 @@ export default function LectureQuiz({
                 ? 'Solid understanding! Review the timestamps for any missed questions.'
                 : 'Keep practicing! Click the timestamp buttons below each explanation to review key segments.'}
             </Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<BookOpen size={14} />}
+              onClick={scrollToTop}
+              sx={{
+                mt: 1.5,
+                textTransform: 'none',
+                fontWeight: 600,
+                fontSize: '0.8rem',
+                borderRadius: 1.5,
+                borderColor: percentScore >= 70 ? 'rgba(16, 185, 129, 0.4)' : 'rgba(234, 179, 8, 0.4)',
+                color: textPrimary,
+                '&:hover': {
+                  borderColor: percentScore >= 70 ? '#10b981' : '#eab308',
+                  bgcolor: 'rgba(255, 255, 255, 0.05)'
+                }
+              }}
+            >
+              Review from Question 1
+            </Button>
           </Box>
         </Box>
       )}
@@ -619,6 +663,18 @@ export default function LectureQuiz({
                     )}
                   </AccordionDetails>
                 </Accordion>
+              )}
+
+              {/* Question Feedback & Quality Calibration */}
+              {isAnswered && (
+                <QuestionFeedback
+                  quizType="lecture"
+                  targetId={quizData?.video_id || ''}
+                  questionId={q.id}
+                  question={q}
+                  userEmail={userEmail}
+                  currentTheme={currentTheme}
+                />
               )}
             </Box>
           );

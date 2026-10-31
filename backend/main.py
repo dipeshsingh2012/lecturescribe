@@ -672,6 +672,19 @@ class QuizAnswersRequest(BaseModel):
     quiz_id: Optional[str] = None
 
 
+class QuizFeedbackRequest(BaseModel):
+    quiz_type: str = "course"  # "course" or "lecture"
+    target_id: str             # course slug or video_id
+    question_id: Union[int, str]
+    rating: str                # "positive" or "negative" (or "up" / "down")
+    issue_tags: Optional[List[str]] = []
+    comment: Optional[str] = ""
+    user_email: Optional[str] = "anonymous"
+    question_text: Optional[str] = ""
+    options: Optional[List[str]] = []
+    correct_index: Optional[int] = 0
+
+
 class CourseQuizExplanationRequest(BaseModel):
     question_id: Union[int, str]
     question: str
@@ -734,6 +747,10 @@ def _lookup_saved_or_cached_quiz(clean_vid: str, email: Optional[str] = None) ->
                         cached_quiz["user_score"] = attempt.get("score", 0)
                         cached_quiz["user_completed"] = attempt.get("completed", False)
                         cached_quiz["is_completed"] = attempt.get("completed", False)
+                cached_quiz = dict(cached_quiz)
+                cached_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("lecture", clean_vid)
+                if email:
+                    cached_quiz["user_feedback"] = db_manager.get_quiz_feedback("lecture", clean_vid, user_email=email)
                 return cached_quiz
 
     db_quiz = db_manager.get_saved_quiz(clean_vid)
@@ -751,6 +768,10 @@ def _lookup_saved_or_cached_quiz(clean_vid: str, email: Optional[str] = None) ->
                     db_quiz["user_score"] = attempt.get("score", 0)
                     db_quiz["user_completed"] = attempt.get("completed", False)
                     db_quiz["is_completed"] = attempt.get("completed", False)
+            db_quiz = dict(db_quiz)
+            db_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("lecture", clean_vid)
+            if email:
+                db_quiz["user_feedback"] = db_manager.get_quiz_feedback("lecture", clean_vid, user_email=email)
             return db_quiz
 
     return None
@@ -823,13 +844,15 @@ def generate_lecture_quiz_endpoint(
     else:
         target_count = determine_lecture_quiz_count(cues, saved.get("duration"))
 
-    # Generate with LLM (No Fallbacks)
+    # Generate with LLM (No Fallbacks) with continuous feedback guidance
+    feedback_guidance = db_manager.get_learned_generation_guidance("lecture", clean_vid)
     try:
         quiz_data = pinecone_rag_engine.generate_lecture_quiz(
             video_id=clean_vid,
             lecture_title=title,
             cues=cues,
-            num_questions=target_count
+            num_questions=target_count,
+            feedback_guidance=feedback_guidance
         )
     except Exception as e:
         raise HTTPException(
@@ -844,16 +867,91 @@ def generate_lecture_quiz_endpoint(
     if redis_cache:
         redis_cache.set_quiz(clean_vid, quiz_data, ttl_seconds=86400)
 
+    quiz_data = dict(quiz_data)
+    quiz_data["feedback_summary"] = db_manager.get_quiz_feedback_summary("lecture", clean_vid)
     if email:
         attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
         if attempt:
-            quiz_data = dict(quiz_data)
             quiz_data["user_answers"] = attempt.get("answers", {})
             quiz_data["user_score"] = attempt.get("score", 0)
             quiz_data["user_completed"] = attempt.get("completed", False)
             quiz_data["is_completed"] = attempt.get("completed", False)
+        quiz_data["user_feedback"] = db_manager.get_quiz_feedback("lecture", clean_vid, user_email=email)
 
     return quiz_data
+
+
+# ============================================================================
+# QUIZ QUESTION FEEDBACK & CALIBRATION LOOP ENDPOINTS
+# ============================================================================
+
+@app.post("/api/quiz/feedback")
+def submit_quiz_feedback(req: QuizFeedbackRequest):
+    """
+    Record user feedback on a quiz question.
+    Feedback is saved to PostgreSQL and immediately incorporated into the
+    feedback calibration loop for subsequent quiz generations.
+    """
+    clean_type = "course" if str(req.quiz_type or "").lower().startswith("course") else "lecture"
+    clean_target = to_course_slug(req.target_id) if clean_type == "course" else str(req.target_id or "").strip()
+
+    saved = db_manager.save_quiz_feedback(
+        quiz_type=clean_type,
+        target_id=clean_target,
+        question_id=req.question_id,
+        rating=req.rating,
+        issue_tags=req.issue_tags,
+        comment=req.comment or "",
+        user_email=req.user_email or "anonymous",
+        question_text=req.question_text or "",
+        options=req.options or [],
+        correct_index=req.correct_index or 0
+    )
+    summary = db_manager.get_quiz_feedback_summary(clean_type, clean_target)
+    return {
+        "status": "success",
+        "message": "Feedback recorded. This feedback directly calibrates future quiz generations.",
+        "feedback": saved,
+        "summary": summary
+    }
+
+
+@app.get("/api/quiz/feedback")
+def get_quiz_feedback_endpoint(
+    quiz_type: str = Query(..., description="'course' or 'lecture'"),
+    target_id: str = Query(..., description="Course slug or video_id"),
+    question_id: Optional[str] = Query(None, description="Filter by question id"),
+    email: Optional[str] = Query(None, description="Filter by user email")
+):
+    """Retrieve quiz feedback entries, summary metrics, and active calibration guidance."""
+    clean_type = "course" if str(quiz_type or "").lower().startswith("course") else "lecture"
+    clean_target = to_course_slug(target_id) if clean_type == "course" else str(target_id or "").strip()
+
+    feedbacks = db_manager.get_quiz_feedback(clean_type, clean_target, question_id, email)
+    summary = db_manager.get_quiz_feedback_summary(clean_type, clean_target)
+    guidance = db_manager.get_learned_generation_guidance(clean_type, clean_target)
+    return {
+        "feedbacks": feedbacks,
+        "summary": summary,
+        "guidance": guidance
+    }
+
+
+@app.get("/api/quiz/feedback/guidance")
+def get_quiz_feedback_guidance_endpoint(
+    quiz_type: str = Query(..., description="'course' or 'lecture'"),
+    target_id: str = Query(..., description="Course slug or video_id")
+):
+    """Retrieve active calibration guidance rules derived from student/instructor feedback."""
+    clean_type = "course" if str(quiz_type or "").lower().startswith("course") else "lecture"
+    clean_target = to_course_slug(target_id) if clean_type == "course" else str(target_id or "").strip()
+
+    guidance = db_manager.get_learned_generation_guidance(clean_type, clean_target)
+    summary = db_manager.get_quiz_feedback_summary(clean_type, clean_target)
+    return {
+        "guidance": guidance,
+        "summary": summary
+    }
 
 
 @app.post("/api/lecture/{video_id}/quiz/answers")
@@ -1326,6 +1424,14 @@ def process_lecture_import(
                     course_name=course_title,
                     drive_folder_url=d_url
                 )
+                is_moodle_src = bool(
+                    src_url and (
+                        "moodle" in src_url.lower() or
+                        "learning.iiitdwd.ac.in" in src_url.lower() or
+                        "/mod/" in src_url
+                    )
+                )
+                playback_url = f"https://video.lecturescribe.local/{clean_vid}" if is_moodle_src else src_url
                 if redis_cache:
                     redis_cache.update_user_course(
                         clean_email,
@@ -1337,7 +1443,7 @@ def process_lecture_import(
                             "video_title": saved["title"],
                             "duration": str(dur_val),
                             "sourceUrl": src_url,
-                            "video_url": src_url,
+                            "video_url": playback_url,
                             "driveFolderUrl": d_url,
                             "drive_folder_url": d_url,
                             "course_name": course_title,
@@ -1465,6 +1571,14 @@ def process_lecture_import(
             course_name=derived_course
         )
         if redis_cache:
+            is_moodle_src = bool(
+                source_url and (
+                    "moodle" in source_url.lower() or
+                    "learning.iiitdwd.ac.in" in source_url.lower() or
+                    "/mod/" in source_url
+                )
+            )
+            playback_url = f"https://video.lecturescribe.local/{clean_vid}" if is_moodle_src else source_url
             redis_cache.update_user_course(
                 clean_user_email,
                 derived_course,
@@ -1475,7 +1589,7 @@ def process_lecture_import(
                     "video_title": title,
                     "duration": duration,
                     "sourceUrl": source_url,
-                    "video_url": source_url,
+                    "video_url": playback_url,
                     "driveFolderUrl": None,
                     "drive_folder_url": None,
                     "course_name": derived_course,
@@ -1531,7 +1645,12 @@ def get_transcript(
     course_name: Optional[str] = Query(None, description="Optional course name to associate video with")
 ):
     try:
-        video_id = extract_video_id(url)
+        try:
+            video_id = extract_video_id(url)
+        except ValueError:
+            video_id = db_manager.get_video_id_by_source_url(url)
+            if not video_id:
+                raise
         return process_lecture_import(video_id=video_id, email=email, course_name=course_name)
     except HTTPException:
         raise
@@ -2956,21 +3075,23 @@ def get_or_generate_course_quiz(
     req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
 
     # 1. Check Redis Cache
-    min_questions = req_count if req_count is not None else 10
+    min_questions = req_count if req_count is not None else 30
     if not is_regenerate and redis_cache:
         cached_quiz = redis_cache.get_course_quiz(course_slug)
         if cached_quiz:
             cached_quiz = sanitize_quiz_payload(cached_quiz)
             if cached_quiz and len(cached_quiz.get("questions") or []) >= min_questions:
                 print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
+                cached_quiz = dict(cached_quiz)
+                cached_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
                 if email:
                     attempt = db_manager.get_quiz_attempt("course", course_slug, email)
                     if attempt:
-                        cached_quiz = dict(cached_quiz)
                         cached_quiz["user_answers"] = attempt.get("answers", {})
                         cached_quiz["user_score"] = attempt.get("score", 0)
                         cached_quiz["user_completed"] = attempt.get("completed", False)
                         cached_quiz["is_completed"] = attempt.get("completed", False)
+                    cached_quiz["user_feedback"] = db_manager.get_quiz_feedback("course", course_slug, user_email=email)
                 return cached_quiz
 
     # 2. Check Database Persistence
@@ -2982,14 +3103,16 @@ def get_or_generate_course_quiz(
                 print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
                 if redis_cache:
                     redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)
+                db_quiz = dict(db_quiz)
+                db_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
                 if email:
                     attempt = db_manager.get_quiz_attempt("course", course_slug, email)
                     if attempt:
-                        db_quiz = dict(db_quiz)
                         db_quiz["user_answers"] = attempt.get("answers", {})
                         db_quiz["user_score"] = attempt.get("score", 0)
                         db_quiz["user_completed"] = attempt.get("completed", False)
                         db_quiz["is_completed"] = attempt.get("completed", False)
+                    db_quiz["user_feedback"] = db_manager.get_quiz_feedback("course", course_slug, user_email=email)
                 return db_quiz
 
     # 3. Retrieve Course & Lecture list from DB
@@ -3045,12 +3168,14 @@ def get_or_generate_course_quiz(
             detail=f"No lectures in course '{canonical_title}' have materials or summaries available to generate a quiz."
         )
 
-    # 5. Generate Course Quiz (No Fallbacks)
+    # 5. Generate Course Quiz (No Fallbacks) with continuous feedback guidance
+    feedback_guidance = db_manager.get_learned_generation_guidance("course", course_slug)
     try:
         quiz_data = pinecone_rag_engine.generate_course_quiz(
             course_name=canonical_title,
             lectures_data=valid_lectures,
-            num_questions=req_count
+            num_questions=req_count,
+            feedback_guidance=feedback_guidance
         )
         quiz_id = f"cquiz_{course_slug}_{int(time.time())}"
         quiz_data["quiz_id"] = quiz_id
@@ -3074,10 +3199,11 @@ def get_or_generate_course_quiz(
     if redis_cache:
         redis_cache.set_course_quiz(course_slug, quiz_data, ttl_seconds=86400)
 
+    quiz_data = dict(quiz_data)
+    quiz_data["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
     if email:
         attempt = db_manager.get_quiz_attempt("course", course_slug, email)
         if attempt:
-            quiz_data = dict(quiz_data)
             # Only restore user answers if this is an active in-progress attempt, NOT a completed attempt
             if not attempt.get("completed"):
                 quiz_data["user_answers"] = attempt.get("answers", {})
@@ -3089,6 +3215,7 @@ def get_or_generate_course_quiz(
                 quiz_data["user_score"] = attempt.get("score", 0)
                 quiz_data["user_completed"] = True
                 quiz_data["is_completed"] = True
+        quiz_data["user_feedback"] = db_manager.get_quiz_feedback("course", course_slug, user_email=email)
 
     return quiz_data
 

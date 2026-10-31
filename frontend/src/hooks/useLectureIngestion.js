@@ -295,7 +295,24 @@ export function useLectureIngestion({
       return;
     }
 
-    const vidId = extractVideoId(rawUrl);
+    const allKnownLectures = [
+      ...(activeCourseData?.lectures || []),
+      ...(effectiveCourses?.flatMap(c => c.lectures || []) || []),
+      ...(userLibrary || [])
+    ];
+
+    let vidId = extractVideoId(rawUrl);
+    const trimmedRaw = rawUrl.trim();
+    const matchedKnown = allKnownLectures.find(l => {
+      const vId = String(l.video_id || l.videoId || '').trim();
+      const sUrl = String(l.source_url || l.sourceUrl || '').trim();
+      const vUrl = String(l.video_url || '').trim();
+      return (vId && vId === trimmedRaw) || (sUrl && sUrl === trimmedRaw) || (vUrl && vUrl === trimmedRaw);
+    });
+
+    if (matchedKnown) {
+      vidId = String(matchedKnown.video_id || matchedKnown.videoId);
+    }
 
     let targetSeek = seekTimestamp;
     if (!targetSeek && rawUrl.includes('?t=')) {
@@ -450,7 +467,12 @@ export function useLectureIngestion({
       const userParam = userEmail ? `&email=${encodeURIComponent(userEmail)}` : '';
       const courseSlug = effectiveCourse ? normalizeCourseSlug(effectiveCourse) : '';
       const courseParam = courseSlug ? `&course_name=${encodeURIComponent(courseSlug)}` : '';
-      const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(rawUrl)}${userParam}${courseParam}`);
+      const targetQueryUrl = (
+        rawUrl.includes('moodle') ||
+        rawUrl.includes('learning.iiitdwd.ac.in') ||
+        rawUrl.includes('/mod/')
+      ) && vidId ? vidId : rawUrl;
+      const res = await fetch(`${API_BASE}/api/transcript?url=${encodeURIComponent(targetQueryUrl)}${userParam}${courseParam}`);
       if (res.ok) {
         const data = await res.json();
         let finalCourse = data.course_name || effectiveCourse;

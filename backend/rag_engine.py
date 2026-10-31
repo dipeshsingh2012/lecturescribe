@@ -78,6 +78,7 @@ class Llama3PineconeRAGStore:
         self.video_id: str = ""
         self.video_title: str = ""
         self.local_chunks: List[Dict[str, Any]] = []
+        self.cues: List[Dict[str, Any]] = []
 
         self._init_pinecone()
 
@@ -154,6 +155,7 @@ class Llama3PineconeRAGStore:
         self.video_id = video_id
         self.video_title = video_title
         self.local_chunks.clear()
+        self.cues = list(cues or [])
 
         if not cues:
             return 0
@@ -289,16 +291,38 @@ class Llama3PineconeRAGStore:
         # If answer is positive but didn't write inline timestamps, return top 5 unique candidates
         return unique_citations[:5]
 
+    @staticmethod
+    def is_holistic_query(query: str) -> bool:
+        if not query or not isinstance(query, str):
+            return False
+        q_lower = query.lower().strip()
+        holistic_patterns = [
+            "core concept", "core concepts", "key concept", "key concepts",
+            "main concept", "main concepts", "fundamental concept", "fundamental concepts",
+            "definition", "definitions", "define the terms", "key terms",
+            "main equation", "main equations", "key equations", "derivations", "formulas",
+            "quiz me", "test me",
+            "summary", "summarize", "overview", "recap", "outline",
+            "what is this lecture about", "what did the professor teach",
+            "what did we cover", "what was covered", "key takeaways", "takeaways"
+        ]
+        return any(p in q_lower for p in holistic_patterns)
+
     AGENT_TOOLS = [
         {
             "type": "function",
             "function": {
                 "name": "get_lecture_outline",
-                "description": "Fetch structured chapter outlines and key takeaways with timestamps.",
+                "description": "Fetch structured chapter outlines, core concepts, and key takeaways with timestamps for this lecture. Essential for overview questions, core concepts, summaries, or when understanding the overarching structure of the lecture.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"video_id": {"type": "string"}},
-                    "required": ["video_id"]
+                    "properties": {
+                        "video_id": {
+                            "type": "string",
+                            "description": "Optional video ID (defaults to active lecture)"
+                        }
+                    },
+                    "required": []
                 }
             }
         },
@@ -423,39 +447,86 @@ class Llama3PineconeRAGStore:
                     pass
 
         if tool_name == "get_lecture_outline":
-            vid = vid_cache
-            if not vid or vid == "active":
-                raise ValueError("get_lecture_outline requires a valid video_id.")
-            from backend.database import db_manager
-            saved = db_manager.get_saved_video(vid)
-            if not saved:
-                raise ValueError(f"Lecture '{vid}' not found in database.")
+            vid = vid_cache or target_video_id or getattr(self, "video_id", "")
+            if vid == "active":
+                vid = getattr(self, "video_id", "")
 
-            sections = saved.get("summarySections") or saved.get("summary_sections") or []
+            saved = None
+            if vid:
+                try:
+                    from backend.database import db_manager
+                    saved = db_manager.get_saved_video(vid)
+                except Exception as e:
+                    print(f"⚠️ [get_lecture_outline] DB lookup notice: {e}")
+
+            sections = (saved.get("summarySections") or saved.get("summary_sections") or []) if saved else []
             formatted = []
-            for sec in sections:
-                title = sec.get("title", "")
-                points = sec.get("points", [])
-                ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
-                start_t = ts_match.group(1) if ts_match else "00:00"
-                end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
+            if sections:
+                for sec in sections:
+                    title = sec.get("title", "")
+                    points = sec.get("points", [])
+                    ts_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]", title)
+                    start_t = ts_match.group(1) if ts_match else "00:00"
+                    end_t = ts_match.group(2) if (ts_match and ts_match.group(2)) else start_t
 
-                clean_title = re.sub(r"\[.*?\]", "", title).strip()
-                citations.append({"timestamp": start_t, "end_time": end_t, "text": f"Topic: {clean_title}"})
-                formatted.append({
-                    "chapter": clean_title,
-                    "timestamp": f"{start_t} - {end_t}",
-                    "core_concepts": points
-                })
+                    clean_title = re.sub(r"\[.*?\]", "", title).strip()
+                    citations.append({"timestamp": start_t, "end_time": end_t, "text": f"Topic: {clean_title}"})
+                    formatted.append({
+                        "chapter": clean_title,
+                        "timestamp": f"{start_t} - {end_t}",
+                        "core_concepts": points
+                    })
+            else:
+                # Fallback to transcript cues if summarySections are absent
+                target_cues = []
+                if saved and saved.get("cues"):
+                    target_cues = saved["cues"]
+                elif getattr(self, "cues", None):
+                    target_cues = self.cues
+
+                if target_cues:
+                    total_c = len(target_cues)
+                    num_chapters = min(6, max(3, total_c // 15))
+                    chunk_sz = max(1, total_c // num_chapters)
+                    for i in range(0, total_c, chunk_sz):
+                        chapter_cues = target_cues[i : i + chunk_sz]
+                        if not chapter_cues:
+                            continue
+                        st = chapter_cues[0].get("time", "00:00")
+                        et = chapter_cues[-1].get("time", st)
+                        sample_pts = [
+                            c.get("text", "").strip()
+                            for c in chapter_cues[::max(1, len(chapter_cues) // 3)]
+                            if c.get("text") and len(c.get("text", "").strip()) > 15
+                        ][:3]
+                        if not sample_pts:
+                            sample_pts = [c.get("text", "") for c in chapter_cues[:2] if c.get("text")]
+                        chapter_title = f"Topic Section {len(formatted) + 1}"
+                        citations.append({"timestamp": st, "end_time": et, "text": f"Section: {chapter_title}"})
+                        formatted.append({
+                            "chapter": chapter_title,
+                            "timestamp": f"{st} - {et}",
+                            "core_concepts": sample_pts
+                        })
+                else:
+                    formatted.append({
+                        "chapter": f"Overview of {lecture_title}",
+                        "timestamp": "00:00",
+                        "core_concepts": [f"Core concepts, definitions, and derivations presented in {lecture_title}."]
+                    })
+                    citations.append({"timestamp": "00:00", "end_time": "00:00", "text": f"Overview: {lecture_title}"})
+
             return json.dumps(formatted), citations, web_sources
 
         elif tool_name == "search_transcript":
             query = str(arguments.get("query", "")).strip()
             top_k = int(arguments.get("top_k", 5))
-            vid = vid_cache
+            vid = vid_cache or target_video_id or getattr(self, "video_id", "")
+            if vid == "active":
+                vid = getattr(self, "video_id", "")
 
             pinecone_matches = []
-            if self.index and vid and vid != "active":
+            if self.index and vid:
                 try:
                     emb = self._generate_embedding(query)
                     kwargs = {
@@ -474,7 +545,7 @@ class Llama3PineconeRAGStore:
                     pass
 
             algolia_matches = []
-            if vid and vid != "active":
+            if vid:
                 try:
                     from backend.algolia_service import algolia_service
                     hits = algolia_service.search(query, video_id=vid, limit=top_k)
@@ -491,25 +562,52 @@ class Llama3PineconeRAGStore:
             ranked = [s for s in [pinecone_matches, algolia_matches] if s]
             combined = self.reciprocal_rank_fusion(ranked, k=60)[:top_k] if ranked else []
 
-            # Fallback to PostgreSQL transcript cues if vector & sparse return zero hits
-            if not combined and vid and vid != "active":
-                from backend.database import db_manager
-                saved = db_manager.get_saved_video(vid)
-                if saved and saved.get("cues"):
-                    cues = saved["cues"]
-                    q_words = re.findall(r"\w+", query.lower())
+            # Fallback to transcript cues if vector & sparse return zero hits
+            if not combined and vid:
+                target_cues = []
+                try:
+                    from backend.database import db_manager
+                    saved = db_manager.get_saved_video(vid)
+                    if saved and saved.get("cues"):
+                        target_cues = saved["cues"]
+                except Exception:
+                    pass
+                if not target_cues and getattr(self, "cues", None):
+                    target_cues = self.cues
+
+                if target_cues:
+                    STOP_WORDS = {
+                        "what", "are", "the", "and", "is", "of", "to", "in", "a", "an", "for", "on",
+                        "with", "as", "by", "at", "from", "it", "this", "that", "how", "why", "can",
+                        "you", "tell", "me", "about", "give", "please", "do", "does", "did", "we",
+                        "i", "our", "my", "your", "their", "there", "then", "so", "some"
+                    }
+                    q_words = [w for w in re.findall(r"\w+", query.lower()) if w not in STOP_WORDS]
                     scored_cues = []
-                    for c in cues:
+                    for c in target_cues:
                         txt = c.get("text", "")
-                        score = sum(1 for w in q_words if w in txt.lower())
-                        scored_cues.append((score, c))
-                    scored_cues.sort(key=lambda x: x[0], reverse=True)
-                    for _, c in scored_cues[:top_k]:
-                        combined.append({
-                            "start_time": c.get("time", "00:00"),
-                            "end_time": c.get("time", "00:00"),
-                            "text": c.get("text", "")
-                        })
+                        if not txt:
+                            continue
+                        score = sum(1 for w in q_words if w in txt.lower()) if q_words else 0
+                        if score > 0:
+                            scored_cues.append((score, c))
+
+                    if scored_cues:
+                        scored_cues.sort(key=lambda x: x[0], reverse=True)
+                        for _, c in scored_cues[:top_k]:
+                            combined.append({
+                                "start_time": c.get("time", "00:00"),
+                                "end_time": c.get("time", "00:00"),
+                                "text": c.get("text", "")
+                            })
+                    elif self.is_holistic_query(query):
+                        step = max(1, len(target_cues) // top_k)
+                        for c in target_cues[::step][:top_k]:
+                            combined.append({
+                                "start_time": c.get("time", "00:00"),
+                                "end_time": c.get("time", "00:00"),
+                                "text": c.get("text", "")
+                            })
 
             out = []
             for item in combined:
@@ -522,17 +620,24 @@ class Llama3PineconeRAGStore:
         elif tool_name == "get_transcript_window":
             st = str(arguments.get("start_time", "00:00")).strip()
             et = str(arguments.get("end_time", "00:00")).strip()
-            vid = vid_cache
-            if not vid or vid == "active":
-                raise ValueError("get_transcript_window requires a valid video_id.")
+            vid = vid_cache or target_video_id or getattr(self, "video_id", "")
+            if vid == "active":
+                vid = getattr(self, "video_id", "")
 
             st_sec = self._parse_timestamp(st)
             et_sec = self._parse_timestamp(et)
-            from backend.database import db_manager
-            saved = db_manager.get_saved_video(vid)
-            cues = saved.get("cues", []) if saved else []
-            window = [c for c in cues if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec]
+            cues = []
+            if vid:
+                try:
+                    from backend.database import db_manager
+                    saved = db_manager.get_saved_video(vid)
+                    cues = saved.get("cues", []) if saved else []
+                except Exception:
+                    pass
+            if not cues and getattr(self, "cues", None):
+                cues = self.cues
 
+            window = [c for c in cues if st_sec <= self._parse_timestamp(c.get("time", "00:00")) <= et_sec]
             if not window:
                 raise ValueError(f"No transcript cues found within time window [{st} - {et}].")
 
@@ -813,6 +918,25 @@ class Llama3PineconeRAGStore:
                     pass
             if target_cues:
                 self.ingest_transcript(target_video_id, lecture_title, target_cues, upsert=False)
+        elif cues:
+            self.cues = list(cues)
+
+        is_holistic = self.is_holistic_query(query)
+        pre_outline_json = ""
+        pre_outline_citations = []
+        if is_holistic:
+            try:
+                out_res, out_cit, _ = self.execute_tool(
+                    "get_lecture_outline",
+                    {"video_id": target_video_id},
+                    target_video_id,
+                    lecture_title
+                )
+                if out_res and out_res != "[]":
+                    pre_outline_json = out_res
+                    pre_outline_citations = out_cit
+            except Exception as e_out:
+                print(f"⚠️ [Pre-fetch Outline Notice] {e_out}")
 
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
@@ -859,17 +983,17 @@ class Llama3PineconeRAGStore:
 
         web_instruction = (
             "2. THREE-TIER WATERFALL PROTOCOL (Strict Non-Hallucination & Mandatory Citations):\n"
-            "   - Tier 1 (Current Lecture): Always search the current lecture first using 'search_transcript'. If found, ground statements with exact [MM:SS] timestamps inline.\n"
-            "   - Tier 2 (Course-Wide Cross-Lecture Search): If the concept is not found in the current lecture (e.g., student asks about an earlier or different session like ELIZA in Session 3), you MUST call 'search_course_lectures' to check if another lecture in this course discusses it. If found in another lecture, explicitly state: 'This concept was not discussed in this lecture, but was covered by the professor in [Lecture Title] at [MM:SS]', and cite that lecture with its timestamp.\n"
+            "   - Tier 1 (Current Lecture): Always search the current lecture first using 'search_transcript' or 'get_lecture_outline'. For questions asking for core concepts, key definitions, outline, summary, or main equations, prioritize 'get_lecture_outline'. Ground statements with exact [MM:SS] timestamps inline.\n"
+            "   - Tier 2 (Course-Wide Cross-Lecture Search): If a specific concept or topic is not found in the current lecture (e.g., student asks about an earlier or different session like ELIZA in Session 3), you MUST call 'search_course_lectures' to check if another lecture in this course discusses it. If found in another lecture, explicitly state: 'This concept was not discussed in this lecture, but was covered by the professor in [Lecture Title] at [MM:SS]', and cite that lecture with its timestamp.\n"
             "   - Citation Formatting: Always cite lectures with clear natural titles and timestamps (e.g., in **[Lecture Title]** at **[MM:SS]**). NEVER leak internal tool names or raw bracketed function tokens like '【search_course_lectures】' in your output.\n"
-            "   - Tier 3 (Academic Foundations & Web Search): If the concept is absent from all lectures in this course, you MUST call 'search_web_context' to retrieve verified external academic sources. Synthesize a clear, direct, and rigorous academic answer using the retrieved web snippets and grounded academic knowledge. Explicitly state the course boundary notice: '⚠️ **Course Boundary Notice**: This topic is not covered in this lecture or course syllabus. Grounded in standard academic literature:'. You MUST summarize the findings and cite the source URLs using clean markdown links: [Source Name / Domain](URL). NEVER output raw JSON dictionaries, stringified objects, or bracketed function tokens like '【\"Web Result...\", \"url\": \"...\"】'.\n"
+            "   - Tier 3 (Academic Foundations & Web Search): Only if a specific requested concept is absent from all lectures in this course, call 'search_web_context' to retrieve verified external academic sources. Synthesize a clear, direct, and rigorous academic answer using the retrieved web snippets and grounded academic knowledge. Explicitly state the course boundary notice: '⚠️ **Course Boundary Notice**: This topic is not covered in this lecture or course syllabus. Grounded in standard academic literature:'. You MUST summarize the findings and cite the source URLs using clean markdown links: [Source Name / Domain](URL). NEVER output raw JSON dictionaries, stringified objects, or bracketed function tokens like '【\"Web Result...\", \"url\": \"...\"】'. NEVER use Tier 3 or Course Boundary Notices for questions asking for the current lecture's own core concepts, definitions, summary, or outline.\n"
             "   - STRICT NON-HALLUCINATION RULE: Never invent timestamps. Never claim a topic was taught in a lecture if it was not. Always provide citations for claims."
             if enable_web_search else
             "2. TWO-TIER WATERFALL PROTOCOL:\n"
-            "   - Tier 1: Search current lecture using 'search_transcript' and cite [MM:SS].\n"
+            "   - Tier 1: Search current lecture using 'search_transcript' or 'get_lecture_outline' and cite [MM:SS].\n"
             "   - Tier 2: If absent, call 'search_course_lectures' to check other course lectures. If found, cite that lecture.\n"
             "   - Citation Formatting: Always cite lectures with clear natural titles and timestamps (e.g., in **[Lecture Title]** at **[MM:SS]**). NEVER leak internal tool names or raw bracketed function tokens like '【search_course_lectures】' in your output.\n"
-            "   - If absent from the course entirely, provide the grounded academic definition with: '⚠️ **Course Boundary Notice**: This topic is not covered in your course lectures. Grounded in standard academic foundations:'."
+            "   - If absent from the course entirely, provide the grounded academic definition with: '⚠️ **Course Boundary Notice**: This topic is not covered in your course lectures. Grounded in standard academic foundations:'. NEVER use Course Boundary Notices for questions asking for the current lecture's own core concepts, definitions, or outline."
         )
 
         system_prompt = (
@@ -891,6 +1015,19 @@ class Llama3PineconeRAGStore:
 
             print(f"🤖 [Agentic RAG] Initializing query: '{query}' using {display_model}")
             messages = [{"role": "system", "content": system_prompt}]
+            if pre_outline_json:
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"Structured lecture outline, chapters, and core concepts for '{lecture_title}':\n"
+                        f"{pre_outline_json}\n\n"
+                        "CORE CONCEPTS & DEFINITIONS INSTRUCTION:\n"
+                        "The student is asking for the core concepts, definitions, or overarching overview taught in this active lecture. "
+                        "Synthesize the core concepts and definitions directly from the lecture outline and transcript cues. "
+                        "Ground every concept in the lecture with inline [MM:SS] timestamps and standard LaTeX math notation ($...$ and $$...$$). "
+                        "DO NOT issue a Course Boundary Notice or claim this topic is not covered in this lecture."
+                    )
+                })
 
             # Append conversational context if available
             if chat_history:
@@ -907,7 +1044,7 @@ class Llama3PineconeRAGStore:
 
             messages.append({"role": "user", "content": f"Student Request: {query}"})
 
-            all_citations = []
+            all_citations = list(pre_outline_citations)
             all_web_sources = []
             max_steps = 3
             current_step = 0
@@ -915,7 +1052,7 @@ class Llama3PineconeRAGStore:
             headers = {"Authorization": auth_header, "Content-Type": "application/json"}
 
             try:
-                if enforce_regenerate:
+                if enforce_regenerate and not is_holistic:
                     try:
                         print("🧭 [Regenerate Enforcement] Forcing Level 2 (course-wide) check: search_course_lectures")
                         lvl2_has_hits = False
@@ -983,7 +1120,7 @@ class Llama3PineconeRAGStore:
 
                 while current_step < max_steps:
                     current_step += 1
-                    is_summary_query = any(k in query.lower() for k in ("summary", "study guide", "comprehensive"))
+                    is_summary_query = is_holistic or any(k in query.lower() for k in ("summary", "study guide", "comprehensive"))
                     payload = {
                         "model": model_name,
                         "messages": messages,
@@ -1025,14 +1162,18 @@ class Llama3PineconeRAGStore:
                         func_name = tc["function"]["name"]
                         raw_args = tc["function"]["arguments"]
                         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                        tool_res, tool_cit, tool_web = self.execute_tool(func_name, args, target_video_id, lecture_title)
-                        all_citations.extend(tool_cit)
-                        all_web_sources.extend(tool_web)
-                        messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
+                        try:
+                            tool_res, tool_cit, tool_web = self.execute_tool(func_name, args, target_video_id, lecture_title)
+                            all_citations.extend(tool_cit)
+                            all_web_sources.extend(tool_web)
+                            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
+                        except Exception as tool_err:
+                            print(f"⚠️ [Tool Execution Error] {func_name} failed: {tool_err}")
+                            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": json.dumps({"error": str(tool_err)})})
 
                 if not final_answer:
-                    # Autonomous Waterfall Tier 3: If no citations or web sources retrieved yet, trigger web search directly
-                    if enable_web_search and not all_web_sources and not all_citations:
+                    # Autonomous Waterfall Tier 3: If no citations or web sources retrieved yet, trigger web search directly (only for specific absent topics, never for holistic lecture overview queries)
+                    if enable_web_search and not all_web_sources and not all_citations and not is_holistic:
                         try:
                             from backend.web_search import search_web_for_context
                             hits = search_web_for_context(query, max_results=3)
@@ -1047,8 +1188,18 @@ class Llama3PineconeRAGStore:
                         except Exception as e_ws:
                             print(f"⚠️ [Autonomous Web Fallback Notice]: {e_ws}")
 
-                    is_summary_query = any(k in query.lower() for k in ("summary", "study guide", "comprehensive", "recap", "overview"))
-                    if is_summary_query:
+                    is_summary_query = is_holistic or any(k in query.lower() for k in ("summary", "study guide", "comprehensive", "recap", "overview"))
+                    if is_holistic:
+                        prompt_msg = (
+                            f"Please synthesize a clear, comprehensive breakdown of the core concepts, fundamental definitions, and key takeaways taught in '{lecture_title}':\n"
+                            "- Group the concepts logically or chronologically by chapter/topic with clear markdown headings.\n"
+                            "- Define each core concept and term thoroughly, explaining how the professor develops it.\n"
+                            "- Format all mathematical formulas and equations using standard LaTeX notation ($...$ for inline, $$...$$ for standalone blocks).\n"
+                            "- Ground each core concept with inline [MM:SS] timestamps where it was taught in the lecture.\n"
+                            "- DO NOT include conversational preamble (e.g. 'Sure! Here are...'). Start directly with the concepts.\n"
+                            "- NEVER output a Course Boundary Notice for this lecture overview query."
+                        )
+                    elif is_summary_query:
                         prompt_msg = (
                             "Please synthesize an exhaustive, comprehensive academic study guide following the official LectureScribe template:\n"
                             "- Start directly with '# Executive Summary: [Lecture Title]'.\n"
@@ -1080,7 +1231,22 @@ class Llama3PineconeRAGStore:
                         final_answer = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
                 if not final_answer:
-                    final_answer = f"⚠️ **Course Boundary Notice**: The topic '{query}' is not covered in '{lecture_title}'. Please verify the concept or check other course lectures."
+                    if is_holistic and pre_outline_json:
+                        try:
+                            parsed_outline = json.loads(pre_outline_json)
+                            lines = [f"# Core Concepts and Definitions: {lecture_title}\n"]
+                            for ch in parsed_outline:
+                                chapter_name = ch.get("chapter", "Overview")
+                                ts = ch.get("timestamp", "00:00")
+                                lines.append(f"### {chapter_name} [{ts}]")
+                                for pt in ch.get("core_concepts", []):
+                                    lines.append(f"- {pt}")
+                                lines.append("")
+                            final_answer = "\n".join(lines).strip()
+                        except Exception:
+                            pass
+                    if not final_answer:
+                        final_answer = f"⚠️ **Course Boundary Notice**: The topic '{query}' is not covered in '{lecture_title}'. Please verify the concept or check other course lectures."
 
                 filtered_citations = self._filter_and_deduplicate_citations(
                     citations=all_citations,
@@ -1176,6 +1342,20 @@ class Llama3PineconeRAGStore:
             user_email=user_email
         )
 
+        is_course_holistic = self.is_holistic_query(query)
+        course_outline_res = ""
+        course_outline_cit = []
+        if is_course_holistic:
+            try:
+                course_outline_res, course_outline_cit = self.execute_course_tool(
+                    "get_course_outline_and_lectures",
+                    {},
+                    cname,
+                    user_email=user_email
+                )
+            except Exception as e_co:
+                print(f"⚠️ [Course Outline Pre-fetch Notice] {e_co}")
+
         system_prompt = (
             f"You are the Academic AI Tutor for the course: '{cname}'.\n"
             "Your mission is to help students synthesize knowledge across all lectures in the course, "
@@ -1205,6 +1385,12 @@ class Llama3PineconeRAGStore:
 
             messages = [{"role": "system", "content": system_prompt}]
 
+            if course_outline_res and course_outline_res != "[]":
+                messages.append({
+                    "role": "system",
+                    "content": f"Complete Course Outline and Lecture List for '{cname}':\n{course_outline_res}"
+                })
+
             # Inject pre-fetched course context
             if pre_res and pre_res != "[]":
                 messages.append({
@@ -1223,6 +1409,8 @@ class Llama3PineconeRAGStore:
             messages.append({"role": "user", "content": query})
 
             all_citations = list(pre_cit)
+            if course_outline_cit:
+                all_citations.extend(course_outline_cit)
             max_steps = 3
             current_step = 0
             final_answer = ""
@@ -1267,9 +1455,13 @@ class Llama3PineconeRAGStore:
                         func_name = tc["function"]["name"]
                         raw_args = tc["function"]["arguments"]
                         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                        tool_res, tool_cit = self.execute_course_tool(func_name, args, cname, user_email=user_email)
-                        all_citations.extend(tool_cit)
-                        messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
+                        try:
+                            tool_res, tool_cit = self.execute_course_tool(func_name, args, cname, user_email=user_email)
+                            all_citations.extend(tool_cit)
+                            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": tool_res})
+                        except Exception as tool_err:
+                            print(f"⚠️ [Course Tool Execution Error] {func_name} failed: {tool_err}")
+                            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": json.dumps({"error": str(tool_err)})})
 
                 if not final_answer:
                     # Compile retrieved tool observations into a clean synthesis prompt
@@ -1959,7 +2151,8 @@ class Llama3PineconeRAGStore:
         video_id: str,
         lecture_title: str,
         cues: List[Dict[str, str]],
-        num_questions: int = 5
+        num_questions: int = 5,
+        feedback_guidance: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Generate structured interactive quiz questions from lecture transcript with LaTeX formulas."""
         import requests
@@ -1969,6 +2162,22 @@ class Llama3PineconeRAGStore:
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         target_count = max(3, min(15, int(num_questions or 5)))
+
+        if feedback_guidance is None:
+            try:
+                from backend.database import db_manager
+                feedback_guidance = db_manager.get_learned_generation_guidance("lecture", clean_vid)
+            except Exception:
+                feedback_guidance = []
+
+        guidance_section = ""
+        if feedback_guidance:
+            guidance_items = "\n".join([f"   - {g}" for g in feedback_guidance])
+            guidance_section = (
+                "\n8. CONTINUOUS QUALITY CALIBRATION (Learned from Past Student/Instructor Feedback):\n"
+                f"{guidance_items}\n"
+                "You MUST strictly adhere to these calibration rules and prevent repeating these reported flaws.\n"
+            )
 
         valid_cues = [c for c in (cues or []) if (c.get("text") or "").strip()]
         if not valid_cues:
@@ -2005,6 +2214,7 @@ class Llama3PineconeRAGStore:
             "   - 'explanation': thorough pedagogical explanation of why this answer is correct, citing the exact timestamp (e.g. [43:34]) and including LaTeX math where applicable\n"
             "   - 'timestamp': timestamp string (e.g. '43:34' or '01:02:13') from the transcript corresponding to this topic\n"
             "   - 'difficulty': 'easy', 'medium', or 'hard'\n"
+            f"{guidance_section}"
             "8. Return ONLY a single valid JSON object matching this schema:\n"
             "{\n"
             '  "questions": [\n'
@@ -2034,16 +2244,20 @@ class Llama3PineconeRAGStore:
                     lines = lines[:-1]
                 t = "\n".join(lines).strip()
             try:
-                data = json.loads(t)
+                data = json.loads(t, strict=False)
             except Exception:
-                match = re.search(r"\{.*\}", t, re.DOTALL)
-                if match:
-                    try:
-                        data = json.loads(match.group(0))
-                    except Exception:
+                fixed = re.sub(r'\\([a-zA-Z])', r'\\\\\1', t)
+                try:
+                    data = json.loads(fixed, strict=False)
+                except Exception:
+                    match = re.search(r"\{.*\}", fixed, re.DOTALL)
+                    if match:
+                        try:
+                            data = json.loads(match.group(0), strict=False)
+                        except Exception:
+                            return None
+                    else:
                         return None
-                else:
-                    return None
 
             raw_qs = data.get("questions") if isinstance(data, dict) else (data if isinstance(data, list) else None)
             if not isinstance(raw_qs, list) or len(raw_qs) == 0:
@@ -2143,12 +2357,13 @@ class Llama3PineconeRAGStore:
         self,
         course_name: str,
         lectures_data: List[Dict[str, Any]],
-        num_questions: Optional[int] = None
+        num_questions: Optional[int] = None,
+        feedback_guidance: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Generate comprehensive, multi-lecture practice quiz testing concepts
         across all lectures in the course using saved summaries and lecture-specific quizzes.
-        Generates 10-15 questions mixing Multiple Choice (MCQ) and Fill in the Blanks.
+        Generates 30 questions mixing Multiple Choice (MCQ) and Fill in the Blanks.
         """
         import requests
 
@@ -2158,6 +2373,22 @@ class Llama3PineconeRAGStore:
             raise ValueError("course_name is required.")
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        if feedback_guidance is None:
+            try:
+                from backend.database import db_manager
+                feedback_guidance = db_manager.get_learned_generation_guidance("course", course_slug)
+            except Exception:
+                feedback_guidance = []
+
+        guidance_section = ""
+        if feedback_guidance:
+            guidance_items = "\n".join([f"   - {g}" for g in feedback_guidance])
+            guidance_section = (
+                "\n9. CONTINUOUS QUALITY CALIBRATION (Learned from Past Student/Instructor Feedback on this course):\n"
+                f"{guidance_items}\n"
+                "You MUST strictly adhere to these calibration rules and prevent repeating these reported flaws.\n"
+            )
 
         valid_lectures = []
         for l in (lectures_data or []):
@@ -2192,8 +2423,8 @@ class Llama3PineconeRAGStore:
         if num_questions is not None and int(num_questions) > 0:
             target_count = int(num_questions)
         else:
-            # Exactly 20 questions for comprehensive course-level exam
-            target_count = 20
+            # Exactly 30 questions for comprehensive course-level exam
+            target_count = 30
 
         # Build token-efficient chronological context using saved summaries and lecture questions (avoiding raw cue exhaustion)
         lecture_materials = []
@@ -2261,6 +2492,7 @@ class Llama3PineconeRAGStore:
             "   - 'lecture_title': title of the lecture this question tests\n"
             "   - 'timestamp': timestamp string (e.g. '12:30')\n"
             "   - 'difficulty': 'easy', 'medium', or 'hard'\n\n"
+            f"{guidance_section}"
             "9. Return ONLY a single valid JSON object matching this schema:\n"
             "{\n"
             '  "questions": [\n'
@@ -2309,16 +2541,20 @@ class Llama3PineconeRAGStore:
                     lines = lines[:-1]
                 t = "\n".join(lines).strip()
             try:
-                data = json.loads(t)
+                data = json.loads(t, strict=False)
             except Exception:
-                match = re.search(r"\{.*\}", t, re.DOTALL)
-                if match:
-                    try:
-                        data = json.loads(match.group(0))
-                    except Exception:
+                fixed = re.sub(r'\\([a-zA-Z])', r'\\\\\1', t)
+                try:
+                    data = json.loads(fixed, strict=False)
+                except Exception:
+                    match = re.search(r"\{.*\}", fixed, re.DOTALL)
+                    if match:
+                        try:
+                            data = json.loads(match.group(0), strict=False)
+                        except Exception:
+                            return None
+                    else:
                         return None
-                else:
-                    return None
 
             raw_qs = data.get("questions") if isinstance(data, dict) else (data if isinstance(data, list) else None)
             if not isinstance(raw_qs, list) or len(raw_qs) == 0:
@@ -2382,7 +2618,7 @@ class Llama3PineconeRAGStore:
                         ],
                         "response_format": {"type": "json_object"},
                         "temperature": 0.3,
-                        "max_tokens": 6000
+                        "max_tokens": 8192
                     }
                     r = requests.post(
                         "https://api.groq.com/openai/v1/chat/completions",
@@ -2416,7 +2652,7 @@ class Llama3PineconeRAGStore:
                     payload = {
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
-                        "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 6000}
+                        "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 8192}
                     }
                     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
                     resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
@@ -2564,16 +2800,20 @@ class Llama3PineconeRAGStore:
                     lines = lines[:-1]
                 t = "\n".join(lines).strip()
             try:
-                data = json.loads(t)
+                data = json.loads(t, strict=False)
             except Exception:
-                match = re.search(r"\{.*\}", t, re.DOTALL)
-                if match:
-                    try:
-                        data = json.loads(match.group(0))
-                    except Exception:
+                fixed = re.sub(r'\\([a-zA-Z])', r'\\\\\1', t)
+                try:
+                    data = json.loads(fixed, strict=False)
+                except Exception:
+                    match = re.search(r"\{.*\}", fixed, re.DOTALL)
+                    if match:
+                        try:
+                            data = json.loads(match.group(0), strict=False)
+                        except Exception:
+                            return None
+                    else:
                         return None
-                else:
-                    return None
 
             if not isinstance(data, dict):
                 return None

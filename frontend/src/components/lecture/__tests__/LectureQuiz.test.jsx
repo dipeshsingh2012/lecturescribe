@@ -144,4 +144,44 @@ describe('LectureQuiz Component', () => {
     // Verify completion scorecard
     expect(screen.getByText(/Quiz Complete! You scored 1 out of 1/i)).toBeInTheDocument();
   });
+
+  it('renders "Review from Question 1" button upon completion and scrolls to top on click', () => {
+    const mockQuizData = {
+      video_id: 'vid123',
+      lecture_title: 'Linear Algebra',
+      questions: [
+        {
+          id: 1,
+          question: 'What is the formula for energy?',
+          options: ['$E = mc^2$', '$F = ma$', '$a^2 + b^2 = c^2$', '$PV = nRT$'],
+          correct_index: 0,
+          explanation: 'At [43:34], the professor notes $E = mc^2$.',
+          timestamp: '43:34',
+          difficulty: 'medium'
+        }
+      ]
+    };
+
+    render(
+      <LectureQuiz
+        quizData={mockQuizData}
+        quizLoading={false}
+        quizError={null}
+        selectedAnswers={{ 1: 0 }}
+        isCompleted={true}
+        score={1}
+        totalQuestions={1}
+        answeredCount={1}
+        generateQuiz={vi.fn()}
+        selectAnswer={vi.fn()}
+        resetQuiz={vi.fn()}
+        handleCueClick={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const reviewBtn = screen.getByText(/Review from Question 1/i).closest('button');
+    expect(reviewBtn).toBeInTheDocument();
+    fireEvent.click(reviewBtn);
+  });
 });

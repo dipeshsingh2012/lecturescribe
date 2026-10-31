@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { API_BASE } from '../utils/constants';
-import { normalizeCourseSlug } from '../utils/routing';
+import { normalizeCourseSlug, getCourseTabFromPath, VALID_COURSE_TABS } from '../utils/routing';
 
 export function useResources(activeVideoId, selectedCourse, googleUser) {
   const [rawLectureResources, setRawLectureResources] = useState([]);
@@ -11,28 +11,16 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
   const [courseReadingsLoading, setCourseReadingsLoading] = useState(false);
   const [isExtractingReadings, setIsExtractingReadings] = useState(false);
 
-  const getInitialCourseTab = () => {
-    if (typeof window !== 'undefined') {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const tab = params.get('tab');
-        if (tab === 'quiz' || tab === 'tutor' || tab === 'resources' || tab === 'library' || tab === 'lectures' || tab === 'summary' || tab === 'assignments') {
-          return tab;
-        }
-      } catch {}
-    }
-    return 'lectures';
-  };
-
-  const [courseViewTab, setCourseViewTabState] = useState(getInitialCourseTab);
+  const [courseViewTab, setCourseViewTabState] = useState(() => getCourseTabFromPath());
 
   const setCourseViewTab = (tab) => {
-    setCourseViewTabState(tab);
+    const validTab = tab && VALID_COURSE_TABS.has(tab) ? tab : 'lectures';
+    setCourseViewTabState(validTab);
     if (typeof window !== 'undefined') {
       try {
         const url = new URL(window.location.href);
-        if (tab && tab !== 'lectures') {
-          url.searchParams.set('tab', tab);
+        if (validTab && validTab !== 'lectures') {
+          url.searchParams.set('tab', validTab);
         } else {
           url.searchParams.delete('tab');
         }
@@ -43,17 +31,22 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     }
   };
 
+  const prevCourseSlugRef = useRef(selectedCourse ? normalizeCourseSlug(selectedCourse) : null);
+
+  // When moving between courses (or navigating to/from hub), sync course tab to URL or reset to default 'lectures'
+  useEffect(() => {
+    const currentCourseSlug = selectedCourse ? normalizeCourseSlug(selectedCourse) : null;
+    if (prevCourseSlugRef.current !== currentCourseSlug) {
+      prevCourseSlugRef.current = currentCourseSlug;
+      setCourseViewTabState(getCourseTabFromPath());
+    }
+  }, [selectedCourse]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handlePopState = () => {
       try {
-        const params = new URLSearchParams(window.location.search);
-        const tab = params.get('tab');
-        if (tab === 'quiz' || tab === 'tutor' || tab === 'resources' || tab === 'library' || tab === 'lectures' || tab === 'summary' || tab === 'assignments') {
-          setCourseViewTabState(tab);
-        } else {
-          setCourseViewTabState('lectures');
-        }
+        setCourseViewTabState(getCourseTabFromPath());
       } catch {}
     };
     window.addEventListener('popstate', handlePopState);

@@ -54,6 +54,29 @@ describe('CourseLibrary Component', () => {
     expect(screen.getByText('Lecture 1 [04:15] & Intro.pptx')).toBeInTheDocument();
   });
 
+  it('renders Upload Slides / Files button in the slides section header and invokes openUploadModal when clicked', () => {
+    const mockOpenUpload = vi.fn();
+    render(
+      <CourseLibrary
+        courseResources={mockSlides}
+        courseReadings={mockBooks}
+        selectedCourse="Machine Learning"
+        googleUser={{ email: 'prof@university.edu' }}
+        openUploadModal={mockOpenUpload}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const uploadBtn = screen.getByRole('button', { name: /Upload Slides or Files/i });
+    expect(uploadBtn).toBeInTheDocument();
+
+    fireEvent.click(uploadBtn);
+    expect(mockOpenUpload).toHaveBeenCalledWith({
+      courseName: 'Machine Learning',
+      videoId: null
+    });
+  });
+
   it('triggers triggerExtractReadings when Scan & Extract Books is clicked', async () => {
     const triggerExtractReadings = vi.fn().mockResolvedValue({ status: 'success', newly_extracted_count: 2, count: 2 });
     render(

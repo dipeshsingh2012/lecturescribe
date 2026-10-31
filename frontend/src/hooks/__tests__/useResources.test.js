@@ -251,4 +251,125 @@ describe('useResources hook functionality', () => {
     expect(readingsFetchCount).toBe(1);
     expect(lectureFetchCount).toBe(1);
   });
+
+  describe('courseViewTab state and navigation persistence', () => {
+    beforeEach(() => {
+      window.history.replaceState({}, '', '/course/intro-cs');
+    });
+
+    it('initializes courseViewTab from URL query parameter', async () => {
+      window.history.replaceState({}, '', '/course/intro-cs?tab=quiz');
+      const { result } = renderHook(() => useResources(null, 'Intro CS', null));
+      await act(async () => {});
+      expect(result.current.courseViewTab).toBe('quiz');
+    });
+
+    it('defaults courseViewTab to lectures when no tab is provided', async () => {
+      window.history.replaceState({}, '', '/course/intro-cs');
+      const { result } = renderHook(() => useResources(null, 'Intro CS', null));
+      await act(async () => {});
+      expect(result.current.courseViewTab).toBe('lectures');
+    });
+
+    it('setCourseViewTab updates state and updates window history search param', async () => {
+      const { result } = renderHook(() => useResources(null, 'Intro CS', null));
+      await act(async () => {});
+      expect(result.current.courseViewTab).toBe('lectures');
+
+      act(() => {
+        result.current.setCourseViewTab('quiz');
+      });
+
+      expect(result.current.courseViewTab).toBe('quiz');
+      expect(window.location.search).toBe('?tab=quiz');
+
+      act(() => {
+        result.current.setCourseViewTab('lectures');
+      });
+
+      expect(result.current.courseViewTab).toBe('lectures');
+      expect(window.location.search).toBe('');
+    });
+
+    it('resets courseViewTab to lectures when moving from Course A (on quiz tab) to Course B without tab in URL', async () => {
+      window.history.replaceState({}, '', '/course/machine-learning');
+      const { result, rerender } = renderHook(
+        ({ course }) => useResources(null, course, null),
+        { initialProps: { course: 'Machine Learning' } }
+      );
+
+      // User selects quiz tab in Course A
+      act(() => {
+        result.current.setCourseViewTab('quiz');
+      });
+      expect(result.current.courseViewTab).toBe('quiz');
+      expect(window.location.search).toBe('?tab=quiz');
+
+      // User navigates to Course B (URL updated to /course/deep-learning without search param)
+      window.history.pushState({}, '', '/course/deep-learning');
+
+      rerender({ course: 'Deep Learning' });
+      await act(async () => {});
+
+      // courseViewTab must NOT persist quiz; must reset to default 'lectures'
+      expect(result.current.courseViewTab).toBe('lectures');
+    });
+
+    it('updates courseViewTab to specified URL tab when moving between courses', async () => {
+      window.history.replaceState({}, '', '/course/machine-learning');
+      const { result, rerender } = renderHook(
+        ({ course }) => useResources(null, course, null),
+        { initialProps: { course: 'Machine Learning' } }
+      );
+
+      act(() => {
+        result.current.setCourseViewTab('quiz');
+      });
+      expect(result.current.courseViewTab).toBe('quiz');
+
+      // User navigates directly to Course B with explicit ?tab=assignments
+      window.history.pushState({}, '', '/course/deep-learning?tab=assignments');
+
+      rerender({ course: 'Deep Learning' });
+      await act(async () => {});
+
+      expect(result.current.courseViewTab).toBe('assignments');
+    });
+
+    it('does not reset active tab when course name alternates between case or slug formatting variants', async () => {
+      window.history.replaceState({}, '', '/course/data-structures');
+      const { result, rerender } = renderHook(
+        ({ course }) => useResources(null, course, null),
+        { initialProps: { course: 'Data Structures' } }
+      );
+
+      act(() => {
+        result.current.setCourseViewTab('quiz');
+      });
+      expect(result.current.courseViewTab).toBe('quiz');
+
+      // Slug variant of same course (e.g. data-structures vs Data Structures)
+      rerender({ course: 'data-structures' });
+      await act(async () => {});
+
+      // Active tab should remain 'quiz' because it's the exact same course
+      expect(result.current.courseViewTab).toBe('quiz');
+    });
+
+    it('resets courseViewTab on browser popstate navigation', async () => {
+      window.history.replaceState({}, '', '/course/data-science?tab=quiz');
+      const { result } = renderHook(() => useResources(null, 'Data Science', null));
+      await act(async () => {});
+      expect(result.current.courseViewTab).toBe('quiz');
+
+      // Simulate popstate back to /course/data-science (no query params)
+      window.history.replaceState({}, '', '/course/data-science');
+      act(() => {
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await act(async () => {});
+
+      expect(result.current.courseViewTab).toBe('lectures');
+    });
+  });
 });

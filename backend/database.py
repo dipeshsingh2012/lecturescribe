@@ -120,6 +120,8 @@ class RelationalDBManager:
         self._course_summaries_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_attempts_memory_cache: Dict[str, Dict[str, Any]] = {}
         self._quiz_explanations_memory_cache: Dict[str, Dict[int, str]] = {}
+        self._quiz_feedback_memory: List[Dict[str, Any]] = []
+        self._quiz_feedback_cache: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
         self._course_quiz_history_memory: List[Dict[str, Any]] = []
         self._course_quiz_explanations_memory: Dict[str, Dict[str, str]] = {}
         self._readings_memory_cache: List[Dict[str, Any]] = []
@@ -529,6 +531,26 @@ class RelationalDBManager:
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_pg_course_quiz_exp ON lecturescribe_course_quiz_explanations(course_slug, question_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_quiz_feedback (
+                            id SERIAL PRIMARY KEY,
+                            quiz_type VARCHAR(32) NOT NULL,
+                            target_id VARCHAR(255) NOT NULL,
+                            question_id VARCHAR(64) NOT NULL,
+                            rating VARCHAR(16) NOT NULL,
+                            issue_tags JSONB DEFAULT '[]'::jsonb,
+                            comment TEXT DEFAULT '',
+                            user_email VARCHAR(255) DEFAULT 'anonymous',
+                            question_text TEXT DEFAULT '',
+                            options_json JSONB DEFAULT '[]'::jsonb,
+                            correct_index INT DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            CONSTRAINT uq_quiz_feedback UNIQUE (quiz_type, target_id, question_id, user_email)
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_pg_quiz_fb_target ON lecturescribe_quiz_feedback(quiz_type, target_id);
+                        CREATE INDEX IF NOT EXISTS idx_pg_quiz_fb_rating ON lecturescribe_quiz_feedback(rating);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_course_readings (
                             id SERIAL PRIMARY KEY,
@@ -2876,6 +2898,287 @@ class RelationalDBManager:
             if conn:
                 conn.close()
         return None
+
+    def save_quiz_feedback(
+        self,
+        quiz_type: str,
+        target_id: str,
+        question_id: Union[int, str],
+        rating: str,
+        issue_tags: Optional[List[str]] = None,
+        comment: str = "",
+        user_email: str = "anonymous",
+        question_text: str = "",
+        options: Optional[List[str]] = None,
+        correct_index: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Record feedback on a quiz question. Rating is 'positive' or 'negative' ('up' / 'down').
+        Issue tags can include 'ambiguous_wording', 'incorrect_answer', 'too_easy', 'too_hard', 'bad_explanation', 'formatting_error'.
+        Feedback is persisted in PostgreSQL and In-Memory cache, and used to calibrate future quiz generations.
+        """
+        clean_type = "course" if str(quiz_type or "").lower().startswith("course") else "lecture"
+        clean_target = to_course_slug(target_id) if clean_type == "course" else str(target_id or "").strip()
+        clean_qid = str(question_id or "").strip()
+        norm_rating = "positive" if str(rating or "").lower() in ("positive", "up", "like", "true", "1") else "negative"
+        clean_tags = [str(t).strip().lower() for t in (issue_tags or []) if str(t).strip()]
+        clean_comment = str(comment or "").strip()[:2000]
+        clean_email = (user_email or "anonymous").strip().lower()
+        clean_qtext = str(question_text or "").strip()[:1000]
+        clean_opts = [str(o) for o in (options or [])]
+        try:
+            c_idx = int(correct_index or 0)
+        except Exception:
+            c_idx = 0
+
+        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        record = {
+            "quiz_type": clean_type,
+            "target_id": clean_target,
+            "question_id": clean_qid,
+            "rating": norm_rating,
+            "issue_tags": clean_tags,
+            "comment": clean_comment,
+            "user_email": clean_email,
+            "question_text": clean_qtext,
+            "options": clean_opts,
+            "correct_index": c_idx,
+            "created_at": now_str,
+            "updated_at": now_str
+        }
+
+        # Update in-memory cache
+        cache_key = (clean_type, clean_target, clean_qid, clean_email)
+        self._quiz_feedback_cache[cache_key] = record
+        updated_list = []
+        found = False
+        for item in self._quiz_feedback_memory:
+            if (item.get("quiz_type"), item.get("target_id"), str(item.get("question_id")), item.get("user_email")) == cache_key:
+                updated_list.append(record)
+                found = True
+            else:
+                updated_list.append(item)
+        if not found:
+            updated_list.append(record)
+        self._quiz_feedback_memory = updated_list
+
+        if not self.postgres_url:
+            return record
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_quiz_feedback (
+                            quiz_type, target_id, question_id, rating, issue_tags,
+                            comment, user_email, question_text, options_json, correct_index, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (quiz_type, target_id, question_id, user_email)
+                        DO UPDATE SET
+                            rating = EXCLUDED.rating,
+                            issue_tags = EXCLUDED.issue_tags,
+                            comment = EXCLUDED.comment,
+                            question_text = CASE WHEN EXCLUDED.question_text <> '' THEN EXCLUDED.question_text ELSE lecturescribe_quiz_feedback.question_text END,
+                            options_json = CASE WHEN jsonb_array_length(EXCLUDED.options_json) > 0 THEN EXCLUDED.options_json ELSE lecturescribe_quiz_feedback.options_json END,
+                            correct_index = EXCLUDED.correct_index,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (
+                        clean_type, clean_target, clean_qid, norm_rating,
+                        json.dumps(clean_tags), clean_comment, clean_email,
+                        clean_qtext, json.dumps(clean_opts), c_idx
+                    ))
+                    conn.commit()
+            return record
+        except Exception as e:
+            print(f"[PostgreSQL Warning] save_quiz_feedback error: {e}")
+            return record
+        finally:
+            if conn:
+                conn.close()
+
+    def get_quiz_feedback(
+        self,
+        quiz_type: str,
+        target_id: str,
+        question_id: Optional[Union[int, str]] = None,
+        user_email: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve question feedback list matching quiz_type and target_id."""
+        clean_type = "course" if str(quiz_type or "").lower().startswith("course") else "lecture"
+        clean_target = to_course_slug(target_id) if clean_type == "course" else str(target_id or "").strip()
+        clean_qid = str(question_id).strip() if question_id is not None and str(question_id).strip() != "" else None
+        clean_email = user_email.strip().lower() if user_email else None
+
+        if not self.postgres_url:
+            res = []
+            for item in self._quiz_feedback_memory:
+                if item.get("quiz_type") == clean_type and item.get("target_id") == clean_target:
+                    if clean_qid is not None and str(item.get("question_id")) != clean_qid:
+                        continue
+                    if clean_email is not None and item.get("user_email") != clean_email:
+                        continue
+                    res.append(item)
+            return res
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = """
+                        SELECT quiz_type, target_id, question_id, rating, issue_tags,
+                               comment, user_email, question_text, options_json, correct_index,
+                               created_at, updated_at
+                        FROM lecturescribe_quiz_feedback
+                        WHERE quiz_type = %s AND target_id = %s
+                    """
+                    params = [clean_type, clean_target]
+                    if clean_qid is not None:
+                        query += " AND question_id = %s"
+                        params.append(clean_qid)
+                    if clean_email is not None:
+                        query += " AND user_email = %s"
+                        params.append(clean_email)
+                    query += " ORDER BY updated_at DESC;"
+
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall()
+                    results = []
+                    for r in rows:
+                        tags = r.get("issue_tags") or []
+                        if isinstance(tags, str):
+                            try:
+                                tags = json.loads(tags)
+                            except Exception:
+                                tags = []
+                        opts = r.get("options_json") or []
+                        if isinstance(opts, str):
+                            try:
+                                opts = json.loads(opts)
+                            except Exception:
+                                opts = []
+                        results.append({
+                            "quiz_type": r.get("quiz_type"),
+                            "target_id": r.get("target_id"),
+                            "question_id": r.get("question_id"),
+                            "rating": r.get("rating"),
+                            "issue_tags": tags,
+                            "comment": r.get("comment") or "",
+                            "user_email": r.get("user_email") or "anonymous",
+                            "question_text": r.get("question_text") or "",
+                            "options": opts,
+                            "correct_index": r.get("correct_index", 0),
+                            "created_at": r.get("created_at").isoformat() if r.get("created_at") else None,
+                            "updated_at": r.get("updated_at").isoformat() if r.get("updated_at") else None
+                        })
+                    return results
+        except Exception as e:
+            print(f"[PostgreSQL Warning] get_quiz_feedback error: {e}")
+            res = []
+            for item in self._quiz_feedback_memory:
+                if item.get("quiz_type") == clean_type and item.get("target_id") == clean_target:
+                    if clean_qid is not None and str(item.get("question_id")) != clean_qid:
+                        continue
+                    if clean_email is not None and item.get("user_email") != clean_email:
+                        continue
+                    res.append(item)
+            return res
+        finally:
+            if conn:
+                conn.close()
+
+    def get_quiz_feedback_summary(
+        self,
+        quiz_type: str,
+        target_id: str
+    ) -> Dict[str, Any]:
+        """Aggregate ratings, issue tag distributions, and recent student/instructor critiques."""
+        items = self.get_quiz_feedback(quiz_type, target_id)
+        total = len(items)
+        positive = 0
+        negative = 0
+        issue_counts: Dict[str, int] = {}
+        critiques: List[Dict[str, Any]] = []
+
+        for item in items:
+            rating = item.get("rating")
+            if rating == "positive":
+                positive += 1
+            else:
+                negative += 1
+                for tag in (item.get("issue_tags") or []):
+                    clean_tag = str(tag).strip().lower()
+                    if clean_tag:
+                        issue_counts[clean_tag] = issue_counts.get(clean_tag, 0) + 1
+                comment = (item.get("comment") or "").strip()
+                if comment:
+                    critiques.append({
+                        "question_id": item.get("question_id"),
+                        "question_excerpt": (item.get("question_text") or "")[:80],
+                        "comment": comment,
+                        "issue_tags": item.get("issue_tags") or []
+                    })
+
+        approval_rate = round((positive / total * 100), 1) if total > 0 else 100.0
+        return {
+            "total_ratings": total,
+            "positive": positive,
+            "negative": negative,
+            "approval_rate": approval_rate,
+            "issue_breakdown": issue_counts,
+            "recent_critiques": critiques[:10]
+        }
+
+    def get_learned_generation_guidance(
+        self,
+        quiz_type: str,
+        target_id: str
+    ) -> List[str]:
+        """
+        Synthesize actionable calibration instructions from past negative user feedback
+        and critiques to inject directly into LLM prompt for future quiz generation.
+        """
+        summary = self.get_quiz_feedback_summary(quiz_type, target_id)
+        guidance: List[str] = []
+        issues = summary.get("issue_breakdown", {})
+
+        if issues.get("ambiguous_wording", 0) > 0:
+            guidance.append(
+                "CRITICAL: Past quiz questions were flagged for 'Ambiguous Wording'. Ensure question stems and distinctions between options are mathematically and theoretically unequivocal. Avoid questions with multiple defensible interpretations."
+            )
+        if issues.get("incorrect_answer", 0) > 0:
+            guidance.append(
+                "CRITICAL: Past quiz questions had 'Incorrect Answer Key' reports. You MUST rigorously verify that the designated correct_index is 100% indisputable, and cross-check it against canonical lecture definitions before outputting."
+            )
+        if issues.get("too_easy", 0) > 0:
+            guidance.append(
+                "CALIBRATION: Past questions were rated 'Too Easy'. Increase conceptual and analytical depth. Test multi-step derivations, trade-offs, and boundary edge cases rather than superficial recall."
+            )
+        if issues.get("too_hard", 0) > 0:
+            guidance.append(
+                "CALIBRATION: Past questions were rated 'Too Hard'. Ensure questions are solvable in under 1-2 minutes and directly covered in the lecture material without requiring unstated assumptions."
+            )
+        if issues.get("bad_explanation", 0) > 0:
+            guidance.append(
+                "EXPLANATION CALIBRATION: Past explanations were flagged as inadequate. Provide thorough, step-by-step mathematical proofs and cite exact lecture concepts and timestamps in the explanation field."
+            )
+        if issues.get("formatting_error", 0) > 0 or issues.get("latex_error", 0) > 0:
+            guidance.append(
+                "LATEX & FORMATTING: Past questions had LaTeX glitches. Ensure all mathematical notation is strictly enclosed in single $...$ (or $$...$$) and all backslashes are properly escaped in JSON."
+            )
+
+        # Include specific user critiques (up to 4 most actionable)
+        for critique in summary.get("recent_critiques", [])[:4]:
+            comment = critique.get("comment") if isinstance(critique, dict) else str(critique)
+            q_snip = critique.get("question_excerpt", "") if isinstance(critique, dict) else ""
+            if comment and len(comment) > 5:
+                ref = f" on '{q_snip}'" if q_snip else ""
+                guidance.append(f"PAST USER CRITIQUE TO PREVENT{ref}: \"{comment}\"")
+
+        return guidance
 
     def get_saved_video(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Fetch video transcript from In-Memory Cache or PostgreSQL.

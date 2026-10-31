@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import { API_BASE } from '../../utils/constants';
+import { extractVideoId } from '../../utils/formatters';
 import { filterCourseUpcomingEvents, getEventBadgeDate } from '../calendar/CalendarAlertCard';
 import {
   SORT_OPTIONS,
@@ -749,6 +750,15 @@ export default function CourseLectures({
             const isCompleted = isLectureCompleted(item);
             const hasProgress = isLectureInProgress(item) || isCompleted;
             const resumeTimestamp = prog?.last_timestamp || '00:00';
+            const targetLectureParam = (
+              item.video_url &&
+              extractVideoId(item.video_url) &&
+              !item.video_url.includes('moodle') &&
+              !item.video_url.includes('learning.iiitdwd.ac.in') &&
+              !item.video_url.includes('/mod/')
+            )
+              ? item.video_url
+              : (item.video_id || item.video_url);
 
             return (
               <Card
@@ -756,11 +766,11 @@ export default function CourseLectures({
                 role="button"
                 tabIndex={0}
                 aria-label={`Study ${item.video_title || item.title || `Lecture ${item.video_id}`}`}
-                onClick={() => handleTranscribe(item.video_url || item.video_id, true, selectedCourse || item.course_name)}
+                onClick={() => handleTranscribe(targetLectureParam, true, selectedCourse || item.course_name)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    handleTranscribe(item.video_url || item.video_id, true, selectedCourse || item.course_name);
+                    handleTranscribe(targetLectureParam, true, selectedCourse || item.course_name);
                   }
                 }}
                 sx={{

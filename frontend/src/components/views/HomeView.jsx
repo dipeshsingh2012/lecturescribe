@@ -7,9 +7,7 @@ import {
   IconButton,
   Tooltip,
   TextField,
-  InputAdornment,
-  Menu,
-  MenuItem
+  InputAdornment
 } from '@mui/material';
 import {
   ArrowLeft,
@@ -24,7 +22,6 @@ import {
   Sparkles,
   Check,
   Plus,
-  ChevronDown,
   FileText,
   FileCode,
   Calendar as CalendarIcon,
@@ -35,7 +32,8 @@ import {
   Database,
   Activity,
   Target,
-  Megaphone
+  Megaphone,
+  X
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -62,6 +60,18 @@ import useCourseQuiz from '../../hooks/useCourseQuiz';
 import { useCourseTutor } from '../../hooks/useCourseTutor';
 import { useCourseAssignments } from '../../hooks/useCourseAssignments';
 import useCourseSummary from '../../hooks/useCourseSummary';
+
+export const isVideoUrlOrId = (val) => {
+  if (!val || typeof val !== 'string') return false;
+  const s = val.trim();
+  if (!s) return false;
+  if (/^(https?:\/\/|www\.)/i.test(s) || s.includes('://')) return true;
+  if (/(youtube\.com|youtu\.be|vimeo\.com|panopto|drive\.google\.com|lecturescribe)/i.test(s)) return true;
+  if (/^\d{5,}$/.test(s)) return true;
+  if (!s.includes(' ') && /[a-zA-Z0-9-]+\.[a-zA-Z]{2,}\//i.test(s)) return true;
+  if (/\.(mp4|mkv|webm|mov)(\?.*)?$/i.test(s)) return true;
+  return false;
+};
 
 export default function HomeView({
   selectedCourse,
@@ -125,7 +135,6 @@ export default function HomeView({
   onOpenFullCalendar,
   currentTheme
 }) {
-  const [newMenuAnchor, setNewMenuAnchor] = React.useState(null);
   const effectiveRole = isTutorProp !== undefined
     ? (isTutorProp ? 'tutor' : 'student')
     : (userRole || (googleUser ? 'student' : 'tutor'));
@@ -178,6 +187,49 @@ export default function HomeView({
     courseSummary.hasFetched,
     courseSummary.fetchSummary
   ]);
+
+  const omnibarValue = librarySearch !== undefined && librarySearch !== '' ? librarySearch : (urlInput || '');
+  const isOmnibarVideoUrl = Boolean(selectedCourse && isTutor && isVideoUrlOrId(omnibarValue));
+
+  const handleOmnibarChange = (e) => {
+    const val = e.target.value;
+    if (typeof setLibrarySearch === 'function') setLibrarySearch(val);
+    if (typeof setUrlInput === 'function') setUrlInput(val);
+    if (typeof setCacheNotice === 'function') setCacheNotice(null);
+  };
+
+  const handleOmnibarPaste = (e) => {
+    if (typeof handlePasteUrl === 'function') {
+      handlePasteUrl(e);
+    }
+  };
+
+  const handleAddVideoFromOmnibar = () => {
+    const target = (omnibarValue || '').trim();
+    if (!target) return;
+    const targetCourse = activeCourseData?.course_name || selectedCourse;
+    if (typeof handleTranscribe === 'function') {
+      handleTranscribe(target, false, targetCourse, true);
+    }
+    if (typeof setLibrarySearch === 'function') setLibrarySearch('');
+    if (typeof setUrlInput === 'function') setUrlInput('');
+    if (typeof setCacheNotice === 'function') setCacheNotice(null);
+  };
+
+  const handleOmnibarKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      if (selectedCourse && isTutor && isVideoUrlOrId(omnibarValue)) {
+        e.preventDefault();
+        handleAddVideoFromOmnibar();
+      }
+    }
+  };
+
+  const handleClearOmnibar = () => {
+    if (typeof setLibrarySearch === 'function') setLibrarySearch('');
+    if (typeof setUrlInput === 'function') setUrlInput('');
+    if (typeof setCacheNotice === 'function') setCacheNotice(null);
+  };
 
   return (
     <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 1.5, sm: 2.5, md: 4 } }}>
@@ -294,44 +346,89 @@ export default function HomeView({
 
         <TextField
           size="small"
-          placeholder={selectedCourse ? "Search lectures in this course..." : "Search courses or lectures..."}
-          value={librarySearch}
-          onChange={(e) => setLibrarySearch(e.target.value)}
+          placeholder={
+            selectedCourse
+              ? (isTutor ? `Search lectures or add video URL or ID to this course (${activeCourseData?.course_name || selectedCourse})...` : "Search lectures in this course...")
+              : "Search courses or lectures..."
+          }
+          value={omnibarValue}
+          onChange={handleOmnibarChange}
+          onPaste={handleOmnibarPaste}
+          onKeyDown={handleOmnibarKeyDown}
           slotProps={{
             input: {
               startAdornment: (
                 <InputAdornment position="start">
-                  <Search size={16} color={currentTheme.palette.textSecondary} />
+                  {isOmnibarVideoUrl ? (
+                    <Video size={16} color={currentTheme.palette.primary} />
+                  ) : (
+                    <Search size={16} color={currentTheme.palette.textSecondary} />
+                  )}
                 </InputAdornment>
               ),
+              endAdornment: isOmnibarVideoUrl ? (
+                <InputAdornment position="end">
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      disabled={loading || !omnibarValue.trim()}
+                      onClick={handleAddVideoFromOmnibar}
+                      startIcon={loading ? <RefreshCw size={13} className="loading-pulse" /> : <Sparkles size={13} />}
+                      sx={{
+                        bgcolor: currentTheme.palette.primary,
+                        color: '#ffffff',
+                        fontWeight: 700,
+                        textTransform: 'none',
+                        fontSize: '0.75rem',
+                        py: 0.35,
+                        px: 1.25,
+                        borderRadius: 1.5,
+                        boxShadow: 'none',
+                        whiteSpace: 'nowrap',
+                        minHeight: '28px',
+                        '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                      }}
+                      aria-label="Add to Course"
+                    >
+                      {loading ? 'Adding...' : 'Add to Course'}
+                    </Button>
+                    <IconButton
+                      size="small"
+                      onClick={handleClearOmnibar}
+                      sx={{ color: currentTheme.palette.textSecondary, p: 0.5 }}
+                      aria-label="Clear input"
+                    >
+                      <X size={14} />
+                    </IconButton>
+                  </Box>
+                </InputAdornment>
+              ) : omnibarValue ? (
+                <InputAdornment position="end">
+                  <IconButton
+                    size="small"
+                    onClick={handleClearOmnibar}
+                    sx={{ color: currentTheme.palette.textSecondary, p: 0.5 }}
+                    aria-label="Clear search"
+                  >
+                    <X size={14} />
+                  </IconButton>
+                </InputAdornment>
+              ) : null,
               sx: {
                 bgcolor: currentTheme.palette.cardBg,
                 borderRadius: 2,
                 fontSize: '0.85rem',
                 color: currentTheme.palette.textPrimary,
-                width: { xs: '100%', sm: 280 },
-                '& fieldset': { borderColor: currentTheme.palette.cardBorder },
+                width: { xs: '100%', sm: selectedCourse && isTutor ? 380 : 280, md: selectedCourse && isTutor ? 440 : 320 },
+                transition: 'all 0.2s ease',
+                '& fieldset': { borderColor: isOmnibarVideoUrl ? currentTheme.palette.primary : currentTheme.palette.cardBorder },
                 '&:hover fieldset': { borderColor: currentTheme.palette.primary }
               }
             }
           }}
         />
       </Box>
-
-      {/* Course-level Quick Add Bar */}
-      {isTutor && selectedCourse && (
-        <QuickAddBar
-          urlInput={urlInput}
-          setUrlInput={setUrlInput}
-          setCacheNotice={setCacheNotice}
-          handlePasteUrl={handlePasteUrl}
-          handleTranscribe={(url) => handleTranscribe(url, false, activeCourseData?.course_name || selectedCourse, true)}
-          loading={loading}
-          currentTheme={currentTheme}
-          placeholder={`Add video URL or ID to this course (${activeCourseData?.course_name || selectedCourse})...`}
-          buttonLabel="Add to Course"
-        />
-      )}
 
       {/* Course View Tabs (Lectures vs Course Quiz vs Course Materials) */}
       {selectedCourse && (
@@ -340,24 +437,46 @@ export default function HomeView({
           alignItems: 'center',
           justifyContent: 'space-between',
           mb: 2.5,
-          flexWrap: 'wrap',
-          gap: 1.5
+          flexWrap: 'nowrap',
+          gap: 1.5,
+          maxWidth: '100%'
         }}>
-          <Box sx={{
-            display: 'flex',
-            gap: 1,
-            flexWrap: { xs: 'nowrap', md: 'wrap' },
-            overflowX: { xs: 'auto', md: 'visible' },
-            maxWidth: '100%',
-            pb: { xs: 1, md: 0 },
-            scrollbarWidth: 'none',
-            '&::-webkit-scrollbar': { display: 'none' },
-            WebkitOverflowScrolling: 'touch',
-            '& > button': {
-              flexShrink: 0,
-              whiteSpace: 'nowrap'
-            }
-          }}>
+          <Box
+            onWheel={(e) => {
+              if (e.deltaY !== 0 && Math.abs(e.deltaX) < Math.abs(e.deltaY)) {
+                e.currentTarget.scrollLeft += e.deltaY;
+              }
+            }}
+            sx={{
+              display: 'flex',
+              flex: 1,
+              minWidth: 0,
+              gap: 1,
+              flexWrap: 'nowrap',
+              overflowX: 'auto',
+              maxWidth: '100%',
+              pb: 0.5,
+              scrollbarWidth: 'thin',
+              '&::-webkit-scrollbar': {
+                height: 4
+              },
+              '&::-webkit-scrollbar-track': {
+                background: 'transparent'
+              },
+              '&::-webkit-scrollbar-thumb': {
+                backgroundColor: 'rgba(100, 116, 139, 0.25)',
+                borderRadius: 4
+              },
+              '&::-webkit-scrollbar-thumb:hover': {
+                backgroundColor: 'rgba(100, 116, 139, 0.45)'
+              },
+              WebkitOverflowScrolling: 'touch',
+              '& > button': {
+                flexShrink: 0,
+                whiteSpace: 'nowrap'
+              }
+            }}
+          >
             <Button
               variant={courseViewTab === 'lectures' ? 'contained' : 'outlined'}
               size="small"
@@ -448,6 +567,26 @@ export default function HomeView({
             >
               Library ({courseResources.length + (courseReadings?.length || 0) + (courseNotes?.length || 0)})
             </Button>
+            {isTutor && (
+              <Button
+                variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
+                size="small"
+                startIcon={<FileCode size={15} />}
+                onClick={() => setCourseViewTab('assignments')}
+                aria-label="Course Assignments"
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.82rem',
+                  borderRadius: 2,
+                  ...(courseViewTab === 'assignments'
+                    ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                    : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+                }}
+              >
+                Assignments ({courseAssignments.assignments.length})
+              </Button>
+            )}
             <Button
               variant={courseViewTab === 'calendar' ? 'contained' : 'outlined'}
               size="small"
@@ -577,24 +716,6 @@ export default function HomeView({
             {isTutor && (
               <>
                 <Button
-                  variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
-                  size="small"
-                  startIcon={<FileCode size={15} />}
-                  onClick={() => setCourseViewTab('assignments')}
-                  aria-label="Course Assignments"
-                  sx={{
-                    textTransform: 'none',
-                    fontWeight: 700,
-                    fontSize: '0.82rem',
-                    borderRadius: 2,
-                    ...(courseViewTab === 'assignments'
-                      ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
-                      : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
-                  }}
-                >
-                  Assignments ({courseAssignments.assignments.length})
-                </Button>
-                <Button
                   variant={courseViewTab === 'question-bank' ? 'contained' : 'outlined'}
                   size="small"
                   startIcon={<Database size={15} />}
@@ -633,93 +754,6 @@ export default function HomeView({
               </>
             )}
           </Box>
-
-          {/* "+ NEW" MINI DROPBOX ACTION BUTTON & MENU (ONLY AVAILABLE INSIDE THE LIBRARY) */}
-          {(courseViewTab === 'resources' || courseViewTab === 'library') && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Tooltip title={!googleUser ? "Sign in with Google to create notes or upload files" : (isTutor ? "Create a new note or upload files" : "Create a new personal study note")}>
-                <span>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    disabled={!googleUser}
-                    startIcon={<Plus size={15} />}
-                    endIcon={<ChevronDown size={14} />}
-                    onClick={(e) => setNewMenuAnchor(e.currentTarget)}
-                    aria-label="New resource or note"
-                    sx={{
-                      textTransform: 'none',
-                      fontWeight: 700,
-                      fontSize: '0.82rem',
-                      borderRadius: 2,
-                      bgcolor: currentTheme.palette.primary,
-                      color: '#fff',
-                      boxShadow: 'none',
-                      '&:hover': { bgcolor: currentTheme.palette.primary, opacity: 0.9 }
-                    }}
-                  >
-                    New
-                  </Button>
-                </span>
-              </Tooltip>
-
-              <Menu
-                anchorEl={newMenuAnchor}
-                open={Boolean(newMenuAnchor)}
-                onClose={() => setNewMenuAnchor(null)}
-                PaperProps={{
-                  sx: {
-                    borderRadius: 2.5,
-                    minWidth: 190,
-                    bgcolor: currentTheme.palette.cardBg,
-                    border: `1px solid ${currentTheme.palette.cardBorder}`,
-                    boxShadow: currentTheme.palette.cardShadow
-                  }
-                }}
-              >
-                <MenuItem
-                  onClick={() => {
-                    setNewMenuAnchor(null);
-                    if (onCreateNewNote) onCreateNewNote();
-                  }}
-                  sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                >
-                  <FileText size={17} color={currentTheme.palette.primary} />
-                  <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
-                      New Note
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
-                      Plain text scratchpad
-                    </Typography>
-                  </Box>
-                </MenuItem>
-
-                {isTutor && (
-                  <MenuItem
-                    onClick={() => {
-                      setNewMenuAnchor(null);
-                      openUploadModal({
-                        courseName: activeCourseData?.course_name || selectedCourse,
-                        videoId: null
-                      });
-                    }}
-                    sx={{ py: 1.2, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                  >
-                    <Upload size={17} color={currentTheme.palette.primary} />
-                    <Box>
-                      <Typography variant="body2" sx={{ fontWeight: 700, color: currentTheme.palette.textPrimary }}>
-                        Upload File
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: 'block', fontSize: '0.72rem' }}>
-                        Slides (.pptx, .pdf), docs
-                      </Typography>
-                    </Box>
-                  </MenuItem>
-                )}
-              </Menu>
-            </Box>
-          )}
         </Box>
       )}
 
@@ -821,28 +855,6 @@ export default function HomeView({
         </>
       ) : (
         <>
-          {/* Course-Level Upcoming Events & Deadlines Widget (shown on Course Page tabs except the full Calendar tab and lectures tab where it is integrated into the Course Pulse card) */}
-          {courseViewTab !== 'calendar' && courseViewTab !== 'lectures' && (
-            <CalendarAlertCard
-              currentTheme={currentTheme}
-              googleUser={googleUser}
-              isTutor={isTutor}
-              selectedCourse={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
-              courses={filteredCourses}
-              onOpenFullCalendar={() => setCourseViewTab('calendar')}
-              onSelectLecture={(vid, ts, cName) => {
-                if (!vid) return;
-                const targetCourse = cName || activeCourseData?.course_name || selectedCourse || null;
-                if (typeof handleTranscribe === 'function') {
-                  handleTranscribe(vid, true, targetCourse, false, ts);
-                }
-                if (typeof handleCueClick === 'function' && ts) {
-                  setTimeout(() => handleCueClick(ts), 350);
-                }
-              }}
-            />
-          )}
-
           {courseViewTab === 'calendar' ? (
             /* LEVEL 2F: COURSE FULL CALENDAR & AI EXAM/TRANSCRIPT SCHEDULE */
             <CalendarView
@@ -926,6 +938,7 @@ export default function HomeView({
           marksPerQuestion={courseQuiz.marksPerQuestion}
           totalMarks={courseQuiz.totalMarks}
           earnedMarks={courseQuiz.earnedMarks}
+          userEmail={googleUser?.email || 'anonymous'}
           handleSelectLecture={(vid, cName, ts) => {
             const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';
             handleTranscribe(`${vid}${tParam}`, false, cName, false, ts);

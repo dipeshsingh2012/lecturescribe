@@ -9,7 +9,9 @@ import {
   Loader2,
   BookmarkPlus,
   Eraser,
-  Bot
+  Bot,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
@@ -31,6 +33,7 @@ export default function TextSelectionToolbar({
   onDiscussInTutor
 }) {
   const [mode, setMode] = useState(initialMode || 'menu'); // 'menu' | 'note' | 'ai'
+  const [isExpanded, setIsExpanded] = useState(false);
   const [noteInput, setNoteInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState('');
@@ -236,39 +239,79 @@ export default function TextSelectionToolbar({
   const posY = position?.y ?? position?.top ?? 200;
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
 
-  const toolbarLeft = typeof window !== 'undefined'
-    ? (isMobile ? '16px' : Math.max(10, Math.min(window.innerWidth - 320, posX - 140)))
-    : posX;
-  const toolbarTop = typeof window !== 'undefined'
-    ? (isMobile ? 'auto' : Math.max(10, Math.min(window.innerHeight - 80, posY > 70 ? posY - 52 : posY + 28)))
-    : Math.max(10, posY > 70 ? posY - 52 : posY + 28);
-  const toolbarBottom = isMobile ? 'calc(var(--safe-bottom, 0px) + 16px)' : 'auto';
+  const isExpandedEffective = mode === 'ai' && isExpanded;
+
+  useEffect(() => {
+    if (!isExpandedEffective) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isExpandedEffective]);
+
+  const toolbarLeft = isExpandedEffective
+    ? '50%'
+    : (typeof window !== 'undefined'
+        ? (isMobile ? '16px' : Math.max(10, Math.min(window.innerWidth - 320, posX - 140)))
+        : posX);
+  const toolbarTop = isExpandedEffective
+    ? '50%'
+    : (typeof window !== 'undefined'
+        ? (isMobile ? 'auto' : Math.max(10, Math.min(window.innerHeight - 80, posY > 70 ? posY - 52 : posY + 28)))
+        : Math.max(10, posY > 70 ? posY - 52 : posY + 28));
+  const toolbarBottom = isExpandedEffective
+    ? 'auto'
+    : (isMobile ? 'calc(var(--safe-bottom, 0px) + 16px)' : 'auto');
+  const toolbarTransform = isExpandedEffective ? 'translate(-50%, -50%)' : 'none';
 
   return (
-    <div
-      className="text-selection-toolbar"
-      style={{
-        position: 'fixed',
-        left: toolbarLeft,
-        right: isMobile ? '16px' : 'auto',
-        top: toolbarTop,
-        bottom: toolbarBottom,
-        zIndex: 1000,
-        background: 'var(--card-bg)',
-        border: '1px solid var(--border-color)',
-        borderRadius: isMobile ? '14px' : '8px',
-        boxShadow: '0 8px 30px rgba(0, 0, 0, 0.35)',
-        padding: isMobile ? '10px 12px' : '6px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px',
-        maxWidth: isMobile ? 'calc(100vw - 32px)' : (mode === 'ai' ? '380px' : '320px'),
-        minWidth: isMobile ? 'auto' : '240px',
-        animation: 'fadeIn 0.15s ease'
-      }}
-      onClick={(e) => e.stopPropagation()}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
+    <>
+      {isExpandedEffective && (
+        <div
+          className="ai-explainer-backdrop"
+          onClick={() => setIsExpanded(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.45)',
+            backdropFilter: 'blur(2px)',
+            zIndex: 1199
+          }}
+        />
+      )}
+      <div
+        className={`text-selection-toolbar ${isExpandedEffective ? 'ai-explainer-expanded' : ''}`}
+        style={{
+          position: 'fixed',
+          left: toolbarLeft,
+          right: isExpandedEffective ? 'auto' : (isMobile ? '16px' : 'auto'),
+          top: toolbarTop,
+          bottom: toolbarBottom,
+          transform: toolbarTransform,
+          zIndex: isExpandedEffective ? 1200 : 1000,
+          background: 'var(--card-bg)',
+          border: '1px solid var(--border-color)',
+          borderRadius: isExpandedEffective ? '12px' : (isMobile ? '14px' : '8px'),
+          boxShadow: isExpandedEffective ? '0 16px 48px rgba(0, 0, 0, 0.5)' : '0 8px 30px rgba(0, 0, 0, 0.35)',
+          padding: isExpandedEffective ? '14px 16px' : (isMobile ? '10px 12px' : '6px'),
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '6px',
+          width: isExpandedEffective ? 'min(720px, calc(100vw - 32px))' : 'auto',
+          maxWidth: isExpandedEffective
+            ? 'min(720px, calc(100vw - 32px))'
+            : (isMobile ? 'calc(100vw - 32px)' : (mode === 'ai' ? '380px' : '320px')),
+          minWidth: isMobile ? 'auto' : (isExpandedEffective ? 'min(500px, calc(100vw - 32px))' : '240px'),
+          maxHeight: isExpandedEffective ? 'calc(100vh - 64px)' : 'auto',
+          animation: isExpandedEffective ? 'none' : 'fadeIn 0.15s ease',
+          transition: 'box-shadow 0.2s ease, width 0.2s ease, max-width 0.2s ease'
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
       {actionError && (
         <div style={{
           fontSize: '0.72rem',
@@ -492,18 +535,53 @@ export default function TextSelectionToolbar({
       {mode === 'ai' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
               <Sparkles size={13} color="#a855f7" />
-              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+              <span style={{ fontSize: isExpandedEffective ? '0.82rem' : '0.74rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                 AI Selection Explainer
               </span>
             </div>
-            <button
-              onClick={() => setMode('menu')}
-              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-            >
-              <X size={12} />
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <button
+                type="button"
+                onClick={() => setIsExpanded(prev => !prev)}
+                title={isExpandedEffective ? "Collapse explainer" : "Expand explainer"}
+                aria-label={isExpandedEffective ? "Collapse explainer" : "Expand explainer"}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '3px',
+                  borderRadius: '4px'
+                }}
+              >
+                {isExpandedEffective ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExpanded(false);
+                  setMode('menu');
+                }}
+                title="Back to menu"
+                aria-label="Back to menu"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '3px',
+                  borderRadius: '4px'
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
           </div>
 
           {/* Quick Action Chips */}
@@ -536,14 +614,15 @@ export default function TextSelectionToolbar({
 
           {/* AI Response Area with Markdown and LaTeX formatting */}
           <div style={{
-            maxHeight: '220px',
+            maxHeight: isExpandedEffective ? 'calc(100vh - 220px)' : '220px',
+            minHeight: isExpandedEffective ? '260px' : 'auto',
             overflowY: 'auto',
-            padding: '8px 10px',
+            padding: isExpandedEffective ? '12px 14px' : '8px 10px',
             background: 'var(--panel-bg)',
             borderRadius: '6px',
             border: '1px solid var(--border-color)',
-            fontSize: '0.8rem',
-            lineHeight: 1.5,
+            fontSize: isExpandedEffective ? '0.88rem' : '0.8rem',
+            lineHeight: 1.6,
             color: 'var(--text-primary)'
           }}>
             {aiLoading ? (
@@ -656,5 +735,6 @@ export default function TextSelectionToolbar({
         </div>
       )}
     </div>
+    </>
   );
 }

@@ -3,7 +3,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
 import { useThemeStore, LMS_THEMES, applyThemeCssVariables, createAppMuiTheme } from './store/themeStore';
-import { parsePathRoute, getLectureTabFromPath, normalizeCourseSlug, isCalendarPath } from './utils/routing';
+import { parsePathRoute, getLectureTabFromPath, getCourseTabFromPath, normalizeCourseSlug, isCalendarPath } from './utils/routing';
 
 import { useGoogleAuth } from './hooks/useGoogleAuth';
 import { useUserLibrary } from './hooks/useUserLibrary';
@@ -144,6 +144,9 @@ export default function App() {
     setActiveData(null);
     lecture.setError(null);
     setCacheNotice(null);
+    if (typeof resources?.setCourseViewTab === 'function') {
+      resources.setCourseViewTab('lectures');
+    }
     navigateTo('/');
     if (library.fetchUserLibrary) {
       library.fetchUserLibrary(auth.googleUser?.email);
@@ -156,6 +159,9 @@ export default function App() {
     if (!name) return;
     setActiveNoteId(null);
     setSelectedCourse(name);
+    if (typeof resources?.setCourseViewTab === 'function') {
+      resources.setCourseViewTab('lectures');
+    }
     navigateTo(`/course/${normalizeCourseSlug(name)}`);
   };
 
@@ -164,6 +170,9 @@ export default function App() {
     setSelectedCourse(null);
     setDirectCourseData(null);
     setActiveData(null);
+    if (typeof resources?.setCourseViewTab === 'function') {
+      resources.setCourseViewTab('lectures');
+    }
     navigateTo('/');
   };
 
@@ -234,7 +243,11 @@ export default function App() {
       setActiveNoteId(noteId);
 
       if (typeof window !== 'undefined') {
-        setActiveTabState(getLectureTabFromPath(`${current}${window.location.search}`));
+        const fullUrl = `${current}${window.location.search}`;
+        setActiveTabState(getLectureTabFromPath(fullUrl));
+        if (typeof resources?.setCourseViewTab === 'function') {
+          resources.setCourseViewTab(getCourseTabFromPath(fullUrl));
+        }
       }
 
       if (videoId) {
@@ -321,6 +334,9 @@ export default function App() {
             onNavigateBack={() => {
               setActiveNoteId(null);
               const c = effectiveCourse || 'Master of Technology';
+              if (typeof resources?.setCourseViewTab === 'function') {
+                resources.setCourseViewTab('library');
+              }
               navigateTo(`/course/${normalizeCourseSlug(c)}?tab=library`, false, setCurrentPath);
             }}
             googleUser={auth.googleUser}

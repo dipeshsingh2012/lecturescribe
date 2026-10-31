@@ -140,6 +140,63 @@ describe('HomeView', () => {
     );
   });
 
+  it('omnibar does not show Add to Course button for normal lecture search keywords', () => {
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        librarySearch="Normal Lecture Title"
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Add to Course/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Clear search/i })).toBeInTheDocument();
+  });
+
+  it('triggers transcription when pressing Enter on a video URL in the omnibar', () => {
+    const handleTranscribe = vi.fn();
+    const setLibrarySearch = vi.fn();
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        librarySearch="https://video.lecturescribe.local/998877"
+        setLibrarySearch={setLibrarySearch}
+        handleTranscribe={handleTranscribe}
+      />
+    );
+
+    const input = screen.getByPlaceholderText(/Add video URL or ID to this course/i);
+    expect(screen.getByRole('button', { name: /Add to Course/i })).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    expect(handleTranscribe).toHaveBeenCalledWith(
+      'https://video.lecturescribe.local/998877',
+      false,
+      'Biostatistics',
+      true
+    );
+    expect(setLibrarySearch).toHaveBeenCalledWith('');
+  });
+
+  it('calls handlePasteUrl when pasting into the course omnibar', () => {
+    const handlePasteUrl = vi.fn();
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        handlePasteUrl={handlePasteUrl}
+      />
+    );
+
+    const input = screen.getByPlaceholderText(/Add video URL or ID to this course/i);
+    fireEvent.paste(input, { clipboardData: { getData: () => 'https://youtu.be/sample' } });
+    expect(handlePasteUrl).toHaveBeenCalled();
+  });
+
   it('renders cacheNotice banner with Check icon without throwing error', () => {
     render(
       <HomeView
@@ -263,8 +320,9 @@ describe('HomeView', () => {
     expect(screen.queryByPlaceholderText(/Add video URL or ID to this course/i)).not.toBeInTheDocument();
   });
 
-  it('shows the New button (to upload or create new notes) only inside the library and hides it on other tabs', () => {
+  it('does not render the redundant top-level New button, and provides Upload Slides button in the slides section', () => {
     const mockTutor = { email: 'tutor@iiitdwd.ac.in', name: 'Test Tutor' };
+    const mockOpenUpload = vi.fn();
     const { rerender } = render(
       <HomeView
         {...baseProps}
@@ -274,10 +332,11 @@ describe('HomeView', () => {
         selectedCourse="Biostatistics"
         activeCourseData={{ course_name: 'Biostatistics' }}
         courseViewTab="lectures"
+        openUploadModal={mockOpenUpload}
       />
     );
 
-    // On lectures tab, the "New" button with upload/note options must NOT be rendered
+    // Redundant top-level "New" button must NOT exist on any tab
     expect(screen.queryByRole('button', { name: /New resource or note/i })).not.toBeInTheDocument();
 
     // Switch to library tab
@@ -290,17 +349,52 @@ describe('HomeView', () => {
         selectedCourse="Biostatistics"
         activeCourseData={{ course_name: 'Biostatistics' }}
         courseViewTab="library"
+        openUploadModal={mockOpenUpload}
       />
     );
 
-    // Inside library, the "New" button must be available
-    const newBtn = screen.getByRole('button', { name: /New resource or note/i });
-    expect(newBtn).toBeInTheDocument();
+    // Still no redundant top-level "New" button
+    expect(screen.queryByRole('button', { name: /New resource or note/i })).not.toBeInTheDocument();
 
-    // Clicking New opens menu with New Note and Upload File
-    fireEvent.click(newBtn);
-    expect(screen.getByText('New Note')).toBeInTheDocument();
-    expect(screen.getByText('Upload File')).toBeInTheDocument();
+    // Inside library, the "Upload Slides / Files" button is available in the slides section header
+    const uploadBtn = screen.getByRole('button', { name: /Upload Slides or Files/i });
+    expect(uploadBtn).toBeInTheDocument();
+
+    fireEvent.click(uploadBtn);
+    expect(mockOpenUpload).toHaveBeenCalledWith({
+      courseName: 'Biostatistics',
+      videoId: null
+    });
+  });
+
+  it('only shows the key date section in the lectures section and not on other course tabs like quiz or summary', () => {
+    const mockUser = { email: 'student@iiitdwd.ac.in', name: 'Test Student' };
+    const { rerender } = render(
+      <HomeView
+        {...baseProps}
+        googleUser={mockUser}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        courseViewTab="quiz"
+      />
+    );
+
+    // On Course Quiz tab, the standalone Key dates card must NOT be present
+    expect(screen.queryByRole('heading', { name: /Key dates/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No upcoming key dates for this course/i)).not.toBeInTheDocument();
+
+    // On Course Summary tab, Key dates must also NOT be present
+    rerender(
+      <HomeView
+        {...baseProps}
+        googleUser={mockUser}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        courseViewTab="summary"
+      />
+    );
+    expect(screen.queryByRole('heading', { name: /Key dates/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No upcoming key dates for this course/i)).not.toBeInTheDocument();
   });
 });
 

@@ -72,8 +72,8 @@ class TestCourseSummaryAndQuizReplay(unittest.TestCase):
         self.assertEqual(summary["core_formulas_and_definitions"][0]["term"], "Rank-Nullity")
         self.assertEqual(len(summary["master_exam_checklist"]), 1)
 
-    def test_course_quiz_defaults_to_20_questions(self):
-        """Verify that generate_course_quiz requests 20 questions by default."""
+    def test_course_quiz_defaults_to_30_questions(self):
+        """Verify that generate_course_quiz requests 30 questions by default."""
         lectures_data = [
             {
                 "title": f"Lecture {i}",
@@ -83,7 +83,7 @@ class TestCourseSummaryAndQuizReplay(unittest.TestCase):
             for i in range(1, 5)
         ]
 
-        mock_20_qs = [
+        mock_30_qs = [
             {
                 "id": i,
                 "type": "mcq" if i % 2 == 1 else "fill_in_the_blank",
@@ -96,13 +96,13 @@ class TestCourseSummaryAndQuizReplay(unittest.TestCase):
                 "lecture_title": f"Lecture {(i % 4) + 1}",
                 "difficulty": "medium"
             }
-            for i in range(1, 21)
+            for i in range(1, 31)
         ]
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({"questions": mock_20_qs})}}]
+            "choices": [{"message": {"content": json.dumps({"questions": mock_30_qs})}}]
         }
 
         with patch.dict("os.environ", {"GROQ_API_KEY": "fake_groq_key"}), patch("requests.post", return_value=mock_resp) as mock_post:
@@ -111,13 +111,13 @@ class TestCourseSummaryAndQuizReplay(unittest.TestCase):
                 lectures_data=lectures_data
             )
 
-        self.assertEqual(quiz["total_questions"], 20)
-        self.assertEqual(len(quiz["questions"]), 20)
-        # Verify prompt instructed 20 questions
+        self.assertEqual(quiz["total_questions"], 30)
+        self.assertEqual(len(quiz["questions"]), 30)
+        # Verify prompt instructed 30 questions
         call_kwargs = mock_post.call_args[1]
         sent_payload = call_kwargs["json"]
         system_content = sent_payload["messages"][0]["content"]
-        self.assertIn("20-question course exam", system_content)
+        self.assertIn("30-question course exam", system_content)
 
     def test_course_summary_db_persistence(self):
         """Verify save_course_summary and get_saved_course_summary in database manager."""

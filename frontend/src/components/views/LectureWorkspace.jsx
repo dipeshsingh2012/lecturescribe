@@ -413,6 +413,7 @@ export default function LectureWorkspace({
             explanationLoading={explanationLoading}
             fetchDetailedExplanation={fetchDetailedExplanation}
             transcriptAvailable={transcriptAvailable}
+            userEmail={googleUser?.email || 'anonymous'}
           />
         ) : activeTab === 'resources' ? (
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px', background: 'var(--panel-bg)', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>

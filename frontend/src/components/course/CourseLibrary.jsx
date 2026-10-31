@@ -537,6 +537,30 @@ export default function CourseLibrary({
             />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            {googleUser && typeof openUploadModal === 'function' && (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<Upload size={13} />}
+                onClick={() => openUploadModal({
+                  courseName: courseDisplayName,
+                  videoId: null
+                })}
+                aria-label="Upload Slides or Files"
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.74rem',
+                  borderRadius: 2,
+                  borderColor: currentTheme.palette.cardBorder,
+                  color: currentTheme.palette.primary,
+                  bgcolor: currentTheme.palette.cardBg,
+                  '&:hover': { borderColor: currentTheme.palette.primary, bgcolor: 'var(--highlight-bg)' }
+                }}
+              >
+                Upload Slides / Files
+              </Button>
+            )}
             <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, display: { xs: 'none', sm: 'inline' } }}>
               PowerPoints and PDFs used by the professor during lectures
             </Typography>

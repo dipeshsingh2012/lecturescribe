@@ -236,6 +236,7 @@ export default function QuizQuestionPalette({
           fullWidth
           onClick={() => {
             if (typeof finishQuiz === 'function') finishQuiz();
+            if (typeof setCurrentIdx === 'function') setCurrentIdx(0);
             setReviewingQuestions(false);
             setShowSummaryView(true);
           }}

@@ -195,6 +195,9 @@ export default function QuizResultsSummary({
           <Button
             variant="outlined"
             onClick={() => {
+              if (typeof setCurrentIdx === 'function') {
+                setCurrentIdx(0);
+              }
               setShowSummaryView(false);
               setReviewingQuestions(true);
             }}

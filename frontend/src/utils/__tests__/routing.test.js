@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   parsePathRoute,
   getLectureTabFromPath,
+  getCourseTabFromPath,
+  VALID_COURSE_TABS,
   getLectureIdFromPath,
   getNoteIdFromPath,
   getCourseNameFromPath,
@@ -78,6 +80,34 @@ describe('routing utility functions', () => {
         expect(getLectureTabFromPath('/course/data-science?tab=quiz')).toBe('transcript');
         expect(getLectureTabFromPath('/?tab=quiz')).toBe('transcript');
         expect(getLectureTabFromPath('/lecture/123')).toBe('transcript');
+      });
+    });
+
+    describe('getCourseTabFromPath', () => {
+      it('reads valid course tabs from query string', () => {
+        expect(getCourseTabFromPath('/course/math?tab=quiz')).toBe('quiz');
+        expect(getCourseTabFromPath('/course/math?tab=tutor')).toBe('tutor');
+        expect(getCourseTabFromPath('/course/math?tab=summary')).toBe('summary');
+        expect(getCourseTabFromPath('/course/math?tab=library')).toBe('library');
+        expect(getCourseTabFromPath('/course/math?tab=assignments')).toBe('assignments');
+      });
+
+      it('defaults to lectures when no tab is present or tab is invalid', () => {
+        expect(getCourseTabFromPath('/course/math')).toBe('lectures');
+        expect(getCourseTabFromPath('/course/math?tab=invalid_tab')).toBe('lectures');
+        expect(getCourseTabFromPath('/')).toBe('lectures');
+        expect(getCourseTabFromPath(null)).toBe('lectures');
+      });
+
+      it('includes all primary and secondary course tabs in VALID_COURSE_TABS', () => {
+        expect(VALID_COURSE_TABS.has('lectures')).toBe(true);
+        expect(VALID_COURSE_TABS.has('quiz')).toBe(true);
+        expect(VALID_COURSE_TABS.has('summary')).toBe(true);
+        expect(VALID_COURSE_TABS.has('tutor')).toBe(true);
+        expect(VALID_COURSE_TABS.has('library')).toBe(true);
+        expect(VALID_COURSE_TABS.has('resources')).toBe(true);
+        expect(VALID_COURSE_TABS.has('calendar')).toBe(true);
+        expect(VALID_COURSE_TABS.has('assignments')).toBe(true);
       });
     });
 

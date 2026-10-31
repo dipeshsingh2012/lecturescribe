@@ -60,6 +60,32 @@ export const getCourseNameFromPath = (path = (typeof window !== 'undefined' ? wi
   return parsePathRoute(path).courseName;
 };
 
+export const VALID_COURSE_TABS = new Set([
+  'lectures',
+  'summary',
+  'quiz',
+  'tutor',
+  'resources',
+  'library',
+  'calendar',
+  'grades',
+  'forum',
+  'participants',
+  'syllabus',
+  'rubrics',
+  'workshops',
+  'assignments',
+  'question-bank',
+  'analytics'
+]);
+
+export const getCourseTabFromPath = (path = (typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/')) => {
+  if (!path) return 'lectures';
+  const query = path.includes('?') ? path.slice(path.indexOf('?') + 1).split('#')[0] : '';
+  const tab = new URLSearchParams(query).get('tab');
+  return tab && VALID_COURSE_TABS.has(tab) ? tab : 'lectures';
+};
+
 export const normalizeCourseSlug = (str) => {
   if (!str) return '';
   return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');

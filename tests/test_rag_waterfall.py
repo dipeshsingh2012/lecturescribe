@@ -149,5 +149,177 @@ class TestRAGWaterfall(unittest.TestCase):
         self.assertNotIn("1:01:56", timestamps)
         self.assertNotIn("53:41", timestamps)
 
+    def test_is_holistic_query_detection(self):
+        """Holistic queries (core concepts, definitions, summary, outline) must be identified accurately."""
+        holistic_queries = [
+            "What are the core concepts and definitions?",
+            "Can you give me the key concepts of this lecture?",
+            "What are the main definitions taught by the professor?",
+            "Give me a summary of this lecture",
+            "What is this lecture about?",
+            "outline",
+            "quiz me on the material",
+            "What are the main equations and formulas?"
+        ]
+        for q in holistic_queries:
+            self.assertTrue(pinecone_rag_engine.is_holistic_query(q), f"Failed to identify holistic query: {q}")
+
+        specific_queries = [
+            "What did Joseph Weizenbaum create in 1966?",
+            "Explain how backpropagation computes gradients with the chain rule",
+            "ELIZA psychotherapist",
+            "Why is softmax used instead of sigmoid in multi-class classification?"
+        ]
+        for q in specific_queries:
+            self.assertFalse(pinecone_rag_engine.is_holistic_query(q), f"False positive holistic query: {q}")
+
+    @patch("backend.database.db_manager.get_saved_video")
+    def test_get_lecture_outline_falls_back_to_cues_gracefully(self, mock_get_video):
+        """When summarySections is missing, get_lecture_outline segments cues into chapters without throwing."""
+        mock_get_video.return_value = {
+            "title": "Machine Learning Lecture 1",
+            "cues": [
+                {"time": "00:00", "text": "Welcome to machine learning lecture one."},
+                {"time": "05:10", "text": "Supervised learning uses labeled training datasets."},
+                {"time": "15:30", "text": "Linear regression models continuous targets using mean squared error."},
+                {"time": "30:00", "text": "Gradient descent iteratively updates weights towards minimum loss."}
+            ]
+        }
+
+        res_str, citations, _ = pinecone_rag_engine.execute_tool(
+            tool_name="get_lecture_outline",
+            arguments={"video_id": "ml-101"},
+            target_video_id="ml-101",
+            lecture_title="Machine Learning Lecture 1"
+        )
+        outline = json.loads(res_str)
+        self.assertTrue(len(outline) >= 1)
+        self.assertTrue(len(citations) >= 1)
+        self.assertIn("00:00", citations[0]["timestamp"])
+
+    @patch("backend.database.db_manager.get_saved_video")
+    def test_search_transcript_holistic_sampling_and_stopword_filtering(self, mock_get_video):
+        """search_transcript ignores stopwords and samples cues chronologically for holistic queries."""
+        mock_get_video.return_value = {
+            "title": "Introduction to NLP",
+            "cues": [
+                {"time": "01:00", "text": "Today we cover morphological parsing and syntax."},
+                {"time": "10:00", "text": "Context free grammars define the rules of hierarchical phrases."},
+                {"time": "25:00", "text": "The CKY algorithm performs bottom-up dynamic programming parsing."}
+            ]
+        }
+
+        res_str, citations, _ = pinecone_rag_engine.execute_tool(
+            tool_name="search_transcript",
+            arguments={"query": "What are the core concepts and definitions?", "top_k": 3},
+            target_video_id="nlp-101",
+            lecture_title="Introduction to NLP"
+        )
+        hits = json.loads(res_str)
+        self.assertTrue(len(hits) >= 1)
+        self.assertTrue(len(citations) >= 1)
+
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("requests.post")
+    def test_query_rag_holistic_core_concepts_synthesizes_without_boundary_notice(self, mock_post, mock_get_video):
+        """The AI Tutor must answer 'What are the core concepts and definitions?' grounded in the lecture without boundary notice."""
+        mock_get_video.return_value = {
+            "title": "Speech Processing Lecture 1",
+            "summarySections": [
+                {
+                    "title": "[00:00 - 15:00] Introduction to Acoustic Phonetics",
+                    "points": ["Sound waves and frequency spectrum", "Formants F1 and F2 determine vowel qualities"]
+                },
+                {
+                    "title": "[15:00 - 35:00] Short-Time Fourier Transform",
+                    "points": ["Windowing with Hamming window", "Spectrogram calculation with STFT"]
+                }
+            ],
+            "cues": [
+                {"time": "00:00", "text": "Introduction to acoustic phonetics and waveforms."},
+                {"time": "15:00", "text": "Short-time Fourier transform computes frequency over time."}
+            ]
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": (
+                        "# Core Concepts and Definitions\n\n"
+                        "1. **Acoustic Phonetics** [00:00]: The study of speech sounds as physical sound waves, characterized by formants $F_1$ and $F_2$.\n"
+                        "2. **Short-Time Fourier Transform (STFT)** [15:00]: A mathematical representation computed by:\n"
+                        "$$\\text{STFT}\\{x[n]\\}(m, \\omega) = \\sum_{n=-\\infty}^{\\infty} x[n] w[n-m] e^{-j\\omega n}$$\n"
+                        "where $w[n]$ is the window function."
+                    ),
+                    "tool_calls": []
+                }
+            }]
+        }
+        mock_post.return_value = mock_resp
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "dummy_groq_key"}):
+            rag_res = pinecone_rag_engine.query_rag(
+                query="What are the core concepts and definitions?",
+                video_id="speech-101",
+                video_title="Speech Processing Lecture 1",
+                enable_web_search=True
+            )
+
+        self.assertNotIn("Course Boundary Notice", rag_res["answer"])
+        self.assertIn("Acoustic Phonetics", rag_res["answer"])
+        self.assertIn("Short-Time Fourier Transform", rag_res["answer"])
+        self.assertTrue(len(rag_res["citations"]) >= 1)
+        timestamps = [c["timestamp"] for c in rag_res["citations"]]
+        self.assertTrue(any("00:00" in t for t in timestamps))
+
+    @patch("backend.database.db_manager.get_saved_video")
+    @patch("requests.post")
+    def test_query_rag_tool_execution_error_is_caught_gracefully(self, mock_post, mock_get_video):
+        """Tool errors inside the agentic step must be caught and returned as JSON tool responses, not crashing provider loop."""
+        mock_get_video.return_value = {"title": "Test Lecture", "cues": []}
+
+        # Step 1: Model makes an invalid tool call
+        mock_resp1 = MagicMock()
+        mock_resp1.status_code = 200
+        mock_resp1.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "function": {
+                            "name": "unknown_tool",
+                            "arguments": "{}"
+                        }
+                    }]
+                }
+            }]
+        }
+
+        # Step 2: Model continues after tool error and answers
+        mock_resp2 = MagicMock()
+        mock_resp2.status_code = 200
+        mock_resp2.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": "The concept was introduced at [02:15] in the lecture.",
+                    "tool_calls": []
+                }
+            }]
+        }
+
+        mock_post.side_effect = [mock_resp1, mock_resp2]
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "dummy_groq_key"}):
+            rag_res = pinecone_rag_engine.query_rag(
+                query="Tell me about the concept",
+                video_id="test-101",
+                video_title="Test Lecture"
+            )
+
+        self.assertIn("02:15", rag_res["answer"])
+
 if __name__ == "__main__":
     unittest.main()

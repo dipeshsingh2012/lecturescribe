@@ -605,4 +605,52 @@ describe('CourseQuiz Component', () => {
     expect(startExam).toHaveBeenCalled();
     expect(screen.getByText(/Question 1: What is ML\?/i)).toBeInTheDocument();
   });
+
+  it('starts review from Question 1 rather than the last question after submitting multi-question quiz', () => {
+    const finishQuiz = vi.fn();
+    const multiQuestionQuiz = {
+      course_name: 'Machine Learning',
+      course_slug: 'machine-learning',
+      questions: [
+        { id: 1, question: 'Question 1: What is ML?', options: ['A', 'B'], correct_index: 0, explanation: 'Expl 1' },
+        { id: 2, question: 'Question 2: What is DL?', options: ['C', 'D'], correct_index: 1, explanation: 'Expl 2' }
+      ]
+    };
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={multiQuestionQuiz}
+        quizLoading={false}
+        selectedAnswers={{ 1: 0, 2: 1 }}
+        totalQuestions={2}
+        answeredCount={2}
+        examStarted={true}
+        isCompleted={true}
+        score={2}
+        finishQuiz={finishQuiz}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Click Next to reach Question 2
+    const nextBtn = screen.getByRole('button', { name: /Next Question/i });
+    fireEvent.click(nextBtn);
+    expect(screen.getByText(/Question 2: What is DL\?/i)).toBeInTheDocument();
+
+    // On last question, button is "Finish Quiz"
+    const finishBtn = screen.getByRole('button', { name: /Finish Quiz/i });
+    expect(finishBtn).toBeInTheDocument();
+    fireEvent.click(finishBtn);
+    expect(finishQuiz).toHaveBeenCalled();
+
+    // Summary scorecard is now displayed
+    const reviewBtn = screen.getByRole('button', { name: /Review Questions/i });
+    expect(reviewBtn).toBeInTheDocument();
+
+    // Clicking Review Questions should reset currentIdx to 0 (Question 1)
+    fireEvent.click(reviewBtn);
+    expect(screen.getByText(/Question 1: What is ML\?/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Question 1 of 2/i)[0]).toBeInTheDocument();
+  });
 });

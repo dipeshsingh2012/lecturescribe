@@ -370,6 +370,31 @@ Today we discuss forward kinematics.
         self.assertEqual(data["course_slug"], "machine-learning-paradigms")
 
     @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.db_manager.get_video_id_by_source_url")
+    def test_transcript_resolves_moodle_page_url_via_source_url_lookup(self, mock_get_source_vid, mock_get_saved):
+        mock_get_source_vid.return_value = "1240897687"
+        mock_get_saved.return_value = {
+            "videoId": "1240897687",
+            "title": "Machine Learning Paradigms Live Session -10 ( 29 / 10 / 2026)",
+            "duration": 5700,
+            "sourceUrl": "https://learning.iiitdwd.ac.in/mod/page/view.php?id=3301",
+            "captionLabel": "Unavailable",
+            "cues": [],
+            "summarySections": [],
+            "course_name": "Machine Learning Paradigms",
+            "course_slug": "machine-learning-paradigms",
+            "cached": True
+        }
+        moodle_url = "https://learning.iiitdwd.ac.in/mod/page/view.php?id=3301"
+        response = self.client.get(f"/api/transcript?url={moodle_url}&course_name=machine-learning-paradigms")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["videoId"], "1240897687")
+        self.assertEqual(data["title"], "Machine Learning Paradigms Live Session -10 ( 29 / 10 / 2026)")
+        mock_get_source_vid.assert_called_once_with(moodle_url)
+        mock_get_saved.assert_called_once_with("1240897687")
+
+    @patch("backend.main.db_manager.get_saved_video")
     @patch("backend.main.fetch_player_config")
     @patch("backend.main.get_text_tracks")
     @patch("backend.main.fetch_vtt")

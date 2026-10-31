@@ -125,11 +125,10 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       setReviewMode(false);
       setReplayingQuizId(null);
       if (courseSlug) {
-        fetchOrGenerateQuiz(false);
         fetchQuizHistory();
       }
     }
-  }, [courseSlug, fetchOrGenerateQuiz, fetchQuizHistory]);
+  }, [courseSlug, fetchQuizHistory]);
 
   const fetchDetailedExplanation = useCallback(async (questionId, questionData) => {
     if (!cleanCourse || !questionData) return;

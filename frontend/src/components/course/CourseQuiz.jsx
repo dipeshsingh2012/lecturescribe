@@ -36,6 +36,7 @@ import PastQuizzesAccordion from './quiz/PastQuizzesAccordion';
 import QuizBriefingCard from './quiz/QuizBriefingCard';
 import QuizResultsSummary from './quiz/QuizResultsSummary';
 import QuizQuestionPalette from './quiz/QuizQuestionPalette';
+import QuestionFeedback from '../quiz/QuestionFeedback';
 
 export default function CourseQuiz({
   courseName = 'Active Course',
@@ -77,7 +78,8 @@ export default function CourseQuiz({
   marksPerQuestion = 0.5,
   totalMarks,
   earnedMarks,
-  isTutor = true
+  isTutor = true,
+  userEmail = 'anonymous'
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showSummaryView, setShowSummaryView] = useState(false);
@@ -302,6 +304,7 @@ export default function CourseQuiz({
       if (typeof finishQuiz === 'function') {
         finishQuiz();
       }
+      setCurrentIdx(0);
       setShowSummaryView(true);
     }
   };
@@ -965,6 +968,18 @@ export default function CourseQuiz({
                   )}
                 </AccordionDetails>
               </Accordion>
+            )}
+
+            {/* Question Quality Feedback & Calibration (visible during review/results) */}
+            {isGradedReview && (
+              <QuestionFeedback
+                quizType="course"
+                targetId={quizData?.course_slug || courseName}
+                questionId={currentQ.id}
+                question={currentQ}
+                userEmail={userEmail}
+                currentTheme={currentTheme}
+              />
             )}
           </Paper>
 

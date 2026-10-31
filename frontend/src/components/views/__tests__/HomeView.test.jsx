@@ -289,7 +289,7 @@ describe('HomeView', () => {
     );
   });
 
-  it('shows Assignments tab and QuickAddBar for Tutor role, and hides both for Student role', () => {
+  it('shows Assignments tab and QuickAddBar for Tutor role, and allows Assignments while hiding QuickAddBar for Student role', () => {
     const mockTutor = { email: 'tutor@iiitdwd.ac.in', name: 'Prof Tutor' };
     const { rerender } = render(
       <HomeView
@@ -316,7 +316,7 @@ describe('HomeView', () => {
       />
     );
 
-    expect(screen.queryByRole('button', { name: /Course Assignments/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Course Assignments/i })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/Add video URL or ID to this course/i)).not.toBeInTheDocument();
   });
 

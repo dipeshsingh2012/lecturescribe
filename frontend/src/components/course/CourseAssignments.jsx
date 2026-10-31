@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -40,6 +40,7 @@ import {
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import { getUserDisplayName } from '../../utils/formatters';
+import AssignmentStudio from './AssignmentStudio';
 
 export default function CourseAssignments({
   courseName = 'Active Course',
@@ -53,6 +54,7 @@ export default function CourseAssignments({
   onSkipDataset,
   onRegenerateAssignment,
   onDeleteAssignment,
+  onRefreshAssignments,
   currentTheme,
   isTutor = true,
   userEmail = '',
@@ -64,6 +66,54 @@ export default function CourseAssignments({
   const [expandedDetails, setExpandedDetails] = useState({});
   const [pendingDatasetFiles, setPendingDatasetFiles] = useState({});
   const [uploadingDataset, setUploadingDataset] = useState({});
+  const courseSlug = normalizeCourseSlug(courseName);
+
+  const [activeStudioSessionId, setActiveStudioSessionId] = useState(() => {
+    try {
+      if (typeof window !== 'undefined' && courseSlug) {
+        return localStorage.getItem(`lecturescribe_active_studio_session_${courseSlug}`) || null;
+      }
+    } catch (e) {}
+    return null;
+  });
+
+  // Keep studio session in sync across tab changes and course transitions
+  useEffect(() => {
+    if (!courseSlug) return;
+    try {
+      const saved = localStorage.getItem(`lecturescribe_active_studio_session_${courseSlug}`);
+      if (saved) {
+        setActiveStudioSessionId(saved);
+      }
+    } catch (e) {}
+  }, [courseSlug]);
+
+  const handleOpenStudio = (sid = 'new') => {
+    setActiveStudioSessionId(sid);
+    try {
+      if (courseSlug) {
+        localStorage.setItem(`lecturescribe_active_studio_session_${courseSlug}`, sid);
+      }
+    } catch (e) {}
+  };
+
+  const handleCloseStudio = () => {
+    setActiveStudioSessionId(null);
+    try {
+      if (courseSlug) {
+        localStorage.removeItem(`lecturescribe_active_studio_session_${courseSlug}`);
+      }
+    } catch (e) {}
+  };
+
+  const handleSessionChange = (newSessionId) => {
+    setActiveStudioSessionId(newSessionId);
+    try {
+      if (courseSlug && newSessionId) {
+        localStorage.setItem(`lecturescribe_active_studio_session_${courseSlug}`, newSessionId);
+      }
+    } catch (e) {}
+  };
 
   // Option 1: Deadline Publishing, Student Submissions & AI SpeedGrader state
   const [publishDrafts, setPublishDrafts] = useState({});
@@ -77,8 +127,6 @@ export default function CourseAssignments({
   const [savingGradeSubId, setSavingGradeSubId] = useState(null);
   const [studentSubmitDrafts, setStudentSubmitDrafts] = useState({});
   const [submittingAsgnId, setSubmittingAsgnId] = useState(null);
-
-  const courseSlug = normalizeCourseSlug(courseName);
 
   const fetchSubmissionsForAssignment = async (assignmentId) => {
     if (!courseSlug || !assignmentId) return;
@@ -323,6 +371,24 @@ export default function CourseAssignments({
     textSecondary: '#64748b'
   };
 
+  if (activeStudioSessionId) {
+    return (
+      <AssignmentStudio
+        courseName={courseName}
+        initialSessionId={activeStudioSessionId === 'new' ? null : activeStudioSessionId}
+        onClose={handleCloseStudio}
+        onSessionChange={handleSessionChange}
+        onAssignmentUpdated={() => {
+          if (onRefreshAssignments) onRefreshAssignments();
+        }}
+        currentTheme={currentTheme}
+        isTutor={isTutor}
+        userEmail={userEmail}
+        userName={userName}
+      />
+    );
+  }
+
   return (
     <Box sx={{ width: '100%', maxWidth: 1100, mx: 'auto', pb: 8 }}>
       {/* HEADER BANNER */}
@@ -361,11 +427,32 @@ export default function CourseAssignments({
           />
         </Box>
         <Typography variant="h5" sx={{ fontWeight: 800, color: palette.textPrimary, mb: 0.5 }}>
-          {courseName} • Assignment Planner
+          {courseName} • Assignment Planner & Studio
         </Typography>
-        <Typography variant="body2" sx={{ color: palette.textSecondary, maxWidth: 820, lineHeight: 1.6 }}>
-          Upload assignment questions or problem sets in PDF format. LectureScribe consults lecture transcripts and slides via Course RAG, synthesizes step-by-step mathematical solutions and code, executes the code cells to verify printed outputs, and exports downloadable <strong>.ipynb Jupyter Notebooks</strong> and formatted <strong>PDF Solution Documents</strong>.
-        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: { xs: 'flex-start', md: 'center' }, justifyContent: 'space-between', gap: 2, mt: 1 }}>
+          <Typography variant="body2" sx={{ color: palette.textSecondary, maxWidth: 680, lineHeight: 1.6 }}>
+            Upload assignment questions in PDF format for automated Jupyter execution, or launch the <strong>Interactive Studio</strong> to paste free-text problems, discuss scope with the Co-Pilot, and co-create course-grounded solutions.
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={<Sparkles size={16} />}
+            onClick={() => handleOpenStudio('new')}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 800,
+              bgcolor: '#7e22ce',
+              color: '#ffffff',
+              borderRadius: 2.5,
+              px: 2.5,
+              py: 1,
+              flexShrink: 0,
+              boxShadow: '0 4px 14px rgba(126, 34, 206, 0.25)',
+              '&:hover': { bgcolor: '#6b21a8' }
+            }}
+          >
+            Launch Free-Text Studio
+          </Button>
+        </Box>
       </Paper>
 
       {/* UPLOAD DROPZONE / ACTION CARD */}
@@ -601,6 +688,14 @@ export default function CourseAssignments({
                       <Typography variant="h6" sx={{ fontWeight: 800, color: palette.textPrimary, fontSize: '1.05rem' }}>
                         {asgn.title || 'Assignment Solution'}
                       </Typography>
+                      {asgn.assignment_type === 'studio' && (
+                        <Chip
+                          icon={<Sparkles size={13} color="#7e22ce" />}
+                          label="Studio Co-Pilot"
+                          size="small"
+                          sx={{ bgcolor: 'rgba(147, 51, 234, 0.1)', color: '#7e22ce', fontWeight: 700, fontSize: '0.72rem' }}
+                        />
+                      )}
                       {isCompleted && (
                         <Chip
                           icon={<CheckCircle2 size={13} color="#047857" />}
@@ -752,25 +847,47 @@ export default function CourseAssignments({
 
                   {/* ACTION BUTTONS */}
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                    {(asgn.assignment_type === 'studio' || asgn.chat_history?.length > 0) && (
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<Sparkles size={14} color="#7e22ce" />}
+                        onClick={() => handleOpenStudio(asgn.assignment_id)}
+                        sx={{
+                          textTransform: 'none',
+                          fontWeight: 700,
+                          borderRadius: 2,
+                          borderColor: '#d8b4fe',
+                          color: '#7e22ce',
+                          bgcolor: 'rgba(147, 51, 234, 0.05)',
+                          '&:hover': { bgcolor: 'rgba(147, 51, 234, 0.12)' }
+                        }}
+                      >
+                        Open in Studio
+                      </Button>
+                    )}
+
                     {isCompleted && (
                       <>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          startIcon={<Terminal size={14} />}
-                          href={ipynbUrl}
-                          download
-                          sx={{
-                            textTransform: 'none',
-                            fontWeight: 700,
-                            borderRadius: 2,
-                            borderColor: '#cbd5e1',
-                            color: '#0f172a',
-                            '&:hover': { bgcolor: 'rgba(0,0,0,0.03)' }
-                          }}
-                        >
-                          Download .ipynb
-                        </Button>
+                        {asgn.assignment_type !== 'studio' && (
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<Terminal size={14} />}
+                            href={ipynbUrl}
+                            download
+                            sx={{
+                              textTransform: 'none',
+                              fontWeight: 700,
+                              borderRadius: 2,
+                              borderColor: '#cbd5e1',
+                              color: '#0f172a',
+                              '&:hover': { bgcolor: 'rgba(0,0,0,0.03)' }
+                            }}
+                          >
+                            Download .ipynb
+                          </Button>
+                        )}
                         <Button
                           variant="contained"
                           size="small"

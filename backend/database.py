@@ -831,6 +831,12 @@ class RelationalDBManager:
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS due_date VARCHAR(128) DEFAULT NULL;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS max_marks DOUBLE PRECISION DEFAULT 100.0;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS assignment_type VARCHAR(32) DEFAULT 'notebook';
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS problem_statement TEXT DEFAULT '';
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS draft_markdown TEXT DEFAULT '';
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS chat_history JSONB DEFAULT '[]'::jsonb;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS citations JSONB DEFAULT '[]'::jsonb;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS selected_model VARCHAR(128) DEFAULT NULL;
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_assignment_submissions (
                             submission_id VARCHAR(64) PRIMARY KEY,
@@ -6834,6 +6840,181 @@ class RelationalDBManager:
 
         return updated_item
 
+    def create_studio_assignment(
+        self,
+        assignment_id: str,
+        course_name: str,
+        user_email: Optional[str],
+        title: str,
+        problem_statement: str,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        draft_markdown: str = "",
+        status: str = "discussing",
+        selected_model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create a new interactive assignment studio session tracking record."""
+        clean_id = (assignment_id or "").strip()
+        clean_course = (course_name or "").strip()
+        clean_email = (user_email or "").strip().lower() if user_email else None
+        clean_title = (title or "Assignment Studio").strip()
+        clean_model = (selected_model or "").strip() or None
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        chat_json = json.dumps(chat_history or [])
+        citations_json = json.dumps(citations or [])
+
+        record = {
+            "assignment_id": clean_id,
+            "course_name": clean_course,
+            "user_email": clean_email,
+            "title": clean_title,
+            "source_filename": "Interactive Studio",
+            "source_blob_name": None,
+            "notebook_blob_name": None,
+            "pdf_blob_name": None,
+            "status": status,
+            "questions_summary": [],
+            "required_files": [],
+            "dataset_files": [],
+            "assignment_type": "studio",
+            "problem_statement": problem_statement or "",
+            "draft_markdown": draft_markdown or "",
+            "chat_history": chat_history or [],
+            "citations": citations or [],
+            "selected_model": clean_model,
+            "due_date": None,
+            "max_marks": 100.0,
+            "is_published": True,
+            "error_message": None,
+            "created_at": now_iso,
+            "updated_at": now_iso
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO lecturescribe_course_assignments
+                        (assignment_id, course_name, user_email, title, source_filename, source_blob_name, status,
+                         assignment_type, problem_statement, draft_markdown, chat_history, citations, selected_model, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, NOW(), NOW())
+                        RETURNING id, assignment_id, course_name, user_email, title, source_filename,
+                                  source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                  questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                                  assignment_type, problem_statement, draft_markdown, chat_history, citations,
+                                  selected_model, error_message, created_at, updated_at;
+                    """, (clean_id, clean_course, clean_email, clean_title, "Interactive Studio", None, status,
+                          "studio", problem_statement, draft_markdown, chat_json, citations_json, clean_model))
+                    row = cursor.fetchone()
+                    if row:
+                        db_record = dict(row)
+                        if hasattr(db_record.get("created_at"), "isoformat"):
+                            db_record["created_at"] = db_record["created_at"].isoformat()
+                        if hasattr(db_record.get("updated_at"), "isoformat"):
+                            db_record["updated_at"] = db_record["updated_at"].isoformat()
+                        record = db_record
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Studio Notice] Could not insert studio assignment to DB ({e}). Using in-memory fallback.")
+        finally:
+            if conn:
+                conn.close()
+
+        self._assignments_memory_cache.append(record)
+        return record
+
+    def update_studio_session(
+        self,
+        assignment_id: str,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        draft_markdown: Optional[str] = None,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        status: Optional[str] = None,
+        pdf_blob_name: Optional[str] = None,
+        title: Optional[str] = None,
+        error_message: Optional[str] = None,
+        selected_model: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update interactive studio session draft, chat history, citations, and compiled PDF status."""
+        clean_id = (assignment_id or "").strip()
+        clean_model = (selected_model or "").strip() or None
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        updated_record = None
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_course_assignments
+                        SET chat_history = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE chat_history END,
+                            draft_markdown = COALESCE(%s, draft_markdown),
+                            citations = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE citations END,
+                            status = COALESCE(%s, status),
+                            pdf_blob_name = COALESCE(%s, pdf_blob_name),
+                            title = COALESCE(%s, title),
+                            selected_model = COALESCE(%s, selected_model),
+                            error_message = %s,
+                            updated_at = NOW()
+                        WHERE assignment_id = %s
+                        RETURNING id, assignment_id, course_name, user_email, title, source_filename,
+                                  source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                  questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                                  assignment_type, problem_statement, draft_markdown, chat_history, citations,
+                                  selected_model, error_message, created_at, updated_at;
+                    """, (
+                        json.dumps(chat_history) if chat_history is not None else None,
+                        json.dumps(chat_history) if chat_history is not None else None,
+                        draft_markdown,
+                        json.dumps(citations) if citations is not None else None,
+                        json.dumps(citations) if citations is not None else None,
+                        status,
+                        pdf_blob_name,
+                        title,
+                        clean_model,
+                        error_message,
+                        clean_id
+                    ))
+                    row = cursor.fetchone()
+                    if row:
+                        db_record = dict(row)
+                        if hasattr(db_record.get("created_at"), "isoformat"):
+                            db_record["created_at"] = db_record["created_at"].isoformat()
+                        if hasattr(db_record.get("updated_at"), "isoformat"):
+                            db_record["updated_at"] = db_record["updated_at"].isoformat()
+                        updated_record = db_record
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Studio Notice] update_studio_session DB error ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        for item in self._assignments_memory_cache:
+            if item.get("assignment_id") == clean_id:
+                if chat_history is not None:
+                    item["chat_history"] = chat_history
+                if draft_markdown is not None:
+                    item["draft_markdown"] = draft_markdown
+                if citations is not None:
+                    item["citations"] = citations
+                if status is not None:
+                    item["status"] = status
+                if pdf_blob_name is not None:
+                    item["pdf_blob_name"] = pdf_blob_name
+                if title is not None:
+                    item["title"] = title
+                if selected_model is not None:
+                    item["selected_model"] = clean_model
+                if error_message is not None:
+                    item["error_message"] = error_message
+                item["updated_at"] = now_iso
+                if not updated_record:
+                    updated_record = item
+
+        return updated_record
+
     def create_assignment(
         self,
         assignment_id: str,
@@ -7009,7 +7190,14 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                    source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at
+                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                                   COALESCE(assignment_type, 'notebook') AS assignment_type,
+                                   COALESCE(problem_statement, '') AS problem_statement,
+                                   COALESCE(draft_markdown, '') AS draft_markdown,
+                                   COALESCE(chat_history, '[]'::jsonb) AS chat_history,
+                                   COALESCE(citations, '[]'::jsonb) AS citations,
+                                   COALESCE(selected_model, '') AS selected_model,
+                                   error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (user_email = %s OR user_email IS NULL) AND (
                                 LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
@@ -7021,7 +7209,14 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                    source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at
+                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                                   COALESCE(assignment_type, 'notebook') AS assignment_type,
+                                   COALESCE(problem_statement, '') AS problem_statement,
+                                   COALESCE(draft_markdown, '') AS draft_markdown,
+                                   COALESCE(chat_history, '[]'::jsonb) AS chat_history,
+                                   COALESCE(citations, '[]'::jsonb) AS citations,
+                                   COALESCE(selected_model, '') AS selected_model,
+                                   error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (
                                 LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
@@ -7065,7 +7260,14 @@ class RelationalDBManager:
                     cursor.execute("""
                         SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                               questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at
+                               questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                               COALESCE(assignment_type, 'notebook') AS assignment_type,
+                               COALESCE(problem_statement, '') AS problem_statement,
+                               COALESCE(draft_markdown, '') AS draft_markdown,
+                               COALESCE(chat_history, '[]'::jsonb) AS chat_history,
+                               COALESCE(citations, '[]'::jsonb) AS citations,
+                               COALESCE(selected_model, '') AS selected_model,
+                               error_message, created_at, updated_at
                         FROM lecturescribe_course_assignments
                         WHERE assignment_id = %s;
                     """, (clean_id,))

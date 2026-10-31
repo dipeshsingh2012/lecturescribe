@@ -151,6 +151,8 @@ async def lifespan(app: FastAPI):
     print("🤖 [4/4] Probing Cloud LLM Providers & Intent Router...")
     try:
         pinecone_rag_engine.check_llm_connectivity()
+        from backend.llm_router import llm_router
+        llm_router.sync_available_models_to_redis()
     except Exception as e:
         print(f"⚠️ [LLM Startup Warning]: Could not complete connectivity probe: {e}")
 
@@ -5719,6 +5721,145 @@ def delete_course_assignment_route(
 
     db_manager.delete_assignment(clean_id)
     return {"status": "success", "message": f"Assignment '{clean_id}' deleted."}
+
+
+# ==============================================================================
+# Dynamic LLM Models Registry (Backed by Redis Cache & Auto-Discovered on Boot)
+# ==============================================================================
+
+@app.get("/api/llm/available-models")
+def get_available_llm_models():
+    """Retrieve live LLM models discovered and cached in Redis for client selection."""
+    from backend.llm_router import llm_router
+    models = llm_router.get_available_models_for_client()
+    rec = next((m["id"] for m in models if m.get("isRecommended")), "gemini-3.8-flash")
+    return {
+        "status": "success",
+        "models": models,
+        "recommended_model": rec
+    }
+
+
+# ==============================================================================
+# Interactive Assignment Studio (Co-Pilot, Multi-Source RAG & PDF Studio)
+# ==============================================================================
+
+class StudioStartRequest(BaseModel):
+    prompt: str
+    title: Optional[str] = None
+    role: Optional[str] = "student"
+    user_email: Optional[str] = None
+    model_name: Optional[str] = None
+
+
+class StudioChatRequest(BaseModel):
+    message: str
+    user_email: Optional[str] = None
+    model_name: Optional[str] = None
+    action: Optional[str] = None
+
+
+class StudioDraftUpdateRequest(BaseModel):
+    draft_markdown: str
+
+
+class StudioCompilePdfRequest(BaseModel):
+    title: Optional[str] = None
+    author: Optional[str] = None
+    draft_markdown: Optional[str] = None
+
+
+@app.post("/api/course/{course_name}/assignments/studio/start")
+def start_assignment_studio_endpoint(course_name: str, payload: StudioStartRequest):
+    """Initialize a new Interactive Assignment Studio session from free-text problem statement or prompt."""
+    from backend.assignment_studio_service import start_studio_session
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    if not payload.prompt or not payload.prompt.strip():
+        raise HTTPException(status_code=400, detail="Problem statement or prompt cannot be empty.")
+
+    res = start_studio_session(
+        course_name=clean_course,
+        user_email=payload.user_email,
+        role=payload.role or "student",
+        prompt=payload.prompt,
+        title=payload.title,
+        model_name=payload.model_name
+    )
+    return res
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/chat")
+def studio_chat_turn_endpoint(course_name: str, session_id: str, payload: StudioChatRequest):
+    """Handle a conversational turn: scoping discussion, draft generation, or iterative critique."""
+    from backend.assignment_studio_service import studio_chat_turn
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    if not payload.message or not payload.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    try:
+        res = studio_chat_turn(
+            session_id=session_id.strip(),
+            course_name=clean_course,
+            user_message=payload.message,
+            user_email=payload.user_email,
+            model_name=payload.model_name,
+            action=payload.action
+        )
+        return res
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        logger.error(f"[Studio Chat Endpoint Error]: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Studio co-pilot error: {str(e)}")
+
+
+@app.put("/api/course/{course_name}/assignments/studio/{session_id}/draft")
+def update_studio_draft_endpoint(course_name: str, session_id: str, payload: StudioDraftUpdateRequest):
+    """Save direct manual edits to the draft markdown."""
+    from backend.assignment_studio_service import update_studio_draft
+    res = update_studio_draft(session_id.strip(), payload.draft_markdown)
+    return res
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/compile-pdf")
+def compile_studio_pdf_endpoint(course_name: str, session_id: str, payload: StudioCompilePdfRequest):
+    """Compile the current draft into an academic PDF, persist to GCS, and update status."""
+    from backend.assignment_studio_service import compile_studio_pdf
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    res = compile_studio_pdf(
+        session_id=session_id.strip(),
+        course_name=clean_course,
+        title=payload.title,
+        author=payload.author,
+        draft_markdown=payload.draft_markdown
+    )
+    return res
+
+
+@app.get("/api/course/{course_name}/assignments/studio/{session_id}")
+def get_studio_session_endpoint(course_name: str, session_id: str):
+    """Retrieve existing studio session state (for resuming co-creation)."""
+    clean_id = session_id.strip()
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Studio session '{clean_id}' not found.")
+
+    return {
+        "status": "success",
+        "session_id": clean_id,
+        "course_name": record.get("course_name") or course_name,
+        "title": record.get("title"),
+        "problem_statement": record.get("problem_statement"),
+        "chat_history": record.get("chat_history") or [],
+        "draft_markdown": record.get("draft_markdown") or "",
+        "citations": record.get("citations") or [],
+        "selected_model": record.get("selected_model"),
+        "studio_status": record.get("status") or "discussing",
+        "pdf_blob_name": record.get("pdf_blob_name"),
+        "download_pdf_url": f"/api/course/assignment/{clean_id}/download/pdf" if record.get("pdf_blob_name") else None,
+        "assignment": record
+    }
+
 
 
 # ==============================================================================

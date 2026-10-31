@@ -181,17 +181,168 @@ class LLMRouter:
 
             data = json.loads(raw)
             if isinstance(data, dict):
-                for name, saved in data.items():
-                    spec = self._models.get(name)
-                    if spec and isinstance(saved, dict):
-                        spec.cooldown_until = float(saved.get("cooldown_until", 0.0))
-                        spec.consecutive_errors = int(saved.get("consecutive_errors", 0))
-                        spec.last_error = str(saved.get("last_error", ""))
-                        spec.last_status = int(saved.get("last_status", 200))
+                with self._lock:
+                    for name, saved in data.items():
+                        if not isinstance(saved, dict):
+                            continue
+                        spec = self._models.get(name)
+                        if spec:
+                            spec.cooldown_until = float(saved.get("cooldown_until", 0.0))
+                            spec.consecutive_errors = int(saved.get("consecutive_errors", 0))
+                            spec.last_error = str(saved.get("last_error", ""))
+                            spec.last_status = int(saved.get("last_status", 200))
+                        else:
+                            # Dynamically restore discovered models saved in Redis
+                            self._models[name] = ModelSpec(
+                                name=name,
+                                provider=saved.get("provider", "gemini"),
+                                context_window=int(saved.get("context_window", 1048576)),
+                                tpm_limit=int(saved.get("tpm_limit", 1000000)),
+                                supports_multimodal=bool(saved.get("supports_multimodal", True)),
+                                supports_json=bool(saved.get("supports_json", True)),
+                                priority=int(saved.get("priority", 10)),
+                                cooldown_until=float(saved.get("cooldown_until", 0.0)),
+                                consecutive_errors=int(saved.get("consecutive_errors", 0)),
+                                last_error=str(saved.get("last_error", "")),
+                                last_status=int(saved.get("last_status", 200))
+                            )
                 self._last_redis_sync = time.time()
-                print(f"⚡ [LLMRouter] Restored model metadata and cooldowns from Redis (TTL: 24h).")
+                print(f"⚡ [LLMRouter] Restored {len(data)} models and cooldowns from Redis (TTL: 24h).")
         except Exception as e:
             print(f"⚠️ [LLMRouter] Could not load model metadata from Redis ({e}). Using in-memory defaults.")
+
+    def sync_available_models_to_redis(self) -> List[Dict[str, Any]]:
+        """
+        Probe provider endpoints (Gemini & Groq), register live available models,
+        filter out deprecated ones, and persist metadata to Redis on server start.
+        """
+        gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+        groq_key = os.getenv("GROQ_API_KEY", "").strip()
+
+        # 1. Probe Google Gemini Models
+        if gemini_key and requests:
+            try:
+                r = requests.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}",
+                    timeout=10
+                )
+                if r.status_code == 200:
+                    g_models = r.json().get("models", [])
+                    with self._lock:
+                        for gm in g_models:
+                            m_name = gm.get("name", "").replace("models/", "").strip()
+                            methods = gm.get("supportedGenerationMethods", [])
+                            if "generateContent" in methods and not any(x in m_name for x in ("embedding", "aqa", "imagen", "tts")):
+                                ctx = gm.get("inputTokenLimit", 1048576)
+                                is_38 = "3.8-flash" in m_name
+                                is_lite = "flash-lite" in m_name
+                                prio = 1 if is_38 else (2 if is_lite else 5)
+                                if m_name in self._models:
+                                    self._models[m_name].context_window = ctx
+                                    self._models[m_name].priority = prio
+                                else:
+                                    self._models[m_name] = ModelSpec(
+                                        name=m_name,
+                                        provider="gemini",
+                                        context_window=ctx,
+                                        tpm_limit=1000000,
+                                        supports_multimodal=True,
+                                        supports_json=True,
+                                        priority=prio
+                                    )
+                    print(f"✅ [LLMRouter] Synced active Gemini models from Google API.")
+            except Exception as e:
+                print(f"⚠️ [LLMRouter] Could not probe Gemini models API ({e}). Keeping cached models.")
+
+        # 2. Probe Groq Models
+        if groq_key and requests:
+            try:
+                r = requests.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {groq_key}"},
+                    timeout=10
+                )
+                if r.status_code == 200:
+                    q_models = r.json().get("data", [])
+                    with self._lock:
+                        for qm in q_models:
+                            qid = qm.get("id", "").strip()
+                            if qm.get("active", True) and not any(x in qid for x in ("whisper", "embedding", "tts")):
+                                ctx = qm.get("context_window", 131072)
+                                prio = 1 if "120b" in qid else 2
+                                if qid in self._models:
+                                    self._models[qid].context_window = ctx
+                                    self._models[qid].priority = prio
+                                else:
+                                    self._models[qid] = ModelSpec(
+                                        name=qid,
+                                        provider="groq",
+                                        context_window=ctx,
+                                        tpm_limit=int(os.getenv("GROQ_TPM_LIMIT", "8000")),
+                                        supports_multimodal=False,
+                                        supports_json=True,
+                                        priority=prio
+                                    )
+                    print(f"✅ [LLMRouter] Synced active Groq models from Groq API.")
+            except Exception as e:
+                print(f"⚠️ [LLMRouter] Could not probe Groq models API ({e}). Keeping cached models.")
+
+        # 3. Persist to Redis
+        self._save_to_redis()
+        return self.get_available_models_for_client()
+
+    def get_available_models_for_client(self) -> List[Dict[str, Any]]:
+        """
+        Return the list of active models directly from Redis/memory formatted for UI selection.
+        """
+        self._load_from_redis()
+        out = []
+        now = time.time()
+        gemini_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
+        groq_key = bool(os.getenv("GROQ_API_KEY", "").strip())
+
+        with self._lock:
+            for spec in self._models.values():
+                # Filter out models if provider key is absent (unless in test mode where neither key is present)
+                if (gemini_key or groq_key):
+                    if spec.provider == "gemini" and not gemini_key:
+                        continue
+                    if spec.provider == "groq" and not groq_key:
+                        continue
+
+                # Filter out models currently on cooldown
+                if spec.cooldown_until > now:
+                    continue
+
+                provider_display = "Google Gemini" if spec.provider == "gemini" else "Groq"
+                is_recommended = (spec.name == "gemini-3.8-flash")
+
+                display_name = spec.name
+                if "gemini-3.8-flash" in spec.name:
+                    display_name = "Gemini 3.8 Flash (Recommended)"
+                elif "gemini-flash-lite-latest" in spec.name:
+                    display_name = "Gemini Flash Lite Latest"
+                elif "gemini-3.5-flash-lite" in spec.name:
+                    display_name = "Gemini 3.5 Flash Lite"
+                elif "120b" in spec.name:
+                    display_name = "Groq GPT-OSS 120B"
+                elif "27b" in spec.name:
+                    display_name = "Groq Qwen 3.8 27B"
+                elif "20b" in spec.name:
+                    display_name = "Groq GPT-OSS 20B"
+
+                out.append({
+                    "id": spec.name,
+                    "displayName": display_name,
+                    "provider": provider_display,
+                    "contextWindow": spec.context_window,
+                    "isRecommended": is_recommended,
+                    "supportsJson": spec.supports_json,
+                    "priority": 0 if is_recommended else (spec.priority if spec.provider == "gemini" else 10 + spec.priority)
+                })
+
+        out.sort(key=lambda x: x["priority"])
+        return out
 
     def _save_to_redis(self):
         """Persist model metadata and cooldown state to Redis with a 24-hour TTL."""
@@ -263,11 +414,13 @@ class LLMRouter:
         self,
         task_type: TaskType,
         est_tokens: int = 0,
-        multimodal: bool = False
+        multimodal: bool = False,
+        preferred_model: Optional[str] = None
     ) -> List[ModelSpec]:
         """
         Return ordered list of models best suited for the given task and token load.
         Filters out models on cooldown or with insufficient TPM/context.
+        If preferred_model is provided, it is hoisted to the front of candidate list.
         """
         # Periodic resync with Redis if more than 30s have elapsed
         if time.time() - self._last_redis_sync > 30.0:
@@ -331,8 +484,31 @@ class LLMRouter:
                 return (multimodal_weight, m.priority)
             candidates.sort(key=correction_sort)
 
+        elif task_type == TaskType.ASSIGNMENT:
+            # Research synthesis, academic documents & notebook code solutions:
+            # Gemini 3.8 Flash is specifically prioritized for deep reasoning, 1M context, and 8k+ output tokens.
+            def assignment_sort(m: ModelSpec):
+                is_gemini_38 = 0 if m.name == "gemini-3.8-flash" else (1 if m.provider == "gemini" else 10)
+                return (is_gemini_38, m.priority)
+            candidates.sort(key=assignment_sort)
+
         else:
             candidates.sort(key=lambda m: m.priority)
+
+        # Hoist user's selected/preferred model to the very top if requested
+        if preferred_model:
+            pref_name = preferred_model.strip()
+            pref_spec = next((c for c in candidates if c.name == pref_name), None)
+            if pref_spec:
+                candidates = [c for c in candidates if c.name != pref_name]
+                candidates.insert(0, pref_spec)
+            else:
+                with self._lock:
+                    raw_spec = self._models.get(pref_name)
+                    if raw_spec:
+                        has_key = (raw_spec.provider == "gemini" and gemini_key) or (raw_spec.provider == "groq" and groq_key)
+                        if has_key:
+                            candidates.insert(0, raw_spec)
 
         return candidates
 

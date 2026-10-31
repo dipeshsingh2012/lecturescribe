@@ -567,26 +567,24 @@ export default function HomeView({
             >
               Library ({courseResources.length + (courseReadings?.length || 0) + (courseNotes?.length || 0)})
             </Button>
-            {isTutor && (
-              <Button
-                variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
-                size="small"
-                startIcon={<FileCode size={15} />}
-                onClick={() => setCourseViewTab('assignments')}
-                aria-label="Course Assignments"
-                sx={{
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.82rem',
-                  borderRadius: 2,
-                  ...(courseViewTab === 'assignments'
-                    ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
-                    : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
-                }}
-              >
-                Assignments ({courseAssignments.assignments.length})
-              </Button>
-            )}
+            <Button
+              variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<FileCode size={15} />}
+              onClick={() => setCourseViewTab('assignments')}
+              aria-label="Course Assignments"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'assignments'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Assignments ({courseAssignments.assignments.length})
+            </Button>
             <Button
               variant={courseViewTab === 'calendar' ? 'contained' : 'outlined'}
               size="small"
@@ -999,8 +997,8 @@ export default function HomeView({
           onDeleteNote={onDeleteNote}
           currentTheme={currentTheme}
         />
-      ) : (courseViewTab === 'assignments' && isTutor) ? (
-        /* LEVEL 2E: COURSE ASSIGNMENT PLANNER & SOLVER (TUTOR ONLY) */
+      ) : courseViewTab === 'assignments' ? (
+        /* LEVEL 2E: COURSE ASSIGNMENT PLANNER & SOLVER (TUTORS & STUDENTS) */
         <CourseAssignments
           courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
           assignments={courseAssignments.assignments}
@@ -1013,6 +1011,7 @@ export default function HomeView({
           onSkipDataset={courseAssignments.skipDataset}
           onRegenerateAssignment={courseAssignments.regenerateAssignment}
           onDeleteAssignment={courseAssignments.deleteAssignment}
+          onRefreshAssignments={courseAssignments.fetchAssignments}
           currentTheme={currentTheme}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}

@@ -942,6 +942,18 @@ class Llama3PineconeRAGStore:
         groq_key = os.getenv("GROQ_API_KEY", "")
 
         candidates = []
+        if gemini_key:
+            for gem_m, gem_disp in [
+                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
+                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+            ]:
+                candidates.append({
+                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    "auth_header": f"Bearer {gemini_key}",
+                    "model_name": gem_m,
+                    "display": f"{gem_disp} (OpenAI API)"
+                })
         if groq_key:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
@@ -961,18 +973,6 @@ class Llama3PineconeRAGStore:
                 "model_name": "openai/gpt-oss-20b",
                 "display": "Groq GPT-OSS 20B"
             })
-        if gemini_key:
-            for gem_m, gem_disp in [
-                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
-                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
-                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-            ]:
-                candidates.append({
-                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                    "auth_header": f"Bearer {gemini_key}",
-                    "model_name": gem_m,
-                    "display": f"{gem_disp} (OpenAI API)"
-                })
 
         if not candidates:
             raise RuntimeError("No active LLM keys (GROQ_API_KEY or GEMINI_API_KEY) found.")
@@ -1299,6 +1299,18 @@ class Llama3PineconeRAGStore:
         groq_key = os.getenv("GROQ_API_KEY", "")
 
         candidates = []
+        if gemini_key:
+            for gem_m, gem_disp in [
+                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
+                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+            ]:
+                candidates.append({
+                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    "auth_header": f"Bearer {gemini_key}",
+                    "model_name": gem_m,
+                    "display": f"{gem_disp} (OpenAI API)"
+                })
         if groq_key:
             candidates.append({
                 "endpoint": "https://api.groq.com/openai/v1/chat/completions",
@@ -1318,18 +1330,6 @@ class Llama3PineconeRAGStore:
                 "model_name": "openai/gpt-oss-20b",
                 "display": "Groq GPT-OSS 20B"
             })
-        if gemini_key:
-            for gem_m, gem_disp in [
-                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
-                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
-                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
-            ]:
-                candidates.append({
-                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                    "auth_header": f"Bearer {gemini_key}",
-                    "model_name": gem_m,
-                    "display": f"{gem_disp} (OpenAI API)"
-                })
 
         if not candidates:
             raise RuntimeError("No active LLM keys (GROQ_API_KEY or GEMINI_API_KEY) found.")

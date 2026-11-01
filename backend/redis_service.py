@@ -269,13 +269,14 @@ class RedisCacheService:
             print(f"[Redis Cache Warning] Quiz cache write error: {e}")
             return False
 
-    def get_course_quiz(self, course_slug: str) -> Optional[Dict[str, Any]]:
+    def get_course_quiz(self, course_slug: str, settings_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Retrieve cached course-level quiz questions."""
         if not self.client or not self.enabled or not course_slug:
             return None
 
         clean_slug = str(course_slug).strip().lower()
-        key = f"ls:course_quiz:{clean_slug}"
+        suffix = f":{settings_key}" if settings_key else ""
+        key = f"ls:course_quiz:{clean_slug}{suffix}"
         try:
             raw = self.client.get(key)
             if raw:
@@ -292,14 +293,16 @@ class RedisCacheService:
         self,
         course_slug: str,
         quiz_data: Dict[str, Any],
-        ttl_seconds: Optional[int] = 86400
+        ttl_seconds: Optional[int] = 86400,
+        settings_key: Optional[str] = None
     ) -> bool:
         """Store generated course-level quiz questions in Redis (default 24h)."""
         if not self.client or not self.enabled or not course_slug:
             return False
 
         clean_slug = str(course_slug).strip().lower()
-        key = f"ls:course_quiz:{clean_slug}"
+        suffix = f":{settings_key}" if settings_key else ""
+        key = f"ls:course_quiz:{clean_slug}{suffix}"
         ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl
         try:
             val_str = json.dumps(quiz_data)

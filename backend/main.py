@@ -659,6 +659,10 @@ def determine_lecture_quiz_count(cues: Optional[List[Dict[str, Any]]] = None, du
 class QuizGenerateRequest(BaseModel):
     regenerate: bool = False
     num_questions: Optional[int] = None
+    difficulty: Optional[str] = "medium"
+    question_types: Optional[str] = "mixed"
+    timed: Optional[bool] = True
+    time_limit_minutes: Optional[int] = None
     generate: bool = True
 
 
@@ -3106,6 +3110,10 @@ def get_or_generate_course_quiz(
     course_name: str,
     regenerate: bool = Query(False, description="Force regenerate without using cache"),
     num_questions: Optional[int] = Query(None, description="Number of quiz questions to generate"),
+    difficulty: Optional[str] = Query(None, description="Difficulty tier: easy, medium, hard, mixed"),
+    question_types: Optional[str] = Query(None, description="Question types: mixed, mcq, fill_in_the_blank"),
+    timed: Optional[bool] = Query(None, description="Whether quiz is timed"),
+    time_limit_minutes: Optional[int] = Query(None, description="Time limit in minutes"),
     email: Optional[str] = Query(None, description="Signed-in user email"),
     generate: bool = Query(True, description="Whether to generate new quiz if not found in cache/DB"),
     body: Optional[QuizGenerateRequest] = None
@@ -3118,17 +3126,31 @@ def get_or_generate_course_quiz(
 
     is_regenerate = regenerate or (body.regenerate if body else False)
     req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
+    req_difficulty = str((body.difficulty if body and body.difficulty is not None else None) or difficulty or "medium").lower().strip()
+    if req_difficulty not in ("easy", "medium", "hard", "mixed"):
+        req_difficulty = "medium"
+
+    req_types = str((body.question_types if body and body.question_types is not None else None) or question_types or "mixed").lower().strip()
+    if req_types not in ("all", "mixed", "mcq", "fill_in_the_blank"):
+        req_types = "mixed"
+
+    is_timed = (body.timed if body and body.timed is not None else None) if (body and body.timed is not None) else (timed if timed is not None else True)
+    req_time_limit = (body.time_limit_minutes if body and body.time_limit_minutes is not None else None) or time_limit_minutes or (req_count or 20)
     is_generate = generate and (body.generate if body and body.generate is not None else True)
+
+    settings_key = f"{req_difficulty}_{req_count or 'all'}_{req_types}"
 
     # 1. Check Redis Cache
     min_questions = req_count if req_count is not None else 10
     if not is_regenerate and redis_cache:
-        cached_quiz = redis_cache.get_course_quiz(course_slug)
+        cached_quiz = redis_cache.get_course_quiz(course_slug, settings_key=settings_key)
+        if not cached_quiz and req_difficulty == "medium" and (req_count is None or req_count >= 10):
+            cached_quiz = redis_cache.get_course_quiz(course_slug)
         if cached_quiz:
             cleaned_cached = sanitize_quiz_payload(cached_quiz)
             if cleaned_cached and len(cleaned_cached.get("questions") or []) >= min_questions:
                 if len(cleaned_cached.get("questions") or []) != len(cached_quiz.get("questions") or []):
-                    redis_cache.set_course_quiz(course_slug, cleaned_cached, ttl_seconds=86400)
+                    redis_cache.set_course_quiz(course_slug, cleaned_cached, ttl_seconds=86400, settings_key=settings_key)
                 cached_quiz = dict(cleaned_cached)
                 print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
                 cached_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
@@ -3148,25 +3170,27 @@ def get_or_generate_course_quiz(
         if db_quiz and db_quiz.get("questions"):
             cleaned_db = sanitize_quiz_payload(db_quiz)
             if cleaned_db and len(cleaned_db.get("questions") or []) >= min_questions:
-                if len(cleaned_db.get("questions") or []) != len(db_quiz.get("questions") or []):
-                    try:
-                        db_manager.save_course_quiz(clean_course, cleaned_db)
-                    except Exception as e:
-                        print(f"Failed to persist sanitized course quiz: {e}")
-                db_quiz = dict(cleaned_db)
-                print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
-                if redis_cache:
-                    redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)
-                db_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
-                if email:
-                    attempt = db_manager.get_quiz_attempt("course", course_slug, email)
-                    if attempt:
-                        db_quiz["user_answers"] = attempt.get("answers", {})
-                        db_quiz["user_score"] = attempt.get("score", 0)
-                        db_quiz["user_completed"] = attempt.get("completed", False)
-                        db_quiz["is_completed"] = attempt.get("completed", False)
-                    db_quiz["user_feedback"] = db_manager.get_quiz_feedback("course", course_slug, user_email=email)
-                return db_quiz
+                quiz_diff = str(cleaned_db.get("difficulty") or "medium").lower()
+                if req_difficulty == "medium" or quiz_diff == req_difficulty:
+                    if len(cleaned_db.get("questions") or []) != len(db_quiz.get("questions") or []):
+                        try:
+                            db_manager.save_course_quiz(clean_course, cleaned_db)
+                        except Exception as e:
+                            print(f"Failed to persist sanitized course quiz: {e}")
+                    db_quiz = dict(cleaned_db)
+                    print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
+                    if redis_cache:
+                        redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400, settings_key=settings_key)
+                    db_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
+                    if email:
+                        attempt = db_manager.get_quiz_attempt("course", course_slug, email)
+                        if attempt:
+                            db_quiz["user_answers"] = attempt.get("answers", {})
+                            db_quiz["user_score"] = attempt.get("score", 0)
+                            db_quiz["user_completed"] = attempt.get("completed", False)
+                            db_quiz["is_completed"] = attempt.get("completed", False)
+                        db_quiz["user_feedback"] = db_manager.get_quiz_feedback("course", course_slug, user_email=email)
+                    return db_quiz
 
     # If not in cache/DB and generate=False, do not generate a new quiz eagerly; return empty state
     if not is_generate:
@@ -3238,10 +3262,17 @@ def get_or_generate_course_quiz(
             course_name=canonical_title,
             lectures_data=valid_lectures,
             num_questions=req_count,
-            feedback_guidance=feedback_guidance
+            feedback_guidance=feedback_guidance,
+            difficulty=req_difficulty,
+            question_types=req_types,
+            time_limit_minutes=req_time_limit
         )
-        quiz_id = f"cquiz_{course_slug}_{int(time.time())}"
+        quiz_id = f"cquiz_{course_slug}_{req_difficulty}_{int(time.time())}"
         quiz_data["quiz_id"] = quiz_id
+        quiz_data["difficulty"] = req_difficulty
+        quiz_data["question_types"] = req_types
+        quiz_data["timed"] = is_timed
+        quiz_data["time_limit_minutes"] = req_time_limit
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -3260,7 +3291,9 @@ def get_or_generate_course_quiz(
 
     # 7. Cache in Redis (24 hours)
     if redis_cache:
-        redis_cache.set_course_quiz(course_slug, quiz_data, ttl_seconds=86400)
+        redis_cache.set_course_quiz(course_slug, quiz_data, ttl_seconds=86400, settings_key=settings_key)
+        if req_difficulty == "medium":
+            redis_cache.set_course_quiz(course_slug, quiz_data, ttl_seconds=86400)
 
     quiz_data = dict(quiz_data)
     quiz_data["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)

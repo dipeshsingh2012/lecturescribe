@@ -928,6 +928,89 @@ class TestCourseQuizImprovements(unittest.TestCase):
         self.assertEqual(cleaned["questions"][0]["id"], 1)
         self.assertEqual(cleaned["questions"][0]["question"], "What characterizes the null space of matrix $A$?")
 
+    def test_generate_course_quiz_calibrates_to_difficulty_and_settings(self):
+        """Verify generate_course_quiz tailors prompts to difficulty and question types."""
+        from backend.rag_engine import pinecone_rag_engine
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "questions": [
+                            {
+                                "id": 1,
+                                "type": "mcq",
+                                "question": "Under what singular value condition does ridge regression prevent gradient explosion?",
+                                "options": ["$\\sigma_{min} > \\lambda$", "$\\sigma_{max} < 1$", "Rank is deficient", "None"],
+                                "correct_index": 0,
+                                "explanation": "Ridge regression stabilizes ill-conditioned matrix inversion.",
+                                "lecture_id": "vid_1",
+                                "lecture_title": "Lecture 1",
+                                "timestamp": "10:00",
+                                "difficulty": "hard"
+                            }
+                        ]
+                    })
+                }
+            }]
+        }
+
+        with patch.dict(os.environ, {"GROQ_API_KEY": "fake_groq_key"}), patch("requests.post", return_value=mock_resp) as mock_post:
+            result = pinecone_rag_engine.generate_course_quiz(
+                course_name="Machine Learning",
+                lectures_data=[{"video_id": "vid_1", "title": "Lecture 1", "summary": "Intro"}],
+                num_questions=10,
+                difficulty="hard",
+                question_types="mcq",
+                time_limit_minutes=15
+            )
+
+            self.assertEqual(result["difficulty"], "hard")
+            self.assertEqual(result["question_types"], "mcq")
+            self.assertEqual(result["duration_minutes"], 15)
+            self.assertEqual(result["questions"][0]["difficulty"], "hard")
+
+            # Check prompt contents sent to LLM
+            sent_payload = mock_post.call_args[1]["json"]
+            system_msg = sent_payload["messages"][0]["content"]
+            self.assertIn("TARGET COMPLEXITY LEVEL: HARD / ADVANCED RIGOR", system_msg)
+            self.assertIn("100% MULTIPLE CHOICE QUESTIONS", system_msg)
+
+    @patch("backend.database.db_manager.get_course_details")
+    @patch("backend.rag_engine.pinecone_rag_engine.generate_course_quiz")
+    def test_course_quiz_api_endpoint_handles_settings_payload(self, mock_gen, mock_details):
+        """Verify /api/course/{course_slug}/quiz accepts settings body and passes to generator."""
+        mock_details.return_value = {
+            "course_name": "Deep Learning",
+            "lectures": [{"video_id": "v1", "title": "L1"}]
+        }
+        mock_gen.return_value = {
+            "course_name": "Deep Learning",
+            "course_slug": "deep-learning",
+            "questions": [{"id": 1, "type": "mcq", "question": "Q1", "options": ["A", "B", "C", "D"], "correct_index": 0, "difficulty": "hard"}],
+            "total_questions": 1,
+            "difficulty": "hard",
+            "question_types": "mcq",
+            "duration_minutes": 15
+        }
+
+        resp = self.client.post("/api/course/deep-learning/quiz", json={
+            "regenerate": True,
+            "num_questions": 10,
+            "difficulty": "hard",
+            "question_types": "mcq",
+            "timed": False,
+            "time_limit_minutes": 15
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["difficulty"], "hard")
+        self.assertEqual(data["question_types"], "mcq")
+        self.assertEqual(data["timed"], False)
+        self.assertEqual(data["time_limit_minutes"], 15)
+
 
 if __name__ == "__main__":
     unittest.main()

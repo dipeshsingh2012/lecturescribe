@@ -534,4 +534,66 @@ describe('useCourseQuiz hook', () => {
     expect(result.current.quizGenerating).toBe(false);
     expect(result.current.quizHistory).toHaveLength(1);
   });
+
+  it('manages quizSettings and submits complexity settings in fetchOrGenerateQuiz', async () => {
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/quiz/history')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ history: [] })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          course_name: 'Machine Learning',
+          questions: [
+            { id: 1, question: 'Hard Q', options: ['A', 'B'], correct_index: 0, difficulty: 'hard' }
+          ],
+          total_questions: 1,
+          difficulty: 'hard',
+          question_types: 'mcq',
+          timed: false
+        })
+      });
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Machine Learning', 'student@example.com'));
+
+    expect(result.current.quizSettings.difficulty).toBe('medium');
+    expect(result.current.quizSettings.numQuestions).toBe(30);
+
+    // Update settings via helper
+    act(() => {
+      result.current.updateQuizSettings({ difficulty: 'hard', numQuestions: 10, timed: false });
+    });
+
+    expect(result.current.quizSettings.difficulty).toBe('hard');
+    expect(result.current.quizSettings.numQuestions).toBe(10);
+    expect(result.current.quizSettings.timed).toBe(false);
+
+    // Generate with custom settings
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(true, { difficulty: 'hard', numQuestions: 10, questionTypes: 'mcq', timed: false });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/quiz'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          regenerate: true,
+          generate: true,
+          num_questions: 10,
+          difficulty: 'hard',
+          question_types: 'mcq',
+          timed: false,
+          time_limit_minutes: 30
+        })
+      })
+    );
+
+    expect(result.current.quizData.difficulty).toBe('hard');
+    expect(result.current.timeLeft).toBeNull(); // Untimed mode
+  });
 });

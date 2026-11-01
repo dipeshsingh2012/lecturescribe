@@ -14,10 +14,10 @@ export function useCourseTutor(courseName, userEmail = null) {
   const chatEndRef = useRef(null);
   const chatInputRef = useRef(null);
 
-  // Auto-scroll when new messages arrive
+  // Auto-scroll when new messages arrive or loading state changes
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [messages.length]);
+  }, [messages.length, loading]);
 
   const fetchHistory = useCallback(async () => {
     if (!courseSlug) return;

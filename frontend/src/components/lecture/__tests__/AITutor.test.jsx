@@ -419,4 +419,106 @@ describe('AITutor', () => {
     expect(handleCrossLectureClick).toHaveBeenCalledWith('1229247139', '37:46', 'Data Science Lab Live session - 2');
     expect(handleCueClick).not.toHaveBeenCalled();
   });
+
+  it('scrolls to the end when a user enters a query and clicks send', () => {
+    const handleSendMessage = vi.fn();
+    const scrollIntoViewMock = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    render(
+      <AITutor
+        chatMessages={[
+          { id: '1', sender: 'bot', text: 'Welcome to the AI Tutor!' }
+        ]}
+        chatLoading={false}
+        chatInput="Explain gradient descent"
+        setChatInput={vi.fn()}
+        handleSendMessage={handleSendMessage}
+      />
+    );
+
+    const buttons = screen.getAllByRole('button');
+    const sendButton = buttons.find(b => b.querySelector('svg.lucide-send'));
+    expect(sendButton).toBeInTheDocument();
+
+    fireEvent.click(sendButton);
+    expect(handleSendMessage).toHaveBeenCalled();
+    expect(scrollIntoViewMock).toHaveBeenCalled();
+  });
+
+  it('scrolls to the end when user presses Enter key in the chat input', () => {
+    const handleSendMessage = vi.fn();
+    const scrollIntoViewMock = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    render(
+      <AITutor
+        chatMessages={[]}
+        chatLoading={false}
+        chatInput="What is backprop?"
+        setChatInput={vi.fn()}
+        handleSendMessage={handleSendMessage}
+      />
+    );
+
+    const textarea = screen.getByPlaceholderText(/Ask AI tutor anything/i);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+
+    expect(handleSendMessage).toHaveBeenCalled();
+    expect(scrollIntoViewMock).toHaveBeenCalled();
+  });
+
+  it('automatically scrolls to bottom when a new user query or bot response arrives', () => {
+    const scrollIntoViewMock = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    const { rerender } = render(
+      <AITutor
+        chatMessages={[
+          { id: '1', sender: 'bot', text: 'Hello' }
+        ]}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    scrollIntoViewMock.mockClear();
+
+    // Rerender with user query added and loading true (Thinking...)
+    rerender(
+      <AITutor
+        chatMessages={[
+          { id: '1', sender: 'bot', text: 'Hello' },
+          { id: '2', sender: 'user', text: 'Can you explain linear regression?' }
+        ]}
+        chatLoading={true}
+        chatInput=""
+        setChatInput={vi.fn()}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    expect(scrollIntoViewMock).toHaveBeenCalled();
+
+    scrollIntoViewMock.mockClear();
+
+    // Rerender when bot answer arrives
+    rerender(
+      <AITutor
+        chatMessages={[
+          { id: '1', sender: 'bot', text: 'Hello' },
+          { id: '2', sender: 'user', text: 'Can you explain linear regression?' },
+          { id: '3', sender: 'bot', text: 'Linear regression models the relationship...' }
+        ]}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    expect(scrollIntoViewMock).toHaveBeenCalled();
+  });
 });

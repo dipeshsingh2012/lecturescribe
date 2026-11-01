@@ -83,7 +83,10 @@ export default function CourseQuiz({
   isTutor = true,
   userEmail = 'anonymous',
   onBackToCourses,
-  onBackToCourseLectures
+  onBackToCourseLectures,
+  quizSettings,
+  updateQuizSettings,
+  setQuizSettings
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showSummaryView, setShowSummaryView] = useState(false);
@@ -341,6 +344,9 @@ export default function CourseQuiz({
           handleStartExam={handleStartExam}
           isInitialEmptyState={true}
           hasPastQuizzes={Boolean(quizHistory && quizHistory.length > 0)}
+          quizSettings={quizSettings}
+          onUpdateSettings={updateQuizSettings || setQuizSettings}
+          handleBackToOverview={handleBackToOverview}
           themeStyles={themeStyles}
         />
       </Box>
@@ -421,6 +427,9 @@ export default function CourseQuiz({
           handleStartExam={handleStartExam}
           isInitialEmptyState={false}
           hasPastQuizzes={Boolean(quizHistory && quizHistory.length > 0)}
+          quizSettings={quizSettings}
+          onUpdateSettings={updateQuizSettings || setQuizSettings}
+          handleBackToOverview={handleBackToOverview}
           themeStyles={themeStyles}
         />
       </Box>
@@ -452,6 +461,7 @@ export default function CourseQuiz({
           isTutor={isTutor}
           fetchOrGenerateQuiz={fetchOrGenerateQuiz}
           handleBackToOverview={handleBackToOverview}
+          quizSettings={quizSettings}
           themeStyles={themeStyles}
         />
       </Box>
@@ -648,6 +658,29 @@ export default function CourseQuiz({
                 fontSize: '0.72rem'
               }}
             />
+            {(quizData?.difficulty || quizSettings?.difficulty) && (
+              <Chip
+                label={(quizData?.difficulty || quizSettings?.difficulty).toUpperCase()}
+                size="small"
+                sx={{
+                  bgcolor:
+                    (quizData?.difficulty || quizSettings?.difficulty) === 'easy'
+                      ? 'rgba(34, 197, 94, 0.15)'
+                      : (quizData?.difficulty || quizSettings?.difficulty) === 'hard'
+                      ? 'rgba(239, 68, 68, 0.15)'
+                      : 'rgba(245, 158, 11, 0.15)',
+                  color:
+                    (quizData?.difficulty || quizSettings?.difficulty) === 'easy'
+                      ? '#22c55e'
+                      : (quizData?.difficulty || quizSettings?.difficulty) === 'hard'
+                      ? '#ef4444'
+                      : '#f59e0b',
+                  fontWeight: 800,
+                  fontSize: '0.72rem',
+                  letterSpacing: '0.5px'
+                }}
+              />
+            )}
           </Box>
           <Typography variant="caption" sx={{ color: textSecondary }}>
             Question {currentIdx + 1} of {totalQuestions} • {answeredCount} marked • {totalQuestions - answeredCount} remaining
@@ -655,21 +688,36 @@ export default function CourseQuiz({
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-          {/* 30-Minute Countdown Timer Chip */}
+          {/* Countdown Timer or Untimed Mode Badge */}
           {!reviewMode && (
-            <Chip
-              icon={<Clock size={14} style={{ color: timeLeft <= 300 ? '#ef4444' : primaryColor }} />}
-              label={formatTime(timeLeft)}
-              size="small"
-              sx={{
-                fontWeight: 800,
-                fontFamily: 'monospace',
-                fontSize: '0.82rem',
-                bgcolor: timeLeft <= 300 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(99, 102, 241, 0.12)',
-                color: timeLeft <= 300 ? '#ef4444' : textPrimary,
-                border: timeLeft <= 300 ? '1.5px solid rgba(239, 68, 68, 0.5)' : `1px solid ${cardBorder}`
-              }}
-            />
+            timeLeft !== null && timeLeft !== undefined ? (
+              <Chip
+                icon={<Clock size={14} style={{ color: timeLeft <= 300 ? '#ef4444' : primaryColor }} />}
+                label={formatTime(timeLeft)}
+                size="small"
+                sx={{
+                  fontWeight: 800,
+                  fontFamily: 'monospace',
+                  fontSize: '0.82rem',
+                  bgcolor: timeLeft <= 300 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(99, 102, 241, 0.12)',
+                  color: timeLeft <= 300 ? '#ef4444' : textPrimary,
+                  border: timeLeft <= 300 ? '1.5px solid rgba(239, 68, 68, 0.5)' : `1px solid ${cardBorder}`
+                }}
+              />
+            ) : (
+              <Chip
+                icon={<Clock size={14} style={{ color: '#10b981' }} />}
+                label="Untimed Practice"
+                size="small"
+                sx={{
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  bgcolor: 'rgba(16, 185, 129, 0.12)',
+                  color: '#10b981',
+                  border: `1px solid ${cardBorder}`
+                }}
+              />
+            )
           )}
 
           {/* Toggle Collapsible Sidebar Button */}

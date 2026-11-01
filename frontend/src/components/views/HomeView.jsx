@@ -952,6 +952,9 @@ export default function HomeView({
           marksPerQuestion={courseQuiz.marksPerQuestion}
           totalMarks={courseQuiz.totalMarks}
           earnedMarks={courseQuiz.earnedMarks}
+          quizSettings={courseQuiz.quizSettings}
+          updateQuizSettings={courseQuiz.updateQuizSettings}
+          setQuizSettings={courseQuiz.setQuizSettings}
           userEmail={googleUser?.email || 'anonymous'}
           handleSelectLecture={(vid, cName, ts) => {
             const tParam = ts ? `?t=${encodeURIComponent(ts)}` : '';

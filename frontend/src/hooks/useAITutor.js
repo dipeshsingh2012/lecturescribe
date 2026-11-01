@@ -64,6 +64,17 @@ export function useAITutor(activeData, googleUser) {
     }
   }, [activeData?.videoId, activeData?.cues?.length, googleUser?.email]);
 
+  // Auto-scroll when new messages arrive or loading state changes
+  useEffect(() => {
+    if (chatEndRef.current) {
+      try {
+        chatEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (e) {
+        chatEndRef.current?.scrollIntoView?.();
+      }
+    }
+  }, [chatMessages.length, chatLoading]);
+
   const clearChatHistory = async () => {
     if (!activeData?.videoId) return;
     clearedInSessionRef.current = true;

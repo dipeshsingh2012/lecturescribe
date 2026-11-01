@@ -55,6 +55,11 @@ export default function AITutor({
   const [showScrollBottom, setShowScrollBottom] = React.useState(false);
   const [showTranscriptNotice, setShowTranscriptNotice] = React.useState(true);
   const messagesContainerRef = React.useRef(null);
+  const internalChatEndRef = React.useRef(null);
+  const effectiveChatEndRef = chatEndRef || internalChatEndRef;
+  const isUserScrolledUpRef = React.useRef(false);
+  const prevMessagesCountRef = React.useRef(chatMessages.length);
+  const prevVideoIdRef = React.useRef(videoId);
   const activeCopiedResponseId = copiedResponseId !== undefined && copiedResponseId !== null ? copiedResponseId : internalCopiedResponseId;
 
   React.useEffect(() => {
@@ -74,11 +79,81 @@ export default function AITutor({
     const el = e.currentTarget;
     const isUp = el.scrollHeight - el.scrollTop - el.clientHeight > 140;
     setShowScrollBottom(isUp);
+    isUserScrolledUpRef.current = isUp;
   };
 
-  const scrollToBottom = () => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  };
+  const scrollToBottom = React.useCallback((behavior = 'smooth') => {
+    const doScroll = () => {
+      const endEl = effectiveChatEndRef?.current;
+      if (endEl) {
+        try {
+          endEl.scrollIntoView({ behavior, block: 'end' });
+        } catch {
+          endEl?.scrollIntoView?.();
+        }
+      }
+      if (messagesContainerRef.current) {
+        if (behavior === 'smooth' && typeof messagesContainerRef.current.scrollTo === 'function') {
+          messagesContainerRef.current.scrollTo({
+            top: messagesContainerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        } else {
+          messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+        }
+      }
+    };
+
+    doScroll();
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        doScroll();
+      });
+    }
+  }, [effectiveChatEndRef]);
+
+  const onSendMessage = React.useCallback((promptText = null) => {
+    isUserScrolledUpRef.current = false;
+    setShowScrollBottom(false);
+    if (typeof handleSendMessage === 'function') {
+      handleSendMessage(promptText);
+    }
+    scrollToBottom('smooth');
+  }, [handleSendMessage, scrollToBottom]);
+
+  // Auto-scroll when user enters a query, bot starts thinking, or answers arrive
+  React.useEffect(() => {
+    if (prevVideoIdRef.current !== videoId) {
+      prevVideoIdRef.current = videoId;
+      isUserScrolledUpRef.current = false;
+      setShowScrollBottom(false);
+      prevMessagesCountRef.current = chatMessages.length;
+      if (chatMessages.length > 0) {
+        scrollToBottom('auto');
+      }
+      return;
+    }
+
+    prevMessagesCountRef.current = chatMessages.length;
+
+    if (chatMessages.length === 0) return;
+
+    const lastMessage = chatMessages[chatMessages.length - 1];
+    const isUserQuery = lastMessage?.sender === 'user';
+
+    // When the user enters a query, or when tutor starts thinking, always scroll to the end
+    if (isUserQuery || chatLoading) {
+      isUserScrolledUpRef.current = false;
+      setShowScrollBottom(false);
+      scrollToBottom('smooth');
+      return;
+    }
+
+    // When a bot response arrives or messages updated without user having scrolled up:
+    if (!isUserScrolledUpRef.current) {
+      scrollToBottom('smooth');
+    }
+  }, [chatMessages, chatLoading, videoId, scrollToBottom]);
 
   const handleCopyResponse = (text, id) => {
     if (typeof copyBotResponse === 'function') {
@@ -319,7 +394,7 @@ export default function AITutor({
                   {TUTOR_QUICK_PROMPTS.map((promptText) => (
                     <button
                       key={promptText}
-                      onClick={() => handleSendMessage(promptText)}
+                      onClick={() => onSendMessage(promptText)}
                       disabled={chatLoading}
                       style={{
                         background: 'var(--card-bg)',
@@ -801,13 +876,17 @@ export default function AITutor({
             </div>
           </div>
         )}
-        <div ref={chatEndRef} />
+        <div ref={effectiveChatEndRef} />
       </div>
 
       {/* Floating Scroll to Bottom Button */}
       {showScrollBottom && (
         <button
-          onClick={scrollToBottom}
+          onClick={() => {
+            isUserScrolledUpRef.current = false;
+            setShowScrollBottom(false);
+            scrollToBottom('smooth');
+          }}
           title="Scroll to latest messages"
           aria-label="Scroll to bottom"
           style={{
@@ -863,7 +942,7 @@ export default function AITutor({
           {TUTOR_QUICK_PROMPTS.map((pText) => (
             <button
               key={pText}
-              onClick={() => !chatLoading && handleSendMessage(pText)}
+              onClick={() => !chatLoading && onSendMessage(pText)}
               disabled={chatLoading}
               title={`Run prompt: "${pText}"`}
               style={{
@@ -921,7 +1000,7 @@ export default function AITutor({
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent?.isComposing) {
                 e.preventDefault();
                 if (chatInput.trim() && !chatLoading) {
-                  handleSendMessage();
+                  onSendMessage();
                 }
               }
             }}
@@ -942,7 +1021,7 @@ export default function AITutor({
             }}
           />
           <button
-            onClick={() => handleSendMessage()}
+            onClick={() => onSendMessage()}
             disabled={!chatInput.trim() || chatLoading}
             style={{
               background: 'var(--theme-primary)',

@@ -59,7 +59,23 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const [reviewMode, setReviewMode] = useState(false);
   const [replayingQuizId, setReplayingQuizId] = useState(null);
 
-  // 30-Minute Timer & Auto-Submit states
+  // Quiz Complexity & Settings state
+  const [quizSettings, setQuizSettings] = useState({
+    difficulty: 'medium', // 'easy' | 'medium' | 'hard' | 'mixed'
+    numQuestions: 30,     // 10 | 20 | 30
+    questionTypes: 'mixed', // 'mixed' | 'mcq' | 'fill_in_the_blank'
+    timed: true,
+    timeLimitMinutes: 30
+  });
+
+  const updateQuizSettings = useCallback((newSettings) => {
+    setQuizSettings((prev) => ({
+      ...prev,
+      ...newSettings
+    }));
+  }, []);
+
+  // Timer & Auto-Submit states
   const [timeLeft, setTimeLeft] = useState(1800); // 30 minutes in seconds
   const [autoSubmitted, setAutoSubmitted] = useState(false);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
@@ -89,7 +105,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     }
   }, [courseSlug, userEmail]);
 
-  const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null, generate = true) => {
+  const fetchOrGenerateQuiz = useCallback(async (regenerate = false, settingsOrNumQuestions = null, generate = true) => {
     if (!courseSlug) return;
     setQuizLoading(true);
     setQuizGenerating(Boolean(generate));
@@ -98,14 +114,32 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setReplayingQuizId(null);
     setQuizSubmitted(false);
     setAutoSubmitted(false);
+
+    // Support both legacy numeric count and rich settings object
+    const appliedSettings = typeof settingsOrNumQuestions === 'number'
+      ? { ...quizSettings, numQuestions: settingsOrNumQuestions }
+      : (settingsOrNumQuestions && typeof settingsOrNumQuestions === 'object'
+          ? { ...quizSettings, ...settingsOrNumQuestions }
+          : quizSettings);
+
+    const isTimed = appliedSettings.timed !== false;
+    const initialSeconds = isTimed ? ((appliedSettings.timeLimitMinutes || appliedSettings.numQuestions || 20) * 60) : null;
+
     if (regenerate) {
-      setTimeLeft(1800);
+      setTimeLeft(initialSeconds);
     }
     try {
-      const payload = { regenerate, generate };
-      if (numQuestions) {
-        payload.num_questions = numQuestions;
-      }
+      const payload = !generate
+        ? { regenerate, generate }
+        : {
+            regenerate,
+            generate,
+            num_questions: appliedSettings.numQuestions,
+            difficulty: appliedSettings.difficulty,
+            question_types: appliedSettings.questionTypes,
+            timed: isTimed,
+            time_limit_minutes: appliedSettings.timeLimitMinutes
+          };
       const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
       const generateQuery = `generate=${generate}`;
       const url = `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz${emailParam ? emailParam + '&' + generateQuery : '?' + generateQuery}`;
@@ -141,6 +175,17 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         return;
       }
 
+      if (sanitized.difficulty) {
+        setQuizSettings((prev) => ({
+          ...prev,
+          difficulty: sanitized.difficulty || prev.difficulty,
+          numQuestions: sanitized.total_questions || prev.numQuestions,
+          questionTypes: sanitized.question_types || prev.questionTypes,
+          timed: sanitized.timed !== undefined ? sanitized.timed : prev.timed,
+          timeLimitMinutes: sanitized.duration_minutes || sanitized.time_limit_minutes || prev.timeLimitMinutes
+        }));
+      }
+
       setQuizData(sanitized);
 
       if (regenerate) {
@@ -149,7 +194,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         setQuizSubmitted(false);
         setAutoSubmitted(false);
         setExamStarted(false);
-        setTimeLeft(1800);
+        setTimeLeft(initialSeconds);
         // Reset answers in database if regenerating
         const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
         fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers${delEmail}`, {
@@ -175,7 +220,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       setQuizGenerating(false);
       setHasFetched(true);
     }
-  }, [courseSlug, userEmail, fetchQuizHistory]);
+  }, [courseSlug, userEmail, fetchQuizHistory, quizSettings]);
 
   // Switch quiz state ONLY when truly switching to a different course
   useEffect(() => {
@@ -329,14 +374,15 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setAutoSubmitted(false);
     setExamStarted(false);
     setQuizData(null);
-    setTimeLeft(1800);
+    const initialSeconds = quizSettings.timed !== false ? ((quizSettings.timeLimitMinutes || quizSettings.numQuestions || 20) * 60) : null;
+    setTimeLeft(initialSeconds);
     if (courseSlug) {
       const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
       fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/answers${delEmail}`, {
         method: 'DELETE'
       }).catch(() => {});
     }
-  }, [courseSlug, userEmail]);
+  }, [courseSlug, userEmail, quizSettings]);
 
   const exitReplay = useCallback(() => {
     setReplayingQuizId(null);
@@ -344,9 +390,10 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setQuizSubmitted(false);
     setAutoSubmitted(false);
     setExamStarted(false);
-    setTimeLeft(1800);
+    const initialSeconds = quizSettings.timed !== false ? ((quizSettings.timeLimitMinutes || quizSettings.numQuestions || 20) * 60) : null;
+    setTimeLeft(initialSeconds);
     fetchOrGenerateQuiz(false);
-  }, [fetchOrGenerateQuiz]);
+  }, [fetchOrGenerateQuiz, quizSettings]);
 
   const deleteQuizHistory = useCallback(async (quizId) => {
     if (!courseSlug || !quizId) return false;
@@ -381,7 +428,20 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         ...quizJson,
         quiz_id: quizId
       });
+      if (sanitized.difficulty) {
+        setQuizSettings((prev) => ({
+          ...prev,
+          difficulty: sanitized.difficulty || prev.difficulty,
+          numQuestions: sanitized.total_questions || prev.numQuestions,
+          questionTypes: sanitized.question_types || prev.questionTypes,
+          timed: sanitized.timed !== undefined ? sanitized.timed : prev.timed,
+          timeLimitMinutes: sanitized.duration_minutes || sanitized.time_limit_minutes || prev.timeLimitMinutes
+        }));
+      }
       setQuizData(sanitized);
+      const isPastTimed = sanitized.timed !== false;
+      const pastSeconds = isPastTimed ? ((sanitized.duration_minutes || sanitized.time_limit_minutes || 20) * 60) : null;
+
       if (forReplay) {
         setReplayingQuizId(quizId);
         setSelectedAnswers({});
@@ -389,7 +449,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         setQuizSubmitted(false);
         setAutoSubmitted(false);
         setExamStarted(false);
-        setTimeLeft(1800);
+        setTimeLeft(pastSeconds);
       } else {
         setReplayingQuizId(null);
         setSelectedAnswers(data.answers || {});
@@ -408,10 +468,14 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const answeredCount = Object.keys(selectedAnswers).length;
   const isCompleted = totalQuestions > 0 && (answeredCount === totalQuestions || reviewMode || quizSubmitted || autoSubmitted);
 
-  // 30-Minute Countdown Timer & Auto-Submit on Expiry
+  // Countdown Timer & Auto-Submit on Expiry (active in timed mode)
   useEffect(() => {
     if (!examStarted || !quizData || !quizData.questions?.length || isCompleted || reviewMode) {
       return;
+    }
+
+    if (timeLeft === null || timeLeft === undefined) {
+      return; // Untimed practice mode
     }
 
     if (timeLeft <= 0) {
@@ -500,6 +564,9 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     marksPerQuestion,
     totalMarks,
     earnedMarks,
-    hasFetched
+    hasFetched,
+    quizSettings,
+    setQuizSettings,
+    updateQuizSettings
   };
 }

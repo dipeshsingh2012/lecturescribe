@@ -36,6 +36,7 @@ export default function QuizResultsSummary({
   isTutor = true,
   fetchOrGenerateQuiz,
   handleBackToOverview,
+  quizSettings = {},
   themeStyles = {}
 }) {
   const {
@@ -49,6 +50,30 @@ export default function QuizResultsSummary({
 
   const percentage = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
   const isPassing = percentage >= 70;
+
+  const currentDiff = quizSettings?.difficulty || 'medium';
+  let nextDifficultyRecommendation = null;
+  if (percentage >= 80) {
+    if (currentDiff === 'easy') {
+      nextDifficultyRecommendation = {
+        level: 'medium',
+        label: 'Medium (Standard Exam)',
+        text: 'Great work! You have mastered the foundations. Ready to challenge yourself on Medium difficulty?'
+      };
+    } else if (currentDiff === 'medium') {
+      nextDifficultyRecommendation = {
+        level: 'hard',
+        label: 'Hard (Mastery Challenge)',
+        text: 'Flawless performance on Medium! Step up to Hard difficulty to test edge-cases & deep theory.'
+      };
+    }
+  } else if (percentage < 60 && currentDiff === 'hard') {
+    nextDifficultyRecommendation = {
+      level: 'medium',
+      label: 'Medium (Standard Exam)',
+      text: 'Hard exams are tough! Solidify your mechanics with a Medium difficulty practice quiz.'
+    };
+  }
 
   return (
     <Box sx={{ width: '100%', pt: 2, pb: 4 }}>
@@ -114,9 +139,78 @@ export default function QuizResultsSummary({
             ? 'Great Job! Course Knowledge Verified'
             : 'Keep Practicing! Review the Lectures Below'}
         </Typography>
-        <Typography variant="body2" sx={{ color: textSecondary, mb: 4 }}>
+        <Typography variant="body2" sx={{ color: textSecondary, mb: 2 }}>
           You answered {score} out of {totalQuestions} questions correctly ({calcEarnedMarks} / {calcTotalMarks} marks) across all course lectures.
         </Typography>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mb: 3 }}>
+          <Chip
+            label={`Difficulty: ${currentDiff.toUpperCase()}`}
+            size="small"
+            sx={{
+              fontWeight: 800,
+              fontSize: '0.72rem',
+              letterSpacing: '0.5px',
+              bgcolor:
+                currentDiff === 'easy'
+                  ? 'rgba(34, 197, 94, 0.15)'
+                  : currentDiff === 'hard'
+                  ? 'rgba(239, 68, 68, 0.15)'
+                  : 'rgba(245, 158, 11, 0.15)',
+              color:
+                currentDiff === 'easy'
+                  ? '#22c55e'
+                  : currentDiff === 'hard'
+                  ? '#ef4444'
+                  : '#f59e0b'
+            }}
+          />
+          <Chip
+            label={quizSettings?.timed !== false ? `${quizSettings?.timeLimitMinutes || totalQuestions} Mins Exam` : 'Untimed Practice'}
+            size="small"
+            sx={{
+              fontWeight: 700,
+              fontSize: '0.72rem',
+              bgcolor: 'rgba(255, 255, 255, 0.05)',
+              color: textSecondary
+            }}
+          />
+        </Box>
+
+        {/* Adaptive Difficulty Progression Card */}
+        {nextDifficultyRecommendation && (
+          <Alert
+            severity="info"
+            icon={<Sparkles size={18} />}
+            sx={{
+              mb: 3,
+              borderRadius: 2,
+              textAlign: 'left',
+              bgcolor: 'rgba(99, 102, 241, 0.08)',
+              border: `1px solid ${cardBorder}`
+            }}
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => {
+                  if (typeof fetchOrGenerateQuiz === 'function') {
+                    fetchOrGenerateQuiz(true, { ...quizSettings, difficulty: nextDifficultyRecommendation.level });
+                  }
+                  if (typeof setCurrentIdx === 'function') setCurrentIdx(0);
+                  if (typeof setReviewingQuestions === 'function') setReviewingQuestions(false);
+                  if (typeof setShowSummaryView === 'function') setShowSummaryView(false);
+                  if (typeof setLocalExamStarted === 'function') setLocalExamStarted(false);
+                }}
+                sx={{ textTransform: 'none', fontWeight: 800 }}
+              >
+                Start {nextDifficultyRecommendation.level.toUpperCase()} Exam
+              </Button>
+            }
+          >
+            {nextDifficultyRecommendation.text}
+          </Alert>
+        )}
 
         {/* Lecture Breakdown Section */}
         {Object.keys(lectureBreakdown).length > 0 && (

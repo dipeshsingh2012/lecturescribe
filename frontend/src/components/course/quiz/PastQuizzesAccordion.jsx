@@ -133,9 +133,35 @@ export default function PastQuizzesAccordion({
                 }}
               >
                 <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 700, color: textPrimary }}>
-                    {dateStr}
-                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.25 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 700, color: textPrimary }}>
+                      {dateStr}
+                    </Typography>
+                    {run.difficulty && (
+                      <Chip
+                        label={run.difficulty.toUpperCase()}
+                        size="small"
+                        sx={{
+                          height: 18,
+                          fontSize: '0.62rem',
+                          fontWeight: 800,
+                          letterSpacing: '0.5px',
+                          bgcolor:
+                            run.difficulty === 'easy'
+                              ? 'rgba(34, 197, 94, 0.15)'
+                              : run.difficulty === 'hard'
+                              ? 'rgba(239, 68, 68, 0.15)'
+                              : 'rgba(245, 158, 11, 0.15)',
+                          color:
+                            run.difficulty === 'easy'
+                              ? '#22c55e'
+                              : run.difficulty === 'hard'
+                              ? '#ef4444'
+                              : '#f59e0b'
+                        }}
+                      />
+                    )}
+                  </Box>
                   <Typography variant="caption" sx={{ color: textSecondary }}>
                     {run.total_questions || totalQuestions} Questions • {run.completed ? 'Completed' : 'In Progress'}
                   </Typography>

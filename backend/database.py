@@ -2520,6 +2520,10 @@ class RelationalDBManager:
                     "score": item["score"],
                     "total_questions": item["total_questions"],
                     "completed": item["completed"],
+                    "difficulty": (item.get("quiz_json") or {}).get("difficulty", "medium"),
+                    "question_types": (item.get("quiz_json") or {}).get("question_types", "mixed"),
+                    "timed": (item.get("quiz_json") or {}).get("timed", True),
+                    "time_limit_minutes": (item.get("quiz_json") or {}).get("time_limit_minutes"),
                     "created_at": item["created_at"],
                     "updated_at": item.get("updated_at", item["created_at"])
                 }
@@ -2535,7 +2539,11 @@ class RelationalDBManager:
                 with conn.cursor() as cursor:
                     if clean_email:
                         cursor.execute("""
-                            SELECT quiz_id, course_slug, course_name, score, total_questions, completed, created_at, updated_at
+                            SELECT quiz_id, course_slug, course_name, score, total_questions, completed, created_at, updated_at,
+                                   COALESCE(quiz_json->>'difficulty', 'medium') AS difficulty,
+                                   COALESCE(quiz_json->>'question_types', 'mixed') AS question_types,
+                                   COALESCE((quiz_json->>'timed')::boolean, true) AS timed,
+                                   (quiz_json->>'time_limit_minutes')::int AS time_limit_minutes
                             FROM lecturescribe_course_quiz_history
                             WHERE course_slug = %s AND (user_email = %s OR user_email = '')
                             ORDER BY created_at DESC
@@ -2543,7 +2551,11 @@ class RelationalDBManager:
                         """, (course_slug, clean_email))
                     else:
                         cursor.execute("""
-                            SELECT quiz_id, course_slug, course_name, score, total_questions, completed, created_at, updated_at
+                            SELECT quiz_id, course_slug, course_name, score, total_questions, completed, created_at, updated_at,
+                                   COALESCE(quiz_json->>'difficulty', 'medium') AS difficulty,
+                                   COALESCE(quiz_json->>'question_types', 'mixed') AS question_types,
+                                   COALESCE((quiz_json->>'timed')::boolean, true) AS timed,
+                                   (quiz_json->>'time_limit_minutes')::int AS time_limit_minutes
                             FROM lecturescribe_course_quiz_history
                             WHERE course_slug = %s
                             ORDER BY created_at DESC
@@ -2559,6 +2571,10 @@ class RelationalDBManager:
                             "score": r["score"],
                             "total_questions": r["total_questions"],
                             "completed": bool(r["completed"]),
+                            "difficulty": r.get("difficulty") or "medium",
+                            "question_types": r.get("question_types") or "mixed",
+                            "timed": bool(r.get("timed", True)),
+                            "time_limit_minutes": r.get("time_limit_minutes"),
                             "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
                             "updated_at": r["updated_at"].isoformat() if hasattr(r["updated_at"], "isoformat") else str(r["updated_at"])
                         })
@@ -2573,6 +2589,10 @@ class RelationalDBManager:
                     "score": item["score"],
                     "total_questions": item["total_questions"],
                     "completed": item["completed"],
+                    "difficulty": (item.get("quiz_json") or {}).get("difficulty", "medium"),
+                    "question_types": (item.get("quiz_json") or {}).get("question_types", "mixed"),
+                    "timed": (item.get("quiz_json") or {}).get("timed", True),
+                    "time_limit_minutes": (item.get("quiz_json") or {}).get("time_limit_minutes"),
                     "created_at": item["created_at"]
                 }
                 for item in reversed(self._course_quiz_history_memory)

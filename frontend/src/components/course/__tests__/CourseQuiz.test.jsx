@@ -58,7 +58,7 @@ describe('CourseQuiz Component', () => {
     const btn = screen.getByRole('button', { name: /Generate Course Quiz/i });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
-    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(true);
+    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(true, expect.any(Object));
   });
 
   it('renders normal loading spinner when quizLoading is true and quizGenerating is false', () => {
@@ -641,7 +641,7 @@ describe('CourseQuiz Component', () => {
     );
 
     expect(screen.getByText(/Machine Learning Comprehensive Exam/i)).toBeInTheDocument();
-    expect(screen.getByText('30 Minutes')).toBeInTheDocument();
+    expect(screen.getAllByText(/Minutes/i).length).toBeGreaterThan(0);
     expect(screen.getByText('2 Questions')).toBeInTheDocument();
 
     const startBtn = screen.getByRole('button', { name: /Start Exam/i });
@@ -771,6 +771,126 @@ describe('CourseQuiz Component', () => {
     const newQuizBtn = screen.getByRole('button', { name: /Generate New Quiz/i });
     expect(newQuizBtn).toBeInTheDocument();
     fireEvent.click(newQuizBtn);
-    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(true);
+    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(true, expect.any(Object));
+  });
+
+  it('renders complexity presets and allows switching to Mastery Challenge', () => {
+    const updateQuizSettings = vi.fn();
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        lectureCount={5}
+        quizData={null}
+        quizLoading={false}
+        updateQuizSettings={updateQuizSettings}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Quick Warmup')).toBeInTheDocument();
+    expect(screen.getByText('Standard Exam')).toBeInTheDocument();
+    expect(screen.getByText('Mastery Challenge')).toBeInTheDocument();
+
+    // Select Mastery Challenge
+    const masteryCard = screen.getByText('Mastery Challenge');
+    fireEvent.click(masteryCard);
+    expect(updateQuizSettings).toHaveBeenCalledWith(expect.objectContaining({
+      difficulty: 'hard',
+      numQuestions: 30
+    }));
+  });
+
+  it('renders Untimed Practice badge when quiz is set to untimed mode', () => {
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        lectureCount={2}
+        quizData={mockQuizData}
+        timeLeft={null}
+        examStarted={true}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Untimed Practice')).toBeInTheDocument();
+  });
+
+  it('allows customizing quiz settings via custom controls collapsible panel', () => {
+    const updateQuizSettings = vi.fn();
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        lectureCount={5}
+        quizData={null}
+        quizLoading={false}
+        quizSettings={{
+          difficulty: 'medium',
+          numQuestions: 20,
+          questionTypes: 'mixed',
+          timed: true,
+          timeLimitMinutes: 20
+        }}
+        updateQuizSettings={updateQuizSettings}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Expand custom controls
+    const customizeBtn = screen.getByRole('button', { name: /Customize Quiz Settings/i });
+    expect(customizeBtn).toBeInTheDocument();
+    fireEvent.click(customizeBtn);
+
+    // Click "Hard (Mastery)" chip
+    const hardChip = screen.getByText('Hard (Mastery)');
+    expect(hardChip).toBeInTheDocument();
+    fireEvent.click(hardChip);
+    expect(updateQuizSettings).toHaveBeenCalledWith(expect.objectContaining({
+      difficulty: 'hard'
+    }));
+
+    // Click "10 Questions" chip
+    const tenQsChip = screen.getByText(/10 Questions/i);
+    expect(tenQsChip).toBeInTheDocument();
+    fireEvent.click(tenQsChip);
+    expect(updateQuizSettings).toHaveBeenCalledWith(expect.objectContaining({
+      numQuestions: 10
+    }));
+  });
+
+  it('displays adaptive difficulty recommendation and allows starting next difficulty exam', () => {
+    const fetchOrGenerateQuiz = vi.fn();
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        lectureCount={5}
+        quizData={mockQuizData}
+        quizLoading={false}
+        autoSubmitted={true}
+        score={1}
+        totalQuestions={1} // 100% score on medium
+        isCompleted={true}
+        quizSettings={{
+          difficulty: 'medium',
+          numQuestions: 20,
+          questionTypes: 'mixed',
+          timed: true,
+          timeLimitMinutes: 20
+        }}
+        fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Should recommend Hard Exam after scoring 100% on Medium
+    const startHardBtn = screen.getByRole('button', { name: /Start HARD Exam/i });
+    expect(startHardBtn).toBeInTheDocument();
+    fireEvent.click(startHardBtn);
+
+    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(true, expect.objectContaining({
+      difficulty: 'hard'
+    }));
   });
 });

@@ -2417,12 +2417,15 @@ class Llama3PineconeRAGStore:
         course_name: str,
         lectures_data: List[Dict[str, Any]],
         num_questions: Optional[int] = None,
-        feedback_guidance: Optional[List[str]] = None
+        feedback_guidance: Optional[List[str]] = None,
+        difficulty: str = "medium",
+        question_types: str = "mixed",
+        time_limit_minutes: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Generate comprehensive, multi-lecture practice quiz testing concepts
         across all lectures in the course using saved summaries and lecture-specific quizzes.
-        Generates 30 questions mixing Multiple Choice (MCQ) and Fill in the Blanks.
+        Generates questions mixing Multiple Choice (MCQ) and Fill in the Blanks calibrated to complexity settings.
         """
         import requests
 
@@ -2432,6 +2435,14 @@ class Llama3PineconeRAGStore:
             raise ValueError("course_name is required.")
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        clean_difficulty = str(difficulty or "medium").lower().strip()
+        if clean_difficulty not in ("easy", "medium", "hard", "mixed"):
+            clean_difficulty = "medium"
+
+        clean_qtypes = str(question_types or "mixed").lower().strip()
+        if clean_qtypes not in ("all", "mixed", "mcq", "fill_in_the_blank"):
+            clean_qtypes = "mixed"
 
         if feedback_guidance is None:
             try:
@@ -2516,11 +2527,61 @@ class Llama3PineconeRAGStore:
 
         course_context = "\n\n".join(lecture_materials)[:22000]
         per_lecture_min = max(1, target_count // num_lectures)
+        target_duration = int(time_limit_minutes) if time_limit_minutes and int(time_limit_minutes) > 0 else max(10, int(target_count))
+
+        if clean_difficulty == "easy":
+            complexity_block = (
+                "TARGET COMPLEXITY LEVEL: EASY / FOUNDATIONAL REINFORCEMENT\n"
+                "- Focus questions on fundamental definitions, primary equations, core architectural terminology, and direct single-step calculations with small numbers.\n"
+                "- Avoid nested mathematical substitutions, complex proof derivations, or counter-intuitive paradoxes.\n"
+                "- Incorrect distractors must represent realistic, common introductory misconceptions rather than subtle mathematical edge cases.\n"
+            )
+        elif clean_difficulty == "hard":
+            complexity_block = (
+                "TARGET COMPLEXITY LEVEL: HARD / ADVANCED RIGOR & DEEP MASTERY\n"
+                "- Focus questions on multi-step quantitative calculations, subtle boundary condition anomalies, failure modes under non-standard assumptions, and diagnostic paradoxes.\n"
+                "- Challenge students to spot fine theoretical invariants, proof subtleties, and trade-offs under severe resource/dimensional constraints.\n"
+                "- Incorrect options should represent sophisticated, deceptive misconceptions requiring precise mathematical elimination.\n"
+            )
+        elif clean_difficulty == "mixed":
+            complexity_block = (
+                "TARGET COMPLEXITY LEVEL: CALIBRATED BELL-CURVE EXAM (MIXED COMPLEXITY)\n"
+                "- Distribute questions along a calibrated difficulty curve across the exam:\n"
+                "  * Approximately 20% Easy foundational questions testing definitions and direct formulas.\n"
+                "  * Approximately 50% Medium application questions testing 1-step traces, mechanics, and tradeoffs.\n"
+                "  * Approximately 30% Hard analytical challenge questions testing failure modes, paradoxes, and edge-cases.\n"
+            )
+        else:
+            complexity_block = (
+                "TARGET COMPLEXITY LEVEL: MEDIUM / STANDARD UNIVERSITY EXAM\n"
+                "- Balance questions across 1-step quantitative trace calculations, failure modes, trade-offs, and paradigm fits.\n"
+                "- Incorrect options should test genuine common student calculation errors and theoretical pitfalls.\n"
+            )
+
+        if clean_qtypes == "mcq":
+            qtypes_block = (
+                "4. Question Types: 100% MULTIPLE CHOICE QUESTIONS (MCQ only):\n"
+                "   - Every single question MUST be of type 'mcq' testing mechanisms, calculations, and trade-offs.\n"
+                "   - Do NOT generate any fill_in_the_blank questions; set blank_answer to empty string.\n"
+            )
+        elif clean_qtypes == "fill_in_the_blank":
+            qtypes_block = (
+                "4. Question Types: 100% FILL IN THE BLANK:\n"
+                "   - Every single question MUST be of type 'fill_in_the_blank'.\n"
+                "   - The question stem MUST contain '_____' and have a corresponding non-empty 'blank_answer' matching the correct option.\n"
+            )
+        else:
+            qtypes_block = (
+                "4. Question Types (Balanced Mix of MCQ & Fill-in-the-Blank):\n"
+                "   - 'mcq': Multiple Choice Question testing mechanisms, numerical evaluations, trade-offs, or paradoxes.\n"
+                "   - 'fill_in_the_blank': Sentence with '_____' testing an essential technical term, equation keyword, or variable, with 4 plausible options including the correct fill-in term.\n"
+            )
 
         system_prompt = (
             "You are an expert university professor and rigorous comprehensive exam creator.\n"
             f"Your task is to generate an academically rigorous, balanced {target_count}-question course exam testing concepts across ALL {num_lectures} lectures in '{clean_course}'.\n"
-            f"Exam Specifications: Total Questions = {target_count}, Marks per Question = 0.5 (Total Exam Marks = {round(target_count * 0.5, 1)}), Duration = 30 minutes.\n\n"
+            f"Exam Specifications: Total Questions = {target_count}, Marks per Question = 0.5 (Total Exam Marks = {round(target_count * 0.5, 1)}), Duration = {target_duration} minutes.\n"
+            f"{complexity_block}\n\n"
             "Strict Guidelines:\n"
             f"1. Equal Representation Across All Lectures: Distribute questions evenly from Lecture 1 through Lecture {num_lectures} in chronological order. "
             f"Ensure at least {per_lecture_min} question(s) is dedicated to each lecture. Do NOT bias questions toward the latest lecture; every single lecture must be represented.\n"
@@ -2531,9 +2592,7 @@ class Llama3PineconeRAGStore:
             "   - Archetype 4: Problem-to-Paradigm Fit (~15% of questions): Describe 2 contrasting problem constraints and ask which algorithmic paradigm, objective function, or system design is justified.\n"
             "   - Archetype 5: Theoretical Mechanics & Invariants (~10% of questions): Test structural properties like convexity vs local minima, linear independence, invariant transformations, or duality.\n"
             "3. Diagnostic Distractors: Every incorrect option must represent a realistic student calculation mistake or genuine theoretical misconception (e.g. inverted ratios, arithmetic instead of harmonic mean, confusing update counts), NEVER obviously absurd filler.\n"
-            "4. Question Types (MCQ & Fill-in-the-Blank): Create a balanced mix of:\n"
-            "   - 'mcq': Multiple Choice Question testing mechanisms, numerical evaluations, trade-offs, or paradoxes.\n"
-            "   - 'fill_in_the_blank': Sentence with '_____' testing an essential technical term, equation keyword, or variable, with 4 plausible options including the correct fill-in term.\n"
+            f"{qtypes_block}"
             "5. Concept-First Framing: Each question must directly test academic theory, algorithms, equations, or definitions. "
             "STRICTLY FORBIDDEN: NEVER use episodic phrasing, lecture titles, or speaker remarks in the question stem (NEVER write 'In Lecture 2...', 'According to the video...', 'At 15:30...'). The question must be standalone.\n"
             "   STRICTLY PROHIBITED: NO COURSE LOGISTICS, EXAM PATTERNS, OR ADMINISTRATIVE HOUSEKEEPING. "
@@ -2647,9 +2706,9 @@ class Llama3PineconeRAGStore:
                     lect_title = lect_title or fallback_lect["title"]
 
                 explanation = str(q.get("explanation") or f"Taught in '{lect_title}' at [{ts}].").strip()
-                diff = str(q.get("difficulty") or "medium").lower().strip()
+                diff = str(q.get("difficulty") or (clean_difficulty if clean_difficulty != "mixed" else "medium")).lower().strip()
                 if diff not in ("easy", "medium", "hard"):
-                    diff = "medium"
+                    diff = "medium" if clean_difficulty == "mixed" else clean_difficulty
 
                 cleaned_qs.append({
                     "id": len(cleaned_qs) + 1,
@@ -2700,7 +2759,9 @@ class Llama3PineconeRAGStore:
                                 "total_questions": len(parsed),
                                 "marks_per_question": 0.5,
                                 "total_marks": round(len(parsed) * 0.5, 1),
-                                "duration_minutes": 30,
+                                "duration_minutes": target_duration,
+                                "difficulty": clean_difficulty,
+                                "question_types": clean_qtypes,
                                 "model": f"Groq {model_name}",
                                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                             }
@@ -2730,7 +2791,9 @@ class Llama3PineconeRAGStore:
                                 "total_questions": len(parsed),
                                 "marks_per_question": 0.5,
                                 "total_marks": round(len(parsed) * 0.5, 1),
-                                "duration_minutes": 30,
+                                "duration_minutes": target_duration,
+                                "difficulty": clean_difficulty,
+                                "question_types": clean_qtypes,
                                 "model": f"Gemini {model_name}",
                                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                             }

@@ -229,3 +229,69 @@ export const formatResponseTime = (ms) => {
   const secs = ((totalTenths % 600) / 10).toFixed(1);
   return `${mins}m ${secs}s`;
 };
+
+const CTRL_B_LATEX_RE = /\x08(ackepsilon|ackprime|acksim|acksimeq|ackslash|arwedge|ar|ecause|egin|etween|eta|eth|fseries|f|igsqcup|igtriangledown|igtriangleup|igodot|igoplus|igotimes|iguplus|igvee|igwedge|igcap|igcup|iggl|iggm|iggr|igg|igl|igm|igr|ig|inom|lacktriangleleft|lacktriangleright|lacktriangledown|lacktriangle|lacklozenge|lacksquare|mod|m|oldsymbol|old|owtie|ot|oxminus|oxplus|oxtimes|oxdot|oxed|ox|reve|ullet|umpeq)(?![a-zA-Z])/g;
+const CTRL_F_LATEX_RE = /\x0c(allingdotseq|orall|rac|rown|box|lat)(?![a-zA-Z])/g;
+const CTRL_N_LATEX_RE = /\x0a(Leftrightarrow|leftrightarrow|trianglelefteq|trianglerighteq|shortparallel|ntriangleleft|triangleleft|triangleright|nsubseteqq|nsupseteqq|subseteqq|supseteqq|Leftarrow|leftarrow|Rightarrow|rightarrow|ewcommand|leqslant|shortmid|subseteq|supseteq|atural|earrow|oindent|olimits|onumber|preceq|succeq|VDash|Vdash|vDash|vdash|warrow|abla|leqq|otin|prec|succ|gtr|leq|mid|orm|sim|eg|eq|ot)(?![a-zA-Z])/g;
+const CTRL_R_LATEX_RE = /\x0d(ightleftharpoons|ightharpoondown|ightharpoonup|ightleftarrows|ightrightarrows|ightsquigarrow|ightthreetimes|ightarrowtail|isingdotseq|estriction|ightarrow|moustache|aisebox|ight|angle|brace|brack|floor|times|Vert|vert|ceil|eal|ule|hd|ho|e|m)(?![a-zA-Z])/g;
+const CTRL_T_LATEX_RE = /\x09(woheadleftarrow|woheadrightarrow|rianglerighteq|rianglelefteq|riangledown|riangleright|riangleleft|hickapprox|extnormal|herefore|riangleq|riangle|hicksim|hinspace|binom|extbf|extit|extmd|extrm|extsc|extsf|extsl|exttt|extup|frac|heta|ilde|imes|anh|ext|iny|au|eX)(?![a-zA-Z])/g;
+
+const MATH_CTRL_T_RE = /\x09(op|ag|an|o)(?![a-zA-Z])/g;
+const MATH_CTRL_N_RE = /\x0a(parallel|exists|less|e|i|u)(?![a-zA-Z])/g;
+
+const BARE_BRACE_MACRO_RE = /(?<![\\a-zA-Z])(operatorname|textnormal|widetilde|underline|overline|widehat|textbf|textit|textrm|texttt|textsf|textup|textmd|textsc|textsl|mathcal|mathbb|mathbf|mathrm|mathit|mathsf|mathtt|dfrac|tfrac|binom|boxed|tilde|frac|sqrt|text|hat|bar|vec|dot|ddot)(?=\s*\{)/g;
+const PROTECTED_TEXT_MACRO_RE = /(\\(?:textnormal|operatorname|textbf|textit|textrm|texttt|textsf|textup|textmd|textsc|textsl|text|mathrm|mathit|mathsf|mathtt)\s*\{[^{}]*\})/g;
+const BARE_MATH_SYMBOL_RE = /(?<![\\a-zA-Z])(varepsilon|rightarrow|Rightarrow|leftarrow|Leftarrow|vartheta|varrho|varsigma|upsilon|Upsilon|epsilon|Lambda|lambda|partial|subseteq|supseteq|approx|propto|forall|exists|implies|sigma|Sigma|theta|Theta|alpha|gamma|Gamma|delta|Delta|kappa|omega|Omega|nabla|infty|equiv|simeq|cdots|ldots|times|beta|zeta|iota|phi|Phi|chi|psi|Psi|rho|tau|eta|mu|nu|xi|Xi|pi|Pi|cdot|leq|geq|neq|iff)(?![a-zA-Z])/g;
+
+const UNIFIED_MATH_SPAN_RE = /(\$\$([\s\S]+?)\$\$|(?<!\\|\$)\$(?!\$)((?:\\.|(?:\x0a(?:parallel|exists|less|e|i|u)(?![a-zA-Z]))|[^\n$])+?)(?<!\\)\$(?!\$|\d)|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\))/g;
+
+const repairMathInner = (mathBody) => {
+  if (!mathBody) return mathBody;
+  let fixed = mathBody
+    .replace(MATH_CTRL_T_RE, (_m, s) => `\\t${s}`)
+    .replace(MATH_CTRL_N_RE, (_m, s) => `\\n${s}`);
+
+  // Restore missing backslashes on brace-taking macros outside already-escaped \text{...}
+  fixed = fixed
+    .split(PROTECTED_TEXT_MACRO_RE)
+    .map((part, idx) => (idx % 2 === 1 ? part : part.replace(BARE_BRACE_MACRO_RE, (_m, cmd) => `\\${cmd}`)))
+    .join('');
+
+  // Re-split so newly restored \text{...} blocks are also protected from bare Greek symbol replacement
+  return fixed
+    .split(PROTECTED_TEXT_MACRO_RE)
+    .map((part, idx) => (idx % 2 === 1 ? part : part.replace(BARE_MATH_SYMBOL_RE, (_m, sym) => `\\${sym}`)))
+    .join('');
+};
+
+export const repairCorruptedLatex = (text) => {
+  if (!text || typeof text !== 'string') return text || '';
+
+  let repaired = text
+    .replace(CTRL_B_LATEX_RE, (_m, s) => `\\b${s}`)
+    .replace(CTRL_F_LATEX_RE, (_m, s) => `\\f${s}`)
+    .replace(CTRL_N_LATEX_RE, (_m, s) => `\\n${s}`)
+    .replace(CTRL_R_LATEX_RE, (_m, s) => `\\r${s}`)
+    .replace(CTRL_T_LATEX_RE, (_m, s) => `\\t${s}`);
+
+  if (repaired.includes('$') || repaired.includes('\\(') || repaired.includes('\\[')) {
+    repaired = repaired.replace(UNIFIED_MATH_SPAN_RE, (full, _outer, displayDollar, inlineDollar, displayBracket, inlineParen) => {
+      if (displayDollar !== undefined) {
+        return `$$${repairMathInner(displayDollar)}$$`;
+      }
+      if (inlineDollar !== undefined) {
+        const inner = repairMathInner(inlineDollar).replace(/^[ \t]+/, '').replace(/(?<!\\)[ \t]+$/, '');
+        return `$${inner}$`;
+      }
+      if (displayBracket !== undefined) {
+        return `\\[${repairMathInner(displayBracket)}\\]`;
+      }
+      if (inlineParen !== undefined) {
+        return `\\(${repairMathInner(inlineParen)}\\)`;
+      }
+      return full;
+    });
+  }
+
+  return repaired;
+};

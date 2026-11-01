@@ -109,6 +109,7 @@ from backend.podcast_service import (
     trigger_background_podcast_generation,
 )
 from backend.quiz_predictor import predict_quizzes_from_cues
+from backend.latex_utils import repair_corrupted_latex_text, repair_latex_in_structure
 
 _TRANSCRIPTION_JOB_ID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -706,11 +707,16 @@ class CourseQuizExplanationRequest(BaseModel):
 
 
 def sanitize_quiz_payload(quiz_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Filter out non-academic, greeting, or filler questions from cached/saved quizzes."""
+    """Filter out non-academic, greeting, or filler questions and heal corrupted LaTeX math in cached/saved quizzes."""
     if not quiz_data or not isinstance(quiz_data, dict):
         return quiz_data
     qs = quiz_data.get("questions")
     if not isinstance(qs, list):
+        if isinstance(quiz_data.get("quiz_json"), dict):
+            cleaned_inner = sanitize_quiz_payload(quiz_data["quiz_json"])
+            if cleaned_inner is not quiz_data["quiz_json"]:
+                quiz_data = dict(quiz_data)
+                quiz_data["quiz_json"] = cleaned_inner
         return quiz_data
 
     clean_qs = []
@@ -727,6 +733,28 @@ def sanitize_quiz_payload(quiz_data: Optional[Dict[str, Any]]) -> Optional[Dict[
         if clean_text != orig_text:
             sanitized_q["question"] = clean_text
             has_modified = True
+
+        orig_opts = sanitized_q.get("options")
+        if isinstance(orig_opts, list):
+            clean_opts = [repair_corrupted_latex_text(str(opt)).strip() for opt in orig_opts]
+            if clean_opts != orig_opts:
+                sanitized_q["options"] = clean_opts
+                has_modified = True
+
+        if "explanation" in sanitized_q and sanitized_q["explanation"] is not None:
+            orig_exp = str(sanitized_q["explanation"])
+            clean_exp = repair_corrupted_latex_text(orig_exp).strip()
+            if clean_exp != orig_exp:
+                sanitized_q["explanation"] = clean_exp
+                has_modified = True
+
+        if "blank_answer" in sanitized_q and sanitized_q["blank_answer"]:
+            orig_blank = str(sanitized_q["blank_answer"])
+            clean_blank = repair_corrupted_latex_text(orig_blank).strip()
+            if clean_blank != orig_blank:
+                sanitized_q["blank_answer"] = clean_blank
+                has_modified = True
+
         clean_qs.append(sanitized_q)
 
     if has_modified:
@@ -742,10 +770,16 @@ def sanitize_quiz_payload(quiz_data: Optional[Dict[str, Any]]) -> Optional[Dict[
 def _lookup_saved_or_cached_quiz(clean_vid: str, email: Optional[str] = None) -> Optional[dict]:
     """Helper to check Redis cache and PostgreSQL for an existing quiz."""
     if redis_cache:
-        cached_quiz = redis_cache.get_quiz(clean_vid)
-        if cached_quiz:
-            cached_quiz = sanitize_quiz_payload(cached_quiz)
+        raw_cached = redis_cache.get_quiz(clean_vid)
+        if raw_cached:
+            cached_quiz = sanitize_quiz_payload(raw_cached)
             if cached_quiz and len(cached_quiz.get("questions") or []) > 0:
+                if cached_quiz.get("questions") != raw_cached.get("questions"):
+                    try:
+                        redis_cache.set_quiz(clean_vid, cached_quiz, ttl_seconds=86400)
+                        db_manager.save_quiz(clean_vid, cached_quiz)
+                    except Exception:
+                        pass
                 print(f"⚡ [Redis Hit] Returning cached quiz for video '{clean_vid}'.")
                 if email:
                     attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
@@ -761,10 +795,15 @@ def _lookup_saved_or_cached_quiz(clean_vid: str, email: Optional[str] = None) ->
                     cached_quiz["user_feedback"] = db_manager.get_quiz_feedback("lecture", clean_vid, user_email=email)
                 return cached_quiz
 
-    db_quiz = db_manager.get_saved_quiz(clean_vid)
-    if db_quiz and db_quiz.get("questions"):
-        db_quiz = sanitize_quiz_payload(db_quiz)
+    raw_db_quiz = db_manager.get_saved_quiz(clean_vid)
+    if raw_db_quiz and raw_db_quiz.get("questions"):
+        db_quiz = sanitize_quiz_payload(raw_db_quiz)
         if db_quiz and len(db_quiz.get("questions") or []) > 0:
+            if db_quiz.get("questions") != raw_db_quiz.get("questions"):
+                try:
+                    db_manager.save_quiz(clean_vid, db_quiz)
+                except Exception:
+                    pass
             print(f"💾 [PostgreSQL Hit] Returning persisted quiz for video '{clean_vid}'.")
             if redis_cache:
                 redis_cache.set_quiz(clean_vid, db_quiz, ttl_seconds=86400)
@@ -1042,8 +1081,14 @@ def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
     if not req.regenerate:
         cached = db_manager.get_quiz_explanation(clean_vid, req.question_id)
         if cached:
+            healed = repair_corrupted_latex_text(cached)
+            if healed != cached:
+                try:
+                    db_manager.save_quiz_explanation(clean_vid, req.question_id, healed)
+                except Exception:
+                    pass
             return {
-                "detailed_explanation": cached,
+                "detailed_explanation": healed,
                 "cached": True,
                 "model": "Cached"
             }
@@ -3204,7 +3249,7 @@ def get_or_generate_course_quiz(
         if cached_quiz:
             cleaned_cached = sanitize_quiz_payload(cached_quiz)
             if cleaned_cached and len(cleaned_cached.get("questions") or []) >= min_questions:
-                if len(cleaned_cached.get("questions") or []) != len(cached_quiz.get("questions") or []):
+                if cleaned_cached.get("questions") != cached_quiz.get("questions"):
                     redis_cache.set_course_quiz(course_slug, cleaned_cached, ttl_seconds=86400, settings_key=settings_key)
                 cached_quiz = dict(cleaned_cached)
                 print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
@@ -3227,7 +3272,7 @@ def get_or_generate_course_quiz(
             if cleaned_db and len(cleaned_db.get("questions") or []) >= min_questions:
                 quiz_diff = str(cleaned_db.get("difficulty") or "medium").lower()
                 if req_difficulty == "medium" or quiz_diff == req_difficulty:
-                    if len(cleaned_db.get("questions") or []) != len(db_quiz.get("questions") or []):
+                    if cleaned_db.get("questions") != db_quiz.get("questions"):
                         try:
                             db_manager.save_course_quiz(clean_course, cleaned_db)
                         except Exception as e:
@@ -3437,6 +3482,7 @@ def get_or_generate_course_summary(
     if not is_regenerate and redis_cache:
         cached_summary = redis_cache.get_course_summary(course_slug)
         if cached_summary and cached_summary.get("executive_summary"):
+            cached_summary = repair_latex_in_structure(cached_summary)
             print(f"⚡ [Redis Hit] Returning cached course summary for '{course_slug}'.")
             return {
                 **cached_summary,
@@ -3449,6 +3495,7 @@ def get_or_generate_course_summary(
     if not is_regenerate:
         db_summary = db_manager.get_saved_course_summary(clean_course)
         if db_summary and db_summary.get("executive_summary"):
+            db_summary = repair_latex_in_structure(db_summary)
             print(f"💾 [PostgreSQL Hit] Returning persisted course summary for '{course_slug}'.")
             if redis_cache:
                 redis_cache.set_course_summary(course_slug, db_summary, ttl_seconds=86400)
@@ -3577,8 +3624,14 @@ def get_detailed_course_quiz_explanation(course_name: str, req: CourseQuizExplan
     if not req.regenerate:
         cached = db_manager.get_course_quiz_explanation(clean_course, q_id)
         if cached:
+            healed = repair_corrupted_latex_text(cached)
+            if healed != cached:
+                try:
+                    db_manager.save_course_quiz_explanation(clean_course, q_id, healed)
+                except Exception:
+                    pass
             return {
-                "detailed_explanation": cached,
+                "detailed_explanation": healed,
                 "cached": True,
                 "model": "Cached"
             }

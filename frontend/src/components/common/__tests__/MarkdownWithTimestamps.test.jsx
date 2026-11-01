@@ -325,4 +325,32 @@ These four subspaces are paired as two for the matrix \\(A\\) (column space and 
     fireEvent.click(btn2);
     expect(handleCueClick).toHaveBeenCalledWith('1:15:00');
   });
+
+  it('heals TAB-corrupted LaTeX (\\theta, \\times, \\text) and bare Greek symbols (eta) and renders them mathematically via KaTeX', () => {
+    const corruptedQuestion =
+      'Which optimization algorithm is typically used to update the weights $\theta$ of the generator and discriminator networks?';
+    const corruptedExplanation =
+      'The lecture describes the update rule as $\theta - eta \times \text{gradient}$ at [18:40], which is the standard gradient descent update rule.';
+
+    const onTimestampClick = vi.fn();
+    const { container } = render(
+      <div>
+        <MarkdownWithTimestamps content={corruptedQuestion} onTimestampClick={onTimestampClick} />
+        <MarkdownWithTimestamps content={corruptedExplanation} onTimestampClick={onTimestampClick} />
+      </div>
+    );
+
+    const katexHtmlElements = Array.from(container.querySelectorAll('.katex-html')).map(el => el.textContent);
+    expect(katexHtmlElements).toEqual(['θ', 'θ−η×gradient']);
+    expect(container.textContent).not.toContain('$');
+    expect(container.textContent).not.toContain('\t');
+
+    const annotations = Array.from(container.querySelectorAll('annotation')).map(a => a.textContent);
+    expect(annotations[0]).toBe('\\theta');
+    expect(annotations[1]).toBe('\\theta - \\eta \\times \\text{gradient}');
+
+    const tsBtn = screen.getByRole('button', { name: /18:40/i });
+    fireEvent.click(tsBtn);
+    expect(onTimestampClick).toHaveBeenCalledWith('18:40');
+  });
 });

@@ -11,7 +11,8 @@ import {
   getUserFirstName,
   cleanSubmissionFallback,
   truncateEnd,
-  formatResponseTime
+  formatResponseTime,
+  repairCorruptedLatex
 } from '../formatters';
 
 describe('formatters utility functions', () => {
@@ -286,6 +287,34 @@ describe('formatters utility functions', () => {
       expect(formatResponseTime(60000)).toBe('1m 0.0s');
       expect(formatResponseTime(72340)).toBe('1m 12.3s');
       expect(formatResponseTime(125000)).toBe('2m 5.0s');
+    });
+  });
+
+  describe('repairCorruptedLatex', () => {
+    it('restores TAB-corrupted \\theta, \\times, \\text and bare Greek eta inside math delimiters', () => {
+      const corruptedQuestion =
+        'Which optimization algorithm is typically used to update the weights $\theta$ of the generator and discriminator networks?';
+      expect(repairCorruptedLatex(corruptedQuestion)).toBe(
+        'Which optimization algorithm is typically used to update the weights $\\theta$ of the generator and discriminator networks?'
+      );
+
+      const corruptedExplanation =
+        'The lecture describes the update rule as $\theta - eta \times \text{gradient}$, which is the standard gradient descent update rule used to minimize the loss function with respect to the network parameters';
+      expect(repairCorruptedLatex(corruptedExplanation)).toBe(
+        'The lecture describes the update rule as $\\theta - \\eta \\times \\text{gradient}$, which is the standard gradient descent update rule used to minimize the loss function with respect to the network parameters'
+      );
+    });
+
+    it('restores \\frac, \\beta, \\nabla, \\rho, and \\to while preserving text inside \\text{...} and subscripts like min', () => {
+      const input = 'Compute $\x0crac{1}{n} \x08eta + \x0aabla L(\x0dho)$ as $x \x09o 0$ with $\\sigma_{min}$ and $\\text{where eta is fixed}$.';
+      expect(repairCorruptedLatex(input)).toBe(
+        'Compute $\\frac{1}{n} \\beta + \\nabla L(\\rho)$ as $x \\to 0$ with $\\sigma_{min}$ and $\\text{where eta is fixed}$.'
+      );
+    });
+
+    it('does not corrupt currency amounts or normal prose words outside math spans', () => {
+      const prose = 'If plan beta costs $100 times two or $200, theta and eta remain English words.';
+      expect(repairCorruptedLatex(prose)).toBe(prose);
     });
   });
 });

@@ -91,63 +91,14 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
 
 def repair_json_escapes(s: str) -> str:
     """Repair unescaped backslashes in JSON strings (common in LaTeX formulas/math) without breaking valid escapes."""
-    out = []
-    in_string = False
-    i = 0
-    n = len(s)
-    
-    while i < n:
-        c = s[i]
-        if c == '"' and (i == 0 or s[i-1] != '\\'):
-            in_string = not in_string
-            out.append(c)
-            i += 1
-        elif in_string and c == '\\':
-            if i + 1 < n:
-                nxt = s[i+1]
-                if nxt in ('"', '\\', '/', 'b', 'f', 'n', 'r', 't'):
-                    if nxt in ('b', 'f', 'n', 'r', 't') and i + 2 < n and s[i+2].isalpha():
-                        # LaTeX words like \frac, \beta, \text, \nabla
-                        out.append('\\\\')
-                    else:
-                        out.append('\\')
-                    out.append(nxt)
-                    i += 2
-                elif nxt == 'u' and i + 5 < n and all(ch in '0123456789abcdefABCDEF' for ch in s[i+2:i+6]):
-                    out.append('\\u')
-                    out.append(s[i+2:i+6])
-                    i += 6
-                else:
-                    out.append('\\\\')
-                    out.append(nxt)
-                    i += 2
-            else:
-                out.append('\\\\')
-                i += 1
-        else:
-            out.append(c)
-            i += 1
-            
-    return "".join(out)
+    from backend.latex_utils import repair_json_latex_escapes
+    return repair_json_latex_escapes(s)
 
 
 def _safe_json_loads(raw: str) -> Any:
     """Safely parse JSON emitted by LLMs that may contain unescaped LaTeX symbols or markdown formatting."""
-    clean = (raw or "").strip()
-    clean = re.sub(r"^```(?:json)?\s*", "", clean)
-    clean = re.sub(r"\s*```$", "", clean)
-    try:
-        return json.loads(clean, strict=False)
-    except Exception:
-        pass
-
-    repaired = repair_json_escapes(clean)
-    try:
-        return json.loads(repaired, strict=False)
-    except Exception:
-        # Fallback double escaping
-        fallback = re.sub(r"\\(?![/\"\\bfnrt]|u[0-9a-fA-F]{4})", r"\\\\", clean)
-        return json.loads(fallback, strict=False)
+    from backend.latex_utils import safe_json_loads_with_latex
+    return safe_json_loads_with_latex(raw)
 
 
 def _call_llm_json(system_prompt: str, user_prompt: str) -> Optional[Any]:

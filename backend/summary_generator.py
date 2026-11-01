@@ -170,9 +170,8 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
                     cand = (resp.json().get("candidates") or [{}])[0]
                     parts = (cand.get("content") or {}).get("parts") or []
                     raw = "".join(p.get("text", "") for p in parts).strip()
-                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                    raw = re.sub(r"\s*```$", "", raw)
-                    data = json.loads(raw)
+                    from backend.latex_utils import safe_json_loads_with_latex, repair_latex_in_structure
+                    data = repair_latex_in_structure(safe_json_loads_with_latex(raw))
                     if isinstance(data, list) and len(data) >= 2:
                         llm_router.record_success(model_name)
                         return data
@@ -197,9 +196,8 @@ def generate_llm_summary(cues: List[Dict[str, str]], title: str) -> Optional[Lis
                 resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=45)
                 if resp.status_code == 200:
                     raw = resp.json()["choices"][0]["message"]["content"].strip()
-                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                    raw = re.sub(r"\s*```$", "", raw)
-                    data = json.loads(raw)
+                    from backend.latex_utils import safe_json_loads_with_latex, repair_latex_in_structure
+                    data = repair_latex_in_structure(safe_json_loads_with_latex(raw))
                     if isinstance(data, list) and len(data) >= 2:
                         llm_router.record_success(model_name)
                         return data

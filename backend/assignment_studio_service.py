@@ -547,9 +547,13 @@ def refine_existing_draft(
             try:
                 clean_json = re.sub(r"^```(?:json)?\s*", "", res_str, flags=re.MULTILINE)
                 clean_json = re.sub(r"\s*```$", "", clean_json, flags=re.MULTILINE)
-                data = json.loads(clean_json, strict=False)
+                from backend.latex_utils import safe_json_loads_with_latex, repair_corrupted_latex_text
+                data = safe_json_loads_with_latex(clean_json)
                 if data.get("updated_draft"):
-                    return data["updated_draft"].strip(), data.get("explanation", "I have updated the draft according to your feedback.")
+                    return (
+                        repair_corrupted_latex_text(data["updated_draft"]).strip(),
+                        repair_corrupted_latex_text(data.get("explanation", "I have updated the draft according to your feedback.")),
+                    )
             except Exception:
                 pass
 

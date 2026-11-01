@@ -184,4 +184,65 @@ describe('LectureQuiz Component', () => {
     expect(reviewBtn).toBeInTheDocument();
     fireEvent.click(reviewBtn);
   });
+
+  it('renders corrupted LaTeX math ($\\theta$ and $\\theta - \\eta \\times \\text{gradient}$) cleanly using KaTeX in questions and explanations', () => {
+    const handleCueClick = vi.fn();
+    const mockQuizData = {
+      video_id: 'gan101',
+      lecture_title: 'Generative Adversarial Networks',
+      questions: [
+        {
+          id: 1,
+          question:
+            'Which optimization algorithm is typically used to update the weights $\theta$ of the generator and discriminator networks?',
+          options: [
+            'Gradient descent ($\theta - eta \times \text{gradient}$)',
+            'Breadth-first search',
+            'K-means clustering',
+            'Topological sorting'
+          ],
+          correct_index: 0,
+          explanation:
+            'The lecture describes the update rule as $\theta - eta \times \text{gradient}$ [18:40], which is the standard gradient descent update rule used to minimize the loss function with respect to the network parameters.',
+          timestamp: '18:40',
+          difficulty: 'medium'
+        }
+      ]
+    };
+
+    const { container } = render(
+      <LectureQuiz
+        quizData={mockQuizData}
+        quizLoading={false}
+        quizError={null}
+        selectedAnswers={{ 1: 0 }}
+        isCompleted={true}
+        score={1}
+        totalQuestions={1}
+        answeredCount={1}
+        generateQuiz={vi.fn()}
+        selectAnswer={vi.fn()}
+        resetQuiz={vi.fn()}
+        handleCueClick={handleCueClick}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Question, option A, and explanation should all render KaTeX visual symbols (θ and θ−η×gradient) with zero raw '$' or TABs
+    const katexHtmlTexts = Array.from(container.querySelectorAll('.katex-html')).map(el => el.textContent);
+    expect(katexHtmlTexts).toContain('θ');
+    expect(katexHtmlTexts).toContain('θ−η×gradient');
+    expect(container.textContent).not.toContain('$');
+    expect(container.textContent).not.toContain('\t');
+
+    const annotations = Array.from(container.querySelectorAll('annotation')).map(el => el.textContent);
+    expect(annotations).toContain('\\theta');
+    expect(annotations).toContain('\\theta - \\eta \\times \\text{gradient}');
+
+    // Inline timestamp button inside explanation should jump video via handleCueClick
+    const inlineTsBtn = container.querySelector('button[data-timestamp="18:40"]');
+    expect(inlineTsBtn).toBeInTheDocument();
+    fireEvent.click(inlineTsBtn);
+    expect(handleCueClick).toHaveBeenCalledWith('18:40');
+  });
 });

@@ -1063,7 +1063,15 @@ export default function CourseQuiz({
                       Correct Term:
                     </Typography>
                     <Chip
-                      label={currentQ.blank_answer}
+                      label={
+                        /[$\\]/.test(currentQ.blank_answer) ? (
+                          <Box component="span" sx={{ '& p': { m: 0, display: 'inline' } }}>
+                            <MarkdownWithTimestamps content={currentQ.blank_answer} />
+                          </Box>
+                        ) : (
+                          currentQ.blank_answer
+                        )
+                      }
                       size="small"
                       sx={{ bgcolor: 'rgba(34, 197, 94, 0.2)', color: '#22c55e', fontWeight: 700, fontSize: '0.75rem' }}
                     />

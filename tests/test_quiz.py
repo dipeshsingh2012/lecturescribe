@@ -1011,6 +1011,103 @@ class TestCourseQuizImprovements(unittest.TestCase):
         self.assertEqual(data["timed"], False)
         self.assertEqual(data["time_limit_minutes"], 15)
 
+    def test_generate_lecture_quiz_preserves_unescaped_latex_escapes_and_bare_greek(self):
+        """
+        Regression test: When an LLM emits single-backslash LaTeX commands inside JSON strings
+        (e.g. \\theta, \\times, \\text{gradient}, \\frac, \\beta, \\nabla) or drops the backslash
+        on Greek letters like 'eta' under constrained JSON decoding, parsing must preserve valid LaTeX
+        rather than turning \\t into TAB or \\f into FORMFEED.
+        """
+        cues = [
+            {"time": "18:40", "text": "We update the generator and discriminator weights theta using gradient descent: theta - eta * gradient."}
+        ]
+        raw_llm_json = (
+            '{\n'
+            '  "questions": [\n'
+            '    {\n'
+            '      "id": 1,\n'
+            '      "question": "Which optimization algorithm is typically used to update the weights $\\theta$ of the generator and discriminator networks?",\n'
+            '      "options": [\n'
+            '        "Gradient descent ($\\theta \\to \\theta - \\eta \\nabla L(\\theta)$)",\n'
+            '        "Bubble sort",\n'
+            '        "Dijkstra shortest path ($\\frac{1}{n}$)",\n'
+            '        "Dynamic programming ($\\beta \\times \\rho$)"\n'
+            '      ],\n'
+            '      "correct_index": 0,\n'
+            '      "explanation": "The lecture describes the update rule as $\\theta - eta \\times \\text{gradient}$ at [18:40], which is the standard gradient descent update rule used to minimize the loss function with respect to the network parameters.",\n'
+            '      "timestamp": "18:40",\n'
+            '      "difficulty": "medium"\n'
+            '    }\n'
+            '  ]\n'
+            '}'
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": raw_llm_json}}]
+        }
+
+        with patch.dict(os.environ, {"GROQ_API_KEY": "fake_groq_key"}), patch("requests.post", return_value=mock_resp):
+            quiz = pinecone_rag_engine.generate_lecture_quiz(
+                video_id="gan_101",
+                lecture_title="Generative Adversarial Networks",
+                cues=cues,
+                num_questions=1
+            )
+
+        q = quiz["questions"][0]
+        self.assertNotIn("\t", q["question"])
+        self.assertIn(r"$\theta$", q["question"])
+        self.assertNotIn("\t", q["explanation"])
+        self.assertIn(r"$\theta - \eta \times \text{gradient}$", q["explanation"])
+        correct_opt = q["options"][q["correct_index"]]
+        self.assertIn(r"$\theta \to \theta - \eta \nabla L(\theta)$", correct_opt)
+        joined_opts = " ".join(q["options"])
+        self.assertIn(r"$\frac{1}{n}$", joined_opts)
+        self.assertIn(r"$\beta \times \rho$", joined_opts)
+
+    def test_sanitize_quiz_payload_heals_already_corrupted_cached_quiz(self):
+        """
+        Regression test: Already-saved quizzes in PostgreSQL/Redis where json.loads previously
+        converted \\theta, \\times, \\text into literal TAB (\\x09) characters and dropped \\ on eta
+        are automatically healed on read.
+        """
+        from backend.main import sanitize_quiz_payload
+
+        corrupted_payload = {
+            "video_id": "gan_101",
+            "questions": [
+                {
+                    "id": 1,
+                    "question": "Which optimization algorithm is typically used to update the weights $\theta$ of the generator and discriminator networks?",
+                    "options": [
+                        "Gradient descent ($\theta - eta \times \text{gradient}$)",
+                        "Simulated annealing",
+                        "Expectation maximization ($\frac{1}{2}$)",
+                        "Genetic crossover ($\x08eta$)"
+                    ],
+                    "correct_index": 0,
+                    "explanation": "The lecture describes the update rule as $\theta - eta \times \text{gradient}$, which is the standard gradient descent update rule used to minimize the loss function with respect to the network parameters.",
+                    "timestamp": "18:40",
+                    "difficulty": "medium"
+                }
+            ],
+            "total_questions": 1
+        }
+        cleaned = sanitize_quiz_payload(corrupted_payload)
+        q = cleaned["questions"][0]
+        self.assertEqual(
+            q["question"],
+            r"Which optimization algorithm is typically used to update the weights $\theta$ of the generator and discriminator networks?"
+        )
+        self.assertEqual(
+            q["explanation"],
+            r"The lecture describes the update rule as $\theta - \eta \times \text{gradient}$, which is the standard gradient descent update rule used to minimize the loss function with respect to the network parameters."
+        )
+        self.assertEqual(q["options"][0], r"Gradient descent ($\theta - \eta \times \text{gradient}$)")
+        self.assertEqual(q["options"][2], r"Expectation maximization ($\frac{1}{2}$)")
+        self.assertEqual(q["options"][3], r"Genetic crossover ($\beta$)")
+
 
 if __name__ == "__main__":
     unittest.main()

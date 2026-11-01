@@ -57,6 +57,19 @@ try:
 except ImportError:
     from video_client import parse_timestamp_to_seconds
 
+try:
+    from backend.latex_utils import (
+        repair_corrupted_latex_text,
+        repair_latex_in_structure,
+        safe_json_loads_with_latex,
+    )
+except ImportError:
+    from latex_utils import (
+        repair_corrupted_latex_text,
+        repair_latex_in_structure,
+        safe_json_loads_with_latex,
+    )
+
 
 class Llama3PineconeRAGStore:
     """RAG Engine powered by Hybrid Search + Agentic LLM Tool Execution."""
@@ -2025,7 +2038,7 @@ class Llama3PineconeRAGStore:
         """
         if not text:
             return ""
-        cleaned = str(text).strip()
+        cleaned = repair_corrupted_latex_text(str(text)).strip()
         patterns = [
             # In 'Lecture Title' (date) at MM:SS, ...
             r"^In\s+['\"‘“][^'\"’”]+['\"’”]\s*(?:\([^)]*\)\s*)?(?:at\s+\d{1,2}:\d{2}(?::\d{2})?,?\s*)?(?:,\s*)?",
@@ -2045,11 +2058,11 @@ class Llama3PineconeRAGStore:
         cleaned = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?\]", "", cleaned).strip()
 
         # Clean duplicated unformatted variable artifacts (e.g., "xx" -> "$x$", "yy" -> "$y$")
-        cleaned = re.sub(r"\b([a-zA-Z])\1\b", r"$\1$", cleaned)
+        cleaned = re.sub(r"(?<![\\$])\b([a-zA-Z])\1\b(?!\$)", r"$\1$", cleaned)
 
         if cleaned:
             cleaned = cleaned[0].upper() + cleaned[1:]
-        return cleaned or str(text).strip()
+        return cleaned or repair_corrupted_latex_text(str(text)).strip()
 
     @classmethod
     def _is_trivial_or_greeting_question(cls, q: Dict[str, Any]) -> bool:
@@ -2198,7 +2211,7 @@ class Llama3PineconeRAGStore:
         q_text = cls._sanitize_quiz_question_text(str(q.get("question") or ""))
         if not q_text or len(q_text) < 8:
             return None
-        opts = [str(opt).strip() for opt in (q.get("options") or [])]
+        opts = [repair_corrupted_latex_text(str(opt)).strip() for opt in (q.get("options") or [])]
         if len(opts) != 4 or any(len(opt) == 0 for opt in opts):
             return None
         raw_correct_idx = q.get("correct_index", 0)
@@ -2263,7 +2276,7 @@ class Llama3PineconeRAGStore:
             "The question must be completely self-contained and conceptual.\n"
             "3. STRICTLY PROHIBITED TOPICS: NEVER test introductory greetings, welcome remarks, speaker introductions, pleasantries, attendance, audio/mic checks, screen sharing checks, or administrative remarks (e.g. 'Namaste', 'Good morning', 'Can you hear me', 'Welcome to the session'). Completely exclude all course logistics, administrative announcements, exam formats or question types on mid-term/mid-semester/final exams, exam syllabus coverage or boundaries, submission deadlines, portals, grading policies, or office hours. NEVER create questions where an option is a greeting, exam format detail, or non-academic administrative policy. Only test substantive academic theory, equations, algorithms, and practical applications.\n"
             "4. Timestamp as Validation: The 'timestamp' field serves strictly for factual citation/verification so students can review the lecture. Timestamps must NEVER appear inside the 'question' text itself.\n"
-            "5. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$, $x$, $y$). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
+            "5. Formulas & Clean Math (STRICT JSON ESCAPING): Format all math expressions, variables, Greek symbols, and equations with standard LaTeX ($...$ for inline or $$...$$ for display). CRITICAL: Because your output is JSON, you MUST double-escape every LaTeX backslash inside JSON strings as `\\\\` (for example, write `\"$\\\\theta - \\\\eta \\\\times \\\\text{gradient}$\"`, `\"$\\\\alpha\\\\mathbf{u} + \\\\beta\\\\mathbf{v}$\"`, `\"$\\\\frac{1}{n}$\"`), and NEVER omit the leading backslash on Greek letters or math commands (`\\\\theta`, `\\\\eta`, `\\\\times`, `\\\\text{...}`). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
             "6. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D) — do NOT bias towards option A.\n"
             "7. Question format:\n"
             "   - 'id': integer (1, 2, 3...)\n"
@@ -2294,29 +2307,10 @@ class Llama3PineconeRAGStore:
         def _clean_and_parse_json(raw_text: str) -> Optional[List[Dict[str, Any]]]:
             if not raw_text:
                 return None
-            t = raw_text.strip()
-            if t.startswith("```"):
-                lines = t.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                t = "\n".join(lines).strip()
             try:
-                data = json.loads(t, strict=False)
+                data = safe_json_loads_with_latex(raw_text)
             except Exception:
-                fixed = re.sub(r'\\([a-zA-Z])', r'\\\\\1', t)
-                try:
-                    data = json.loads(fixed, strict=False)
-                except Exception:
-                    match = re.search(r"\{.*\}", fixed, re.DOTALL)
-                    if match:
-                        try:
-                            data = json.loads(match.group(0), strict=False)
-                        except Exception:
-                            return None
-                    else:
-                        return None
+                return None
 
             raw_qs = data.get("questions") if isinstance(data, dict) else (data if isinstance(data, list) else None)
             if not isinstance(raw_qs, list) or len(raw_qs) == 0:
@@ -2330,7 +2324,7 @@ class Llama3PineconeRAGStore:
                 q_text, shuffled_opts, balanced_idx = validated
 
                 ts = str(q.get("timestamp") or "00:00").strip().replace("[", "").replace("]", "")
-                explanation = str(q.get("explanation") or f"Discussed at [{ts}].").strip()
+                explanation = repair_corrupted_latex_text(str(q.get("explanation") or f"Discussed at [{ts}].")).strip()
                 diff = str(q.get("difficulty") or "medium").lower().strip()
                 if diff not in ("easy", "medium", "hard"):
                     diff = "medium"
@@ -2598,7 +2592,7 @@ class Llama3PineconeRAGStore:
             "   STRICTLY PROHIBITED: NO COURSE LOGISTICS, EXAM PATTERNS, OR ADMINISTRATIVE HOUSEKEEPING. "
             "Completely exclude all questions testing course logistics, administrative announcements, mid-term/mid-semester/final examination question formats or patterns (e.g. MCQ vs subjective, negative marking, question counts), syllabus boundaries/coverage for upcoming exams (e.g. 'topics covered up to...', 'excluding advanced topics...'), assignment deadlines, submission portals, grading schemes, or office hours. "
             "Every single question must test 100% technical, conceptual, algorithmic, or mathematical subject matter.\n"
-            "6. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $W^T x + b$, $\\mathcal{O}(n \\log n)$). NEVER duplicate variable characters.\n"
+            "6. Formulas & Clean Math (STRICT JSON ESCAPING): Format all math expressions, variables, Greek symbols, and equations with standard LaTeX ($...$ for inline or $$...$$ for display). CRITICAL: Because your output is JSON, you MUST double-escape every LaTeX backslash inside JSON strings as `\\\\` (e.g. `\"$E=mc^2$\"`, `\"$W^T x + b$\"`, `\"$\\\\theta - \\\\eta \\\\times \\\\text{gradient}$\"`, `\"$\\\\mathcal{O}(n \\\\log n)$\"`), and NEVER omit the leading backslash on Greek letters or math commands. NEVER duplicate variable characters.\n"
             "7. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D).\n"
             "8. Question Schema:\n"
             "   - 'id': integer (1, 2, ...)\n"
@@ -2653,29 +2647,10 @@ class Llama3PineconeRAGStore:
         def _clean_and_parse_course_json(raw_text: str) -> Optional[List[Dict[str, Any]]]:
             if not raw_text:
                 return None
-            t = raw_text.strip()
-            if t.startswith("```"):
-                lines = t.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                t = "\n".join(lines).strip()
             try:
-                data = json.loads(t, strict=False)
+                data = safe_json_loads_with_latex(raw_text)
             except Exception:
-                fixed = re.sub(r'\\([a-zA-Z])', r'\\\\\1', t)
-                try:
-                    data = json.loads(fixed, strict=False)
-                except Exception:
-                    match = re.search(r"\{.*\}", fixed, re.DOTALL)
-                    if match:
-                        try:
-                            data = json.loads(match.group(0), strict=False)
-                        except Exception:
-                            return None
-                    else:
-                        return None
+                return None
 
             raw_qs = data.get("questions") if isinstance(data, dict) else (data if isinstance(data, list) else None)
             if not isinstance(raw_qs, list) or len(raw_qs) == 0:
@@ -2692,7 +2667,7 @@ class Llama3PineconeRAGStore:
                 if q_type not in ("mcq", "fill_in_the_blank"):
                     q_type = "fill_in_the_blank" if ("_____" in q_text or "___" in q_text) else "mcq"
 
-                blank_ans = str(q.get("blank_answer") or "").strip()
+                blank_ans = repair_corrupted_latex_text(str(q.get("blank_answer") or "")).strip()
                 if q_type == "fill_in_the_blank" and not blank_ans:
                     blank_ans = shuffled_opts[balanced_idx]
 
@@ -2705,7 +2680,7 @@ class Llama3PineconeRAGStore:
                     lect_id = lect_id or fallback_lect["video_id"]
                     lect_title = lect_title or fallback_lect["title"]
 
-                explanation = str(q.get("explanation") or f"Taught in '{lect_title}' at [{ts}].").strip()
+                explanation = repair_corrupted_latex_text(str(q.get("explanation") or f"Taught in '{lect_title}' at [{ts}].")).strip()
                 diff = str(q.get("difficulty") or (clean_difficulty if clean_difficulty != "mixed" else "medium")).lower().strip()
                 if diff not in ("easy", "medium", "hard"):
                     diff = "medium" if clean_difficulty == "mixed" else clean_difficulty
@@ -2891,8 +2866,8 @@ class Llama3PineconeRAGStore:
             '    {\n'
             '      "term": "Loss Function / Mechanism Name",\n'
             '      "name": "Loss Function / Mechanism Name",\n'
-            '      "formula_or_def": "$$\\mathcal{L}_{\\theta} = \\frac{1}{m}\\sum_{i=1}^m (h_\\theta(x^{(i)}) - y^{(i)})^2$$",\n'
-            '      "formula": "$$\\mathcal{L}_{\\theta} = \\frac{1}{m}\\sum_{i=1}^m (h_\\theta(x^{(i)}) - y^{(i)})^2$$",\n'
+            '      "formula_or_def": "$$\\\\mathcal{L}_{\\\\theta} = \\\\frac{1}{m}\\\\sum_{i=1}^m (h_\\\\theta(x^{(i)}) - y^{(i)})^2$$",\n'
+            '      "formula": "$$\\\\mathcal{L}_{\\\\theta} = \\\\frac{1}{m}\\\\sum_{i=1}^m (h_\\\\theta(x^{(i)}) - y^{(i)})^2$$",\n'
             '      "significance": "Optimization objective for empirical risk minimization.",\n'
             '      "description": "Optimization objective for empirical risk minimization."\n'
             '    }\n'
@@ -2916,32 +2891,14 @@ class Llama3PineconeRAGStore:
         def _clean_and_parse_course_summary_json(raw_text: str) -> Optional[Dict[str, Any]]:
             if not raw_text:
                 return None
-            t = raw_text.strip()
-            if t.startswith("```"):
-                lines = t.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                t = "\n".join(lines).strip()
             try:
-                data = json.loads(t, strict=False)
+                data = safe_json_loads_with_latex(raw_text)
             except Exception:
-                fixed = re.sub(r'\\([a-zA-Z])', r'\\\\\1', t)
-                try:
-                    data = json.loads(fixed, strict=False)
-                except Exception:
-                    match = re.search(r"\{.*\}", fixed, re.DOTALL)
-                    if match:
-                        try:
-                            data = json.loads(match.group(0), strict=False)
-                        except Exception:
-                            return None
-                    else:
-                        return None
+                return None
 
             if not isinstance(data, dict):
                 return None
+            data = repair_latex_in_structure(data)
 
             exec_sum = str(data.get("executive_summary") or "").strip()
             if not exec_sum:
@@ -3085,6 +3042,9 @@ class Llama3PineconeRAGStore:
 
         clean_vid = str(video_id or "").strip()
         title = lecture_title or "Active Lecture"
+        question = repair_corrupted_latex_text(str(question or ""))
+        options = [repair_corrupted_latex_text(str(opt)) for opt in (options or [])]
+        explanation = repair_corrupted_latex_text(str(explanation or ""))
         groq_key = os.getenv("GROQ_API_KEY", "")
         gemini_key = os.getenv("GEMINI_API_KEY", "")
 
@@ -3215,7 +3175,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
                         timeout=60
                     )
                     if r.status_code == 200:
-                        detailed_explanation = r.json()["choices"][0]["message"]["content"].strip()
+                        detailed_explanation = repair_corrupted_latex_text(r.json()["choices"][0]["message"]["content"].strip())
                         return {
                             "detailed_explanation": detailed_explanation,
                             "model": f"Groq {model_name}",
@@ -3236,7 +3196,7 @@ Please provide a comprehensive, detailed explanation that helps the student unde
                     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
                     resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
                     if resp.status_code == 200:
-                        detailed_explanation = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        detailed_explanation = repair_corrupted_latex_text(resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip())
                         return {
                             "detailed_explanation": detailed_explanation,
                             "model": f"Gemini {model_name}",

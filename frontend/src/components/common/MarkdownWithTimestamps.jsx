@@ -4,7 +4,7 @@ import { gfmTable } from 'micromark-extension-gfm-table';
 import { gfmTableFromMarkdown, gfmTableToMarkdown } from 'mdast-util-gfm-table';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { normalizeTimestamp } from '../../utils/formatters';
+import { normalizeTimestamp, repairCorruptedLatex } from '../../utils/formatters';
 
 function remarkGfmTable() {
   const data = this.data();
@@ -17,10 +17,12 @@ export default function MarkdownWithTimestamps({
   content,
   text,
   onCueClick,
+  onTimestampClick,
   citations = [],
   onCrossLectureClick
 }) {
   const effectiveText = content ?? text ?? '';
+  const handleTimestampJump = onCueClick || onTimestampClick;
 
   const renderTimestampButton = (rawTs, key) => {
     const ts = normalizeTimestamp(rawTs);
@@ -65,8 +67,8 @@ export default function MarkdownWithTimestamps({
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (typeof onCueClick === 'function') {
-            onCueClick(ts);
+          if (typeof handleTimestampJump === 'function') {
+            handleTimestampJump(ts);
           }
         }}
         title={`Jump video to ${ts}`}
@@ -201,8 +203,8 @@ export default function MarkdownWithTimestamps({
               e.stopPropagation();
               if (isCross && matchedCite?.video_id && typeof onCrossLectureClick === 'function') {
                 onCrossLectureClick(matchedCite.video_id, matchedCite.timestamp, matchedCite.video_title);
-              } else if (matchedCite?.timestamp && typeof onCueClick === 'function') {
-                onCueClick(matchedCite.timestamp);
+              } else if (matchedCite?.timestamp && typeof handleTimestampJump === 'function') {
+                handleTimestampJump(matchedCite.timestamp);
               } else if (crossCite?.video_id && typeof onCrossLectureClick === 'function') {
                 onCrossLectureClick(crossCite.video_id, crossCite.timestamp, crossCite.video_title);
               }
@@ -253,7 +255,7 @@ export default function MarkdownWithTimestamps({
 
   const sanitizedContent = React.useMemo(() => {
     if (!effectiveText) return '';
-    return effectiveText
+    return repairCorruptedLatex(effectiveText)
       // Repair corrupted timestamp delimiters like [14:52$$ or $$22:23]
       .replace(/\[((?:\d{1,3}:\d{2}(?::\d{2})?(?:,\s*)?)+)\$\$/g, '[$1]')
       .replace(/\$\$((?:\d{1,3}:\d{2}(?::\d{2})?(?:,\s*)?)+)\]/g, '[$1]')

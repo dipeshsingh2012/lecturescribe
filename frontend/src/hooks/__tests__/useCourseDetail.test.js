@@ -251,4 +251,35 @@ describe('useCourseDetail hook functionality', () => {
     expect(result.current.filteredCourseLectures.length).toBe(1);
     expect(result.current.filteredCourseLectures[0].video_id).toBe('cn-3');
   });
+
+  it('resolves 1.2 Machine Learning Paradigms and its lectures at first load when URL is /course/machine-learning-paradigms', async () => {
+    window.history.pushState({}, '', '/course/machine-learning-paradigms');
+
+    const canonicalCoursePayload = {
+      course_name: '1.2 Machine Learning Paradigms',
+      course_slug: '1-2-machine-learning-paradigms',
+      lectures: [
+        { video_id: '1230001154', video_title: 'Session 1' },
+        { video_id: '1241735505', video_title: 'Session 11' }
+      ]
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ course: canonicalCoursePayload })
+    });
+
+    const { result } = renderHook(() =>
+      useCourseDetail([], 'dipesh.singh2012@gmail.com', '', null)
+    );
+
+    // Initial selectedCourse should have the canonical 1.2 numerical prefix immediately
+    expect(result.current.selectedCourse).toBe('1.2 Machine Learning Paradigms');
+
+    await waitFor(() => {
+      expect(result.current.activeCourseData).not.toBeNull();
+      expect(result.current.activeCourseData.course_name).toBe('1.2 Machine Learning Paradigms');
+      expect(result.current.filteredCourseLectures.length).toBe(2);
+    });
+  });
 });

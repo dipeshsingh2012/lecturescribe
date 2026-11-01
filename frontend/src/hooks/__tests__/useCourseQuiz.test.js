@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import useCourseQuiz from '../useCourseQuiz';
+import useCourseQuiz, { filterAcademicQuestions, sanitizeCourseQuizData } from '../useCourseQuiz';
 
 describe('useCourseQuiz hook', () => {
   beforeEach(() => {
@@ -426,5 +426,112 @@ describe('useCourseQuiz hook', () => {
     expect(success).toBe(true);
     expect(result.current.quizHistory).toHaveLength(1);
     expect(result.current.quizHistory[0].quiz_id).toBe('quiz-2');
+  });
+
+  it('does not populate quizData when generate=false and no quiz exists yet', async () => {
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/quiz/history')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ history: [{ quiz_id: 'h1', score: 3, total_questions: 5 }] })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          course_name: 'Data Science',
+          course_slug: 'data-science',
+          questions: [],
+          exists: false
+        })
+      });
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Data Science'));
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false, null, false);
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('generate=false'),
+      expect.objectContaining({
+        body: JSON.stringify({ regenerate: false, generate: false })
+      })
+    );
+    expect(result.current.quizData).toBeNull();
+    expect(result.current.quizLoading).toBe(false);
+    expect(result.current.hasFetched).toBe(true);
+    expect(result.current.quizHistory).toHaveLength(1);
+    expect(result.current.quizHistory[0].quiz_id).toBe('h1');
+  });
+
+  it('filters out non-academic exam format and syllabus coverage questions from quiz payload', () => {
+    const rawQuestions = [
+      {
+        id: 1,
+        question: 'In the context of the mid-semester examination for this introductory course, which of the following statements is correct regarding the question format?',
+        options: ['MCQs only', 'Oral only', 'Coding only', 'None']
+      },
+      {
+        id: 2,
+        question: 'What is the primary difference between Supervised Learning and Unsupervised Learning?',
+        options: ['Presence of ground truth labels', 'Learning rate schedule', 'Batch size', 'Hardware GPU']
+      },
+      {
+        id: 3,
+        question: 'The mid-semester examination syllabus covers all topics up to the _____, excluding advanced topics like Variational Autoencoders and Generative Adversarial Networks.',
+        options: ['CNNs', 'VAEs', 'GANs', 'Diffusion']
+      }
+    ];
+
+    const filtered = filterAcademicQuestions(rawQuestions);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].question).toContain('Supervised Learning');
+
+    const sanitized = sanitizeCourseQuizData({
+      course_name: 'Machine Learning',
+      questions: rawQuestions,
+      total_questions: 3
+    });
+    expect(sanitized.questions).toHaveLength(1);
+    expect(sanitized.total_questions).toBe(1);
+    expect(sanitized.questions[0].id).toBe(1);
+    expect(sanitized.questions[0].question).toContain('Supervised Learning');
+  });
+
+  it('does not populate quizData and keeps exam unstarted when probing existing quiz (generate=false) if quiz was already completed', async () => {
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/quiz/history')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ history: [{ quiz_id: 'prev-1', score: 10, total_questions: 10 }] })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          course_name: 'Machine Learning',
+          questions: [
+            { id: 1, question: 'Explain Backpropagation', options: ['A', 'B', 'C', 'D'], correct_index: 0 }
+          ],
+          user_completed: true,
+          is_completed: true,
+          user_answers: { 1: 0 }
+        })
+      });
+    });
+
+    const { result } = renderHook(() => useCourseQuiz('Machine Learning', 'student@example.com'));
+
+    await act(async () => {
+      await result.current.fetchOrGenerateQuiz(false, null, false);
+    });
+
+    expect(result.current.quizData).toBeNull();
+    expect(result.current.selectedAnswers).toEqual({});
+    expect(result.current.examStarted).toBe(false);
+    expect(result.current.quizGenerating).toBe(false);
+    expect(result.current.quizHistory).toHaveLength(1);
   });
 });

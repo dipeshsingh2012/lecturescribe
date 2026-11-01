@@ -21,6 +21,7 @@ import {
 
 export default function PastQuizzesAccordion({
   quizHistory = [],
+  historyLoading = false,
   pastQuizzesOpen,
   setPastQuizzesOpen,
   fetchQuizHistory,
@@ -94,10 +95,11 @@ export default function PastQuizzesAccordion({
                 e.stopPropagation();
                 fetchQuizHistory();
               }}
+              disabled={historyLoading}
               sx={{ color: textSecondary, mr: 0.5 }}
               title="Refresh history"
             >
-              <RotateCcw size={13} />
+              {historyLoading ? <CircularProgress size={13} color="inherit" /> : <RotateCcw size={13} />}
             </IconButton>
           )}
         </Box>

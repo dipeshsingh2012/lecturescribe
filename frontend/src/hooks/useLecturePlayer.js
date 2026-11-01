@@ -748,7 +748,10 @@ export function useLecturePlayer(activeData, userEmail = null) {
   const handleCueClick = (timestampStr) => {
     const secs = parseTimestampToSeconds(timestampStr);
     const cues = activeData?.cues || [];
-    const clickedIdx = cues.findIndex(c => c.time === timestampStr);
+    let clickedIdx = cues.findIndex(c => c.time === timestampStr);
+    if (clickedIdx === -1 && Number.isFinite(secs)) {
+      clickedIdx = cues.findIndex(c => parseTimestampToSeconds(c.time) === secs);
+    }
     const targetIdx = clickedIdx !== -1 ? clickedIdx : 0;
     setActiveCueIdx(targetIdx);
     activeCueIdxRef.current = targetIdx;

@@ -18,7 +18,10 @@ import {
   Pause,
   Pencil,
   Bot,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Plus,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import katex from 'katex';
 import DOMPurify from 'dompurify';
@@ -108,6 +111,7 @@ export default function TranscriptSearch({
   // Drawers and Annotations state
   const [showReviewDrawer, setShowReviewDrawer] = useState(false);
   const [showAnnotationsDrawer, setShowAnnotationsDrawer] = useState(false);
+  const [drawerInitialCreate, setDrawerInitialCreate] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
@@ -498,6 +502,7 @@ export default function TranscriptSearch({
     }
 
     setAutoScroll(true);
+    setLocalPlaying(true);
     handleCueClick(cueTime);
     if (cueRefs.current[idx] && scrollContainerRef.current) {
       const container = scrollContainerRef.current;
@@ -823,9 +828,13 @@ export default function TranscriptSearch({
           justDismissedToolbarRef.current = false;
         }, 120);
       }
-      if (activeMarkAction && !e.target.closest?.('.active-mark-action-popover')) {
-        setActiveMarkAction(null);
-      }
+      setActiveMarkAction(prev => (prev && !e.target.closest?.('.active-mark-action-popover') ? null : prev));
+      setHoveredMark(prev => {
+        if (!prev) return null;
+        if (prev.expanded || prev.editing) return prev;
+        if (e.target.closest?.('[data-testid="mark-hover-tooltip"]')) return prev;
+        return null;
+      });
     };
     const handleDocMouseUp = (e) => {
       if (e.target.closest?.('.text-selection-toolbar')) return;
@@ -846,6 +855,16 @@ export default function TranscriptSearch({
       document.removeEventListener('mouseup', handleDocMouseUp);
     };
   }, [selectionToolbar, handleTextSelection]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if (e.key === 'Escape' && hoveredMark?.expanded) {
+        setHoveredMark(prev => (prev ? { ...prev, expanded: false } : null));
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [hoveredMark?.expanded]);
 
   // Helper to render mathematical formulas via KaTeX inside cue strings
   const renderMathText = (text, isActive) => {
@@ -945,7 +964,7 @@ export default function TranscriptSearch({
   };
 
   // Helper to render annotated text (highlights, comments/notes, and AI explanations)
-  const renderAnnotatedCue = (cueText, cueAnnotations, isActive, cueSec, nextCueSec) => {
+  const renderAnnotatedCue = (cueText, cueAnnotations, isActive, cueSec, nextCueSec, cue = null, idx = 0) => {
     if (!cueText || typeof cueText !== 'string') return cueText;
     if (!cueAnnotations || cueAnnotations.length === 0) {
       return renderMathText(cueText, isActive);
@@ -1060,9 +1079,14 @@ export default function TranscriptSearch({
         <mark
           key={`highlight-${m.id}-${i}`}
           onClick={(e) => {
-            const sel = window.getSelection();
+            const sel = typeof window !== 'undefined' ? window.getSelection() : null;
             if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
               return;
+            }
+            justDismissedToolbarRef.current = false;
+            const cueTime = cue?.time || (cueSec !== undefined ? formatSecondsToTimestamp(cueSec) : '00:00');
+            if (typeof onCueClick === 'function') {
+              onCueClick(cueTime, idx);
             }
             e.stopPropagation();
             if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
@@ -1080,20 +1104,27 @@ export default function TranscriptSearch({
             if (!hasContent) return;
             if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
             const rect = e.currentTarget.getBoundingClientRect();
+            const cueTime = cue?.time || (cueSec !== undefined ? formatSecondsToTimestamp(cueSec) : '00:00');
             setHoveredMark(prev => {
               if (prev?.editing && prev?.annotation?.id === ann.id) return prev;
+              if (prev?.expanded) return prev;
               return {
                 annotation: ann,
+                cue,
+                cueIdx: idx,
+                cueTime,
                 x: rect.left + rect.width / 2,
                 y: rect.top,
-                editing: false
+                bottom: rect.bottom,
+                editing: false,
+                expanded: false
               };
             });
           }}
           onMouseLeave={() => {
             if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
             hoverCloseTimeoutRef.current = setTimeout(() => {
-              setHoveredMark(prev => (prev?.editing ? prev : null));
+              setHoveredMark(prev => (prev?.editing || prev?.expanded ? prev : null));
             }, 180);
           }}
           title={
@@ -1184,7 +1215,7 @@ export default function TranscriptSearch({
           lineHeight: 'var(--cue-line-height, 1.35)'
         }}
       >
-        {renderAnnotatedCue(cue.text, cueAnnotations, isActive, cueSec, nextCueSec)}
+        {renderAnnotatedCue(cue.text, cueAnnotations, isActive, cueSec, nextCueSec, cue, idx)}
       </span>
     );
   };
@@ -1264,7 +1295,10 @@ export default function TranscriptSearch({
               {/* Notes & Highlights Drawer Button */}
               {videoId && (
                 <button
-                  onClick={() => setShowAnnotationsDrawer(true)}
+                  onClick={() => {
+                    setDrawerInitialCreate(false);
+                    setShowAnnotationsDrawer(true);
+                  }}
                   title="View Notes & Highlights"
                   aria-label="Notes and Highlights"
                   style={{
@@ -1297,6 +1331,36 @@ export default function TranscriptSearch({
                       {annotations.length}
                     </span>
                   )}
+                </button>
+              )}
+
+              {/* Quick Add Note Button in header */}
+              {videoId && (
+                <button
+                  data-testid="header-add-note-btn"
+                  onClick={() => {
+                    setDrawerInitialCreate(true);
+                    setShowAnnotationsDrawer(true);
+                  }}
+                  title="Add new note"
+                  aria-label="Add new note"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    background: 'var(--card-bg)',
+                    color: 'var(--theme-primary)',
+                    border: '1px solid var(--border-color)',
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <Plus size={11} color="var(--theme-primary)" />
+                  <span>Note</span>
                 </button>
               )}
 
@@ -1978,266 +2042,411 @@ export default function TranscriptSearch({
             />
           )}
 
-          {/* Rich Hover Card for Notes / Highlights (supports inline editing) */}
+          {/* Rich Hover Card for Notes / Highlights (supports inline editing & AI explanation expansion) */}
           {hoveredMark && !activeMarkAction && (() => {
             const ann = hoveredMark.annotation;
             const annType = ann?.annotationType || ann?.annotation_type;
-            const isAi = annType === 'ai_explanation';
+            const isAi = annType === 'ai_explanation' || Boolean(ann?.aiResponse || ann?.ai_response);
             const isNote = annType === 'note';
+            const isExpanded = Boolean(isAi && hoveredMark.expanded);
 
             return (
-              <div
-                data-testid="mark-hover-tooltip"
-                onMouseEnter={() => {
-                  if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
-                }}
-                onMouseLeave={() => {
-                  if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
-                  hoverCloseTimeoutRef.current = setTimeout(() => {
-                    setHoveredMark(prev => (prev?.editing ? prev : null));
-                  }, 150);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  position: 'fixed',
-                  left: Math.max(10, Math.min(typeof window !== 'undefined' ? window.innerWidth - 320 : 300, (hoveredMark.x || 200) - 140)),
-                  top: Math.max(10, (hoveredMark.y || 200) > 110 ? (hoveredMark.y || 200) - (hoveredMark.editing ? 120 : 84) : (hoveredMark.y || 200) + 26),
-                  zIndex: 1200,
-                  background: 'var(--card-bg, #1e293b)',
-                  border: isAi ? '1px solid rgba(168, 85, 247, 0.35)' : '1px solid rgba(129, 140, 248, 0.35)',
-                  borderRadius: '8px',
-                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
-                  padding: '8px 12px',
-                  maxWidth: '300px',
-                  minWidth: '210px',
-                  pointerEvents: 'auto',
-                  animation: 'fadeIn 0.12s ease'
-                }}
-              >
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '6px',
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
-                  color: isAi ? '#a855f7' : isNote ? '#3b82f6' : 'var(--theme-primary, #6366f1)',
-                  marginBottom: '4px'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    {isNote ? (
-                      <>
-                        <MessageSquare size={12} />
-                        <span>Margin Note</span>
-                      </>
-                    ) : isAi ? (
-                      <>
-                        <Sparkles size={12} />
-                        <span>AI Explanation</span>
-                      </>
-                    ) : (
-                      <span>Highlight ({ann?.color || 'yellow'})</span>
-                    )}
-                  </div>
-                  {!hoveredMark.editing && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      {/* Copy Button */}
-                      <button
-                        type="button"
-                        aria-label="Copy note or explanation"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const textToCopy = ann?.aiResponse || ann?.ai_response || ann?.noteText || ann?.note_text || ann?.selectedText || ann?.selected_text || '';
-                          navigator.clipboard.writeText(textToCopy);
-                          setCopiedMarkId(ann?.id);
-                          setTimeout(() => setCopiedMarkId(null), 1500);
-                        }}
-                        title="Copy note or explanation"
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '2px',
-                          background: 'transparent',
-                          border: 'none',
-                          color: copiedMarkId === ann?.id ? '#10b981' : 'var(--text-secondary)',
-                          fontSize: '0.68rem',
-                          cursor: 'pointer',
-                          padding: '2px 4px'
-                        }}
-                      >
-                        {copiedMarkId === ann?.id ? <Check size={11} color="#10b981" /> : <Copy size={11} />}
-                      </button>
-
-                      {/* Discuss in AI Tutor Button */}
-                      {typeof onDiscussInTutor === 'function' && (
+              <>
+                {isExpanded && (
+                  <div
+                    data-testid="mark-hover-backdrop"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHoveredMark(prev => (prev ? { ...prev, expanded: false } : null));
+                    }}
+                    style={{
+                      position: 'fixed',
+                      inset: 0,
+                      background: 'rgba(0, 0, 0, 0.45)',
+                      backdropFilter: 'blur(2px)',
+                      zIndex: 1199
+                    }}
+                  />
+                )}
+                <div
+                  data-testid="mark-hover-tooltip"
+                  className={isExpanded ? 'mark-hover-tooltip-expanded' : ''}
+                  onMouseEnter={() => {
+                    if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+                  }}
+                  onMouseLeave={() => {
+                    if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
+                    hoverCloseTimeoutRef.current = setTimeout(() => {
+                      setHoveredMark(prev => (prev?.editing || prev?.expanded ? prev : null));
+                    }, 150);
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (hoveredMark.editing || hoveredMark.expanded) return;
+                    const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+                    if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) return;
+                    if (e.target.closest?.('button, a, input, textarea')) return;
+                    const targetTime = hoveredMark.cueTime || hoveredMark.cue?.time;
+                    if (targetTime && typeof onCueClick === 'function') {
+                      onCueClick(targetTime, hoveredMark.cueIdx ?? idx);
+                      setHoveredMark(null);
+                    }
+                  }}
+                  style={{
+                    position: 'fixed',
+                    left: isExpanded
+                      ? '50%'
+                      : Math.max(160, Math.min(typeof window !== 'undefined' ? window.innerWidth - 160 : 300, hoveredMark.x || 200)),
+                    top: isExpanded
+                      ? '50%'
+                      : (hoveredMark.y || 200) > 180
+                      ? Math.max(10, (hoveredMark.y || 200) - 8)
+                      : ((hoveredMark.bottom || ((hoveredMark.y || 200) + 24)) + 8),
+                    transform: isExpanded
+                      ? 'translate(-50%, -50%)'
+                      : (hoveredMark.y || 200) > 180
+                      ? 'translate(-50%, -100%)'
+                      : 'translate(-50%, 0)',
+                    zIndex: 1200,
+                    background: 'var(--card-bg, #1e293b)',
+                    border: isAi ? '1px solid rgba(168, 85, 247, 0.45)' : '1px solid rgba(129, 140, 248, 0.35)',
+                    borderRadius: isExpanded ? '12px' : '8px',
+                    boxShadow: isExpanded ? '0 16px 48px rgba(0, 0, 0, 0.5)' : '0 8px 24px rgba(0, 0, 0, 0.35)',
+                    padding: isExpanded ? '14px 16px' : '8px 12px',
+                    width: isExpanded ? 'min(640px, calc(100vw - 32px))' : 'auto',
+                    maxWidth: isExpanded ? 'min(640px, calc(100vw - 32px))' : '300px',
+                    minWidth: isExpanded ? 'min(440px, calc(100vw - 32px))' : '210px',
+                    maxHeight: isExpanded ? 'calc(100vh - 64px)' : 'auto',
+                    pointerEvents: 'auto',
+                    animation: isExpanded ? 'none' : 'fadeIn 0.12s ease',
+                    transition: 'box-shadow 0.2s ease, width 0.2s ease, max-width 0.2s ease, border-radius 0.2s ease'
+                  }}
+                >
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '6px',
+                    fontSize: isExpanded ? '0.8rem' : '0.72rem',
+                    fontWeight: 700,
+                    color: isAi ? '#a855f7' : isNote ? '#3b82f6' : 'var(--theme-primary, #6366f1)',
+                    marginBottom: isExpanded ? '8px' : '4px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      {isNote ? (
+                        <>
+                          <MessageSquare size={isExpanded ? 14 : 12} />
+                          <span>Margin Note</span>
+                        </>
+                      ) : isAi ? (
+                        <>
+                          <Sparkles size={isExpanded ? 14 : 12} />
+                          <span>AI Explanation</span>
+                        </>
+                      ) : (
+                        <span>Highlight ({ann?.color || 'yellow'})</span>
+                      )}
+                      {hoveredMark.cueTime && (
                         <button
                           type="button"
-                          aria-label="Discuss in AI Tutor"
+                          data-testid="mark-hover-seek-btn"
                           onClick={(e) => {
                             e.stopPropagation();
-                            const topic = ann?.selectedText || ann?.selected_text || ann?.noteText || ann?.note_text || ann?.aiResponse || ann?.ai_response || '';
-                            const startSec = Number(ann?.startSeconds ?? ann?.start_seconds ?? 0);
-                            const ts = startSec ? formatSecondsToTimestamp(startSec) : '';
-                            onDiscussInTutor(topic, ts);
+                            onCueClick(hoveredMark.cueTime, hoveredMark.cueIdx ?? idx);
                             setHoveredMark(null);
                           }}
-                          title="Discuss in AI Tutor"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '2px',
-                            background: 'rgba(99, 102, 241, 0.1)',
-                            border: '1px solid rgba(99, 102, 241, 0.25)',
-                            borderRadius: '4px',
-                            color: 'var(--theme-primary, #6366f1)',
-                            fontSize: '0.68rem',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            padding: '1px 5px'
-                          }}
-                        >
-                          <Bot size={11} /> Discuss
-                        </button>
-                      )}
-
-                      {!isAi && (
-                        <button
-                          type="button"
-                          aria-label="Edit note in tooltip"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingMarkNoteText(ann?.noteText || ann?.note_text || '');
-                            setHoveredMark(prev => prev ? { ...prev, editing: true } : null);
-                          }}
+                          title={`Play from ${hoveredMark.cueTime}`}
+                          aria-label={`Play from ${hoveredMark.cueTime}`}
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '3px',
-                            background: 'rgba(59, 130, 246, 0.12)',
-                            color: '#3b82f6',
-                            border: 'none',
+                            marginLeft: '4px',
+                            padding: '1px 5px',
                             borderRadius: '4px',
-                            padding: '2px 6px',
+                            background: 'rgba(0, 117, 237, 0.12)',
+                            color: 'var(--theme-primary, #6366f1)',
+                            border: '1px solid rgba(0, 117, 237, 0.25)',
                             fontSize: '0.68rem',
-                            fontWeight: 600,
+                            fontFamily: 'monospace',
                             cursor: 'pointer'
                           }}
                         >
-                          <Pencil size={10} /> Edit
+                          <Play size={8} fill="currentColor" />
+                          <span>{hoveredMark.cueTime}</span>
                         </button>
                       )}
                     </div>
-                  )}
-                </div>
-
-                {hoveredMark.editing ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
-                    <textarea
-                      autoFocus
-                      aria-label="Edit margin note text"
-                      value={editingMarkNoteText}
-                      onChange={(e) => setEditingMarkNoteText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          if (editingMarkNoteText.trim()) {
-                            handleUpdateAnnotation(ann?.id, editingMarkNoteText);
-                          }
-                        } else if (e.key === 'Escape') {
-                          setHoveredMark(prev => prev ? { ...prev, editing: false } : null);
-                        }
-                      }}
-                      rows={2}
-                      placeholder="Write note... (Press Enter to save)"
-                      style={{
-                        width: '100%',
-                        boxSizing: 'border-box',
-                        padding: '5px 7px',
-                        borderRadius: '5px',
-                        border: '1px solid var(--border-color)',
-                        background: 'var(--panel-bg)',
-                        color: 'var(--text-primary)',
-                        fontSize: '0.78rem',
-                        resize: 'none',
-                        outline: 'none'
-                      }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)' }}>Enter to save</span>
-                      <div style={{ display: 'flex', gap: '4px' }}>
+                    {!hoveredMark.editing && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {/* Copy Button */}
                         <button
                           type="button"
-                          onClick={() => setHoveredMark(prev => prev ? { ...prev, editing: false } : null)}
+                          aria-label="Copy note or explanation"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const textToCopy = ann?.aiResponse || ann?.ai_response || ann?.noteText || ann?.note_text || ann?.selectedText || ann?.selected_text || '';
+                            navigator.clipboard.writeText(textToCopy);
+                            setCopiedMarkId(ann?.id);
+                            setTimeout(() => setCopiedMarkId(null), 1500);
+                          }}
+                          title="Copy note or explanation"
                           style={{
-                            padding: '2px 6px',
-                            fontSize: '0.68rem',
-                            borderRadius: '4px',
-                            border: '1px solid var(--border-color)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '2px',
                             background: 'transparent',
-                            color: 'var(--text-secondary)',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!editingMarkNoteText.trim() || isSavingMarkNote}
-                          onClick={() => handleUpdateAnnotation(ann?.id, editingMarkNoteText)}
-                          style={{
-                            padding: '2px 8px',
-                            fontSize: '0.68rem',
-                            fontWeight: 600,
-                            borderRadius: '4px',
                             border: 'none',
-                            background: 'var(--theme-primary)',
-                            color: '#fff',
-                            cursor: 'pointer'
+                            color: copiedMarkId === ann?.id ? '#10b981' : 'var(--text-secondary)',
+                            fontSize: '0.68rem',
+                            cursor: 'pointer',
+                            padding: '2px 4px'
                           }}
                         >
-                          Save
+                          {copiedMarkId === ann?.id ? <Check size={11} color="#10b981" /> : <Copy size={11} />}
                         </button>
+
+                        {/* Discuss in AI Tutor Button */}
+                        {typeof onDiscussInTutor === 'function' && (
+                          <button
+                            type="button"
+                            aria-label="Discuss in AI Tutor"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const topic = ann?.selectedText || ann?.selected_text || ann?.noteText || ann?.note_text || ann?.aiResponse || ann?.ai_response || '';
+                              const startSec = Number(ann?.startSeconds ?? ann?.start_seconds ?? 0);
+                              const ts = startSec ? formatSecondsToTimestamp(startSec) : '';
+                              onDiscussInTutor(topic, ts);
+                              setHoveredMark(null);
+                            }}
+                            title="Discuss in AI Tutor"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '2px',
+                              background: 'rgba(99, 102, 241, 0.1)',
+                              border: '1px solid rgba(99, 102, 241, 0.25)',
+                              borderRadius: '4px',
+                              color: 'var(--theme-primary, #6366f1)',
+                              fontSize: '0.68rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              padding: '1px 5px'
+                            }}
+                          >
+                            <Bot size={11} /> Discuss
+                          </button>
+                        )}
+
+                        {/* Expand / Collapse Button for AI Explanations */}
+                        {isAi && (
+                          <button
+                            type="button"
+                            data-testid="mark-hover-expand-btn"
+                            aria-label={isExpanded ? "Collapse explanation" : "Expand explanation"}
+                            title={isExpanded ? "Collapse explanation" : "Expand explanation"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setHoveredMark(prev => (prev ? { ...prev, expanded: !prev.expanded } : null));
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: isExpanded ? 'rgba(168, 85, 247, 0.18)' : 'transparent',
+                              border: isExpanded ? '1px solid rgba(168, 85, 247, 0.35)' : 'none',
+                              color: isExpanded ? '#a855f7' : 'var(--text-secondary)',
+                              fontSize: '0.68rem',
+                              cursor: 'pointer',
+                              padding: '2px 4px',
+                              borderRadius: '4px',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            {isExpanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                          </button>
+                        )}
+
+                        {/* Close button when expanded */}
+                        {isExpanded && (
+                          <button
+                            type="button"
+                            data-testid="mark-hover-close-btn"
+                            aria-label="Close explanation"
+                            title="Close"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setHoveredMark(null);
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--text-secondary)',
+                              cursor: 'pointer',
+                              padding: '2px 4px',
+                              borderRadius: '4px'
+                            }}
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+
+                        {!isAi && (
+                          <button
+                            type="button"
+                            aria-label="Edit note in tooltip"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingMarkNoteText(ann?.noteText || ann?.note_text || '');
+                              setHoveredMark(prev => prev ? { ...prev, editing: true } : null);
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              background: 'rgba(59, 130, 246, 0.12)',
+                              color: '#3b82f6',
+                              border: 'none',
+                              borderRadius: '4px',
+                              padding: '2px 6px',
+                              fontSize: '0.68rem',
+                              fontWeight: 600,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <Pencil size={10} /> Edit
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {hoveredMark.editing ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
+                      <textarea
+                        autoFocus
+                        aria-label="Edit margin note text"
+                        value={editingMarkNoteText}
+                        onChange={(e) => setEditingMarkNoteText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            if (editingMarkNoteText.trim()) {
+                              handleUpdateAnnotation(ann?.id, editingMarkNoteText);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setHoveredMark(prev => prev ? { ...prev, editing: false } : null);
+                          }
+                        }}
+                        rows={2}
+                        placeholder="Write note... (Press Enter to save)"
+                        style={{
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          padding: '5px 7px',
+                          borderRadius: '5px',
+                          border: '1px solid var(--border-color)',
+                          background: 'var(--panel-bg)',
+                          color: 'var(--text-primary)',
+                          fontSize: '0.78rem',
+                          resize: 'none',
+                          outline: 'none'
+                        }}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)' }}>Enter to save</span>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            type="button"
+                            onClick={() => setHoveredMark(prev => prev ? { ...prev, editing: false } : null)}
+                            style={{
+                              padding: '2px 6px',
+                              fontSize: '0.68rem',
+                              borderRadius: '4px',
+                              border: '1px solid var(--border-color)',
+                              background: 'transparent',
+                              color: 'var(--text-secondary)',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!editingMarkNoteText.trim() || isSavingMarkNote}
+                            onClick={() => handleUpdateAnnotation(ann?.id, editingMarkNoteText)}
+                            style={{
+                              padding: '2px 8px',
+                              fontSize: '0.68rem',
+                              fontWeight: 600,
+                              borderRadius: '4px',
+                              border: 'none',
+                              background: 'var(--theme-primary)',
+                              color: '#fff',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Save
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : isAi ? (
-                  <div style={{
-                    fontSize: '0.8rem',
-                    color: 'var(--text-primary)',
-                    lineHeight: '1.5',
-                    maxHeight: '180px',
-                    overflowY: 'auto'
-                  }}>
-                    <MarkdownWithTimestamps content={ann?.aiResponse || ann?.ai_response || ann?.noteText || ann?.note_text || ''} onCueClick={handleCueClick} />
-                  </div>
-                ) : (ann?.noteText || ann?.note_text) ? (
-                  <div style={{
-                    fontSize: '0.82rem',
-                    color: 'var(--text-primary)',
-                    lineHeight: '1.5',
-                    maxHeight: '160px',
-                    overflowY: 'auto'
-                  }}>
-                    <MarkdownWithTimestamps content={ann?.noteText || ann?.note_text} onCueClick={handleCueClick} />
-                  </div>
-                ) : (ann?.aiResponse || ann?.ai_response) ? (
-                  <div style={{
-                    fontSize: '0.8rem',
-                    color: 'var(--text-primary)',
-                    lineHeight: '1.5',
-                    maxHeight: '160px',
-                    overflowY: 'auto'
-                  }}>
-                    <MarkdownWithTimestamps content={ann?.aiResponse || ann?.ai_response} onCueClick={handleCueClick} />
-                  </div>
-                ) : null}
+                  ) : isAi ? (
+                    <div style={{
+                      fontSize: isExpanded ? '0.86rem' : '0.8rem',
+                      color: 'var(--text-primary)',
+                      lineHeight: '1.6',
+                      maxHeight: isExpanded ? 'calc(75vh - 100px)' : '180px',
+                      overflowY: 'auto',
+                      paddingRight: '4px'
+                    }}>
+                      <MarkdownWithTimestamps
+                        content={ann?.aiResponse || ann?.ai_response || ann?.noteText || ann?.note_text || ''}
+                        onCueClick={(ts) => {
+                          setHoveredMark(null);
+                          handleCueClick(ts);
+                        }}
+                      />
+                    </div>
+                  ) : (ann?.noteText || ann?.note_text) ? (
+                    <div style={{
+                      fontSize: '0.82rem',
+                      color: 'var(--text-primary)',
+                      lineHeight: '1.5',
+                      maxHeight: '160px',
+                      overflowY: 'auto'
+                    }}>
+                      <MarkdownWithTimestamps content={ann?.noteText || ann?.note_text} onCueClick={handleCueClick} />
+                    </div>
+                  ) : (ann?.aiResponse || ann?.ai_response) ? (
+                    <div style={{
+                      fontSize: isExpanded ? '0.86rem' : '0.8rem',
+                      color: 'var(--text-primary)',
+                      lineHeight: '1.6',
+                      maxHeight: isExpanded ? 'calc(75vh - 100px)' : '160px',
+                      overflowY: 'auto',
+                      paddingRight: '4px'
+                    }}>
+                      <MarkdownWithTimestamps
+                        content={ann?.aiResponse || ann?.ai_response}
+                        onCueClick={(ts) => {
+                          setHoveredMark(null);
+                          handleCueClick(ts);
+                        }}
+                      />
+                    </div>
+                  ) : null}
 
-                {!hoveredMark.editing && !isAi && (
-                  <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                    Click to open in Notes drawer, edit, or un-highlight
-                  </div>
-                )}
-              </div>
+                  {!hoveredMark.editing && !isAi && (
+                    <div style={{ fontSize: '0.66rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Click to open in Notes drawer, edit, or un-highlight
+                    </div>
+                  )}
+                </div>
+              </>
             );
           })()}
 
@@ -2684,15 +2893,26 @@ export default function TranscriptSearch({
         {/* Annotations & Notes Drawer */}
         <TranscriptAnnotationsDrawer
           open={showAnnotationsDrawer}
-          onClose={() => setShowAnnotationsDrawer(false)}
+          onClose={() => {
+            setShowAnnotationsDrawer(false);
+            setDrawerInitialCreate(false);
+          }}
           videoId={videoId}
           annotations={annotations}
           onDeleteAnnotation={(deletedId) => {
             setAnnotations(prev => prev.filter(a => a.id !== deletedId));
           }}
           onUpdateAnnotation={handleUpdateAnnotation}
+          onAnnotationCreated={(newAnn) => {
+            setAnnotations(prev => [newAnn, ...prev]);
+          }}
           handleCueClick={handleCueClick}
           onDiscussInTutor={onDiscussInTutor}
+          activeCue={displayCues[activeCueIdx] || displayCues[0]}
+          activeCueIdx={activeCueIdx}
+          displayCues={displayCues}
+          userEmail={googleUser?.email}
+          initialShowCreate={drawerInitialCreate}
         />
       </div>
     </div>

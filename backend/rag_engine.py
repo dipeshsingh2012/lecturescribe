@@ -2055,7 +2055,7 @@ class Llama3PineconeRAGStore:
     def _is_trivial_or_greeting_question(cls, q: Dict[str, Any]) -> bool:
         """
         Detect and discard questions that test greetings, pleasantries, mic checks,
-        or other non-academic filler.
+        course logistics, exam formats, syllabus scopes, or other non-academic filler.
         """
         if not isinstance(q, dict):
             return True
@@ -2080,6 +2080,48 @@ class Llama3PineconeRAGStore:
             "welcome the class",
             "welcome the students",
             "opening greeting",
+            # Administrative announcements, exam logistics, question formats, and syllabus boundaries
+            "mid-semester examination",
+            "mid-semester exam",
+            "midsem examination",
+            "midsem exam",
+            "mid-term examination",
+            "mid-term exam",
+            "midterm examination",
+            "midterm exam",
+            "end-semester examination",
+            "end-semester exam",
+            "endsem examination",
+            "endsem exam",
+            "question format",
+            "question paper format",
+            "examination format",
+            "exam format",
+            "paper pattern",
+            "exam pattern",
+            "question paper pattern",
+            "structure of the exam",
+            "format of the exam",
+            "examination syllabus",
+            "exam syllabus",
+            "syllabus covers",
+            "syllabus coverage",
+            "negative marking",
+            "marking scheme",
+            "submission deadline",
+            "assignment deadline",
+            "homework deadline",
+            "assignment due date",
+            "homework due date",
+            "course portal",
+            "portal announcement",
+            "office hours",
+            "ta office hours",
+            "make-up exam",
+            "makeup exam",
+            "re-examination",
+            "admit card",
+            "hall ticket",
         ]
         for phrase in banned_phrases:
             if phrase in all_text:
@@ -2092,6 +2134,23 @@ class Llama3PineconeRAGStore:
             r'\bopening\s+statement\b',
             r'\bhow\s+does\s+the\s+lecture\s+begin\b',
             r'\bwhat\s+greeting\b',
+            r'\bquestion\s+format\b',
+            r'\bexam(?:ination)?\s+format\b',
+            r'\bexam(?:ination)?\s+pattern\b',
+            r'\bexam(?:ination)?\s+syllabus\b',
+            r'\bsyllabus\s+covers?\b',
+            r'\bsyllabus\s+coverage\b',
+            r'\bsyllabus\s+for\s+the\s+(?:mid|exam|final|test)\b',
+            r'\bmid-?semester\s+(?:exam|examination)\b',
+            r'\bmid-?term\s+(?:exam|examination)\b',
+            r'\bend-?semester\s+(?:exam|examination)\b',
+            r'\bnegative\s+marking\b',
+            r'\bmarking\s+scheme\b',
+            r'\bgrade\s+weightage\b',
+            r'\bgrading\s+policy\b',
+            r'\bsubmission\s+deadline\b',
+            r'\bcourse\s+portal\b',
+            r'\bassignment\s+due\s+date\b',
         ]
         for sb in stem_banned:
             if re.search(sb, q_text):
@@ -2202,7 +2261,7 @@ class Llama3PineconeRAGStore:
             "2. Concept-First Framing: Each question must directly test an underlying concept, theorem, definition, mechanism, proof, or practical trade-off. "
             "STRICTLY FORBIDDEN: NEVER use episodic phrasing or mention timestamps or lecture titles in the question stem (e.g. 'When the lecturer mentions...', 'At 41:32...', 'In Lecture 5...', 'According to the lecture...'). "
             "The question must be completely self-contained and conceptual.\n"
-            "3. STRICTLY PROHIBITED TOPICS: NEVER test introductory greetings, welcome remarks, speaker introductions, pleasantries, attendance, audio/mic checks, screen sharing checks, or administrative remarks (e.g. 'Namaste', 'Good morning', 'Can you hear me', 'Welcome to the session'). NEVER create questions where an option is a greeting or 'An introductory greeting with no mathematical bearing'. Only test substantive academic theory, equations, algorithms, and practical applications.\n"
+            "3. STRICTLY PROHIBITED TOPICS: NEVER test introductory greetings, welcome remarks, speaker introductions, pleasantries, attendance, audio/mic checks, screen sharing checks, or administrative remarks (e.g. 'Namaste', 'Good morning', 'Can you hear me', 'Welcome to the session'). Completely exclude all course logistics, administrative announcements, exam formats or question types on mid-term/mid-semester/final exams, exam syllabus coverage or boundaries, submission deadlines, portals, grading policies, or office hours. NEVER create questions where an option is a greeting, exam format detail, or non-academic administrative policy. Only test substantive academic theory, equations, algorithms, and practical applications.\n"
             "4. Timestamp as Validation: The 'timestamp' field serves strictly for factual citation/verification so students can review the lecture. Timestamps must NEVER appear inside the 'question' text itself.\n"
             "5. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $\\alpha\\mathbf{u} + \\beta\\mathbf{v}$, $x$, $y$). NEVER duplicate variable characters (do NOT write 'xx' or 'yy').\n"
             "6. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D) — do NOT bias towards option A.\n"
@@ -2477,6 +2536,9 @@ class Llama3PineconeRAGStore:
             "   - 'fill_in_the_blank': Sentence with '_____' testing an essential technical term, equation keyword, or variable, with 4 plausible options including the correct fill-in term.\n"
             "5. Concept-First Framing: Each question must directly test academic theory, algorithms, equations, or definitions. "
             "STRICTLY FORBIDDEN: NEVER use episodic phrasing, lecture titles, or speaker remarks in the question stem (NEVER write 'In Lecture 2...', 'According to the video...', 'At 15:30...'). The question must be standalone.\n"
+            "   STRICTLY PROHIBITED: NO COURSE LOGISTICS, EXAM PATTERNS, OR ADMINISTRATIVE HOUSEKEEPING. "
+            "Completely exclude all questions testing course logistics, administrative announcements, mid-term/mid-semester/final examination question formats or patterns (e.g. MCQ vs subjective, negative marking, question counts), syllabus boundaries/coverage for upcoming exams (e.g. 'topics covered up to...', 'excluding advanced topics...'), assignment deadlines, submission portals, grading schemes, or office hours. "
+            "Every single question must test 100% technical, conceptual, algorithmic, or mathematical subject matter.\n"
             "6. Formulas & Clean Math: Format all math expressions, variables, and equations with standard LaTeX ($...$ for inline or $$...$$ for display) (e.g. $E=mc^2$, $W^T x + b$, $\\mathcal{O}(n \\log n)$). NEVER duplicate variable characters.\n"
             "7. Balanced Answer Distribution: Distribute correct answers evenly across all four options (A, B, C, D).\n"
             "8. Question Schema:\n"

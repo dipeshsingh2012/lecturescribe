@@ -108,6 +108,56 @@ class TestLectureQuiz(unittest.TestCase):
         self.assertIn("Singular value decomposition", combined)
         self.assertIn("Gram-Schmidt", combined)
 
+    def test_quiz_filters_non_academic_exam_logistics_and_syllabus_questions(self):
+        """Verify that questions testing mid-semester exam formats and syllabus coverage are flagged and dropped."""
+        non_academic_q1 = {
+            "id": 1,
+            "type": "mcq",
+            "question": "In the context of the mid-semester examination for this introductory course, which of the following statements is correct regarding the question format?",
+            "options": ["Multiple choice questions", "Subjective only", "Oral exam", "No exam"],
+            "correct_index": 0,
+            "explanation": "Announced during class."
+        }
+        non_academic_q2 = {
+            "id": 2,
+            "type": "fill_in_the_blank",
+            "question": "The mid-semester examination syllabus covers all topics up to the _____, excluding advanced topics like Variational Autoencoders and Generative Adversarial Networks.",
+            "options": ["Convolutional Neural Networks", "Transformers", "Diffusion", "Reinforcement Learning"],
+            "correct_index": 0,
+            "explanation": "Exam syllabus boundary."
+        }
+        valid_academic_q = {
+            "id": 3,
+            "type": "mcq",
+            "question": "What is the primary objective of Variational Autoencoders compared to Generative Adversarial Networks?",
+            "options": [
+                "Maximizing the Evidence Lower Bound (ELBO)",
+                "Minimax game with a discriminator",
+                "Heuristic cluster scoring",
+                "Minimizing L1 reconstruction only"
+            ],
+            "correct_index": 0,
+            "explanation": "VAEs maximize the ELBO."
+        }
+
+        # Check filter detection
+        self.assertTrue(pinecone_rag_engine._is_trivial_or_greeting_question(non_academic_q1))
+        self.assertTrue(pinecone_rag_engine._is_trivial_or_greeting_question(non_academic_q2))
+        self.assertFalse(pinecone_rag_engine._is_trivial_or_greeting_question(valid_academic_q))
+
+        # Check payload sanitization drops non-academic questions and renumbers IDs
+        from backend.main import sanitize_quiz_payload
+        raw_payload = {
+            "course_name": "Machine Learning",
+            "questions": [non_academic_q1, valid_academic_q, non_academic_q2],
+            "total_questions": 3
+        }
+        sanitized = sanitize_quiz_payload(raw_payload)
+        self.assertEqual(len(sanitized["questions"]), 1)
+        self.assertEqual(sanitized["total_questions"], 1)
+        self.assertEqual(sanitized["questions"][0]["id"], 1)
+        self.assertIn("Evidence Lower Bound", sanitized["questions"][0]["options"][0])
+
     @patch("backend.database.db_manager.get_saved_video")
     def test_quiz_endpoint_404_when_missing(self, mock_get_saved):
         mock_get_saved.return_value = None
@@ -536,7 +586,14 @@ class TestLectureQuiz(unittest.TestCase):
             ]
         }
 
-        # 1. Fetching generates quiz
+        # 0. Calling with generate=False when no quiz exists does NOT generate
+        res_no_gen = self.client.post("/api/course/Machine%20Learning/quiz", json={"generate": False})
+        self.assertEqual(res_no_gen.status_code, 200)
+        self.assertEqual(res_no_gen.json().get("exists"), False)
+        self.assertEqual(len(res_no_gen.json().get("questions", [])), 0)
+        mock_gen.assert_not_called()
+
+        # 1. Fetching generates quiz when generate=True or omitted
         res = self.client.post("/api/course/Machine%20Learning/quiz", json={"regenerate": True})
         self.assertEqual(res.status_code, 200)
         data = res.json()

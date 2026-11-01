@@ -35,6 +35,7 @@ export default function QuizResultsSummary({
   setLocalExamStarted,
   isTutor = true,
   fetchOrGenerateQuiz,
+  handleBackToOverview,
   themeStyles = {}
 }) {
   const {
@@ -50,7 +51,7 @@ export default function QuizResultsSummary({
   const isPassing = percentage >= 70;
 
   return (
-    <Box sx={{ width: '100%', py: 4, px: { xs: 1.5, sm: 3 }, maxWidth: 1360, mx: 'auto' }}>
+    <Box sx={{ width: '100%', pt: 2, pb: 4 }}>
       {autoSubmitted && (
         <Alert
           severity="warning"
@@ -210,36 +211,45 @@ export default function QuizResultsSummary({
             variant="outlined"
             onClick={() => {
               if (typeof resetQuiz === 'function') resetQuiz();
-              setCurrentIdx(0);
-              setReviewingQuestions(false);
-              setShowSummaryView(false);
-              setLocalExamStarted(false);
+              if (typeof setCurrentIdx === 'function') setCurrentIdx(0);
+              if (typeof setReviewingQuestions === 'function') setReviewingQuestions(false);
+              if (typeof setShowSummaryView === 'function') setShowSummaryView(false);
+              if (typeof setLocalExamStarted === 'function') setLocalExamStarted(false);
             }}
             startIcon={<RotateCcw size={16} />}
             sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
           >
             Retake Quiz
           </Button>
-          {isTutor && (
+          <Button
+            variant="contained"
+            onClick={() => {
+              if (typeof fetchOrGenerateQuiz === 'function') fetchOrGenerateQuiz(true);
+              if (typeof setCurrentIdx === 'function') setCurrentIdx(0);
+              if (typeof setReviewingQuestions === 'function') setReviewingQuestions(false);
+              if (typeof setShowSummaryView === 'function') setShowSummaryView(false);
+              if (typeof setLocalExamStarted === 'function') setLocalExamStarted(false);
+            }}
+            startIcon={<Sparkles size={16} />}
+            sx={{
+              bgcolor: primaryColor,
+              color: '#fff',
+              textTransform: 'none',
+              fontWeight: 700,
+              borderRadius: 2,
+              '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
+            }}
+          >
+            Generate New Quiz
+          </Button>
+          {typeof handleBackToOverview === 'function' && (
             <Button
-              variant="contained"
-              onClick={() => {
-                if (typeof fetchOrGenerateQuiz === 'function') fetchOrGenerateQuiz(true);
-                setCurrentIdx(0);
-                setReviewingQuestions(false);
-                setShowSummaryView(false);
-                setLocalExamStarted(false);
-              }}
-              startIcon={<Sparkles size={16} />}
-              sx={{
-                bgcolor: primaryColor,
-                color: '#fff',
-                textTransform: 'none',
-                fontWeight: 700,
-                borderRadius: 2
-              }}
+              variant="outlined"
+              onClick={handleBackToOverview}
+              startIcon={<Award size={16} />}
+              sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
             >
-              Generate New Quiz
+              Back to Quiz Home
             </Button>
           )}
         </Box>

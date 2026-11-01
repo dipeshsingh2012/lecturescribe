@@ -58,22 +58,40 @@ describe('CourseQuiz Component', () => {
     const btn = screen.getByRole('button', { name: /Generate Course Quiz/i });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
-    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(false);
+    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(true);
   });
 
-  it('renders loading spinner when quizLoading is true', () => {
+  it('renders normal loading spinner when quizLoading is true and quizGenerating is false', () => {
     render(
       <CourseQuiz
         courseName="Machine Learning"
         lectureCount={3}
         quizData={null}
         quizLoading={true}
+        quizGenerating={false}
         quizError={null}
         currentTheme={mockTheme}
       />
     );
 
-    expect(screen.getByText(/Synthesizing Course-Wide Quiz/i)).toBeInTheDocument();
+    expect(screen.getByText(/Loading course quizzes.../i)).toBeInTheDocument();
+    expect(screen.queryByText(/Synthesizing Course-Wide Quiz/i)).not.toBeInTheDocument();
+  });
+
+  it('renders synthesizing spinner when quizGenerating is true', () => {
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        lectureCount={3}
+        quizData={null}
+        quizLoading={true}
+        quizGenerating={true}
+        quizError={null}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Synthesizing Course-Wide Quiz.../i)).toBeInTheDocument();
   });
 
   it('renders question, lecture badge, options, and allows answering with lecture navigation', () => {
@@ -247,6 +265,34 @@ describe('CourseQuiz Component', () => {
     });
     expect(window.confirm).toHaveBeenCalled();
     expect(deleteQuizHistory).toHaveBeenCalledWith('cquiz_123');
+  });
+
+  it('automatically triggers fetchQuizHistory on mount and displays past quizzes in initial empty state', () => {
+    const fetchQuizHistory = vi.fn();
+    const mockHistory = [
+      {
+        quiz_id: 'cquiz_past_1',
+        created_at: '2026-10-10T10:00:00Z',
+        score: 5,
+        total_questions: 5,
+        completed: true
+      }
+    ];
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={null}
+        quizLoading={false}
+        quizHistory={mockHistory}
+        fetchQuizHistory={fetchQuizHistory}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(fetchQuizHistory).toHaveBeenCalled();
+    expect(screen.getByText(/Past Course Quizzes/i)).toBeInTheDocument();
+    expect(screen.getByText(/5 \/ 5 \(100%\)/i)).toBeInTheDocument();
   });
 
   it('renders replay mode banner with cross dismiss button and triggers exitReplay', () => {
@@ -652,5 +698,79 @@ describe('CourseQuiz Component', () => {
     fireEvent.click(reviewBtn);
     expect(screen.getByText(/Question 1: What is ML\?/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Question 1 of 2/i)[0]).toBeInTheDocument();
+  });
+
+  it('renders breadcrumb navigation in Results Summary view and returns to quiz home', () => {
+    const resetQuiz = vi.fn();
+    const onBackToCourses = vi.fn();
+    const onBackToCourseLectures = vi.fn();
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        autoSubmitted={true}
+        totalQuestions={1}
+        score={1}
+        resetQuiz={resetQuiz}
+        onBackToCourses={onBackToCourses}
+        onBackToCourseLectures={onBackToCourseLectures}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const breadcrumbs = screen.getByRole('navigation', { name: /Breadcrumbs/i });
+    expect(breadcrumbs).toBeInTheDocument();
+    expect(screen.getByText('Results Summary')).toBeInTheDocument();
+
+    const courseQuizBtn = screen.getByRole('button', { name: /Course Quiz/i });
+    expect(courseQuizBtn).toBeInTheDocument();
+    fireEvent.click(courseQuizBtn);
+    expect(resetQuiz).toHaveBeenCalled();
+  });
+
+  it('renders Back to Quiz Home button in QuizResultsSummary and invokes resetQuiz', () => {
+    const resetQuiz = vi.fn();
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        quizData={mockQuizData}
+        autoSubmitted={true}
+        totalQuestions={1}
+        score={1}
+        resetQuiz={resetQuiz}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const backHomeBtn = screen.getByRole('button', { name: /Back to Quiz Home/i });
+    expect(backHomeBtn).toBeInTheDocument();
+    fireEvent.click(backHomeBtn);
+    expect(resetQuiz).toHaveBeenCalled();
+  });
+
+  it('renders Generate New Quiz button on initial screen when past quizzes exist', () => {
+    const fetchOrGenerateQuiz = vi.fn();
+    const mockHistory = [
+      { quiz_id: 'q-past-1', score: 8, total_questions: 10, completed_at: '2026-03-01T10:00:00Z' }
+    ];
+
+    render(
+      <CourseQuiz
+        courseName="Machine Learning"
+        lectureCount={5}
+        quizData={null}
+        quizLoading={false}
+        quizHistory={mockHistory}
+        fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const newQuizBtn = screen.getByRole('button', { name: /Generate New Quiz/i });
+    expect(newQuizBtn).toBeInTheDocument();
+    fireEvent.click(newQuizBtn);
+    expect(fetchOrGenerateQuiz).toHaveBeenCalledWith(true);
   });
 });

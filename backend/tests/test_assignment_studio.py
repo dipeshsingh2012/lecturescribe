@@ -239,6 +239,9 @@ def test_academic_html_rendering():
     # 4. Standard tables and display math
     assert "<table class='academic-table'>" in html_out
     assert "math-display" in html_out
+    # 5. Internal course lecture video titles or timestamps must NEVER be injected into the academic PDF
+    assert "Course References & Citations" not in html_out
+    assert "Timestamp:" not in html_out
 
 
 def test_studio_api_endpoints(mock_llm_responses):

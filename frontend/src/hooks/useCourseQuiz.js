@@ -2,12 +2,49 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
 import { normalizeCourseSlug } from '../utils/routing';
 
+export function filterAcademicQuestions(questions) {
+  if (!Array.isArray(questions)) return [];
+  const bannedPatterns = [
+    /\bmid-?semester\s+(?:exam|examination)\b/i,
+    /\bmid-?term\s+(?:exam|examination)\b/i,
+    /\bend-?semester\s+(?:exam|examination)\b/i,
+    /\bquestion\s+format\b/i,
+    /\bexam(?:ination)?\s+format\b/i,
+    /\bexam(?:ination)?\s+pattern\b/i,
+    /\bexam(?:ination)?\s+syllabus\b/i,
+    /\bsyllabus\s+covers?\b/i,
+    /\bsyllabus\s+coverage\b/i,
+    /\bsyllabus\s+for\s+the\s+(?:mid|exam|final|test)\b/i,
+    /\bnegative\s+marking\b/i,
+    /\bmarking\s+scheme\b/i,
+    /\bsubmission\s+deadline\b/i,
+    /\bcourse\s+portal\b/i
+  ];
+  return questions.filter((q) => {
+    if (!q || typeof q !== 'object') return false;
+    const qText = String(q.question || '');
+    return !bannedPatterns.some((pattern) => pattern.test(qText));
+  });
+}
+
+export function sanitizeCourseQuizData(quizData) {
+  if (!quizData || !Array.isArray(quizData.questions)) return quizData;
+  const filtered = filterAcademicQuestions(quizData.questions);
+  if (filtered.length === quizData.questions.length) return quizData;
+  return {
+    ...quizData,
+    questions: filtered.map((q, idx) => ({ ...q, id: idx + 1 })),
+    total_questions: filtered.length
+  };
+}
+
 export default function useCourseQuiz(courseName, userEmail = null) {
   const cleanCourse = (courseName || '').trim();
   const courseSlug = normalizeCourseSlug(cleanCourse);
 
   const [quizData, setQuizData] = useState(null);
   const [quizLoading, setQuizLoading] = useState(false);
+  const [quizGenerating, setQuizGenerating] = useState(false);
   const [quizError, setQuizError] = useState(null);
   const [selectedAnswers, setSelectedAnswers] = useState({});
 
@@ -27,6 +64,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const [autoSubmitted, setAutoSubmitted] = useState(false);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [examStarted, setExamStarted] = useState(false);
+  const [hasFetched, setHasFetched] = useState(false);
 
   const startExam = useCallback(() => {
     setExamStarted(true);
@@ -51,9 +89,10 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     }
   }, [courseSlug, userEmail]);
 
-  const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null) => {
+  const fetchOrGenerateQuiz = useCallback(async (regenerate = false, numQuestions = null, generate = true) => {
     if (!courseSlug) return;
     setQuizLoading(true);
+    setQuizGenerating(Boolean(generate));
     setQuizError(null);
     setReviewMode(false);
     setReplayingQuizId(null);
@@ -63,12 +102,14 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       setTimeLeft(1800);
     }
     try {
-      const payload = { regenerate };
+      const payload = { regenerate, generate };
       if (numQuestions) {
         payload.num_questions = numQuestions;
       }
       const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
-      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz${emailParam}`, {
+      const generateQuery = `generate=${generate}`;
+      const url = `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz${emailParam ? emailParam + '&' + generateQuery : '?' + generateQuery}`;
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -80,7 +121,27 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       }
 
       const data = await res.json();
-      setQuizData(data);
+      const sanitized = sanitizeCourseQuizData(data);
+      if (!sanitized || !sanitized.questions || sanitized.questions.length === 0) {
+        setQuizData(null);
+        setSelectedAnswers({});
+        setExamStarted(false);
+        fetchQuizHistory();
+        return;
+      }
+
+      // If user has already completed this quiz and we are NOT actively generating:
+      // Don't force them into the recent completed quiz questions on page load. Instead, show the Generate Course Quiz briefing card.
+      if (!generate && (data.user_completed || data.is_completed)) {
+        setQuizData(null);
+        setSelectedAnswers({});
+        setExamStarted(false);
+        setQuizSubmitted(false);
+        fetchQuizHistory();
+        return;
+      }
+
+      setQuizData(sanitized);
 
       if (regenerate) {
         setSelectedAnswers({});
@@ -111,6 +172,8 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       setQuizError(err.message || 'Unable to load course quiz. Please try again.');
     } finally {
       setQuizLoading(false);
+      setQuizGenerating(false);
+      setHasFetched(true);
     }
   }, [courseSlug, userEmail, fetchQuizHistory]);
 
@@ -124,6 +187,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       setQuizError(null);
       setReviewMode(false);
       setReplayingQuizId(null);
+      setHasFetched(false);
       if (courseSlug) {
         fetchQuizHistory();
       }
@@ -264,6 +328,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setQuizSubmitted(false);
     setAutoSubmitted(false);
     setExamStarted(false);
+    setQuizData(null);
     setTimeLeft(1800);
     if (courseSlug) {
       const delEmail = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
@@ -311,11 +376,12 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/history/${encodeURIComponent(quizId)}`);
       if (!res.ok) throw new Error('Unable to load past quiz');
       const data = await res.json();
-      const quizJson = data.quiz_json || {};
-      setQuizData({
+      const quizJson = data.quiz_json || (data.questions ? data : {});
+      const sanitized = sanitizeCourseQuizData({
         ...quizJson,
         quiz_id: quizId
       });
+      setQuizData(sanitized);
       if (forReplay) {
         setReplayingQuizId(quizId);
         setSelectedAnswers({});
@@ -396,6 +462,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   return {
     quizData,
     quizLoading,
+    quizGenerating,
     quizError,
     selectedAnswers,
     isCompleted,
@@ -432,6 +499,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     setExamStarted,
     marksPerQuestion,
     totalMarks,
-    earnedMarks
+    earnedMarks,
+    hasFetched
   };
 }

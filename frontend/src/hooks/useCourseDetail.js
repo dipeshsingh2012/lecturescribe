@@ -1,13 +1,14 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
-import { normalizeCourseSlug, getCourseNameFromPath } from '../utils/routing';
+import { normalizeCourseSlug, getCourseNameFromPath, coursesMatch, toCanonicalCourseName } from '../utils/routing';
 import { filterAndSortLectures } from '../utils/lectureSort';
 
 export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '', activeData = null) {
   const [selectedCourse, setSelectedCourse] = useState(() => {
     try {
       const initial = typeof window !== 'undefined' ? window.location.pathname : '/';
-      return getCourseNameFromPath(initial);
+      const raw = getCourseNameFromPath(initial);
+      return toCanonicalCourseName(raw) || raw;
     } catch {
       return null;
     }
@@ -18,12 +19,7 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
       const initial = typeof window !== 'undefined' ? window.location.pathname : '/';
       const cName = getCourseNameFromPath(initial);
       if (!cName) return false;
-      const slug = normalizeCourseSlug(cName);
-      const exists = (effectiveCourses || []).some(c => 
-        c.course_name === cName || 
-        normalizeCourseSlug(c.course_name) === slug ||
-        c.course_slug === slug
-      );
+      const exists = (effectiveCourses || []).some(c => coursesMatch(c, cName));
       return !exists;
     } catch {
       return false;
@@ -40,30 +36,19 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
       setCourseLoading(false);
       return;
     }
-    const clean = selectedCourse.trim().toLowerCase();
-    const slug = normalizeCourseSlug(selectedCourse);
 
     const alreadyInEffective = (effectiveCourses || []).some(c => 
-      c.course_name === selectedCourse || 
-      c.course_name.toLowerCase() === clean ||
-      normalizeCourseSlug(c.course_name) === slug ||
-      c.course_slug === slug
+      coursesMatch(c, selectedCourse)
     );
 
-    const alreadyInDirect = (
-      directCourseData && (
-        directCourseData.course_name === selectedCourse ||
-        directCourseData.course_name.toLowerCase() === clean ||
-        normalizeCourseSlug(directCourseData.course_name) === slug ||
-        directCourseData.course_slug === slug
-      )
-    );
+    const alreadyInDirect = directCourseData && coursesMatch(directCourseData, selectedCourse);
 
     if (alreadyInEffective || alreadyInDirect) {
       setCourseLoading(false);
       return;
     }
 
+    const slug = normalizeCourseSlug(selectedCourse);
     const queryTarget = slug || selectedCourse;
     if (lastFetchedRef.current === queryTarget) {
       setCourseLoading(false);
@@ -86,10 +71,7 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
             lastFetchedRef.current = queryTarget;
             setDirectCourseData(data.course);
             if (data.course.course_name && data.course.course_name !== selectedCourse) {
-              const isSlug = selectedCourse === normalizeCourseSlug(selectedCourse);
-              if (isSlug || normalizeCourseSlug(selectedCourse) !== normalizeCourseSlug(data.course.course_name)) {
-                setSelectedCourse(data.course.course_name);
-              }
+              setSelectedCourse(data.course.course_name);
             }
           }
         }
@@ -185,24 +167,10 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
 
   const activeCourseData = useMemo(() => {
     if (!selectedCourse) return null;
-    const clean = selectedCourse.trim().toLowerCase();
-    const slug = normalizeCourseSlug(selectedCourse);
 
-    const fromDirect = (
-      directCourseData && (
-        directCourseData.course_name === selectedCourse ||
-        (directCourseData.course_name && directCourseData.course_name.toLowerCase() === clean) ||
-        (directCourseData.course_name && normalizeCourseSlug(directCourseData.course_name) === slug) ||
-        directCourseData.course_slug === slug
-      )
-    ) ? directCourseData : null;
+    const fromDirect = (directCourseData && coursesMatch(directCourseData, selectedCourse)) ? directCourseData : null;
 
-    const fromEffective = (
-      (effectiveCourses || []).find(c => c.course_name === selectedCourse) ||
-      (effectiveCourses || []).find(c => c.course_name && c.course_name.toLowerCase() === clean) ||
-      (effectiveCourses || []).find(c => c.course_name && normalizeCourseSlug(c.course_name) === slug) ||
-      (effectiveCourses || []).find(c => c.course_slug === slug)
-    );
+    const fromEffective = (effectiveCourses || []).find(c => coursesMatch(c, selectedCourse));
 
     if (fromDirect && fromEffective) {
       const seen = new Map();
@@ -237,11 +205,10 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     return null;
   }, [effectiveCourses, selectedCourse, directCourseData]);
 
-  // Automatically upgrade selectedCourse from a URL slug to its human-readable title
+  // Automatically upgrade selectedCourse from a URL slug or alias to its human-readable title
   useEffect(() => {
-    if (activeCourseData?.course_name && selectedCourse) {
-      const isSlug = selectedCourse === normalizeCourseSlug(selectedCourse);
-      if (isSlug && normalizeCourseSlug(selectedCourse) === normalizeCourseSlug(activeCourseData.course_name)) {
+    if (activeCourseData?.course_name && selectedCourse !== activeCourseData.course_name) {
+      if (coursesMatch(selectedCourse, activeCourseData.course_name)) {
         setSelectedCourse(activeCourseData.course_name);
       }
     }

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { API_BASE } from '../utils/constants';
-import { normalizeCourseSlug } from '../utils/routing';
+import { normalizeCourseSlug, toCanonicalCourseName } from '../utils/routing';
 
 export function useUserLibrary(userEmail) {
   const [userLibrary, setUserLibrary] = useState([]);
@@ -181,33 +181,19 @@ export function useUserLibrary(userEmail) {
         if (!cName || cName.length < 3) cName = raw;
       }
 
-      const slug = normalizeCourseSlug(cName);
-      if (!cName || !slug) return;
-      const isSlugFormat = cName === slug || (cName.includes('-') && cName === cName.toLowerCase());
+      const canonicalTitle = toCanonicalCourseName(cName);
+      const slug = normalizeCourseSlug(canonicalTitle);
+      if (!canonicalTitle || !slug) return;
 
       if (!map[slug]) {
-        let displayTitle = cName;
-        if (isSlugFormat) {
-          const raw = (item.title || item.video_title || '').trim();
-          const withoutDate = raw.replace(/[\(\[\{]\s*\d{1,2}[\s/.\-]+\d{1,2}[\s/.\-]+\d{2,4}\s*[\)\]\}]/g, '');
-          const extracted = withoutDate.replace(/\b(?:Live\s+Session|Session|Lecture|Module|Class|Week|Part|Episode)\b.*$/i, '').trim().replace(/[\s\-_:\|\/]+$/, '');
-          displayTitle = (extracted && extracted.length >= 3 && !extracted.includes('-')) 
-            ? extracted 
-            : cName.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-        }
-
         map[slug] = {
-          course_name: displayTitle,
+          course_name: canonicalTitle,
           course_slug: slug,
           lecture_count: 0,
           latest_viewed_at: item.last_viewed_at || item.created_at,
           thumbnail_video_id: item.video_id,
           lectures: []
         };
-      } else {
-        if (map[slug].course_name.includes('-') && map[slug].course_name === map[slug].course_name.toLowerCase() && !isSlugFormat) {
-          map[slug].course_name = cName;
-        }
       }
 
       map[slug].lecture_count += 1;

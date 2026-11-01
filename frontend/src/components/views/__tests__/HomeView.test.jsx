@@ -113,6 +113,69 @@ describe('HomeView', () => {
     expect(setCourseViewTab).toHaveBeenCalledWith('quiz');
   });
 
+  it('waits for user trigger (button click) on course quiz tab and shows Generate Course Quiz button when no quiz exists', async () => {
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/quiz')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ questions: [], exists: false })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        courseViewTab="quiz"
+      />
+    );
+
+    expect(await screen.findByText(/Biostatistics Comprehensive Quiz/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate Course Quiz/i })).toBeInTheDocument();
+  });
+
+  it('shows past quizzes in course quiz tab without needing to click generate quiz', async () => {
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/quiz/history')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            history: [
+              {
+                quiz_id: 'cquiz_prev_1',
+                created_at: '2026-10-15T08:00:00Z',
+                score: 9,
+                total_questions: 10,
+                completed: true
+              }
+            ]
+          })
+        });
+      }
+      if (url.includes('/quiz')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ questions: [], exists: false })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        courseViewTab="quiz"
+      />
+    );
+
+    expect(await screen.findByText(/Past Course Quizzes/i)).toBeInTheDocument();
+    expect(await screen.findByText(/9 \/ 10 \(90%\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate (New|Course) Quiz/i })).toBeInTheDocument();
+  });
+
   it('renders course-specific QuickAddBar when selectedCourse is active and calls handleTranscribe with stayOnCoursePage=true', () => {
     const handleTranscribe = vi.fn();
     render(

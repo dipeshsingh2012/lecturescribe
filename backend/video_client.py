@@ -39,6 +39,7 @@ def fetch_player_config(
     urls_to_try = [
         f"{base_url}/{video_id}/config{query}",
         f"{base_url}/{video_id}/config?byline=0&portrait=0" + (f"&h={h_hash}" if h_hash else ""),
+        f"https://player.vimeo.com/video/{video_id}/config{query}",
     ]
 
     effective_referer = referer if (referer and referer.startswith("http")) else os.environ.get("DEFAULT_VIDEO_REFERER", "")

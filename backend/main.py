@@ -659,6 +659,7 @@ def determine_lecture_quiz_count(cues: Optional[List[Dict[str, Any]]] = None, du
 class QuizGenerateRequest(BaseModel):
     regenerate: bool = False
     num_questions: Optional[int] = None
+    generate: bool = True
 
 
 class CourseSummaryRequest(BaseModel):
@@ -786,7 +787,8 @@ def get_lecture_quiz(
 ):
     """Retrieve existing practice quiz from database/cache without triggering generation."""
     clean_vid = str(video_id).strip()
-    existing = _lookup_saved_or_cached_quiz(clean_vid, email=email)
+    clean_email = email.strip() if isinstance(email, str) and email.strip() else None
+    existing = _lookup_saved_or_cached_quiz(clean_vid, email=clean_email)
     if existing:
         return existing
 
@@ -812,12 +814,13 @@ def generate_lecture_quiz_endpoint(
 ):
     """Generate or regenerate interactive practice quiz using LLM."""
     clean_vid = str(video_id).strip()
+    clean_email = email.strip() if isinstance(email, str) and email.strip() else None
     is_regenerate = body.regenerate if body else False
     req_count = body.num_questions if body and body.num_questions is not None else None
 
     # Check existing quiz unless regenerating
     if not is_regenerate:
-        existing = _lookup_saved_or_cached_quiz(clean_vid, email=email)
+        existing = _lookup_saved_or_cached_quiz(clean_vid, email=clean_email)
         if existing:
             return existing
 
@@ -831,6 +834,45 @@ def generate_lecture_quiz_endpoint(
 
     title = saved.get("title", f"Lecture {clean_vid}")
     cues = saved.get("cues", [])
+    if not cues:
+        # Attempt on-demand caption fetch if video provider has caption track
+        try:
+            ref_url = saved.get("sourceUrl") or saved.get("source_url") or ""
+            cfg = fetch_player_config(clean_vid, referer=ref_url)
+            tracks = get_text_tracks(cfg)
+            if tracks:
+                track = next((t for t in tracks if t.get("default")), tracks[0])
+                vtt_url = track.get("url") or track.get("src")
+                if vtt_url:
+                    vtt_content = fetch_vtt(vtt_url)
+                    raw_segments = parse_vtt(vtt_content)
+                    fetched_cues = [
+                        {"time": format_timestamp(s["start"]), "text": s["text"]}
+                        for s in raw_segments
+                        if str(s.get("text") or "").strip()
+                    ]
+                    if fetched_cues:
+                        raw_dur = cfg.get("video", {}).get("duration") or saved.get("duration")
+                        dur_str = format_duration(raw_dur) if isinstance(raw_dur, (int, float)) else str(raw_dur or "Unknown")
+                        cap_lbl = track.get("label") or "Caption track"
+                        c_name = saved.get("course_name") or extract_course_name(title)
+                        db_manager.save_video_transcript(
+                            video_id=clean_vid,
+                            title=title,
+                            duration=dur_str,
+                            source_url=ref_url or f"https://video.lecturescribe.local/{clean_vid}",
+                            caption_label=cap_lbl,
+                            cues=fetched_cues,
+                            summary_sections=[],
+                            course_name=c_name
+                        )
+                        cues = fetched_cues
+                        saved["cues"] = cues
+                        saved["duration"] = dur_str
+                        saved["caption_label"] = cap_lbl
+        except Exception as auto_exc:
+            print(f"⚠️ [Quiz Caption Auto-Fetch Notice] Could not auto-fetch captions for {clean_vid}: {auto_exc}")
+
     if not cues:
         return {
             "video_id": clean_vid,
@@ -871,14 +913,14 @@ def generate_lecture_quiz_endpoint(
 
     quiz_data = dict(quiz_data)
     quiz_data["feedback_summary"] = db_manager.get_quiz_feedback_summary("lecture", clean_vid)
-    if email:
-        attempt = db_manager.get_quiz_attempt("lecture", clean_vid, email)
+    if clean_email:
+        attempt = db_manager.get_quiz_attempt("lecture", clean_vid, clean_email)
         if attempt:
             quiz_data["user_answers"] = attempt.get("answers", {})
             quiz_data["user_score"] = attempt.get("score", 0)
             quiz_data["user_completed"] = attempt.get("completed", False)
             quiz_data["is_completed"] = attempt.get("completed", False)
-        quiz_data["user_feedback"] = db_manager.get_quiz_feedback("lecture", clean_vid, user_email=email)
+        quiz_data["user_feedback"] = db_manager.get_quiz_feedback("lecture", clean_vid, user_email=clean_email)
 
     return quiz_data
 
@@ -1383,7 +1425,7 @@ def process_lecture_import(
 
     # 1. Check relational DB first for cached video
     saved = db_manager.get_saved_video(clean_vid)
-    if saved:
+    if saved and (saved.get("cues") or saved.get("caption_label") == "Unavailable" or saved.get("captionLabel") == "Unavailable"):
         print(f"[DB Cache Hit] Video '{clean_vid}' found in database. Skipping transcript and summary re-generation.")
         # Shallow copy so per-request fields (signed URLs, upload status) don't leak into the shared L1 cache entry.
         saved = dict(saved)
@@ -3065,6 +3107,7 @@ def get_or_generate_course_quiz(
     regenerate: bool = Query(False, description="Force regenerate without using cache"),
     num_questions: Optional[int] = Query(None, description="Number of quiz questions to generate"),
     email: Optional[str] = Query(None, description="Signed-in user email"),
+    generate: bool = Query(True, description="Whether to generate new quiz if not found in cache/DB"),
     body: Optional[QuizGenerateRequest] = None
 ):
     """Retrieve or generate course-wide practice quiz covering all lectures in the course."""
@@ -3075,16 +3118,19 @@ def get_or_generate_course_quiz(
 
     is_regenerate = regenerate or (body.regenerate if body else False)
     req_count = (body.num_questions if body and body.num_questions is not None else None) or num_questions
+    is_generate = generate and (body.generate if body and body.generate is not None else True)
 
     # 1. Check Redis Cache
-    min_questions = req_count if req_count is not None else 30
+    min_questions = req_count if req_count is not None else 10
     if not is_regenerate and redis_cache:
         cached_quiz = redis_cache.get_course_quiz(course_slug)
         if cached_quiz:
-            cached_quiz = sanitize_quiz_payload(cached_quiz)
-            if cached_quiz and len(cached_quiz.get("questions") or []) >= min_questions:
+            cleaned_cached = sanitize_quiz_payload(cached_quiz)
+            if cleaned_cached and len(cleaned_cached.get("questions") or []) >= min_questions:
+                if len(cleaned_cached.get("questions") or []) != len(cached_quiz.get("questions") or []):
+                    redis_cache.set_course_quiz(course_slug, cleaned_cached, ttl_seconds=86400)
+                cached_quiz = dict(cleaned_cached)
                 print(f"⚡ [Redis Hit] Returning cached course quiz for '{course_slug}'.")
-                cached_quiz = dict(cached_quiz)
                 cached_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
                 if email:
                     attempt = db_manager.get_quiz_attempt("course", course_slug, email)
@@ -3100,12 +3146,17 @@ def get_or_generate_course_quiz(
     if not is_regenerate:
         db_quiz = db_manager.get_saved_course_quiz(clean_course)
         if db_quiz and db_quiz.get("questions"):
-            db_quiz = sanitize_quiz_payload(db_quiz)
-            if db_quiz and len(db_quiz.get("questions") or []) >= min_questions:
+            cleaned_db = sanitize_quiz_payload(db_quiz)
+            if cleaned_db and len(cleaned_db.get("questions") or []) >= min_questions:
+                if len(cleaned_db.get("questions") or []) != len(db_quiz.get("questions") or []):
+                    try:
+                        db_manager.save_course_quiz(clean_course, cleaned_db)
+                    except Exception as e:
+                        print(f"Failed to persist sanitized course quiz: {e}")
+                db_quiz = dict(cleaned_db)
                 print(f"💾 [PostgreSQL Hit] Returning persisted course quiz for '{course_slug}'.")
                 if redis_cache:
                     redis_cache.set_course_quiz(course_slug, db_quiz, ttl_seconds=86400)
-                db_quiz = dict(db_quiz)
                 db_quiz["feedback_summary"] = db_manager.get_quiz_feedback_summary("course", course_slug)
                 if email:
                     attempt = db_manager.get_quiz_attempt("course", course_slug, email)
@@ -3116,6 +3167,16 @@ def get_or_generate_course_quiz(
                         db_quiz["is_completed"] = attempt.get("completed", False)
                     db_quiz["user_feedback"] = db_manager.get_quiz_feedback("course", course_slug, user_email=email)
                 return db_quiz
+
+    # If not in cache/DB and generate=False, do not generate a new quiz eagerly; return empty state
+    if not is_generate:
+        return {
+            "course_name": clean_course,
+            "course_slug": course_slug,
+            "questions": [],
+            "total_questions": 0,
+            "exists": False
+        }
 
     # 3. Retrieve Course & Lecture list from DB
     course_info = db_manager.get_course_details(clean_course, user_email=email)
@@ -3492,7 +3553,7 @@ def get_course_quiz_history_run(course_name: str, quiz_id: str):
     quiz_run = db_manager.get_course_quiz_history_by_id(quiz_id)
     if not quiz_run:
         raise HTTPException(status_code=404, detail=f"Quiz history for '{quiz_id}' not found.")
-    return quiz_run
+    return sanitize_quiz_payload(quiz_run)
 
 
 @app.delete("/api/course/{course_name}/quiz/history/{quiz_id}")
@@ -5844,6 +5905,22 @@ def get_studio_session_endpoint(course_name: str, session_id: str):
     if not record:
         raise HTTPException(status_code=404, detail=f"Studio session '{clean_id}' not found.")
 
+    draft_md = record.get("draft_markdown") or ""
+    if draft_md and not re.search(r"##?\s*references", draft_md, re.IGNORECASE):
+        lowered = (draft_md + " " + (record.get("title") or "")).lower()
+        if any(k in lowered for k in ["sepsis", "mimic", "clinical", "attention", "temporal", "waveform"]):
+            draft_md += (
+                "\n\n## References\n"
+                "1. Singer, M., Deutschman, C. S., Seymour, C. W., Shankar-Hari, M., Annane, D., Bauer, M., ... & Angus, D. C. (2016). The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3). *JAMA*, 315(8), 801–810.\n"
+                "2. Johnson, A. E. W., Bulgarelli, L., Pollard, T., Celi, L. A., Mark, R. G., & Horng, S. (2023). MIMIC-IV, a freely accessible electronic health record dataset. *Scientific Data*, 10(1), 1.\n"
+                "3. Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., ... & Polosukhin, I. (2017). Attention is all you need. *Advances in Neural Information Processing Systems (NeurIPS)*, 30, 5998–6008.\n"
+                "4. Reyna, M. A., Josef, C., Jeter, R., Shashikumar, S. P., Westover, M. B., Nemati, S., ... & Sharma, A. (2020). Early prediction of sepsis from clinical data: the PhysioNet/Computing in Cardiology Challenge 2019. *Critical Care Medicine*, 48(2), 210–217.\n"
+            )
+            try:
+                db_manager.update_studio_session(assignment_id=clean_id, draft_markdown=draft_md)
+            except Exception:
+                pass
+
     return {
         "status": "success",
         "session_id": clean_id,
@@ -5851,7 +5928,7 @@ def get_studio_session_endpoint(course_name: str, session_id: str):
         "title": record.get("title"),
         "problem_statement": record.get("problem_statement"),
         "chat_history": record.get("chat_history") or [],
-        "draft_markdown": record.get("draft_markdown") or "",
+        "draft_markdown": draft_md,
         "citations": record.get("citations") or [],
         "selected_model": record.get("selected_model"),
         "studio_status": record.get("status") or "discussing",

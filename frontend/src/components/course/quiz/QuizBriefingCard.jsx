@@ -23,6 +23,7 @@ export default function QuizBriefingCard({
   fetchOrGenerateQuiz,
   handleStartExam,
   isInitialEmptyState = false,
+  hasPastQuizzes = false,
   themeStyles = {}
 }) {
   const {
@@ -81,7 +82,7 @@ export default function QuizBriefingCard({
         <Button
           variant="contained"
           size="large"
-          onClick={() => fetchOrGenerateQuiz && fetchOrGenerateQuiz(false)}
+          onClick={() => fetchOrGenerateQuiz && fetchOrGenerateQuiz(true)}
           startIcon={<Sparkles size={18} />}
           sx={{
             bgcolor: primaryColor,
@@ -96,7 +97,7 @@ export default function QuizBriefingCard({
             '&:hover': { bgcolor: primaryColor, opacity: 0.9 }
           }}
         >
-          Generate Course Quiz
+          {hasPastQuizzes ? 'Generate New Quiz' : 'Generate Course Quiz'}
         </Button>
       </Box>
     );

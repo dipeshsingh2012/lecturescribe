@@ -46,6 +46,48 @@ def to_course_slug(course_name: str) -> str:
     """Normalize a course name into a URL-safe, lowercase hyphenated slug."""
     clean = (course_name or "").strip()
     return re.sub(r'[^a-z0-9]+', '-', clean.lower()).strip('-')
+
+CANONICAL_COURSE_MAPPINGS = {
+    "AMDSAIC04": "1.1 Applied Mathematics for Data Science and AI",
+    "MLPC04": "1.2 Machine Learning Paradigms",
+    "ISNLPC04": "1.3 Introduction to Speech and Natural Language Processing",
+    "ICVC04": "1.4 Introduction to Computer Vision",
+    "IGAIC04": "1.5 Introduction to Generative AI",
+    "IFAC04": "1.6 Introduction to Financial Analytics",
+    "IFACO4": "1.6 Introduction to Financial Analytics",
+    "IAIHC04": "1.7 Introduction to AI in Healthcare",
+    "IRC04": "1.8 Introduction to Research",
+    "DSLC04": "1.9 Data Science Lab",
+    "machine-learning-paradigms": "1.2 Machine Learning Paradigms",
+    "Machine Learning Paradigms": "1.2 Machine Learning Paradigms",
+    "1-2-machine-learning-paradigms": "1.2 Machine Learning Paradigms",
+    "applied-mathematics-for-data-science-and-ai": "1.1 Applied Mathematics for Data Science and AI",
+    "applied-mathemartics-for-data-science-and-ai": "1.1 Applied Mathematics for Data Science and AI",
+    "Applied Mathematics for Data Science and AI": "1.1 Applied Mathematics for Data Science and AI",
+    "Applied Mathemartics for Data Science and AI": "1.1 Applied Mathematics for Data Science and AI",
+    "1-1-applied-mathematics-for-data-science-and-ai": "1.1 Applied Mathematics for Data Science and AI",
+    "introduction-to-speech-and-natural-language-processing": "1.3 Introduction to Speech and Natural Language Processing",
+    "Introduction to Speech and Natural Language Processing": "1.3 Introduction to Speech and Natural Language Processing",
+    "1-3-introduction-to-speech-and-natural-language-processing": "1.3 Introduction to Speech and Natural Language Processing",
+    "introduction-to-computer-vision": "1.4 Introduction to Computer Vision",
+    "Introduction to Computer Vision": "1.4 Introduction to Computer Vision",
+    "1-4-introduction-to-computer-vision": "1.4 Introduction to Computer Vision",
+    "introduction-to-generative-ai": "1.5 Introduction to Generative AI",
+    "Introduction to Generative AI": "1.5 Introduction to Generative AI",
+    "1-5-introduction-to-generative-ai": "1.5 Introduction to Generative AI",
+    "introduction-to-financial-analytics": "1.6 Introduction to Financial Analytics",
+    "Introduction to Financial Analytics": "1.6 Introduction to Financial Analytics",
+    "1-6-introduction-to-financial-analytics": "1.6 Introduction to Financial Analytics",
+    "introduction-to-ai-in-healthcare": "1.7 Introduction to AI in Healthcare",
+    "Introduction to AI in Healthcare": "1.7 Introduction to AI in Healthcare",
+    "1-7-introduction-to-ai-in-healthcare": "1.7 Introduction to AI in Healthcare",
+    "introduction-to-research": "1.8 Introduction to Research",
+    "Introduction to Research": "1.8 Introduction to Research",
+    "1-8-introduction-to-research": "1.8 Introduction to Research",
+    "data-science-lab": "1.9 Data Science Lab",
+    "Data Science Lab": "1.9 Data Science Lab",
+    "1-9-data-science-lab": "1.9 Data Science Lab",
+}
 # Load environment variables
 try:
     from dotenv import load_dotenv
@@ -1123,6 +1165,19 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_pg_notes_course_slug ON lecturescribe_course_notes(course_slug);
 
                         INSERT INTO lecturescribe_courses (slug, name)
+                        VALUES
+                            ('1-1-applied-mathematics-for-data-science-and-ai', '1.1 Applied Mathematics for Data Science and AI'),
+                            ('1-2-machine-learning-paradigms', '1.2 Machine Learning Paradigms'),
+                            ('1-3-introduction-to-speech-and-natural-language-processing', '1.3 Introduction to Speech and Natural Language Processing'),
+                            ('1-4-introduction-to-computer-vision', '1.4 Introduction to Computer Vision'),
+                            ('1-5-introduction-to-generative-ai', '1.5 Introduction to Generative AI'),
+                            ('1-6-introduction-to-financial-analytics', '1.6 Introduction to Financial Analytics'),
+                            ('1-7-introduction-to-ai-in-healthcare', '1.7 Introduction to AI in Healthcare'),
+                            ('1-8-introduction-to-research', '1.8 Introduction to Research'),
+                            ('1-9-data-science-lab', '1.9 Data Science Lab')
+                        ON CONFLICT (slug) DO NOTHING;
+
+                        INSERT INTO lecturescribe_courses (slug, name)
                         SELECT DISTINCT 
                             regexp_replace(LOWER(TRIM(course_name)), '[^a-z0-9]+', '-', 'g') as slug,
                             TRIM(course_name) as name
@@ -1138,6 +1193,13 @@ class RelationalDBManager:
                             SELECT course_name FROM lecturescribe_course_quizzes WHERE course_name IS NOT NULL AND course_name != ''
                         ) all_courses
                         WHERE TRIM(course_name) != '' AND regexp_replace(LOWER(TRIM(course_name)), '[^a-z0-9]+', '-', 'g') != ''
+                          AND regexp_replace(LOWER(TRIM(course_name)), '[^a-z0-9]+', '-', 'g') NOT IN (
+                              'machine-learning-paradigms', 'applied-mathematics-for-data-science-and-ai',
+                              'applied-mathemartics-for-data-science-and-ai', 'introduction-to-speech-and-natural-language-processing',
+                              'introduction-to-computer-vision', 'introduction-to-generative-ai',
+                              'introduction-to-financial-analytics', 'ifaco4', 'introduction-to-ai-in-healthcare',
+                              'introduction-to-research', 'data-science-lab'
+                          )
                         ON CONFLICT (slug) DO NOTHING;
 
                         UPDATE lecturescribe_videos v
@@ -1602,6 +1664,11 @@ class RelationalDBManager:
         """Save video, transcript cues, and AI summaries directly to PostgreSQL."""
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
         derived_course = (course_name or extract_course_name(title)).strip()
+        if derived_course:
+            try:
+                derived_course = self.resolve_course_canonical_name(derived_course)
+            except Exception:
+                pass
         course_obj = None
         if derived_course:
             try:
@@ -1630,34 +1697,33 @@ class RelationalDBManager:
                                           course_id = COALESCE(EXCLUDED.course_id, lecturescribe_videos.course_id);
                         """, (video_id, title, duration, source_url, caption_label, clean_email, canonical_course, course_slug, course_id))
 
-                    cursor.execute("DELETE FROM lecturescribe_transcript_cues WHERE video_id = %s;", (video_id,))
-                    cue_tuples = [
-                        (video_id, c.get("time", "00:00"), self._ts_to_secs(c.get("time", "00:00")), c.get("text", ""))
-                        for c in cues
-                    ]
-                    if cue_tuples:
-                        execute_values(
-                            cursor,
-                            """
-                            INSERT INTO lecturescribe_transcript_cues (video_id, timestamp, seconds, text)
-                            VALUES %s
-                            """,
-                            cue_tuples
-                        )
-
-                    # Upsert chapter sections into unified lecturescribe_lecture_summaries only if non-empty
-                    if summary_sections:
-                        cursor.execute("""
-                            INSERT INTO lecturescribe_lecture_summaries (
-                                video_id, user_email, summary_type, markdown_text, submission_text,
-                                sections_json, is_outdated, created_at, updated_at
+                        cursor.execute("DELETE FROM lecturescribe_transcript_cues WHERE video_id = %s;", (video_id,))
+                        cue_tuples = [
+                            (video_id, c.get("time", "00:00"), self._ts_to_secs(c.get("time", "00:00")), c.get("text", ""))
+                            for c in cues
+                        ]
+                        if cue_tuples:
+                            execute_values(
+                                cursor,
+                                """
+                                INSERT INTO lecturescribe_transcript_cues (video_id, timestamp, seconds, text)
+                                VALUES %s
+                                """,
+                                cue_tuples
                             )
-                            VALUES (%s, %s, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
-                            ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
-                            SET sections_json = EXCLUDED.sections_json,
-                                updated_at = NOW();
-                        """, (video_id, clean_email, json.dumps(summary_sections)))
-                        conn.commit()
+
+                        # Upsert chapter sections into unified lecturescribe_lecture_summaries only if non-empty
+                        if summary_sections:
+                            cursor.execute("""
+                                INSERT INTO lecturescribe_lecture_summaries (
+                                    video_id, user_email, summary_type, markdown_text, submission_text,
+                                    sections_json, is_outdated, created_at, updated_at
+                                )
+                                VALUES (%s, %s, 'comprehensive', '', '', %s::jsonb, FALSE, NOW(), NOW())
+                                ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
+                                SET sections_json = EXCLUDED.sections_json,
+                                    updated_at = NOW();
+                            """, (video_id, clean_email, json.dumps(summary_sections)))
                 print(f"[PostgreSQL] Saved video '{video_id}' with {len(cues)} cues and summary.")
             except Exception as e:
                 print(f"[PostgreSQL Notice] save_video_transcript DB write fallback: {e}")
@@ -3016,7 +3082,7 @@ class RelationalDBManager:
         clean_type = "course" if str(quiz_type or "").lower().startswith("course") else "lecture"
         clean_target = to_course_slug(target_id) if clean_type == "course" else str(target_id or "").strip()
         clean_qid = str(question_id).strip() if question_id is not None and str(question_id).strip() != "" else None
-        clean_email = user_email.strip().lower() if user_email else None
+        clean_email = user_email.strip().lower() if isinstance(user_email, str) and user_email.strip() else None
 
         if not self.postgres_url:
             res = []
@@ -3360,6 +3426,52 @@ class RelationalDBManager:
         finally:
             if conn:
                 conn.close()
+
+    def get_video_id_by_source_url(self, source_url: str) -> Optional[str]:
+        """
+        Find video_id matching a given source_url (e.g. Moodle LMS page link)
+        from memory cache or PostgreSQL.
+        """
+        if not source_url or not str(source_url).strip():
+            return None
+
+        clean_url = str(source_url).strip()
+
+        # Check in-memory cache
+        for vid, entry in self._memory_cache.items():
+            if isinstance(entry, dict):
+                if entry.get("sourceUrl") == clean_url or entry.get("source_url") == clean_url:
+                    return str(vid)
+
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT video_id FROM lecturescribe_videos
+                        WHERE source_url = %s
+                        LIMIT 1;
+                    """, (clean_url,))
+                    row = cursor.fetchone()
+                    if row and isinstance(row, dict) and isinstance(row.get("video_id"), (str, int)):
+                        return str(row["video_id"])
+
+                    cursor.execute("""
+                        SELECT video_id FROM lecturescribe_user_library
+                        WHERE source_url = %s
+                        LIMIT 1;
+                    """, (clean_url,))
+                    row = cursor.fetchone()
+                    if row and isinstance(row, dict) and isinstance(row.get("video_id"), (str, int)):
+                        return str(row["video_id"])
+            except Exception as e:
+                print(f"[PostgreSQL Notice] get_video_id_by_source_url lookup notice: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        return None
 
     def save_chat_log(
         self,
@@ -3961,27 +4073,28 @@ class RelationalDBManager:
 
                         courses_map = OrderedDict()
                         for r in rows:
-                            c_name = (r.get("course_name") or extract_course_name(r.get("title", ""))).strip()
-                            if not c_name:
+                            raw_c_name = (r.get("course_name") or extract_course_name(r.get("title", ""))).strip()
+                            if not raw_c_name:
                                 continue
+                            c_name = str(self.resolve_course_canonical_name(raw_c_name))
 
                             # Canonical key grouped by hyphenated slug
                             c_slug = to_course_slug(c_name)
                             if not c_slug:
                                 continue
-                            is_slug = bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', c_name))
+                            is_slug = bool(isinstance(c_name, str) and re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', c_name))
 
                             if c_slug not in courses_map:
                                 display_title = c_name
                                 if is_slug:
                                     extracted = extract_course_name(r.get("title", ""))
                                     if extracted and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', extracted):
-                                        display_title = extracted
+                                        display_title = self.resolve_course_canonical_name(extracted)
                                     else:
-                                        display_title = c_name.replace("-", " ").title()
+                                        display_title = self.resolve_course_canonical_name(c_name.replace("-", " ").title())
 
                                 c_ent = self.get_course(c_slug)
-                                resolved_cid = str(r.get("course_id")) if r.get("course_id") else (str(c_ent["id"]) if c_ent and c_ent.get("id") else None)
+                                resolved_cid = str(r.get("course_id")) if r.get("course_id") else (str(c_ent["id"]) if c_ent and isinstance(c_ent, dict) and c_ent.get("id") and isinstance(c_ent["id"], (str, int)) else None)
 
                                 courses_map[c_slug] = {
                                     "course_id": resolved_cid,
@@ -3994,7 +4107,7 @@ class RelationalDBManager:
                                 }
                             else:
                                 # Upgrade slug display name to proper capitalized course title if available
-                                if bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', courses_map[c_slug]["course_name"])) and not is_slug:
+                                if bool(isinstance(courses_map[c_slug]["course_name"], str) and re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', courses_map[c_slug]["course_name"])) and not is_slug:
                                     courses_map[c_slug]["course_name"] = c_name
 
                             canonical_course_title = courses_map[c_slug]["course_name"]
@@ -4042,9 +4155,10 @@ class RelationalDBManager:
                 continue
             if v.get("userEmail") and v["userEmail"] != clean_email:
                 continue
-            c_name = (v.get("course_name") or extract_course_name(v.get("title", ""))).strip()
-            if not c_name:
+            raw_c_name = (v.get("course_name") or extract_course_name(v.get("title", ""))).strip()
+            if not raw_c_name:
                 continue
+            c_name = self.resolve_course_canonical_name(raw_c_name)
             c_slug = to_course_slug(c_name)
             if not c_slug:
                 continue
@@ -4199,23 +4313,43 @@ class RelationalDBManager:
         except (ValueError, AttributeError):
             is_uuid = False
 
-        derived_slug = clean_id if is_uuid else to_course_slug(clean_id)
-        if not derived_slug and not is_uuid:
-            derived_slug = "course"
+        canon_name = None
+        if clean_id in CANONICAL_COURSE_MAPPINGS:
+            canon_name = CANONICAL_COURSE_MAPPINGS[clean_id]
+        elif (course_name or "").strip() in CANONICAL_COURSE_MAPPINGS:
+            canon_name = CANONICAL_COURSE_MAPPINGS[(course_name or "").strip()]
+        else:
+            try:
+                base_s = to_gcs_course_slug(clean_id)
+                if base_s in CANONICAL_COURSE_MAPPINGS:
+                    canon_name = CANONICAL_COURSE_MAPPINGS[base_s]
+            except Exception:
+                pass
 
-        # Determine best display title
-        display_name = (course_name or "").strip()
-        if not display_name:
-            if not is_uuid and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean_id):
-                display_name = clean_id
-            else:
-                display_name = derived_slug.replace("-", " ").title()
+        if canon_name:
+            display_name = canon_name
+            derived_slug = to_course_slug(canon_name)
+        else:
+            derived_slug = clean_id if is_uuid else to_course_slug(clean_id)
+            if not derived_slug and not is_uuid:
+                derived_slug = "course"
+
+            display_name = (course_name or "").strip()
+            if not display_name:
+                if not is_uuid and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean_id):
+                    display_name = clean_id
+                else:
+                    display_name = derived_slug.replace("-", " ").title()
 
         # Check memory cache first
         if is_uuid and clean_id in self._courses_memory_cache:
             return self._courses_memory_cache[clean_id]
         if derived_slug in self._courses_memory_cache:
             return self._courses_memory_cache[derived_slug]
+        for item in self._courses_memory_cache.values():
+            if isinstance(item, dict):
+                if item.get("slug") == derived_slug or item.get("name") == display_name:
+                    return item
 
         conn = None
         if HAS_PSYCOPG2 and self.postgres_url:
@@ -4236,8 +4370,10 @@ class RelationalDBManager:
                                 SELECT id::text, slug, name, created_at, updated_at
                                 FROM lecturescribe_courses
                                 WHERE slug = %s OR LOWER(name) = LOWER(%s)
+                                   OR slug = %s OR LOWER(name) = LOWER(%s)
+                                ORDER BY CASE WHEN name ~ '^[0-9]+\\.[0-9]+\\s+' THEN 0 ELSE 1 END
                                 LIMIT 1;
-                            """, (derived_slug, display_name))
+                            """, (derived_slug, display_name, to_course_slug(clean_id), clean_id))
                         row = cursor.fetchone()
                         if row:
                             course_dict = dict(row)
@@ -4300,13 +4436,31 @@ class RelationalDBManager:
         except (ValueError, AttributeError):
             is_uuid = False
 
+        canon_name = None
+        if clean_id in CANONICAL_COURSE_MAPPINGS:
+            canon_name = CANONICAL_COURSE_MAPPINGS[clean_id]
+        else:
+            try:
+                base_s = to_gcs_course_slug(clean_id)
+                if base_s in CANONICAL_COURSE_MAPPINGS:
+                    canon_name = CANONICAL_COURSE_MAPPINGS[base_s]
+            except Exception:
+                pass
+
         derived_slug = clean_id if is_uuid else to_course_slug(clean_id)
+        canon_slug = to_course_slug(canon_name) if canon_name else None
 
         # Check memory cache first
         if is_uuid and clean_id in self._courses_memory_cache:
             return self._courses_memory_cache[clean_id]
+        if canon_slug and canon_slug in self._courses_memory_cache:
+            return self._courses_memory_cache[canon_slug]
         if derived_slug in self._courses_memory_cache:
             return self._courses_memory_cache[derived_slug]
+        for item in self._courses_memory_cache.values():
+            if isinstance(item, dict):
+                if (canon_slug and item.get("slug") == canon_slug) or (canon_name and item.get("name") == canon_name):
+                    return item
 
         conn = None
         if HAS_PSYCOPG2 and self.postgres_url:
@@ -4326,10 +4480,12 @@ class RelationalDBManager:
                                 SELECT id::text, slug, name, created_at, updated_at
                                 FROM lecturescribe_courses
                                 WHERE slug = %s OR LOWER(name) = LOWER(%s)
+                                   OR (%s IS NOT NULL AND (slug = %s OR LOWER(name) = LOWER(%s)))
+                                ORDER BY CASE WHEN name ~ '^[0-9]+\\.[0-9]+\\s+' THEN 0 ELSE 1 END
                                 LIMIT 1;
-                            """, (derived_slug, clean_id))
+                            """, (derived_slug, clean_id, canon_slug, canon_slug or "", canon_name or ""))
                         row = cursor.fetchone()
-                        if row:
+                        if row and isinstance(row, dict) and "slug" in row and "id" in row and isinstance(row.get("slug"), str):
                             c_dict = dict(row)
                             if hasattr(c_dict.get("created_at"), "isoformat"):
                                 c_dict["created_at"] = c_dict["created_at"].isoformat()
@@ -4403,13 +4559,24 @@ class RelationalDBManager:
 
         clean = course_identifier.strip()
         slug_norm = to_course_slug(clean)
-        base_slug = to_gcs_course_slug(clean)
+        try:
+            base_slug = to_gcs_course_slug(clean)
+        except Exception:
+            base_slug = re.sub(r'^\s*\d+[\s.\-_]+\d+[\s.\-_:]*', '', slug_norm).strip('-')
         base_title = base_slug.replace("-", " ")
 
-        # 0. Check first-class lecturescribe_courses entity
+        # 0. Check direct dictionary mapping
+        if clean in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[clean]
+        if slug_norm in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[slug_norm]
+        if base_slug in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[base_slug]
+
+        # 1. Check first-class lecturescribe_courses entity (prioritizing numbered names)
         try:
             existing_c = self.get_course(clean)
-            if existing_c and existing_c.get("name") and not bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', existing_c["name"])):
+            if existing_c and isinstance(existing_c, dict) and isinstance(existing_c.get("name"), str) and re.match(r'^[0-9]+\.[0-9]+\s+', existing_c["name"]):
                 return existing_c["name"]
         except Exception:
             pass
@@ -4431,8 +4598,8 @@ class RelationalDBManager:
                         LIMIT 1;
                     """, (clean, slug_norm, f"%{base_title}%"))
                     row = cursor.fetchone()
-                    if row and row.get("course_name"):
-                        return row["course_name"]
+                    if row and isinstance(row, dict) and isinstance(row.get("course_name"), str) and row["course_name"].strip():
+                        return row["course_name"].strip()
         except Exception:
             pass
         finally:
@@ -4444,6 +4611,14 @@ class RelationalDBManager:
                 c = (v.get("course_name") or "").strip()
                 if c and (to_course_slug(c) == slug_norm or to_gcs_course_slug(c) == base_slug or c.lower() == clean.lower()):
                     return c
+
+        # If existing_c had a non-slug name, return it
+        try:
+            existing_c = self.get_course(clean)
+            if existing_c and isinstance(existing_c, dict) and isinstance(existing_c.get("name"), str) and not bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', existing_c["name"])):
+                return existing_c["name"]
+        except Exception:
+            pass
 
         if re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean):
             m = re.match(r'^(\d+)-(\d+)-(.+)$', clean)
@@ -4462,7 +4637,7 @@ class RelationalDBManager:
         if not course_name or not course_name.strip():
             return None
 
-        clean_name = course_name.strip()
+        clean_name = self.resolve_course_canonical_name(course_name)
         clean_lower = clean_name.lower()
         slug_as_space = clean_name.replace("-", " ")
         slug_as_wildcard = clean_name.replace("-", "%")

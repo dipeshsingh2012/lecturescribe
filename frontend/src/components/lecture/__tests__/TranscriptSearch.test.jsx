@@ -2094,4 +2094,327 @@ describe('TranscriptSearch', () => {
     expect(container.innerHTML).not.toContain('onerror');
     expect(container.innerHTML).not.toContain('alert("xss")');
   });
+
+  it('allows creating a new note from the notes drawer via New Note button and header button', async () => {
+    const cues = [
+      { id: 1, time: '01:00', text: 'First line of transcript.' },
+      { id: 2, time: '01:10', text: 'Second line of transcript.' }
+    ];
+    const activeData = { videoId: 'vid_note_drawer_1', cues };
+    let savedNote = null;
+
+    const mockFetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations') && (!opts || opts.method === 'GET')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ annotations: savedNote ? [savedNote] : [] })
+        });
+      }
+      if (url.includes('/annotations') && opts?.method === 'POST') {
+        const body = JSON.parse(opts.body);
+        savedNote = {
+          id: 'ann_new_drawer_note_1',
+          annotation_type: 'note',
+          annotationType: 'note',
+          selected_text: body.selected_text,
+          selectedText: body.selected_text,
+          cue_id: body.cue_id,
+          cueId: body.cue_id,
+          start_seconds: body.start_seconds,
+          startSeconds: body.start_seconds,
+          end_seconds: body.end_seconds,
+          endSeconds: body.end_seconds,
+          note_text: body.note_text,
+          noteText: body.note_text,
+          created_at: new Date().toISOString()
+        };
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ status: 'success', annotation: savedNote })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    // Open Notes drawer via header notes button
+    const notesBtn = await screen.findByTitle('View Notes & Highlights');
+    fireEvent.click(notesBtn);
+    expect(await screen.findByText(/Reader Notes & Highlights/i)).toBeInTheDocument();
+
+    // Click "New Note" in the drawer
+    const drawerNewNoteBtn = screen.getByTestId('annotations-drawer-new-note-btn');
+    fireEvent.click(drawerNewNoteBtn);
+
+    // Composer appears with textarea
+    const textarea = screen.getByTestId('drawer-new-note-textarea');
+    expect(textarea).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: 'My manual summary note' } });
+
+    // Save note
+    const saveBtn = screen.getByTestId('drawer-save-new-note-btn');
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/lecture/vid_note_drawer_1/annotations'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"note_text":"My manual summary note"')
+        })
+      );
+    });
+
+    // Check that the note appears in the drawer
+    expect(await screen.findByText('My manual summary note')).toBeInTheDocument();
+
+    // Close the drawer
+    const closeBtn = screen.getByRole('button', { name: /Close Notes Panel/i });
+    fireEvent.click(closeBtn);
+
+    // Open via Header "+ Note" button which directly activates the composer
+    const headerAddNoteBtn = screen.getByTestId('header-add-note-btn');
+    fireEvent.click(headerAddNoteBtn);
+    expect(await screen.findByText(/Reader Notes & Highlights/i)).toBeInTheDocument();
+    expect(screen.getByTestId('drawer-new-note-composer')).toBeInTheDocument();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('seeks video when clicking on highlighted cue text', async () => {
+    const cues = [
+      { id: 1, time: '02:30', text: 'Important concepts in linear algebra.' }
+    ];
+    const activeData = { videoId: 'vid_highlight_click', cues };
+    const mockHandleCueClick = vi.fn();
+
+    const mockFetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_existing_1',
+                annotation_type: 'highlight',
+                annotationType: 'highlight',
+                selected_text: 'linear algebra',
+                selectedText: 'linear algebra',
+                cue_id: 1,
+                cueId: 1,
+                start_seconds: 150,
+                startSeconds: 150,
+                end_seconds: 156,
+                endSeconds: 156,
+                color: 'yellow'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => ''
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={mockHandleCueClick}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const markEl = await screen.findByText('linear algebra');
+    expect(markEl.tagName.toLowerCase()).toBe('mark');
+
+    fireEvent.click(markEl);
+
+    expect(mockHandleCueClick).toHaveBeenCalledWith('02:30');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('renders expand button on hover popup for AI-explained cues and toggles expansion', async () => {
+    const cues = [
+      { id: 'cue_1', time: '03:15', seconds: 195, text: 'Neural networks use backpropagation.' }
+    ];
+    const activeData = { videoId: 'vid_ai_hover', cues };
+
+    const mockFetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_ai_hover_1',
+                annotation_type: 'ai_explanation',
+                annotationType: 'ai_explanation',
+                selected_text: 'backpropagation',
+                selectedText: 'backpropagation',
+                cue_id: 'cue_1',
+                cueId: 'cue_1',
+                start_seconds: 195,
+                startSeconds: 195,
+                end_seconds: 201,
+                endSeconds: 201,
+                ai_response: 'Backpropagation computes the gradient of the loss function with respect to weights.'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={vi.fn()}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const markEl = await screen.findByText('backpropagation');
+    expect(markEl).toBeInTheDocument();
+
+    // Hover on AI-explained mark
+    fireEvent.mouseEnter(markEl);
+
+    // Hover tooltip appears
+    const tooltip = await screen.findByTestId('mark-hover-tooltip');
+    expect(tooltip).toBeInTheDocument();
+    expect(tooltip).toHaveTextContent(/Backpropagation computes the gradient/i);
+
+    // Expand button is present
+    const expandBtn = screen.getByTestId('mark-hover-expand-btn');
+    expect(expandBtn).toBeInTheDocument();
+    expect(expandBtn).toHaveAttribute('title', 'Expand explanation');
+
+    // Click Expand
+    fireEvent.click(expandBtn);
+
+    // Expanded state verified
+    expect(tooltip).toHaveClass('mark-hover-tooltip-expanded');
+    expect(screen.getByTestId('mark-hover-backdrop')).toBeInTheDocument();
+    expect(expandBtn).toHaveAttribute('title', 'Collapse explanation');
+    expect(screen.getByTestId('mark-hover-close-btn')).toBeInTheDocument();
+
+    // Pressing Escape collapses the expanded view
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(tooltip).not.toHaveClass('mark-hover-tooltip-expanded');
+    expect(screen.queryByTestId('mark-hover-backdrop')).not.toBeInTheDocument();
+
+    // Toggle expand again and collapse via backdrop
+    fireEvent.click(expandBtn);
+    expect(screen.getByTestId('mark-hover-backdrop')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('mark-hover-backdrop'));
+    expect(screen.queryByTestId('mark-hover-backdrop')).not.toBeInTheDocument();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('allows seeking video by clicking on the highlighted cue even when hover card is open, and via the hover card seek button', async () => {
+    const cues = [
+      { id: 'cue_1', time: '04:20', seconds: 260, text: 'Eigenvectors remain in the same direction.' }
+    ];
+    const activeData = { videoId: 'vid_ai_hover_click', cues };
+    const mockHandleCueClick = vi.fn();
+
+    const mockFetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            annotations: [
+              {
+                id: 'ann_ai_1',
+                annotation_type: 'ai_explanation',
+                annotationType: 'ai_explanation',
+                selected_text: 'Eigenvectors',
+                selectedText: 'Eigenvectors',
+                cue_id: 'cue_1',
+                cueId: 'cue_1',
+                start_seconds: 260,
+                startSeconds: 260,
+                end_seconds: 266,
+                endSeconds: 266,
+                ai_response: 'An eigenvector is a vector whose direction does not change under transformation.'
+              }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => ''
+    });
+
+    render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={mockHandleCueClick}
+        activeCueIdx={0}
+        activeData={activeData}
+      />
+    );
+
+    const markEl = await screen.findByText('Eigenvectors');
+    expect(markEl).toBeInTheDocument();
+
+    // Hover over mark
+    fireEvent.mouseEnter(markEl);
+    const tooltip = await screen.findByTestId('mark-hover-tooltip');
+    expect(tooltip).toBeInTheDocument();
+
+    // Verify hover seek button is rendered with the cue timestamp
+    const seekBtn = screen.getByTestId('mark-hover-seek-btn');
+    expect(seekBtn).toBeInTheDocument();
+    expect(seekBtn).toHaveTextContent('04:20');
+
+    // Clicking the hover seek button seeks playback
+    fireEvent.click(seekBtn);
+    expect(mockHandleCueClick).toHaveBeenCalledWith('04:20');
+
+    // Hover again and click directly on the highlighted cue mark element
+    fireEvent.mouseEnter(markEl);
+    expect(await screen.findByTestId('mark-hover-tooltip')).toBeInTheDocument();
+
+    fireEvent.click(markEl);
+    expect(mockHandleCueClick).toHaveBeenCalledWith('04:20');
+
+    vi.unstubAllGlobals();
+  });
 });

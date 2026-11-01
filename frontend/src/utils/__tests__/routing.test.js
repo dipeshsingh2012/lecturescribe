@@ -8,6 +8,9 @@ import {
   getNoteIdFromPath,
   getCourseNameFromPath,
   normalizeCourseSlug,
+  toCanonicalCourseName,
+  toBaseCourseSlug,
+  coursesMatch,
   navigateTo
 } from '../routing';
 
@@ -114,6 +117,33 @@ describe('routing utility functions', () => {
     it('extracts course name correctly', () => {
       expect(getCourseNameFromPath('/course/physics-101/lecture/555')).toBe('physics-101');
       expect(getCourseNameFromPath('/lecture/555')).toBeNull();
+    });
+  });
+
+  describe('canonical course name and matching utilities', () => {
+    it('resolves machine-learning-paradigms to 1.2 Machine Learning Paradigms', () => {
+      expect(toCanonicalCourseName('machine-learning-paradigms')).toBe('1.2 Machine Learning Paradigms');
+      expect(toCanonicalCourseName('1-2-machine-learning-paradigms')).toBe('1.2 Machine Learning Paradigms');
+      expect(toCanonicalCourseName('Machine Learning Paradigms')).toBe('1.2 Machine Learning Paradigms');
+    });
+
+    it('strips numerical prefixes in toBaseCourseSlug', () => {
+      expect(toBaseCourseSlug('1.2 Machine Learning Paradigms')).toBe('machine-learning-paradigms');
+      expect(toBaseCourseSlug('1-2-machine-learning-paradigms')).toBe('machine-learning-paradigms');
+      expect(toBaseCourseSlug('machine-learning-paradigms')).toBe('machine-learning-paradigms');
+    });
+
+    it('matches courses regardless of numerical prefix variation', () => {
+      expect(coursesMatch('1.2 Machine Learning Paradigms', 'machine-learning-paradigms')).toBe(true);
+      expect(coursesMatch('1-2-machine-learning-paradigms', 'machine-learning-paradigms')).toBe(true);
+      expect(coursesMatch(
+        { course_name: '1.2 Machine Learning Paradigms', course_slug: '1-2-machine-learning-paradigms' },
+        'machine-learning-paradigms'
+      )).toBe(true);
+      expect(coursesMatch(
+        { course_name: '1.2 Machine Learning Paradigms', course_slug: '1-2-machine-learning-paradigms' },
+        '1.2 Machine Learning Paradigms'
+      )).toBe(true);
     });
   });
 

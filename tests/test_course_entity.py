@@ -61,6 +61,23 @@ class TestCourseEntityNormalization(unittest.TestCase):
         resolved = self.db.resolve_course_canonical_name("3-1-natural-language-processing")
         self.assertEqual(resolved, canonical_title)
 
+    def test_resolve_machine_learning_paradigms_canonical_prefix(self):
+        # 1. Unnumbered slug and titles must resolve to 1.2 Machine Learning Paradigms
+        self.assertEqual(self.db.resolve_course_canonical_name("machine-learning-paradigms"), "1.2 Machine Learning Paradigms")
+        self.assertEqual(self.db.resolve_course_canonical_name("Machine Learning Paradigms"), "1.2 Machine Learning Paradigms")
+        self.assertEqual(self.db.resolve_course_canonical_name("1-2-machine-learning-paradigms"), "1.2 Machine Learning Paradigms")
+
+        # 2. get_or_create_course with unnumbered identifier must return canonical entity with 1.2 prefix
+        entity = self.db.get_or_create_course("machine-learning-paradigms")
+        self.assertEqual(entity["name"], "1.2 Machine Learning Paradigms")
+        self.assertEqual(entity["slug"], "1-2-machine-learning-paradigms")
+
+        # 3. get_course lookup by unnumbered slug must also return 1.2 Machine Learning Paradigms
+        lookup = self.db.get_course("machine-learning-paradigms")
+        self.assertIsNotNone(lookup)
+        self.assertEqual(lookup["name"], "1.2 Machine Learning Paradigms")
+        self.assertEqual(lookup["slug"], "1-2-machine-learning-paradigms")
+
     def test_dual_write_video_and_library(self):
         course_name = "Cloud Computing Architecture"
         video_id = "test_vid_dual_write_101"

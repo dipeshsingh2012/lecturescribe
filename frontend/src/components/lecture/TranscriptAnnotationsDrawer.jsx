@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   BookOpen,
   X,
@@ -12,10 +12,11 @@ import {
   Check,
   Copy,
   Loader2,
-  Bot
+  Bot,
+  Plus
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
-import { formatSecondsToTimestamp } from '../../utils/formatters';
+import { formatSecondsToTimestamp, parseTimestampToSeconds } from '../../utils/formatters';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 
 export default function TranscriptAnnotationsDrawer({
@@ -25,8 +26,15 @@ export default function TranscriptAnnotationsDrawer({
   annotations = [],
   onDeleteAnnotation,
   onUpdateAnnotation,
+  onAddAnnotation,
+  onAnnotationCreated,
   handleCueClick,
-  onDiscussInTutor
+  onDiscussInTutor,
+  activeCue = null,
+  activeCueIdx = 0,
+  displayCues = [],
+  userEmail = 'anonymous',
+  initialShowCreate = false
 }) {
   const [filterType, setFilterType] = useState('all'); // 'all' | 'note' | 'highlight' | 'ai_explanation'
   const [deleteError, setDeleteError] = useState(null);
@@ -35,6 +43,25 @@ export default function TranscriptAnnotationsDrawer({
   const [savingEdit, setSavingEdit] = useState(false);
   const [explainingId, setExplainingId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
+
+  // New Note creation state
+  const [showCreateForm, setShowCreateForm] = useState(initialShowCreate || false);
+  const [targetCueIdx, setTargetCueIdx] = useState(activeCueIdx || 0);
+  const [newNoteText, setNewNoteText] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState(null);
+
+  useEffect(() => {
+    if (initialShowCreate) {
+      setShowCreateForm(true);
+    }
+  }, [initialShowCreate]);
+
+  useEffect(() => {
+    if (activeCueIdx !== undefined && activeCueIdx !== null && activeCueIdx >= 0) {
+      setTargetCueIdx(activeCueIdx);
+    }
+  }, [activeCueIdx]);
 
   if (!open) return null;
 
@@ -94,6 +121,84 @@ export default function TranscriptAnnotationsDrawer({
     } catch (err) {
       console.error('Error deleting annotation:', err);
       setDeleteError(err.message || 'Error deleting annotation');
+    }
+  };
+
+  const handleSaveNewNote = async () => {
+    const trimmed = (newNoteText || '').trim();
+    if (!trimmed) return;
+    setIsCreating(true);
+    setCreateError(null);
+    try {
+      const chosenCue = (displayCues && displayCues.length > targetCueIdx)
+        ? displayCues[targetCueIdx]
+        : (activeCue || displayCues?.[0] || null);
+
+      const cueSec = chosenCue?.seconds !== undefined
+        ? Number(chosenCue.seconds)
+        : (chosenCue?.time ? parseTimestampToSeconds(chosenCue.time) : 0.0);
+      const chosenIdx = chosenCue
+        ? (displayCues.indexOf(chosenCue) !== -1 ? displayCues.indexOf(chosenCue) : targetCueIdx)
+        : 0;
+      const nextCue = displayCues?.[chosenIdx + 1];
+      const nextCueSec = nextCue?.seconds !== undefined
+        ? Number(nextCue.seconds)
+        : (nextCue?.time ? parseTimestampToSeconds(nextCue.time) : cueSec + 6);
+      const cueText = chosenCue?.text || `Note at [${chosenCue?.time || formatSeconds(cueSec)}]`;
+      const cueId = chosenCue?.id !== undefined ? chosenCue.id : chosenIdx;
+
+      let createdAnnotation = null;
+
+      if (typeof onAddAnnotation === 'function') {
+        createdAnnotation = await onAddAnnotation({
+          user_email: userEmail || 'anonymous',
+          selected_text: cueText,
+          annotation_type: 'note',
+          cue_id: cueId,
+          start_seconds: cueSec,
+          end_seconds: nextCueSec,
+          note_text: trimmed
+        });
+        if (createdAnnotation && typeof onAnnotationCreated === 'function') {
+          onAnnotationCreated(createdAnnotation);
+        }
+      } else if (videoId) {
+        const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_email: userEmail || 'anonymous',
+            selected_text: cueText,
+            annotation_type: 'note',
+            cue_id: cueId,
+            start_seconds: cueSec,
+            end_seconds: nextCueSec,
+            note_text: trimmed
+          })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setCreateError(err.detail || 'Failed to create note');
+          setIsCreating(false);
+          return;
+        }
+        const data = await res.json();
+        createdAnnotation = data?.annotation;
+        if (createdAnnotation && typeof onAnnotationCreated === 'function') {
+          onAnnotationCreated(createdAnnotation);
+        }
+      }
+
+      setNewNoteText('');
+      setShowCreateForm(false);
+      if (filterType === 'highlight') {
+        setFilterType('all');
+      }
+    } catch (err) {
+      console.error('Error creating note:', err);
+      setCreateError(err.message || 'Error creating note');
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -192,22 +297,48 @@ export default function TranscriptAnnotationsDrawer({
             {annotations.length}
           </span>
         </div>
-        <button
-          onClick={onClose}
-          aria-label="Close Notes Panel"
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            padding: '4px',
-            borderRadius: '4px',
-            display: 'flex',
-            alignItems: 'center'
-          }}
-        >
-          <X size={17} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            type="button"
+            data-testid="annotations-drawer-new-note-btn"
+            onClick={() => setShowCreateForm(prev => !prev)}
+            title="Create a new note"
+            aria-label="New Note"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              background: showCreateForm ? 'rgba(0, 117, 237, 0.12)' : 'var(--theme-primary)',
+              color: showCreateForm ? 'var(--theme-primary)' : '#fff',
+              border: showCreateForm ? '1px solid var(--theme-primary)' : 'none',
+              padding: '3px 8px',
+              borderRadius: '6px',
+              fontSize: '0.72rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <Plus size={12} />
+            <span>New Note</span>
+          </button>
+          <button
+            onClick={onClose}
+            aria-label="Close Notes Panel"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              padding: '4px',
+              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center'
+            }}
+          >
+            <X size={17} />
+          </button>
+        </div>
       </div>
 
       {/* Filter Tabs */}
@@ -250,6 +381,133 @@ export default function TranscriptAnnotationsDrawer({
           );
         })}
       </div>
+
+      {/* New Note Composer */}
+      {showCreateForm && (
+        <div
+          data-testid="drawer-new-note-composer"
+          style={{
+            padding: '12px 16px',
+            background: 'var(--card-bg)',
+            borderBottom: '1px solid var(--border-color)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <MessageSquare size={13} color="var(--theme-primary)" />
+              Add Manual Note
+            </span>
+            {displayCues.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>At cue:</span>
+                <select
+                  data-testid="drawer-new-note-cue-select"
+                  aria-label="Select cue for note"
+                  value={targetCueIdx}
+                  onChange={(e) => setTargetCueIdx(Number(e.target.value))}
+                  style={{
+                    fontSize: '0.72rem',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    border: '1px solid var(--border-color)',
+                    background: 'var(--panel-bg)',
+                    color: 'var(--text-primary)',
+                    maxWidth: '180px'
+                  }}
+                >
+                  {displayCues.map((c, i) => (
+                    <option key={i} value={i}>
+                      [{c.time}] {c.text ? c.text.slice(0, 25) + '...' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <textarea
+            data-testid="drawer-new-note-textarea"
+            value={newNoteText}
+            onChange={(e) => setNewNoteText(e.target.value)}
+            placeholder="Write your note here... (Markdown & LaTeX supported)"
+            rows={3}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                handleSaveNewNote();
+              }
+              if (e.key === 'Escape') {
+                setShowCreateForm(false);
+              }
+            }}
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              fontSize: '0.82rem',
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
+              background: 'var(--panel-bg)',
+              color: 'var(--text-primary)',
+              resize: 'vertical',
+              fontFamily: 'inherit',
+              outline: 'none',
+              boxSizing: 'border-box'
+            }}
+          />
+
+          {createError && (
+            <div style={{ color: '#ef4444', fontSize: '0.72rem' }}>{createError}</div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setShowCreateForm(false);
+                setNewNoteText('');
+                setCreateError(null);
+              }}
+              style={{
+                padding: '4px 10px',
+                fontSize: '0.74rem',
+                borderRadius: '5px',
+                border: '1px solid var(--border-color)',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer'
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              data-testid="drawer-save-new-note-btn"
+              disabled={isCreating || !newNoteText.trim()}
+              onClick={handleSaveNewNote}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 12px',
+                fontSize: '0.74rem',
+                fontWeight: 600,
+                borderRadius: '5px',
+                border: 'none',
+                background: 'var(--theme-primary)',
+                color: '#fff',
+                cursor: isCreating || !newNoteText.trim() ? 'not-allowed' : 'pointer',
+                opacity: isCreating || !newNoteText.trim() ? 0.6 : 1
+              }}
+            >
+              {isCreating ? <Loader2 size={12} className="spin" /> : <Check size={12} />} Save Note
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Error banner */}
       {deleteError && (
@@ -482,16 +740,21 @@ export default function TranscriptAnnotationsDrawer({
                 </div>
 
                 {/* Quoted Text */}
-                <blockquote style={{
-                  margin: '2px 0',
-                  padding: '4px 8px',
-                  borderLeft: `3px solid ${getColorClass(item.color)}`,
-                  background: 'var(--panel-bg)',
-                  borderRadius: '0 4px 4px 0',
-                  fontSize: '0.78rem',
-                  fontStyle: 'italic',
-                  color: 'var(--text-primary)'
-                }}>
+                <blockquote
+                  onClick={() => handleCueClick(formattedTime)}
+                  title={`Jump to ${formattedTime}`}
+                  style={{
+                    margin: '2px 0',
+                    padding: '4px 8px',
+                    borderLeft: `3px solid ${getColorClass(item.color)}`,
+                    background: 'var(--panel-bg)',
+                    borderRadius: '0 4px 4px 0',
+                    fontSize: '0.78rem',
+                    fontStyle: 'italic',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer'
+                  }}
+                >
                   "{selectedText}"
                 </blockquote>
 

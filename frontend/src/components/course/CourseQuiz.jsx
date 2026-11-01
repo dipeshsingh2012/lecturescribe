@@ -28,6 +28,7 @@ import {
   BookOpen,
   PanelRightClose,
   PanelRightOpen,
+  Folder,
   X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
@@ -43,6 +44,7 @@ export default function CourseQuiz({
   lectureCount = 0,
   quizData,
   quizLoading,
+  quizGenerating = false,
   quizError,
   selectedAnswers = {},
   isCompleted,
@@ -79,16 +81,33 @@ export default function CourseQuiz({
   totalMarks,
   earnedMarks,
   isTutor = true,
-  userEmail = 'anonymous'
+  userEmail = 'anonymous',
+  onBackToCourses,
+  onBackToCourseLectures
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showSummaryView, setShowSummaryView] = useState(false);
   const [reviewingQuestions, setReviewingQuestions] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [localExamStarted, setLocalExamStarted] = useState(false);
-  const [pastQuizzesOpen, setPastQuizzesOpen] = useState(false);
+  const [pastQuizzesOpen, setPastQuizzesOpen] = useState(!quizData || !quizData.questions?.length);
   const [deletingQuizId, setDeletingQuizId] = useState(null);
   const [replayBannerDismissed, setReplayBannerDismissed] = useState(false);
+
+  const handleBackToOverview = () => {
+    setShowSummaryView(false);
+    setReviewingQuestions(false);
+    setLocalExamStarted(false);
+    if (typeof resetQuiz === 'function') {
+      resetQuiz();
+    }
+  };
+
+  React.useEffect(() => {
+    if (typeof fetchQuizHistory === 'function') {
+      fetchQuizHistory();
+    }
+  }, [fetchQuizHistory]);
 
   React.useEffect(() => {
     setReplayBannerDismissed(false);
@@ -101,6 +120,7 @@ export default function CourseQuiz({
     setLocalExamStarted(true);
     setShowSummaryView(false);
     setReviewingQuestions(false);
+    setPastQuizzesOpen(false);
   };
 
   const handleDeleteQuiz = async (quizId) => {
@@ -158,10 +178,130 @@ export default function CourseQuiz({
   const OPTION_LABELS = ['A', 'B', 'C', 'D'];
   const questions = quizData?.questions || [];
 
+  // Helper: render breadcrumbs navigation for summary and review states
+  const renderBreadcrumbs = (currentLevelName) => (
+    <Box
+      component="nav"
+      aria-label="Breadcrumbs"
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        flexWrap: 'wrap',
+        mb: 2.5
+      }}
+    >
+      {onBackToCourses && (
+        <>
+          <Button
+            variant="text"
+            size="small"
+            onClick={onBackToCourses}
+            startIcon={<Folder size={14} color={primaryColor} />}
+            sx={{
+              p: 0,
+              minWidth: 'auto',
+              textTransform: 'none',
+              fontWeight: 600,
+              fontSize: '0.82rem',
+              color: textSecondary,
+              '&:hover': { color: primaryColor, bgcolor: 'transparent' }
+            }}
+          >
+            Courses
+          </Button>
+          <ChevronRight size={13} color={textSecondary} style={{ opacity: 0.5 }} />
+        </>
+      )}
+
+      {onBackToCourseLectures ? (
+        <Button
+          variant="text"
+          size="small"
+          onClick={onBackToCourseLectures}
+          sx={{
+            p: 0,
+            minWidth: 'auto',
+            textTransform: 'none',
+            fontWeight: 600,
+            fontSize: '0.82rem',
+            color: textSecondary,
+            '&:hover': { color: primaryColor, bgcolor: 'transparent' }
+          }}
+        >
+          {courseName}
+        </Button>
+      ) : (
+        <Typography variant="caption" sx={{ fontWeight: 600, fontSize: '0.82rem', color: textSecondary }}>
+          {courseName}
+        </Typography>
+      )}
+
+      <ChevronRight size={13} color={textSecondary} style={{ opacity: 0.5 }} />
+
+      {currentLevelName ? (
+        <>
+          <Button
+            variant="text"
+            size="small"
+            onClick={handleBackToOverview}
+            startIcon={<Award size={14} color={primaryColor} />}
+            sx={{
+              p: 0,
+              minWidth: 'auto',
+              textTransform: 'none',
+              fontWeight: 600,
+              fontSize: '0.82rem',
+              color: textSecondary,
+              '&:hover': { color: primaryColor, bgcolor: 'transparent' }
+            }}
+          >
+            Course Quiz
+          </Button>
+          <ChevronRight size={13} color={textSecondary} style={{ opacity: 0.5 }} />
+          <Typography
+            variant="caption"
+            sx={{
+              fontWeight: 700,
+              fontSize: '0.82rem',
+              color: primaryColor,
+              bgcolor: 'rgba(99, 102, 241, 0.1)',
+              px: 1,
+              py: 0.25,
+              borderRadius: 1
+            }}
+          >
+            {currentLevelName}
+          </Typography>
+        </>
+      ) : (
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 700,
+            fontSize: '0.82rem',
+            color: primaryColor,
+            bgcolor: 'rgba(99, 102, 241, 0.1)',
+            px: 1,
+            py: 0.25,
+            borderRadius: 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 0.5
+          }}
+        >
+          <Award size={14} color={primaryColor} />
+          Course Quiz
+        </Typography>
+      )}
+    </Box>
+  );
+
   // Helper: render past quizzes accordion
   const renderPastQuizzes = () => (
     <PastQuizzesAccordion
       quizHistory={quizHistory}
+      historyLoading={historyLoading}
       pastQuizzesOpen={pastQuizzesOpen}
       setPastQuizzesOpen={setPastQuizzesOpen}
       fetchQuizHistory={fetchQuizHistory}
@@ -177,7 +317,7 @@ export default function CourseQuiz({
   );
 
   // 1. Initial State: No quiz generated yet
-  if ((!quizData || questions.length === 0) && !quizLoading) {
+  if ((!quizData || questions.length === 0) && !quizLoading && !quizGenerating) {
     return (
       <Box
         sx={{
@@ -189,6 +329,7 @@ export default function CourseQuiz({
           mx: 'auto'
         }}
       >
+        {renderBreadcrumbs()}
         {renderPastQuizzes()}
         <QuizBriefingCard
           courseName={courseName}
@@ -199,14 +340,15 @@ export default function CourseQuiz({
           fetchOrGenerateQuiz={fetchOrGenerateQuiz}
           handleStartExam={handleStartExam}
           isInitialEmptyState={true}
+          hasPastQuizzes={Boolean(quizHistory && quizHistory.length > 0)}
           themeStyles={themeStyles}
         />
       </Box>
     );
   }
 
-  // 2. Loading State
-  if (quizLoading) {
+  // 2. Loading State: Actively generating / synthesizing quiz
+  if (quizGenerating) {
     return (
       <Box
         sx={{
@@ -231,6 +373,29 @@ export default function CourseQuiz({
     );
   }
 
+  // 2b. Loading State: Normal probe / history load on tab mount
+  if (quizLoading || (historyLoading && (!quizHistory || quizHistory.length === 0))) {
+    return (
+      <Box
+        sx={{
+          flex: 1,
+          width: '100%',
+          py: 10,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 2
+        }}
+      >
+        <CircularProgress size={36} sx={{ color: primaryColor }} />
+        <Typography variant="body2" sx={{ color: textSecondary, fontWeight: 500 }}>
+          Loading course quizzes...
+        </Typography>
+      </Box>
+    );
+  }
+
   // 3. Exam Briefing / Start Screen (When quiz is ready but exam not yet started by user)
   if (!isStarted && !isCompleted && !reviewMode && !autoSubmitted) {
     return (
@@ -244,6 +409,7 @@ export default function CourseQuiz({
           mx: 'auto'
         }}
       >
+        {renderBreadcrumbs('Exam Briefing')}
         {renderPastQuizzes()}
         <QuizBriefingCard
           courseName={courseName}
@@ -254,6 +420,7 @@ export default function CourseQuiz({
           fetchOrGenerateQuiz={fetchOrGenerateQuiz}
           handleStartExam={handleStartExam}
           isInitialEmptyState={false}
+          hasPastQuizzes={Boolean(quizHistory && quizHistory.length > 0)}
           themeStyles={themeStyles}
         />
       </Box>
@@ -265,6 +432,7 @@ export default function CourseQuiz({
   if (shouldShowSummary) {
     return (
       <Box sx={{ width: '100%', py: 4, px: { xs: 1.5, sm: 3 }, maxWidth: 1360, mx: 'auto' }}>
+        {renderBreadcrumbs('Results Summary')}
         {renderPastQuizzes()}
         <QuizResultsSummary
           score={score}
@@ -283,6 +451,7 @@ export default function CourseQuiz({
           setLocalExamStarted={setLocalExamStarted}
           isTutor={isTutor}
           fetchOrGenerateQuiz={fetchOrGenerateQuiz}
+          handleBackToOverview={handleBackToOverview}
           themeStyles={themeStyles}
         />
       </Box>
@@ -317,6 +486,7 @@ export default function CourseQuiz({
 
   return (
     <Box sx={{ width: '100%', py: 3, px: { xs: 1, sm: 3 }, maxWidth: 1360, mx: 'auto' }}>
+      {renderBreadcrumbs(reviewingQuestions ? 'Question Review' : (isGradedReview || reviewMode ? 'Review Mode' : 'Course Exam'))}
       {/* Top Collapsible Past Quizzes Accordion */}
       {renderPastQuizzes()}
 

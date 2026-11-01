@@ -60,6 +60,7 @@ import useCourseQuiz from '../../hooks/useCourseQuiz';
 import { useCourseTutor } from '../../hooks/useCourseTutor';
 import { useCourseAssignments } from '../../hooks/useCourseAssignments';
 import useCourseSummary from '../../hooks/useCourseSummary';
+import { toCanonicalCourseName } from '../../utils/routing';
 
 export const isVideoUrlOrId = (val) => {
   if (!val || typeof val !== 'string') return false;
@@ -159,12 +160,26 @@ export default function HomeView({
     activeCourseData?.course_name || selectedCourse
   );
 
-  // Automatically fetch course quiz if user is on the Course Quiz tab and no quiz is loaded yet
+  // Automatically check for an existing course quiz on Course Quiz tab, but do NOT eagerly generate a new one
   useEffect(() => {
-    if (courseViewTab === 'quiz' && selectedCourse && !courseQuiz.quizData && !courseQuiz.quizLoading && !courseQuiz.quizError) {
-      courseQuiz.fetchOrGenerateQuiz(false);
+    if (
+      courseViewTab === 'quiz' &&
+      selectedCourse &&
+      !courseQuiz.quizData &&
+      !courseQuiz.quizLoading &&
+      !courseQuiz.quizError &&
+      !courseQuiz.hasFetched
+    ) {
+      courseQuiz.fetchOrGenerateQuiz(false, null, false);
     }
-  }, [courseViewTab, selectedCourse, courseQuiz.quizData, courseQuiz.quizLoading, courseQuiz.quizError, courseQuiz.fetchOrGenerateQuiz]);
+  }, [courseViewTab, selectedCourse, courseQuiz.quizData, courseQuiz.quizLoading, courseQuiz.quizError, courseQuiz.hasFetched, courseQuiz.fetchOrGenerateQuiz]);
+
+  // Automatically fetch past quiz history whenever user is on the Course Quiz tab
+  useEffect(() => {
+    if (courseViewTab === 'quiz' && selectedCourse && typeof courseQuiz.fetchQuizHistory === 'function') {
+      courseQuiz.fetchQuizHistory();
+    }
+  }, [courseViewTab, selectedCourse, courseQuiz.fetchQuizHistory]);
 
   // Automatically fetch course summary if user is on Course Summary tab and no summary loaded yet
   useEffect(() => {
@@ -313,7 +328,7 @@ export default function HomeView({
                 All Courses
               </Button>
               <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
-                {activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+                {activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
               </Typography>
               <Chip
                 label={`${filteredCourseLectures.length} ${filteredCourseLectures.length === 1 ? 'lecture' : 'lectures'}`}
@@ -859,7 +874,7 @@ export default function HomeView({
               currentTheme={currentTheme}
               googleUser={googleUser}
               isTutor={isTutor}
-              selectedCourse={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+              selectedCourse={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
               courses={filteredCourses}
               embeddedInCourse={true}
               onSelectLecture={(vid, ts, cName) => {
@@ -876,7 +891,7 @@ export default function HomeView({
           ) : courseViewTab === 'summary' ? (
         /* LEVEL 2E: COURSE EXECUTIVE SUMMARY */
         <CourseSummary
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           lectureCount={filteredCourseLectures.length || activeCourseData?.lecture_count || 0}
           summaryData={courseSummary.summaryData}
           loading={courseSummary.loading}
@@ -898,10 +913,11 @@ export default function HomeView({
       ) : courseViewTab === 'quiz' ? (
         /* LEVEL 2C: COURSE COMPREHENSIVE PRACTICE EXAM */
         <CourseQuiz
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           lectureCount={filteredCourseLectures.length || activeCourseData?.lecture_count || 0}
           quizData={courseQuiz.quizData}
           quizLoading={courseQuiz.quizLoading}
+          quizGenerating={courseQuiz.quizGenerating}
           quizError={courseQuiz.quizError}
           selectedAnswers={courseQuiz.selectedAnswers}
           isCompleted={courseQuiz.isCompleted}
@@ -945,11 +961,18 @@ export default function HomeView({
             }
           }}
           currentTheme={currentTheme}
+          onBackToCourses={() => {
+            if (typeof setSelectedCourse === 'function') setSelectedCourse(null);
+            if (typeof navigateTo === 'function') navigateTo('/');
+          }}
+          onBackToCourseLectures={() => {
+            if (typeof setCourseViewTab === 'function') setCourseViewTab('lectures');
+          }}
         />
       ) : courseViewTab === 'tutor' ? (
         /* LEVEL 2D: COURSE-LEVEL AI TUTOR & EXAM PREPARATION */
         <CourseTutor
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           lectureCount={filteredCourseLectures.length || activeCourseData?.lecture_count || 0}
           messages={courseTutor.messages}
           input={courseTutor.input}
@@ -1000,7 +1023,7 @@ export default function HomeView({
       ) : courseViewTab === 'assignments' ? (
         /* LEVEL 2E: COURSE ASSIGNMENT PLANNER & SOLVER (TUTORS & STUDENTS) */
         <CourseAssignments
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           assignments={courseAssignments.assignments}
           loading={courseAssignments.loading}
           error={courseAssignments.error}
@@ -1020,7 +1043,7 @@ export default function HomeView({
       ) : courseViewTab === 'grades' ? (
         /* LEVEL 2G: CENTRALIZED COURSE GRADEBOOK & STUDENT SUBMISSIONS */
         <CourseGrades
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
           userName={googleUser?.name || ''}
@@ -1029,7 +1052,7 @@ export default function HomeView({
       ) : courseViewTab === 'participants' ? (
         /* LEVEL 2H: COURSE ROSTER, ROLES & SELF-ENROLLMENT KEYS */
         <CourseParticipants
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
           userName={googleUser?.name || ''}
@@ -1038,7 +1061,7 @@ export default function HomeView({
       ) : courseViewTab === 'forum' ? (
         /* LEVEL 2I: COURSE DISCUSSIONS / Q&A FORUM WITH TIMESTAMP DEEP-LINKS & AI TA */
         <CourseForum
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           lectures={filteredCourseLectures}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
@@ -1058,7 +1081,7 @@ export default function HomeView({
       ) : courseViewTab === 'syllabus' ? (
         /* LEVEL 2J: MODULAR COURSE SYLLABUS SPINE & COMPLETION TRACKING */
         <CourseSyllabusSpine
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           lectures={filteredCourseLectures}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
@@ -1073,7 +1096,7 @@ export default function HomeView({
       ) : (courseViewTab === 'question-bank' && isTutor) ? (
         /* LEVEL 2K: DECOUPLED AI QUESTION BANK & CUSTOM QUIZ BUILDER */
         <CourseQuestionBank
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           lectures={filteredCourseLectures}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
@@ -1085,13 +1108,13 @@ export default function HomeView({
       ) : (courseViewTab === 'analytics' && isTutor) ? (
         /* LEVEL 2L: INSTRUCTOR LEARNING ANALYTICS & AT-RISK AI EARLY-WARNING DASHBOARD */
         <CourseAnalytics
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           currentTheme={currentTheme}
         />
       ) : courseViewTab === 'rubrics' ? (
         /* LEVEL 2M: 2D GRADING RUBRICS & COURSE COMPETENCY MASTERY MATRIX */
         <CourseRubricsAndCompetencies
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           assignments={courseAssignments.assignments}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
@@ -1100,7 +1123,7 @@ export default function HomeView({
       ) : courseViewTab === 'workshops' ? (
         /* LEVEL 2N: PEER REVIEW WORKSHOPS, OFFICIAL ANNOUNCEMENTS & AUDIT LOG */
         <CourseWorkshopsAndAnnouncements
-          courseName={activeCourseData?.course_name || (selectedCourse && selectedCourse.includes('-') && selectedCourse === selectedCourse.toLowerCase() ? selectedCourse.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : selectedCourse)}
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
           userName={googleUser?.name || ''}

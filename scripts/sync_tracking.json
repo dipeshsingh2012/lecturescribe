@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": "2026-10-09T22:22:19.209705+00:00",
+  "last_updated": "2026-11-01T21:25:07.972506+00:00",
   "summary": {
-    "total_tracked": 36,
-    "success": 11,
+    "total_tracked": 37,
+    "success": 12,
     "already_cached": 25,
     "failed": 0,
     "pending": 0,
-    "total_size_mb": 10744.45
+    "total_size_mb": 10922.01
   },
   "videos": {
     "1225764089": {
@@ -645,6 +645,24 @@
       "blob_name": "courses/machine-learning-paradigms/lectures/1234158573/Machine_Learning_Paradigms_Live_Session_-4___8___10___2026_.mp4",
       "gcs_uri": "gs://lecturescribe-resources/courses/machine-learning-paradigms/lectures/1234158573/",
       "size_mb": 371.82
+    },
+    "1235498967": {
+      "video_id": "1235498967",
+      "title": "Introduction to Generative AI Live session -5 (13 / 10 / 2026)",
+      "course_name": "1.5 Introduction to Generative AI",
+      "course_slug": "introduction-to-generative-ai",
+      "status": "SUCCESS",
+      "attempts": 1,
+      "last_attempt_at": "2026-11-01T21:23:14.796831+00:00",
+      "blob_name": "courses/introduction-to-generative-ai/lectures/1235498967/Introduction_to_Generative_AI_Live_session_-5__13___10___2026_.mp4",
+      "gcs_uri": "gs://lecturescribe-resources/courses/introduction-to-generative-ai/lectures/1235498967/",
+      "size_mb": 177.56,
+      "duration_seconds": 106.6,
+      "has_video": true,
+      "has_captions": true,
+      "cues_count": 1061,
+      "error": null,
+      "error_category": null
     }
   }
 }

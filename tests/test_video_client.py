@@ -1,5 +1,15 @@
+import io
+import json
+import os
 import unittest
-from backend.video_client import extract_video_id, format_timestamp, parse_vtt, parse_timestamp_to_seconds
+from unittest.mock import patch, MagicMock
+from backend.video_client import (
+    extract_video_id,
+    fetch_player_config,
+    format_timestamp,
+    parse_vtt,
+    parse_timestamp_to_seconds,
+)
 
 class TestVideoClient(unittest.TestCase):
     def test_extract_video_id_from_raw_id(self):
@@ -74,6 +84,33 @@ Today we discuss distributed systems.
         self.assertEqual(segments[0]["text"], "Welcome to the lecture.")
         self.assertEqual(segments[0]["start"], "00:00:01.000")
         self.assertEqual(segments[1]["text"], "Today we discuss distributed systems.")
+
+    def test_fetch_player_config_uses_lms_referer_fallback_and_ignores_local_placeholder(self):
+        captured_requests = []
+
+        def fake_urlopen(req, timeout=15):
+            captured_requests.append(req)
+            resp = MagicMock()
+            resp.__enter__.return_value = io.BytesIO(json.dumps({"video": {"title": "GenAI 5"}}).encode("utf-8"))
+            resp.__exit__.return_value = False
+            return resp
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VIDEO_PLAYER_CONFIG_BASE", None)
+            os.environ.pop("DEFAULT_VIDEO_REFERER", None)
+            os.environ.pop("LMS_REFERER", None)
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cfg = fetch_player_config("1235498967", referer="https://video.lecturescribe.local/1235498967")
+                self.assertEqual(cfg["video"]["title"], "GenAI 5")
+                self.assertEqual(len(captured_requests), 1)
+                self.assertEqual(
+                    captured_requests[0].full_url,
+                    "https://player.vimeo.com/video/1235498967/config",
+                )
+                self.assertEqual(
+                    captured_requests[0].headers.get("Referer"),
+                    "https://learning.iiitdwd.ac.in/",
+                )
 
 if __name__ == "__main__":
     unittest.main()

@@ -553,5 +553,146 @@ describe('LecturePlayer', () => {
     fireEvent.click(copyTitleBtn);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Machine Learning Paradigms Live session -3');
   });
+
+  it('restarts status polling when Sync to Cloud Storage is clicked and updates activeData when sync completes', async () => {
+    const setActiveData = vi.fn();
+    const activeData = {
+      videoId: '1235498967',
+      title: 'Introduction to Generative AI Live session -5',
+      course_name: '1.5 Introduction to Generative AI',
+      source_url: 'https://video.lecturescribe.local/1235498967',
+      duration: '1h 11m',
+      cues: [{ time: '00:00', text: 'Welcome' }]
+    };
+
+    let statusCallCount = 0;
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/api/videos/1235498967/sync-gcs') && opts?.method === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            status: 'STARTED',
+            is_uploading: true,
+            synced_to_gcs: false,
+            upload_stage: 'Transferring video to Google Cloud Storage...'
+          })
+        };
+      }
+      if (u.endsWith('/api/videos/1235498967/status')) {
+        statusCallCount += 1;
+        if (statusCallCount === 1) {
+          // Initial mount status check: IDLE
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              videoId: '1235498967',
+              synced_to_gcs: false,
+              is_uploading: false,
+              upload_status: 'IDLE'
+            })
+          };
+        }
+        // Poll triggered after clicking Sync to Cloud Storage: COMPLETED
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            videoId: '1235498967',
+            synced_to_gcs: true,
+            is_uploading: false,
+            upload_status: 'COMPLETED',
+            view_url: 'https://storage.googleapis.com/lecturescribe-resources/genai-5.mp4'
+          })
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    try {
+      render(
+        <LecturePlayer
+          activeData={activeData}
+          setActiveData={setActiveData}
+          activeCourseData={{ course_name: '1.5 Introduction to Generative AI' }}
+          selectedCourse="1.5 Introduction to Generative AI"
+          currentTheme={mockTheme}
+          iframeRef={{ current: null }}
+        />
+      );
+
+      const videoEl = screen.getByTitle('Introduction to Generative AI Live session -5');
+      fireEvent.error(videoEl);
+
+      const fallback = await screen.findByTestId('broken-video-moodle-fallback');
+      const syncBtn = within(fallback).getByRole('button', { name: /Sync to Cloud Storage/i });
+      fireEvent.click(syncBtn);
+
+      await vi.waitFor(() => {
+        expect(statusCallCount).toBeGreaterThanOrEqual(2);
+        expect(setActiveData).toHaveBeenCalled();
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('surfaces error message and resets uploading spinner when Sync to Cloud Storage fails', async () => {
+    const activeData = {
+      videoId: '1235498967',
+      title: 'Introduction to Generative AI Live session -5',
+      course_name: '1.5 Introduction to Generative AI',
+      source_url: 'https://video.lecturescribe.local/1235498967',
+      duration: '1h 11m',
+      cues: [{ time: '00:00', text: 'Welcome' }]
+    };
+
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url, opts) => {
+      const u = String(url);
+      if (u.endsWith('/api/videos/1235498967/sync-gcs') && opts?.method === 'POST') {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ detail: 'Failed to resolve stream' })
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          videoId: '1235498967',
+          synced_to_gcs: false,
+          is_uploading: false,
+          upload_status: 'IDLE'
+        })
+      };
+    });
+
+    try {
+      render(
+        <LecturePlayer
+          activeData={activeData}
+          activeCourseData={{ course_name: '1.5 Introduction to Generative AI' }}
+          selectedCourse="1.5 Introduction to Generative AI"
+          currentTheme={mockTheme}
+          iframeRef={{ current: null }}
+        />
+      );
+
+      const videoEl = screen.getByTitle('Introduction to Generative AI Live session -5');
+      fireEvent.error(videoEl);
+
+      const fallback = await screen.findByTestId('broken-video-moodle-fallback');
+      const syncBtn = within(fallback).getByRole('button', { name: /Sync to Cloud Storage/i });
+      fireEvent.click(syncBtn);
+
+      const errBanner = await screen.findByTestId('gcs-sync-error');
+      expect(errBanner).toHaveTextContent('Failed to resolve stream');
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
 

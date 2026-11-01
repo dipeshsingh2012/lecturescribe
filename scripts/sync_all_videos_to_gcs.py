@@ -207,6 +207,24 @@ def check_gcs_status(video_id: str, course_slug: str) -> Dict[str, Any]:
     }
 
 
+def _persist_gcs_blob_in_db(vid: str, blob_name: Optional[str], title: str, course_name: str) -> None:
+    """Update PostgreSQL gcs_video_blob and invalidate Redis video cache so API immediately serves GCS stream."""
+    if not blob_name:
+        return
+    try:
+        from backend.database import db_manager
+        db_manager.update_video_gcs_blob(vid, blob_name, title=title, course_name=course_name)
+        print(f"   ✓ Updated PostgreSQL gcs_video_blob -> {blob_name}")
+    except Exception as db_err:
+        print(f"   ⚠️ [DB Update Notice] Could not update gcs_video_blob for {vid}: {db_err}")
+    try:
+        from backend.redis_service import redis_cache
+        if redis_cache:
+            redis_cache.invalidate_video(vid)
+    except Exception:
+        pass
+
+
 def sync_single_video(
     video: Dict[str, Any],
     state: Dict[str, Any],
@@ -253,6 +271,7 @@ def sync_single_video(
         status = check_gcs_status(vid, course_slug)
         if status.get("has_video"):
             print(f"⏩ [GCS Cache Hit] Video is ALREADY stored in GCS ({status['blob_count']} files, {status['size_mb']} MB). Skipping.")
+            _persist_gcs_blob_in_db(vid, status.get("video_blob_name"), title, raw_course)
             record.update({
                 "status": "ALREADY_CACHED",
                 "blob_name": status.get("video_blob_name"),
@@ -343,6 +362,7 @@ def sync_single_video(
             size_mb = video_details.get("size_mb") or 0.0
             blob_name = video_details.get("blob_name") or f"{folder_prefix}/{vid}/lecture_{vid}.mp4"
             print(f"🎉 [Upload Complete] Successfully synced {vid} ({size_mb} MB) in {duration:.1f}s.")
+            _persist_gcs_blob_in_db(vid, blob_name, title, raw_course)
             record.update({
                 "status": "SUCCESS",
                 "blob_name": blob_name,

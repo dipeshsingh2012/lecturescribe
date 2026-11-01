@@ -531,6 +531,65 @@ Today we discuss forward kinematics.
         rag_resp_low = self.client.post("/api/rag/query", json={"query": "test query", "top_k": 0})
         self.assertEqual(rag_resp_low.status_code, 422)
 
+    @patch("backend.main.db_manager.update_video_gcs_blob")
+    @patch("backend.main.gcs_storage_service.upload_lecture_bundle")
+    @patch("backend.main.fetch_player_config")
+    def test_async_upload_worker_marks_failed_when_video_upload_fails(
+        self,
+        mock_fetch_config,
+        mock_upload_bundle,
+        mock_update_blob,
+    ):
+        from backend.main import _async_upload_video_to_gcs_worker, _active_gcs_uploads, _gcs_upload_lock
+
+        mock_fetch_config.return_value = {
+            "video": {"title": "GenAI Live session -5", "duration": 4287},
+            "request": {
+                "files": {
+                    "hls": {
+                        "default_cdn": "akfire",
+                        "cdns": {"akfire": {"url": "https://cdn.example.com/master.m3u8"}},
+                    }
+                }
+            },
+        }
+        mock_upload_bundle.return_value = {
+            "status": "success",
+            "video_uploaded": False,
+            "video_details": {
+                "status": "error",
+                "blob_name": "courses/genai/lectures/1235498967/GenAI.mp4",
+                "error": "HLS mux interrupted",
+            },
+        }
+
+        with _gcs_upload_lock:
+            _active_gcs_uploads["1235498967"] = {
+                "video_id": "1235498967",
+                "status": "UPLOADING",
+                "stage": "Initializing...",
+                "started_at": "2026-11-01T21:00:00Z",
+            }
+
+        with patch("backend.main.threading.Thread"):
+            _async_upload_video_to_gcs_worker(
+                video_id="1235498967",
+                title="GenAI Live session -5",
+                course_name="Introduction to Generative AI",
+                cues=[],
+                player_config=None,
+                referer="https://video.lecturescribe.local/1235498967",
+            )
+
+        # Referer placeholder should be sanitized to LMS referer
+        mock_fetch_config.assert_called_once_with("1235498967", referer="https://learning.iiitdwd.ac.in/")
+        # Failed video upload must NOT write phantom gcs_video_blob into PostgreSQL
+        mock_update_blob.assert_not_called()
+        with _gcs_upload_lock:
+            state = _active_gcs_uploads.pop("1235498967", {})
+        self.assertEqual(state.get("status"), "FAILED")
+        self.assertIn("HLS mux interrupted", state.get("stage", ""))
+
 if __name__ == "__main__":
     unittest.main()
 

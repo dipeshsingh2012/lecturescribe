@@ -178,8 +178,19 @@ export default function LecturePlayer({
   const [gcsUploadState, setGcsUploadState] = useState({
     isUploading: Boolean(activeData.is_uploading),
     stage: activeData.upload_stage || 'Processing video stream...',
-    syncedToGcs: Boolean(freshGcsVideoUrl)
+    syncedToGcs: Boolean(freshGcsVideoUrl),
+    error: null
   });
+  const [syncPollGeneration, setSyncPollGeneration] = useState(0);
+
+  useEffect(() => {
+    setGcsUploadState({
+      isUploading: Boolean(activeData?.is_uploading),
+      stage: activeData?.upload_stage || 'Processing video stream...',
+      syncedToGcs: Boolean(freshGcsVideoUrl),
+      error: null
+    });
+  }, [activeData?.videoId]);
 
   // Track & poll Cloud Storage video upload status
   useEffect(() => {
@@ -190,8 +201,10 @@ export default function LecturePlayer({
       setGcsUploadState({
         isUploading: false,
         stage: 'Complete',
-        syncedToGcs: true
+        syncedToGcs: true,
+        error: null
       });
+      setVideoError(false);
       return;
     }
 
@@ -207,10 +220,12 @@ export default function LecturePlayer({
         if (!isMounted) return;
 
         if (data.synced_to_gcs && data.view_url) {
+          setVideoError(false);
           setGcsUploadState({
             isUploading: false,
             stage: 'Complete',
-            syncedToGcs: true
+            syncedToGcs: true,
+            error: null
           });
           if (typeof setActiveData === 'function') {
             setActiveData(prev => prev ? {
@@ -224,9 +239,18 @@ export default function LecturePlayer({
           setGcsUploadState({
             isUploading: true,
             stage: data.upload_stage || 'Uploading video to Cloud Storage...',
-            syncedToGcs: false
+            syncedToGcs: false,
+            error: null
           });
           pollTimer = setTimeout(checkGcsStatus, 3500);
+        } else if (data.upload_status === 'FAILED') {
+          const failMsg = data.upload_stage || 'Cloud Storage sync failed.';
+          setGcsUploadState({
+            isUploading: false,
+            stage: failMsg,
+            syncedToGcs: false,
+            error: failMsg
+          });
         } else {
           setGcsUploadState(prev => ({
             ...prev,
@@ -244,7 +268,7 @@ export default function LecturePlayer({
       isMounted = false;
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [activeData?.videoId, freshGcsVideoUrl, setActiveData]);
+  }, [activeData?.videoId, freshGcsVideoUrl, setActiveData, syncPollGeneration]);
 
   const [triggeringSync, setTriggeringSync] = useState(false);
 
@@ -256,7 +280,8 @@ export default function LecturePlayer({
     setGcsUploadState(prev => ({
       ...prev,
       isUploading: true,
-      stage: 'Contacting server to start Cloud Storage sync...'
+      stage: 'Contacting server to start Cloud Storage sync...',
+      error: null
     }));
 
     try {
@@ -264,32 +289,52 @@ export default function LecturePlayer({
       const res = await fetch(`${base}/api/videos/${encodeURIComponent(vid)}/sync-gcs`, {
         method: 'POST'
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.synced_to_gcs && data.view_url) {
-          setGcsUploadState({
-            isUploading: false,
-            stage: 'Complete',
-            syncedToGcs: true
-          });
-          if (typeof setActiveData === 'function') {
-            setActiveData(prev => prev ? {
-              ...prev,
-              gcs_video_url: data.view_url,
-              gcsVideoUrl: data.view_url,
-              video_source: 'gcs'
-            } : prev);
-          }
-        } else {
-          setGcsUploadState(prev => ({
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errDetail = data.detail || `Sync request failed (HTTP ${res.status})`;
+        setGcsUploadState(prev => ({
+          ...prev,
+          isUploading: false,
+          stage: errDetail,
+          error: errDetail
+        }));
+        return;
+      }
+
+      if (data.synced_to_gcs && data.view_url) {
+        setVideoError(false);
+        setGcsUploadState({
+          isUploading: false,
+          stage: 'Complete',
+          syncedToGcs: true,
+          error: null
+        });
+        if (typeof setActiveData === 'function') {
+          setActiveData(prev => prev ? {
             ...prev,
-            isUploading: true,
-            stage: data.upload_stage || 'Cloud Storage upload started in background...'
-          }));
+            gcs_video_url: data.view_url,
+            gcsVideoUrl: data.view_url,
+            video_source: 'gcs'
+          } : prev);
         }
+      } else {
+        setGcsUploadState(prev => ({
+          ...prev,
+          isUploading: true,
+          stage: data.upload_stage || 'Cloud Storage upload started in background...',
+          error: null
+        }));
+        setSyncPollGeneration(prev => prev + 1);
       }
     } catch (err) {
       console.warn('Could not trigger GCS sync:', err);
+      const errMsg = err?.message || 'Could not reach server to start Cloud Storage sync.';
+      setGcsUploadState(prev => ({
+        ...prev,
+        isUploading: false,
+        stage: errMsg,
+        error: errMsg
+      }));
     } finally {
       setTriggeringSync(false);
     }
@@ -1025,9 +1070,29 @@ export default function LecturePlayer({
                   Video Stream Not Synced to Cloud Storage
                 </Typography>
 
-                <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.7)', maxWidth: 480, mb: 2.5, fontSize: '0.82rem', lineHeight: 1.5 }}>
+                <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.7)', maxWidth: 480, mb: gcsUploadState.error ? 1.25 : 2.5, fontSize: '0.82rem', lineHeight: 1.5 }}>
                   This recording is hosted on {sourcePlatformLabel}. You can view the original stream directly on {sourcePlatformLabel}, or sync it to Cloud Storage for native in-app playback.
                 </Typography>
+
+                {gcsUploadState.error && (
+                  <Typography
+                    variant="caption"
+                    data-testid="gcs-sync-error"
+                    sx={{
+                      color: '#fca5a5',
+                      bgcolor: 'rgba(239, 68, 68, 0.14)',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      borderRadius: '6px',
+                      px: 1.5,
+                      py: 0.5,
+                      mb: 2,
+                      maxWidth: 480,
+                      fontSize: '0.76rem'
+                    }}
+                  >
+                    {gcsUploadState.error}
+                  </Typography>
+                )}
 
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, justifyContent: 'center', alignItems: 'center' }}>
                   {sourceDirectUrl && (

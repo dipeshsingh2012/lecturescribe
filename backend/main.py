@@ -1137,6 +1137,8 @@ def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
 
 _active_gcs_uploads: Dict[str, Dict[str, Any]] = {}
 _gcs_upload_lock = threading.Lock()
+# Serialize heavy HLS /tmp downloads & ffmpeg muxing so a 1Gi Cloud Run container never OOMs on concurrent syncs.
+_gcs_transfer_semaphore = threading.BoundedSemaphore(1)
 # Small shared pool for fanning out independent request-path I/O (Postgres vs. GCS) concurrently.
 _lecture_io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="lecture-io")
 DEFAULT_LMS_REFERER = os.getenv("LMS_REFERER", "https://learning.iiitdwd.ac.in/")
@@ -1184,6 +1186,13 @@ def _trigger_background_gcs_upload(
     return True
 
 
+def _resolve_video_referer(referer: Optional[str]) -> str:
+    cand = (referer or "").strip()
+    if cand.startswith(("http://", "https://")) and ".local/" not in cand and not cand.endswith(".local"):
+        return cand
+    return DEFAULT_LMS_REFERER
+
+
 def _async_upload_video_to_gcs_worker(
     video_id: str,
     title: str,
@@ -1192,17 +1201,21 @@ def _async_upload_video_to_gcs_worker(
     player_config: Optional[Dict[str, Any]],
     referer: Optional[str]
 ):
-    eff_referer = referer or DEFAULT_LMS_REFERER
+    eff_referer = _resolve_video_referer(referer)
+    run_started_at = None
     try:
         with _gcs_upload_lock:
             if video_id in _active_gcs_uploads:
+                run_started_at = _active_gcs_uploads[video_id].get("started_at")
                 _active_gcs_uploads[video_id]["stage"] = "Resolving video stream config..."
 
         config = player_config
+        config_err = None
         if not config:
             try:
                 config = fetch_player_config(video_id, referer=eff_referer)
             except Exception as e:
+                config_err = e
                 logger.warning(f"[GCS Background Upload Notice] Config fetch for {video_id}: {e}")
 
         streams_info = None
@@ -1212,41 +1225,59 @@ def _async_upload_video_to_gcs_worker(
             except Exception as e:
                 logger.warning(f"[GCS Background Upload Notice] Streams parse for {video_id}: {e}")
 
-        if not streams_info:
-            logger.warning(f"[GCS Background Upload] No streams available for video {video_id}.")
+        if not streams_info or (not streams_info.get("has_progressive") and not streams_info.get("has_hls")):
+            fail_reason = f"Could not resolve video stream ({config_err})" if config_err else "No stream format available"
+            logger.warning(f"[GCS Background Upload] No streams available for video {video_id}: {fail_reason}")
             with _gcs_upload_lock:
                 if video_id in _active_gcs_uploads:
                     _active_gcs_uploads[video_id]["status"] = "FAILED"
-                    _active_gcs_uploads[video_id]["stage"] = "No stream format available"
+                    _active_gcs_uploads[video_id]["stage"] = fail_reason
             return
 
         cslug = to_gcs_course_slug(course_name)
         effective_prefix = f"courses/{cslug}/lectures"
-
-        with _gcs_upload_lock:
-            if video_id in _active_gcs_uploads:
-                _active_gcs_uploads[video_id]["stage"] = "Transferring video to Google Cloud Storage..."
 
         def _on_stage_change(msg: str):
             with _gcs_upload_lock:
                 if video_id in _active_gcs_uploads:
                     _active_gcs_uploads[video_id]["stage"] = msg
 
-        logger.info(f"🚀 [GCS Background Upload] Starting video upload for '{video_id}' ({title})...")
-        result = gcs_storage_service.upload_lecture_bundle(
-            video_id=video_id,
-            title=title,
-            vtt_content="",
-            cues=cues or [],
-            summary_content="",
-            streams_info=streams_info,
-            prefix=effective_prefix,
-            upload_video=True,
-            referer=eff_referer,
-            progress_callback=_on_stage_change
-        )
-        logger.info(f"✅ [GCS Background Upload Complete] Video '{video_id}' status: {result.get('status')}")
+        acquired = _gcs_transfer_semaphore.acquire(blocking=False)
+        if not acquired:
+            _on_stage_change("Queued for Cloud Storage transfer...")
+            _gcs_transfer_semaphore.acquire()
+        try:
+            _on_stage_change("Transferring video to Google Cloud Storage...")
+            logger.info(f"🚀 [GCS Background Upload] Starting video upload for '{video_id}' ({title})...")
+            result = gcs_storage_service.upload_lecture_bundle(
+                video_id=video_id,
+                title=title,
+                vtt_content="",
+                cues=cues or [],
+                summary_content="",
+                streams_info=streams_info,
+                prefix=effective_prefix,
+                upload_video=True,
+                referer=eff_referer,
+                progress_callback=_on_stage_change
+            )
+        finally:
+            _gcs_transfer_semaphore.release()
         video_details = result.get("video_details") or {}
+        video_ok = bool(
+            result.get("video_uploaded")
+            or video_details.get("status") in ("success", "emulated")
+        )
+        if not video_ok:
+            err_msg = video_details.get("error") or "Video stream upload did not complete"
+            logger.error(f"❌ [GCS Background Upload Failed] Video '{video_id}': {err_msg}")
+            with _gcs_upload_lock:
+                if video_id in _active_gcs_uploads:
+                    _active_gcs_uploads[video_id]["status"] = "FAILED"
+                    _active_gcs_uploads[video_id]["stage"] = f"Error: {err_msg}"
+            return
+
+        logger.info(f"✅ [GCS Background Upload Complete] Video '{video_id}' status: {result.get('status')}")
         blob_name = video_details.get("blob_name")
         view_url = video_details.get("view_url")
         size_mb = video_details.get("size_mb")
@@ -1256,6 +1287,11 @@ def _async_upload_video_to_gcs_worker(
                 db_manager.update_video_gcs_blob(video_id, blob_name, title=title, course_name=course_name)
             except Exception as e:
                 logger.warning(f"[GCS Background Upload] Could not update gcs_video_blob in DB: {e}")
+            if redis_cache:
+                try:
+                    redis_cache.invalidate_video(video_id)
+                except Exception:
+                    pass
 
         with _gcs_upload_lock:
             if video_id in _active_gcs_uploads:
@@ -1274,7 +1310,9 @@ def _async_upload_video_to_gcs_worker(
         def _cleanup():
             time.sleep(300)
             with _gcs_upload_lock:
-                _active_gcs_uploads.pop(video_id, None)
+                cur = _active_gcs_uploads.get(video_id)
+                if cur and cur.get("status") != "UPLOADING" and (run_started_at is None or cur.get("started_at") == run_started_at):
+                    _active_gcs_uploads.pop(video_id, None)
         threading.Thread(target=_cleanup, daemon=True).start()
 
 
@@ -1606,7 +1644,11 @@ def process_lecture_import(
     if player_config and isinstance(player_config, dict):
         config = player_config
     else:
-        config = fetch_player_config(clean_vid)
+        clean_lms_ref = (lms_page_url or "").strip()
+        if clean_lms_ref.startswith(("http://", "https://")) and ".local/" not in clean_lms_ref and not clean_lms_ref.endswith(".local"):
+            config = fetch_player_config(clean_vid, referer=clean_lms_ref)
+        else:
+            config = fetch_player_config(clean_vid)
 
     details = video_details or {}
     title = details.get("title") or config.get("video", {}).get("title", f"Video {clean_vid}")
@@ -5503,13 +5545,16 @@ def trigger_video_gcs_sync(
             "is_uploading": False
         }
 
+    saved_src = (saved.get("sourceUrl") or saved.get("source_url") or "").strip()
+    eff_referer = _resolve_video_referer(referer or saved_src)
+
     is_started = _trigger_background_gcs_upload(
         video_id=vid,
         title=title,
         course_name=course_title,
         cues=cues,
         player_config=None,
-        referer=referer
+        referer=eff_referer
     )
 
     with _gcs_upload_lock:

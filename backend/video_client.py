@@ -35,14 +35,28 @@ def fetch_player_config(
 ) -> Dict[str, Any]:
     """Fetch video player config JSON to get video metadata and text tracks."""
     query = f"?h={h_hash}" if h_hash else ""
-    base_url = os.environ.get("VIDEO_PLAYER_CONFIG_BASE", "https://player.video-hosting.local/video")
-    urls_to_try = [
-        f"{base_url}/{video_id}/config{query}",
-        f"{base_url}/{video_id}/config?byline=0&portrait=0" + (f"&h={h_hash}" if h_hash else ""),
+    configured_base = os.environ.get("VIDEO_PLAYER_CONFIG_BASE", "").strip().rstrip("/")
+    urls_to_try: List[str] = []
+    if configured_base:
+        urls_to_try.extend([
+            f"{configured_base}/{video_id}/config{query}",
+            f"{configured_base}/{video_id}/config?byline=0&portrait=0" + (f"&h={h_hash}" if h_hash else ""),
+        ])
+    urls_to_try.extend([
         f"https://player.vimeo.com/video/{video_id}/config{query}",
-    ]
+        f"https://player.vimeo.com/video/{video_id}/config?byline=0&portrait=0" + (f"&h={h_hash}" if h_hash else ""),
+    ])
 
-    effective_referer = referer if (referer and referer.startswith("http")) else os.environ.get("DEFAULT_VIDEO_REFERER", "")
+    default_referer = (
+        os.environ.get("DEFAULT_VIDEO_REFERER")
+        or os.environ.get("LMS_REFERER")
+        or "https://learning.iiitdwd.ac.in/"
+    )
+    clean_ref = (referer or "").strip()
+    if clean_ref.startswith(("http://", "https://")) and ".local/" not in clean_ref and not clean_ref.endswith(".local"):
+        effective_referer = clean_ref
+    else:
+        effective_referer = default_referer
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",

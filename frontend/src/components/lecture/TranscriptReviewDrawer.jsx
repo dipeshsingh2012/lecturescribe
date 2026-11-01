@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function TranscriptReviewDrawer({
   open,
@@ -129,6 +130,7 @@ export default function TranscriptReviewDrawer({
           }}>
             {pendingSuggestions.length} pending
           </span>
+          <ResponseTimeBadge ms={reviewJob?.responseTimeMs || reviewJob?.response_time_ms} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {onTriggerReview && (

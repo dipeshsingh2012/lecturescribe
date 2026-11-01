@@ -6,10 +6,12 @@ export default function useLectureQuiz(activeData, userEmail = null) {
   const email = userEmail || activeData?.user_email || null;
 
   const [quizData, setQuizData] = useState(null);
+  const [quizResponseTimeMs, setQuizResponseTimeMs] = useState(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizError, setQuizError] = useState(null);
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [detailedExplanations, setDetailedExplanations] = useState({});
+  const [explanationResponseTimes, setExplanationResponseTimes] = useState({});
   const [explanationLoading, setExplanationLoading] = useState({});
 
   const lastVidRef = useRef(videoId);
@@ -57,6 +59,7 @@ export default function useLectureQuiz(activeData, userEmail = null) {
 
     setQuizLoading(true);
     setQuizError(null);
+    const t0 = performance.now();
     try {
       const payload = { regenerate };
       if (numQuestions) {
@@ -80,6 +83,8 @@ export default function useLectureQuiz(activeData, userEmail = null) {
         return;
       }
 
+      const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
+      setQuizResponseTimeMs(elapsedMs);
       setQuizData(data);
 
       if (regenerate) {
@@ -149,6 +154,7 @@ export default function useLectureQuiz(activeData, userEmail = null) {
   const resetQuiz = useCallback(() => {
     setSelectedAnswers({});
     setDetailedExplanations({});
+    setExplanationResponseTimes({});
     if (videoId) {
       const delEmail = email ? `?email=${encodeURIComponent(email)}` : '';
       fetch(`${API_BASE}/api/lecture/${videoId}/quiz/answers${delEmail}`, {
@@ -163,6 +169,7 @@ export default function useLectureQuiz(activeData, userEmail = null) {
     const loadingKey = `${questionId}`;
     setExplanationLoading(prev => ({ ...prev, [loadingKey]: true }));
 
+    const t0 = performance.now();
     try {
       const emailParam = email ? `?email=${encodeURIComponent(email)}` : '';
       const res = await fetch(`${API_BASE}/api/lecture/${videoId}/quiz/explanation${emailParam}`, {
@@ -185,10 +192,17 @@ export default function useLectureQuiz(activeData, userEmail = null) {
       }
 
       const data = await res.json();
+      const elapsedMs = data.response_time_ms ?? (!data.cached ? Math.max(1, Math.round(performance.now() - t0)) : null);
       setDetailedExplanations(prev => ({
         ...prev,
         [questionId]: data.detailed_explanation
       }));
+      if (elapsedMs) {
+        setExplanationResponseTimes(prev => ({
+          ...prev,
+          [questionId]: elapsedMs
+        }));
+      }
     } catch (err) {
       console.error('Failed to fetch detailed explanation:', err);
     } finally {
@@ -207,6 +221,7 @@ export default function useLectureQuiz(activeData, userEmail = null) {
 
   return {
     quizData,
+    quizResponseTimeMs,
     quizLoading,
     quizError,
     selectedAnswers,
@@ -219,6 +234,7 @@ export default function useLectureQuiz(activeData, userEmail = null) {
     selectAnswer,
     resetQuiz,
     detailedExplanations,
+    explanationResponseTimes,
     explanationLoading,
     fetchDetailedExplanation
   };

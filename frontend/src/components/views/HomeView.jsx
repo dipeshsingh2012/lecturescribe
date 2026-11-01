@@ -932,6 +932,8 @@ export default function HomeView({
           finishQuiz={courseQuiz.finishQuiz}
           resetQuiz={courseQuiz.resetQuiz}
           detailedExplanations={courseQuiz.detailedExplanations}
+          explanationResponseTimes={courseQuiz.explanationResponseTimes}
+          quizResponseTimeMs={courseQuiz.quizResponseTimeMs}
           explanationLoading={courseQuiz.explanationLoading}
           expandedExplanation={courseQuiz.expandedExplanation}
           setExpandedExplanation={courseQuiz.setExpandedExplanation}

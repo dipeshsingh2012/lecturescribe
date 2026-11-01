@@ -70,6 +70,10 @@ class TestChatMessageProcessing(unittest.TestCase):
             save_to_db=True
         )
         mock_save_log.assert_called_once()
+        self.assertIn("response_time_ms", res_save)
+        self.assertIsInstance(res_save["response_time_ms"], int)
+        self.assertGreaterEqual(res_save["response_time_ms"], 1)
+        self.assertIn("response_time_ms", mock_save_log.call_args.kwargs)
 
     @patch("backend.main.db_manager.delete_chat_message")
     @patch("backend.main.redis_cache")

@@ -212,3 +212,20 @@ export const truncateEnd = (str, maxLength = 30) => {
   if (trimmed.length <= maxLength) return trimmed;
   return `${trimmed.slice(0, maxLength).trimEnd()}...`;
 };
+
+export const formatResponseTime = (ms) => {
+  if (ms === null || ms === undefined || ms === '' || typeof ms === 'boolean') return null;
+  const num = Number(ms);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  const roundedMs = Math.round(num);
+  if (roundedMs < 1000) {
+    return `${Math.max(1, roundedMs)}ms`;
+  }
+  const totalTenths = Math.round(num / 100);
+  if (totalTenths < 600) {
+    return `${(totalTenths / 10).toFixed(1)}s`;
+  }
+  const mins = Math.floor(totalTenths / 600);
+  const secs = ((totalTenths % 600) / 10).toFixed(1);
+  return `${mins}m ${secs}s`;
+};

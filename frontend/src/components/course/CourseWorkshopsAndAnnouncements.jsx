@@ -18,6 +18,7 @@ import {
   RefreshCw,
   CheckCircle2
 } from 'lucide-react';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseWorkshopsAndAnnouncements({
   courseName,
@@ -49,6 +50,8 @@ export default function CourseWorkshopsAndAnnouncements({
 
   // Peer Review inputs: { [submissionId]: { score, feedback } }
   const [reviewInputs, setReviewInputs] = useState({});
+  const [reviewResponseTimes, setReviewResponseTimes] = useState({});
+  const [lastCalibrationTimeMs, setLastCalibrationTimeMs] = useState(null);
 
   const effectiveEmail = userEmail || (isTutor ? 'prof@iiitdwd.ac.in' : 'student@iiitdwd.ac.in');
   const effectiveName = userName || (isTutor ? 'Course Instructor' : 'Student');
@@ -102,6 +105,7 @@ export default function CourseWorkshopsAndAnnouncements({
       setAnnTitle('');
       setAnnBody('');
       setShowAnnForm(false);
+      setLastCalibrationTimeMs(null);
       setNotice(`Broadcasted announcement "${data.announcement?.title}"!`);
       fetchAll();
     } catch (err) {
@@ -128,6 +132,7 @@ export default function CourseWorkshopsAndAnnouncements({
       setWsTitle('');
       setWsInstructions('');
       setShowWsForm(false);
+      setLastCalibrationTimeMs(null);
       setNotice(`Created Peer Review Workshop "${data.workshop?.title}"!`);
       fetchAll();
     } catch (err) {
@@ -149,6 +154,7 @@ export default function CourseWorkshopsAndAnnouncements({
         })
       });
       if (res.ok) {
+        setLastCalibrationTimeMs(null);
         setNotice(`Advanced "${ws.title}" to ${nextPhase.toUpperCase()} phase.`);
         fetchAll();
       }
@@ -176,6 +182,7 @@ export default function CourseWorkshopsAndAnnouncements({
       );
       if (res.ok) {
         setSubInputs((prev) => ({ ...prev, [workshopId]: { title: '', content: '' } }));
+        setLastCalibrationTimeMs(null);
         setNotice('Submitted workshop artifact for peer assessment!');
         fetchAll();
       }
@@ -187,6 +194,7 @@ export default function CourseWorkshopsAndAnnouncements({
   const handleSubmitPeerReview = async (workshopId, submissionId) => {
     const rev = reviewInputs[submissionId] || {};
     if (rev.score === undefined || !rev.feedback) return;
+    const t0 = performance.now();
     try {
       const res = await fetch(
         `/api/course/${encodeURIComponent(courseName)}/workshops/${encodeURIComponent(workshopId)}/reviews`,
@@ -204,6 +212,14 @@ export default function CourseWorkshopsAndAnnouncements({
       );
       const data = await res.json();
       if (res.ok) {
+        const elapsedMs =
+          data.response_time_ms ??
+          data.review?.response_time_ms ??
+          Math.max(1, Math.round(performance.now() - t0));
+        if (data.review?.review_id) {
+          setReviewResponseTimes((prev) => ({ ...prev, [data.review.review_id]: elapsedMs }));
+        }
+        setLastCalibrationTimeMs(elapsedMs);
         setReviewInputs((prev) => ({ ...prev, [submissionId]: { score: '', feedback: '' } }));
         setNotice(
           `Peer review recorded! AI Calibration Score: ${data.review?.ai_calibration_score}% (${data.review?.ai_calibration_note})`
@@ -265,9 +281,12 @@ export default function CourseWorkshopsAndAnnouncements({
         </Box>
 
         {notice && (
-          <Typography variant="body2" sx={{ mb: 1.5, color: '#10b981', fontWeight: 600 }}>
-            {notice}
-          </Typography>
+          <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="body2" sx={{ color: '#10b981', fontWeight: 600 }}>
+              {notice}
+            </Typography>
+            <ResponseTimeBadge ms={lastCalibrationTimeMs} />
+          </Box>
         )}
         {error && (
           <Typography variant="body2" sx={{ mb: 1.5, color: '#ef4444', fontWeight: 600 }}>
@@ -636,12 +655,15 @@ export default function CourseWorkshopsAndAnnouncements({
                               <Typography variant="caption" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
                                 Peer Review by {r.reviewer_name}: {r.peer_score}/100
                               </Typography>
-                              <Chip
-                                icon={<Sparkles size={12} />}
-                                label={`AI Calibration: ${r.ai_calibration_score}%`}
-                                size="small"
-                                sx={{ height: 20, fontSize: '0.68rem', fontWeight: 800, bgcolor: 'rgba(139, 92, 246, 0.16)', color: '#8b5cf6' }}
-                              />
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
+                                <Chip
+                                  icon={<Sparkles size={12} />}
+                                  label={`AI Calibration: ${r.ai_calibration_score}%`}
+                                  size="small"
+                                  sx={{ height: 20, fontSize: '0.68rem', fontWeight: 800, bgcolor: 'rgba(139, 92, 246, 0.16)', color: '#8b5cf6' }}
+                                />
+                                <ResponseTimeBadge ms={r.response_time_ms ?? reviewResponseTimes[r.review_id]} />
+                              </Box>
                             </Box>
                             <Typography variant="caption" sx={{ color: currentTheme.palette.textPrimary, display: 'block', mt: 0.4 }}>
                               {r.feedback}

@@ -24,10 +24,12 @@ import {
   BookOpen
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 import QuestionFeedback from '../quiz/QuestionFeedback';
 
 export default function LectureQuiz({
   quizData,
+  quizResponseTimeMs = null,
   quizLoading,
   quizError,
   selectedAnswers = {},
@@ -41,6 +43,7 @@ export default function LectureQuiz({
   handleCueClick,
   currentTheme,
   detailedExplanations = {},
+  explanationResponseTimes = {},
   explanationLoading = {},
   fetchDetailedExplanation,
   transcriptAvailable = true,
@@ -241,6 +244,7 @@ export default function LectureQuiz({
                 fontSize: '0.75rem'
               }}
             />
+            <ResponseTimeBadge ms={quizData?.response_time_ms ?? quizData?.responseTimeMs ?? quizResponseTimeMs} size="sm" />
           </Box>
           <Typography variant="caption" sx={{ color: textSecondary }}>
             {quizData?.lecture_title || 'Lecture Concepts & Formulas'}
@@ -626,17 +630,20 @@ export default function LectureQuiz({
                         <CircularProgress size={14} sx={{ color: primaryColor }} />
                       )}
                       {detailedExplanations[q.id] && !explanationLoading[q.id] && (
-                        <Chip
-                          label="Ready"
-                          size="small"
-                          sx={{
-                            height: 20,
-                            fontSize: '0.65rem',
-                            fontWeight: 700,
-                            bgcolor: 'rgba(16, 185, 129, 0.15)',
-                            color: '#10b981'
-                          }}
-                        />
+                        <>
+                          <Chip
+                            label="Ready"
+                            size="small"
+                            sx={{
+                              height: 20,
+                              fontSize: '0.65rem',
+                              fontWeight: 700,
+                              bgcolor: 'rgba(16, 185, 129, 0.15)',
+                              color: '#10b981'
+                            }}
+                          />
+                          <ResponseTimeBadge ms={explanationResponseTimes[q.id]} />
+                        </>
                       )}
                     </Box>
                   </AccordionSummary>

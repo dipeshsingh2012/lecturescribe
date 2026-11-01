@@ -25,6 +25,7 @@ import {
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import { getUserDisplayName } from '../../utils/formatters';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseForum({
   courseName = 'Active Course',
@@ -53,6 +54,7 @@ export default function CourseForum({
   const [replyDrafts, setReplyDrafts] = useState({});
   const [postingReplyId, setPostingReplyId] = useState(null);
   const [aiDraftingId, setAiDraftingId] = useState(null);
+  const [aiReplyTimes, setAiReplyTimes] = useState({});
 
   const palette = currentTheme?.palette || {
     primary: '#3b82f6',
@@ -149,12 +151,21 @@ export default function CourseForum({
 
   const handleAskAiTa = async (threadId) => {
     setAiDraftingId(threadId);
+    const t0 = performance.now();
     try {
       const res = await fetch(
         `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/forum/${encodeURIComponent(threadId)}/ai-reply`,
         { method: 'POST' }
       );
       if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const elapsedMs =
+          data.response_time_ms ??
+          data.reply?.response_time_ms ??
+          Math.max(1, Math.round(performance.now() - t0));
+        if (data.reply?.reply_id) {
+          setAiReplyTimes((prev) => ({ ...prev, [data.reply.reply_id]: elapsedMs }));
+        }
         await fetchThreads();
       }
     } catch (e) {
@@ -491,13 +502,16 @@ export default function CourseForum({
                         <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
                           {rep.author_name || rep.author_email}
                         </Typography>
-                        {rep.is_ai_generated && (
-                          <Chip
-                            icon={<Sparkles size={12} color="#1d4ed8" />}
-                            label="AI TA Grounded Reply"
-                            size="small"
-                            sx={{ bgcolor: '#dbeafe', color: '#1d4ed8', fontWeight: 700, fontSize: '0.7rem' }}
-                          />
+                        {Boolean(rep.is_ai_generated) && (
+                          <>
+                            <Chip
+                              icon={<Sparkles size={12} color="#1d4ed8" />}
+                              label="AI TA Grounded Reply"
+                              size="small"
+                              sx={{ bgcolor: '#dbeafe', color: '#1d4ed8', fontWeight: 700, fontSize: '0.7rem' }}
+                            />
+                            <ResponseTimeBadge ms={rep.response_time_ms ?? aiReplyTimes[rep.reply_id]} />
+                          </>
                         )}
                         {rep.is_instructor_endorsed && (
                           <Chip

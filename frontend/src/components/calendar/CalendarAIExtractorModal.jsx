@@ -31,6 +31,7 @@ import {
   MapPin
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 const CATEGORIES = [
   { value: 'exam', label: 'Exam / Viva' },
@@ -63,6 +64,7 @@ export default function CalendarAIExtractorModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [extractResponseTimeMs, setExtractResponseTimeMs] = useState(null);
   const [stagedEvents, setStagedEvents] = useState([]);
   const [selectedIndices, setSelectedIndices] = useState(new Set());
   const fileInputRef = useRef(null);
@@ -89,6 +91,7 @@ export default function CalendarAIExtractorModal({
       }
       setError(null);
       setSuccessMsg(null);
+      setExtractResponseTimeMs(null);
     }
   }, [open, initialTab, defaultCourse, defaultDateIso, isTutor]);
 
@@ -119,6 +122,8 @@ export default function CalendarAIExtractorModal({
     setExtracting(true);
     setError(null);
     setSuccessMsg(null);
+    setExtractResponseTimeMs(null);
+    const t0 = performance.now();
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
@@ -136,6 +141,9 @@ export default function CalendarAIExtractorModal({
         throw new Error(errBody.detail || `HTTP ${res.status}: Failed to extract PDF dates`);
       }
       const data = await res.json();
+      setExtractResponseTimeMs(
+        data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0))
+      );
       const extracted = data.events || [];
       setStagedEvents(extracted);
       setSelectedIndices(new Set(extracted.map((_, i) => i)));
@@ -163,6 +171,8 @@ export default function CalendarAIExtractorModal({
     setExtracting(true);
     setError(null);
     setSuccessMsg(null);
+    setExtractResponseTimeMs(null);
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/calendar/extract-transcript`, {
         method: 'POST',
@@ -179,6 +189,9 @@ export default function CalendarAIExtractorModal({
         throw new Error(errBody.detail || `HTTP ${res.status}: Transcript scan failed`);
       }
       const data = await res.json();
+      setExtractResponseTimeMs(
+        data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0))
+      );
       const extracted = data.events || [];
       setStagedEvents(extracted);
       setSelectedIndices(new Set(extracted.map((_, i) => i)));
@@ -223,6 +236,7 @@ export default function CalendarAIExtractorModal({
         throw new Error(`HTTP ${res.status}: Failed to inject calendar events`);
       }
       const data = await res.json();
+      setExtractResponseTimeMs(null);
       setSuccessMsg(`Successfully injected ${data.count || chosen.length} events into the calendar!`);
       setStagedEvents([]);
       if (onEventsInjected) onEventsInjected(data.events || payloadEvents);
@@ -275,6 +289,7 @@ export default function CalendarAIExtractorModal({
         throw new Error(`HTTP ${res.status}: Could not create event`);
       }
       const data = await res.json();
+      setExtractResponseTimeMs(null);
       setSuccessMsg('Event added to calendar!');
       setManualTitle('');
       setManualDescription('');
@@ -462,9 +477,10 @@ export default function CalendarAIExtractorModal({
         )}
 
         {successMsg && (
-          <Box sx={{ p: 1.5, mb: 2, borderRadius: 2, bgcolor: 'rgba(16,185,129,0.12)', border: '1px solid #10b981', color: '#34d399', display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.85rem', fontWeight: 600 }}>
+          <Box sx={{ p: 1.5, mb: 2, borderRadius: 2, bgcolor: 'rgba(16,185,129,0.12)', border: '1px solid #10b981', color: '#34d399', display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', fontSize: '0.85rem', fontWeight: 600 }}>
             <Check size={16} />
             <span>{successMsg}</span>
+            <ResponseTimeBadge ms={extractResponseTimeMs} />
           </Box>
         )}
 

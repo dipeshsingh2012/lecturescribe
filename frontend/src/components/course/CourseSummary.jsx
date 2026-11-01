@@ -31,6 +31,7 @@ import {
   ListOrdered
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseSummary({
   courseName = 'Active Course',
@@ -356,6 +357,7 @@ export default function CourseSummary({
                 fontSize: '0.75rem'
               }}
             />
+            <ResponseTimeBadge ms={summaryData?.response_time_ms || summaryData?.responseTimeMs} size="sm" />
           </Box>
           <Typography variant="caption" sx={{ color: textSecondary, display: 'block', lineHeight: 1.4 }}>
             Complete thematic roadmap, formulas, and master exam checklist for {courseName}

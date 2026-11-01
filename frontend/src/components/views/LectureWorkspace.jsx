@@ -79,6 +79,8 @@ export default function LectureWorkspace({
   selectAnswer = quiz?.selectAnswer,
   resetQuiz = quiz?.resetQuiz,
   detailedExplanations = quiz?.detailedExplanations,
+  explanationResponseTimes = quiz?.explanationResponseTimes,
+  quizResponseTimeMs = quiz?.quizResponseTimeMs,
   explanationLoading = quiz?.explanationLoading,
   fetchDetailedExplanation = quiz?.fetchDetailedExplanation
 }) {
@@ -410,6 +412,8 @@ export default function LectureWorkspace({
             handleCueClick={handleCueClick}
             currentTheme={currentTheme}
             detailedExplanations={detailedExplanations}
+            explanationResponseTimes={explanationResponseTimes}
+            quizResponseTimeMs={quizResponseTimeMs}
             explanationLoading={explanationLoading}
             fetchDetailedExplanation={fetchDetailedExplanation}
             transcriptAvailable={transcriptAvailable}

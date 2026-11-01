@@ -41,6 +41,7 @@ import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import { getUserDisplayName } from '../../utils/formatters';
 import AssignmentStudio from './AssignmentStudio';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseAssignments({
   courseName = 'Active Course',
@@ -228,6 +229,7 @@ export default function CourseAssignments({
 
   const handleRunAiSpeedGrader = async (assignmentId, submissionId) => {
     setAiGradingSubId(submissionId);
+    const t0 = performance.now();
     try {
       const emailParam = userEmail ? `?actor_email=${encodeURIComponent(userEmail)}` : '';
       const res = await fetch(
@@ -236,7 +238,12 @@ export default function CourseAssignments({
       );
       if (res.ok) {
         const data = await res.json();
-        const sub = data.submission;
+        const rawSub = data.submission;
+        const elapsedMs =
+          data.response_time_ms ??
+          rawSub?.response_time_ms ??
+          Math.max(1, Math.round(performance.now() - t0));
+        const sub = rawSub ? { ...rawSub, response_time_ms: rawSub.response_time_ms ?? elapsedMs } : null;
         if (sub) {
           setSubmissionsByAsgn((prev) => ({
             ...prev,
@@ -697,12 +704,15 @@ export default function CourseAssignments({
                         />
                       )}
                       {isCompleted && (
-                        <Chip
-                          icon={<CheckCircle2 size={13} color="#047857" />}
-                          label="Ready"
-                          size="small"
-                          sx={{ bgcolor: '#ecfdf5', color: '#047857', fontWeight: 700, fontSize: '0.72rem' }}
-                        />
+                        <>
+                          <Chip
+                            icon={<CheckCircle2 size={13} color="#047857" />}
+                            label="Ready"
+                            size="small"
+                            sx={{ bgcolor: '#ecfdf5', color: '#047857', fontWeight: 700, fontSize: '0.72rem' }}
+                          />
+                          <ResponseTimeBadge ms={asgn.response_time_ms} />
+                        </>
                       )}
                       {isNeedsInput && (
                         <Chip
@@ -1201,7 +1211,12 @@ export default function CourseAssignments({
 
                               {sub.ai_suggested_score !== null && sub.ai_suggested_score !== undefined && (
                                 <Alert severity="info" sx={{ mb: 1.5, py: 0.5, borderRadius: 1.5 }}>
-                                  <strong>AI SpeedGrader Suggestion:</strong> {sub.ai_suggested_score} / {sub.max_marks} — {sub.ai_feedback}
+                                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                                    <span>
+                                      <strong>AI SpeedGrader Suggestion:</strong> {sub.ai_suggested_score} / {sub.max_marks} — {sub.ai_feedback}
+                                    </span>
+                                    <ResponseTimeBadge ms={sub.response_time_ms} />
+                                  </Box>
                                 </Alert>
                               )}
 

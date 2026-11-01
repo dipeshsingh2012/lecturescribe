@@ -1148,6 +1148,16 @@ class RelationalDBManager:
 
                         ALTER TABLE lecturescribe_course_chat_logs ADD COLUMN IF NOT EXISTS course_id UUID;
 
+                        ALTER TABLE lecturescribe_chat_logs ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_course_chat_logs ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_lecture_summaries ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_forum_replies ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_transcript_reviews ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_transcript_annotations ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_assignment_submissions ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+                        ALTER TABLE lecturescribe_workshop_reviews ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+
                         ALTER TABLE lecturescribe_course_notes ADD COLUMN IF NOT EXISTS course_id UUID;
                         ALTER TABLE lecturescribe_course_notes ADD COLUMN IF NOT EXISTS course_slug VARCHAR(255);
 
@@ -1797,7 +1807,8 @@ class RelationalDBManager:
         citations: Optional[List[Dict[str, Any]]] = None,
         word_count: Optional[int] = None,
         model: str = "",
-        user_email: Optional[str] = None
+        user_email: Optional[str] = None,
+        response_time_ms: Optional[int] = None
     ) -> bool:
         """Save or update a lecture summary in lecturescribe_lecture_summaries."""
         if not video_id or not summary_type or not markdown_text:
@@ -1819,15 +1830,16 @@ class RelationalDBManager:
                         INSERT INTO lecturescribe_lecture_summaries (
                             video_id, user_email, summary_type, markdown_text,
                             submission_text, citations_json, word_count, model,
-                            is_outdated, created_at, updated_at
+                            response_time_ms, is_outdated, created_at, updated_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, FALSE, NOW(), NOW())
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, FALSE, NOW(), NOW())
                         ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
                         SET markdown_text = EXCLUDED.markdown_text,
                             submission_text = EXCLUDED.submission_text,
                             citations_json = EXCLUDED.citations_json,
                             word_count = EXCLUDED.word_count,
                             model = EXCLUDED.model,
+                            response_time_ms = COALESCE(EXCLUDED.response_time_ms, lecturescribe_lecture_summaries.response_time_ms),
                             is_outdated = FALSE,
                             updated_at = NOW();
                     """, (
@@ -1838,7 +1850,8 @@ class RelationalDBManager:
                         submission_text or "",
                         json.dumps(citations or []),
                         calculated_word_count,
-                        model or ""
+                        model or "",
+                        int(response_time_ms) if response_time_ms is not None else None
                     ))
                     conn.commit()
             return True
@@ -1872,6 +1885,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, video_id, user_email, summary_type, markdown_text,
                                    submission_text, citations_json, word_count, model,
+                                   response_time_ms,
                                    COALESCE(is_outdated, FALSE) as is_outdated,
                                    created_at, updated_at
                             FROM lecturescribe_lecture_summaries
@@ -1883,6 +1897,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, video_id, user_email, summary_type, markdown_text,
                                    submission_text, citations_json, word_count, model,
+                                   response_time_ms,
                                    COALESCE(is_outdated, FALSE) as is_outdated,
                                    created_at, updated_at
                             FROM lecturescribe_lecture_summaries
@@ -1907,6 +1922,8 @@ class RelationalDBManager:
                                 "citations": citations,
                                 "wordCount": row.get("word_count") or 0,
                                 "model": row.get("model") or "",
+                                "responseTimeMs": row.get("response_time_ms"),
+                                "response_time_ms": row.get("response_time_ms"),
                                 "isOutdated": bool(row.get("is_outdated", False)),
                                 "createdAt": row.get("created_at").isoformat() if row.get("created_at") else None,
                                 "updatedAt": row.get("updated_at").isoformat() if row.get("updated_at") else None
@@ -3502,7 +3519,8 @@ class RelationalDBManager:
         user_email: Optional[str] = None,
         submission_text: Optional[str] = None,
         model: Optional[str] = None,
-        web_sources: Optional[List[Dict[str, Any]]] = None
+        web_sources: Optional[List[Dict[str, Any]]] = None,
+        response_time_ms: Optional[int] = None
     ):
         """Save chat interaction directly to PostgreSQL."""
         if not video_id or not user_prompt:
@@ -3518,9 +3536,9 @@ class RelationalDBManager:
                     cursor.execute("""
                         INSERT INTO lecturescribe_chat_logs (
                             video_id, user_prompt, ai_reply, citations_json, user_email,
-                            submission_text, model, web_sources_json
+                            submission_text, model, web_sources_json, response_time_ms
                         )
-                        VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb);
+                        VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s);
                     """, (
                         video_id,
                         user_prompt,
@@ -3529,7 +3547,8 @@ class RelationalDBManager:
                         clean_email,
                         submission_text or "",
                         model or "",
-                        json.dumps(web_sources or [])
+                        json.dumps(web_sources or []),
+                        int(response_time_ms) if response_time_ms is not None else None
                     ))
                     conn.commit()
         except Exception as e:
@@ -3559,7 +3578,7 @@ class RelationalDBManager:
                 with conn.cursor() as cursor:
                     query = """
                         SELECT id, video_id, user_prompt, ai_reply, citations_json, user_email,
-                               submission_text, model, web_sources_json, created_at
+                               submission_text, model, web_sources_json, response_time_ms, created_at
                         FROM lecturescribe_chat_logs
                         WHERE video_id = %s
                     """
@@ -3594,6 +3613,7 @@ class RelationalDBManager:
                             "citations": citations,
                             "web_sources": web_sources,
                             "model": r.get("model") or "",
+                            "response_time_ms": r.get("response_time_ms"),
                             "created_at": ts_str
                         })
                     return history
@@ -3696,7 +3716,8 @@ class RelationalDBManager:
         ai_reply: str,
         citations: Optional[List[Dict[str, Any]]] = None,
         user_email: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        response_time_ms: Optional[int] = None
     ):
         """Save course-level chat interaction directly to PostgreSQL."""
         if not course_name or not user_prompt:
@@ -3722,9 +3743,9 @@ class RelationalDBManager:
                     cursor.execute("""
                         INSERT INTO lecturescribe_course_chat_logs (
                             course_slug, course_name, course_id, user_prompt, ai_reply,
-                            citations_json, user_email, model
+                            citations_json, user_email, model, response_time_ms
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s);
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s);
                     """, (
                         course_slug,
                         canonical_name,
@@ -3733,7 +3754,8 @@ class RelationalDBManager:
                         ai_reply,
                         json.dumps(citations or []),
                         clean_email,
-                        model or ""
+                        model or "",
+                        int(response_time_ms) if response_time_ms is not None else None
                     ))
                     conn.commit()
         except Exception as e:
@@ -3761,7 +3783,7 @@ class RelationalDBManager:
                 with conn.cursor() as cursor:
                     query = """
                         SELECT id, course_slug, course_name, user_prompt, ai_reply,
-                               citations_json, user_email, model, created_at
+                               citations_json, user_email, model, response_time_ms, created_at
                         FROM lecturescribe_course_chat_logs
                         WHERE course_slug = %s
                     """
@@ -3791,6 +3813,7 @@ class RelationalDBManager:
                             "text": r["ai_reply"],
                             "citations": citations,
                             "model": r.get("model") or "",
+                            "response_time_ms": r.get("response_time_ms"),
                             "created_at": ts_str
                         })
                     return history
@@ -6203,7 +6226,8 @@ class RelationalDBManager:
         ai_prompt: Optional[str] = None,
         ai_response: Optional[str] = None,
         created_at: Optional[str] = None,
-        updated_at: Optional[str] = None
+        updated_at: Optional[str] = None,
+        response_time_ms: Optional[int] = None
     ) -> Dict[str, Any]:
         """Produce consistent annotation dictionary with both camelCase and snake_case properties."""
         return {
@@ -6219,6 +6243,7 @@ class RelationalDBManager:
             "noteText": note_text,
             "aiPrompt": ai_prompt,
             "aiResponse": ai_response,
+            "responseTimeMs": response_time_ms,
             "createdAt": created_at,
             "updatedAt": updated_at,
             # snake_case properties for full API parity
@@ -6232,6 +6257,7 @@ class RelationalDBManager:
             "note_text": note_text,
             "ai_prompt": ai_prompt,
             "ai_response": ai_response,
+            "response_time_ms": response_time_ms,
             "created_at": created_at,
             "updated_at": updated_at
         }
@@ -6248,7 +6274,8 @@ class RelationalDBManager:
         color: Optional[str] = None,
         note_text: Optional[str] = None,
         ai_prompt: Optional[str] = None,
-        ai_response: Optional[str] = None
+        ai_response: Optional[str] = None,
+        response_time_ms: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """Save a new highlight, margin note, or embedded AI explanation."""
         clean_email = (user_email or "anonymous").strip().lower()
@@ -6293,16 +6320,16 @@ class RelationalDBManager:
                         INSERT INTO lecturescribe_transcript_annotations (
                             video_id, user_email, cue_id, start_seconds, end_seconds,
                             selected_text, annotation_type, color, note_text,
-                            ai_prompt, ai_response, created_at, updated_at
+                            ai_prompt, ai_response, response_time_ms, created_at, updated_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                         RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
                                   selected_text, annotation_type, color, note_text,
-                                  ai_prompt, ai_response, created_at, updated_at;
+                                  ai_prompt, ai_response, response_time_ms, created_at, updated_at;
                     """, (
                         video_id, clean_email, clean_cue_id, float(start_seconds), float(end_seconds),
                         selected_text, clean_type, color, note_text,
-                        ai_prompt, ai_response
+                        ai_prompt, ai_response, int(response_time_ms) if response_time_ms is not None else None
                     ))
                     row = cursor.fetchone()
                     conn.commit()
@@ -6321,7 +6348,8 @@ class RelationalDBManager:
                             ai_prompt=row.get("ai_prompt"),
                             ai_response=row.get("ai_response"),
                             created_at=row["created_at"].isoformat() if row.get("created_at") else now_iso,
-                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else now_iso
+                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else now_iso,
+                            response_time_ms=row.get("response_time_ms")
                         )
         except Exception as e:
             print(f"[PostgreSQL Notice] add_annotation error: {e}")
@@ -6344,7 +6372,8 @@ class RelationalDBManager:
             ai_prompt=ai_prompt,
             ai_response=ai_response,
             created_at=now_iso,
-            updated_at=now_iso
+            updated_at=now_iso,
+            response_time_ms=int(response_time_ms) if response_time_ms is not None else None
         )
         self._annotations_memory_cache.append(fallback_ann)
         return fallback_ann
@@ -6362,7 +6391,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, video_id, user_email, cue_id, start_seconds, end_seconds,
                                    selected_text, annotation_type, color, note_text,
-                                   ai_prompt, ai_response, created_at, updated_at
+                                   ai_prompt, ai_response, response_time_ms, created_at, updated_at
                             FROM lecturescribe_transcript_annotations
                             WHERE video_id = %s AND user_email = %s
                             ORDER BY start_seconds ASC, created_at ASC;
@@ -6371,7 +6400,7 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, video_id, user_email, cue_id, start_seconds, end_seconds,
                                    selected_text, annotation_type, color, note_text,
-                                   ai_prompt, ai_response, created_at, updated_at
+                                   ai_prompt, ai_response, response_time_ms, created_at, updated_at
                             FROM lecturescribe_transcript_annotations
                             WHERE video_id = %s
                             ORDER BY start_seconds ASC, created_at ASC;
@@ -6392,7 +6421,8 @@ class RelationalDBManager:
                             ai_prompt=row.get("ai_prompt"),
                             ai_response=row.get("ai_response"),
                             created_at=row["created_at"].isoformat() if row.get("created_at") else None,
-                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else None
+                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else None,
+                            response_time_ms=row.get("response_time_ms")
                         ))
                     return annotations
         except Exception as e:
@@ -6455,7 +6485,8 @@ class RelationalDBManager:
         ai_prompt: Optional[str] = None,
         ai_response: Optional[str] = None,
         annotation_type: Optional[str] = None,
-        user_email: Optional[str] = None
+        user_email: Optional[str] = None,
+        response_time_ms: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """Update an existing annotation's note text or AI response."""
         clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
@@ -6480,6 +6511,9 @@ class RelationalDBManager:
                     if annotation_type is not None:
                         fields.append("annotation_type = %s")
                         params.append(annotation_type)
+                    if response_time_ms is not None:
+                        fields.append("response_time_ms = %s")
+                        params.append(int(response_time_ms))
 
                     set_clause = ", ".join(fields)
                     if clean_email:
@@ -6490,7 +6524,7 @@ class RelationalDBManager:
                             WHERE id = %s AND user_email = %s
                             RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
                                       selected_text, annotation_type, color, note_text,
-                                      ai_prompt, ai_response, created_at, updated_at;
+                                      ai_prompt, ai_response, response_time_ms, created_at, updated_at;
                         """, tuple(params))
                     else:
                         params.append(annotation_id)
@@ -6500,7 +6534,7 @@ class RelationalDBManager:
                             WHERE id = %s
                             RETURNING id, video_id, user_email, cue_id, start_seconds, end_seconds,
                                       selected_text, annotation_type, color, note_text,
-                                      ai_prompt, ai_response, created_at, updated_at;
+                                      ai_prompt, ai_response, response_time_ms, created_at, updated_at;
                         """, tuple(params))
                     row = cursor.fetchone()
                     if row:
@@ -6519,7 +6553,8 @@ class RelationalDBManager:
                             ai_prompt=row.get("ai_prompt"),
                             ai_response=row.get("ai_response"),
                             created_at=row["created_at"].isoformat() if row.get("created_at") else now_iso,
-                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else now_iso
+                            updated_at=row["updated_at"].isoformat() if row.get("updated_at") else now_iso,
+                            response_time_ms=row.get("response_time_ms")
                         )
         except Exception as e:
             print(f"[PostgreSQL Notice] update_annotation error: {e}")
@@ -6530,8 +6565,21 @@ class RelationalDBManager:
         # Update in-memory cache as well
         for a in self._annotations_memory_cache:
             if str(a.get("id")) == str(annotation_id):
-                a["noteText"] = note_text
-                a["note_text"] = note_text
+                if note_text is not None:
+                    a["noteText"] = note_text
+                    a["note_text"] = note_text
+                if ai_prompt is not None:
+                    a["aiPrompt"] = ai_prompt
+                    a["ai_prompt"] = ai_prompt
+                if ai_response is not None:
+                    a["aiResponse"] = ai_response
+                    a["ai_response"] = ai_response
+                if annotation_type is not None:
+                    a["annotationType"] = annotation_type
+                    a["annotation_type"] = annotation_type
+                if response_time_ms is not None:
+                    a["responseTimeMs"] = int(response_time_ms)
+                    a["response_time_ms"] = int(response_time_ms)
                 a["updatedAt"] = now_iso
                 a["updated_at"] = now_iso
                 if not updated_ann:
@@ -6569,13 +6617,13 @@ class RelationalDBManager:
                 with conn.cursor() as cursor:
                     if job_id:
                         cursor.execute("""
-                            SELECT id, video_id, review_mode, status, error_message, created_at, updated_at
+                            SELECT id, video_id, review_mode, status, error_message, response_time_ms, created_at, updated_at
                             FROM lecturescribe_transcript_reviews
                             WHERE id = %s;
                         """, (job_id,))
                     elif video_id:
                         cursor.execute("""
-                            SELECT id, video_id, review_mode, status, error_message, created_at, updated_at
+                            SELECT id, video_id, review_mode, status, error_message, response_time_ms, created_at, updated_at
                             FROM lecturescribe_transcript_reviews
                             WHERE video_id = %s
                             ORDER BY created_at DESC LIMIT 1;
@@ -6590,6 +6638,8 @@ class RelationalDBManager:
                             "reviewMode": row["review_mode"],
                             "status": row["status"],
                             "errorMessage": row.get("error_message"),
+                            "responseTimeMs": row.get("response_time_ms"),
+                            "response_time_ms": row.get("response_time_ms"),
                             "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
                             "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None
                         }
@@ -6600,7 +6650,7 @@ class RelationalDBManager:
                 conn.close()
         return None
 
-    def update_review_job(self, job_id: str, status: str, error_message: Optional[str] = None) -> bool:
+    def update_review_job(self, job_id: str, status: str, error_message: Optional[str] = None, response_time_ms: Optional[int] = None) -> bool:
         """Update review job status."""
         conn = None
         try:
@@ -6609,9 +6659,12 @@ class RelationalDBManager:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         UPDATE lecturescribe_transcript_reviews
-                        SET status = %s, error_message = %s, updated_at = NOW()
+                        SET status = %s,
+                            error_message = %s,
+                            response_time_ms = COALESCE(%s, response_time_ms),
+                            updated_at = NOW()
                         WHERE id = %s;
-                    """, (status, error_message, job_id))
+                    """, (status, error_message, int(response_time_ms) if response_time_ms is not None else None, job_id))
                     conn.commit()
                     return cursor.rowcount > 0
         except Exception as e:
@@ -7293,7 +7346,8 @@ class RelationalDBManager:
         questions_summary: Optional[List[Dict[str, Any]]] = None,
         required_files: Optional[List[str]] = None,
         dataset_files: Optional[List[str]] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        response_time_ms: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """Update assignment status, output blob paths, questions summary, required files, datasets, or error messages."""
         clean_id = (assignment_id or "").strip()
@@ -7314,11 +7368,12 @@ class RelationalDBManager:
                             required_files = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE required_files END,
                             dataset_files = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE dataset_files END,
                             error_message = %s,
+                            response_time_ms = COALESCE(%s, response_time_ms),
                             updated_at = NOW()
                         WHERE assignment_id = %s
                         RETURNING id, assignment_id, course_name, user_email, title, source_filename,
                                   source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                  questions_summary, required_files, dataset_files, error_message, created_at, updated_at;
+                                  questions_summary, required_files, dataset_files, error_message, response_time_ms, created_at, updated_at;
                     """, (
                         status,
                         notebook_blob_name,
@@ -7330,6 +7385,7 @@ class RelationalDBManager:
                         json.dumps(dataset_files) if dataset_files is not None else None,
                         json.dumps(dataset_files) if dataset_files is not None else None,
                         error_message,
+                        int(response_time_ms) if response_time_ms is not None else None,
                         clean_id
                     ))
                     row = cursor.fetchone()
@@ -7363,6 +7419,8 @@ class RelationalDBManager:
                     item["dataset_files"] = dataset_files
                 if error_message is not None:
                     item["error_message"] = error_message
+                if response_time_ms is not None:
+                    item["response_time_ms"] = int(response_time_ms)
                 item["updated_at"] = now_iso
                 if not updated_record:
                     updated_record = item
@@ -7392,7 +7450,7 @@ class RelationalDBManager:
                                    COALESCE(chat_history, '[]'::jsonb) AS chat_history,
                                    COALESCE(citations, '[]'::jsonb) AS citations,
                                    COALESCE(selected_model, '') AS selected_model,
-                                   error_message, created_at, updated_at
+                                   response_time_ms, error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (user_email = %s OR user_email IS NULL) AND (
                                 LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
@@ -7411,7 +7469,7 @@ class RelationalDBManager:
                                    COALESCE(chat_history, '[]'::jsonb) AS chat_history,
                                    COALESCE(citations, '[]'::jsonb) AS citations,
                                    COALESCE(selected_model, '') AS selected_model,
-                                   error_message, created_at, updated_at
+                                   response_time_ms, error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (
                                 LOWER(TRIM(course_name)) = LOWER(TRIM(%s))
@@ -7462,7 +7520,7 @@ class RelationalDBManager:
                                COALESCE(chat_history, '[]'::jsonb) AS chat_history,
                                COALESCE(citations, '[]'::jsonb) AS citations,
                                COALESCE(selected_model, '') AS selected_model,
-                               error_message, created_at, updated_at
+                               response_time_ms, error_message, created_at, updated_at
                         FROM lecturescribe_course_assignments
                         WHERE assignment_id = %s;
                     """, (clean_id,))
@@ -8595,6 +8653,7 @@ class RelationalDBManager:
         ai_feedback: Optional[str] = None,
         graded_by_email: Optional[str] = None,
         apply_grade: bool = True,
+        response_time_ms: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """Update AI suggested score/feedback or finalize instructor grade on a student submission."""
         clean_sid = (submission_id or "").strip()
@@ -8637,6 +8696,7 @@ class RelationalDBManager:
         new_status = "graded" if (apply_grade and new_score is not None) else existing.get("status", "submitted")
         new_graded_by = (graded_by_email or existing.get("graded_by_email") or "").strip().lower()
         new_graded_at = now_iso if new_status == "graded" else existing.get("graded_at")
+        new_rt = int(response_time_ms) if response_time_ms is not None else existing.get("response_time_ms")
 
         updated = {
             **existing,
@@ -8647,6 +8707,7 @@ class RelationalDBManager:
             "status": new_status,
             "graded_by_email": new_graded_by,
             "graded_at": new_graded_at,
+            "response_time_ms": new_rt,
         }
 
         conn = None
@@ -8663,6 +8724,7 @@ class RelationalDBManager:
                             ai_feedback = %s,
                             status = %s,
                             graded_by_email = %s,
+                            response_time_ms = COALESCE(%s, response_time_ms),
                             graded_at = CASE WHEN %s = 'graded' THEN NOW() ELSE graded_at END
                         WHERE submission_id = %s
                         RETURNING *;
@@ -8674,6 +8736,7 @@ class RelationalDBManager:
                             new_ai_fb,
                             new_status,
                             new_graded_by,
+                            new_rt,
                             new_status,
                             clean_sid,
                         ),
@@ -9460,6 +9523,7 @@ class RelationalDBManager:
         author_role: str = "student",
         is_ai_generated: bool = False,
         citations: Optional[List[Dict[str, Any]]] = None,
+        response_time_ms: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """Append a reply (student, tutor, or AI TA) to a discussion thread."""
         clean_tid = (thread_id or "").strip()
@@ -9472,6 +9536,7 @@ class RelationalDBManager:
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         resolved_name = (author_name or "").strip() or (self._users_memory_cache.get(clean_email, {}).get("name") or clean_email.split("@")[0])
         norm_role = "ai_ta" if is_ai_generated else self._normalize_role(author_role, "student")
+        clean_rt = int(response_time_ms) if response_time_ms is not None else None
 
         reply_rec = {
             "reply_id": rid,
@@ -9483,6 +9548,7 @@ class RelationalDBManager:
             "is_instructor_endorsed": norm_role == "tutor",
             "is_ai_generated": bool(is_ai_generated),
             "citations_json": citations or [],
+            "response_time_ms": clean_rt,
             "created_at": now_iso,
         }
 
@@ -9495,9 +9561,9 @@ class RelationalDBManager:
                         """
                         INSERT INTO lecturescribe_forum_replies (
                             reply_id, thread_id, author_email, author_name, author_role,
-                            body, is_instructor_endorsed, is_ai_generated, citations_json, created_at
+                            body, is_instructor_endorsed, is_ai_generated, citations_json, response_time_ms, created_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW())
                         RETURNING *;
                         """,
                         (
@@ -9510,6 +9576,7 @@ class RelationalDBManager:
                             reply_rec["is_instructor_endorsed"],
                             reply_rec["is_ai_generated"],
                             json.dumps(citations or []),
+                            clean_rt,
                         ),
                     )
                     row = cursor.fetchone()
@@ -11307,8 +11374,10 @@ class RelationalDBManager:
         reviewer_name: str,
         peer_score: float,
         feedback: str,
+        response_time_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Record a peer review and compute an AI Calibration Quality score for the reviewer's feedback."""
+        t0 = time.perf_counter()
         rid = f"wsrev_{uuid.uuid4().hex[:10]}"
         clean_fb = (feedback or "").strip()
         word_count = len(clean_fb.split())
@@ -11323,6 +11392,7 @@ class RelationalDBManager:
             cal_score = 65.0
             cal_note = "Brief review; expand on specific rubric strengths and areas for improvement."
 
+        computed_rt = int(response_time_ms) if response_time_ms is not None else max(1, int(round((time.perf_counter() - t0) * 1000)))
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         record = {
             "review_id": rid,
@@ -11334,6 +11404,7 @@ class RelationalDBManager:
             "feedback": clean_fb,
             "ai_calibration_score": cal_score,
             "ai_calibration_note": cal_note,
+            "response_time_ms": computed_rt,
             "created_at": now_iso,
         }
         self._workshop_reviews_memory.append(record)
@@ -11348,9 +11419,9 @@ class RelationalDBManager:
                         INSERT INTO lecturescribe_workshop_reviews (
                             review_id, workshop_id, submission_id, reviewer_email,
                             reviewer_name, peer_score, feedback, ai_calibration_score,
-                            ai_calibration_note, created_at
+                            ai_calibration_note, response_time_ms, created_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW());
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW());
                         """,
                         (
                             rid,
@@ -11362,6 +11433,7 @@ class RelationalDBManager:
                             record["feedback"],
                             cal_score,
                             cal_note,
+                            computed_rt,
                         ),
                     )
                     conn.commit()

@@ -137,4 +137,31 @@ describe('CourseTutor Component', () => {
 
     expect(screen.getByText('Unable to connect to course tutor service.')).toBeInTheDocument();
   });
+
+  it('renders response time badge on Course AI Tutor bot responses when response_time_ms is provided', () => {
+    render(
+      <CourseTutor
+        courseName="Machine Learning"
+        lectureCount={4}
+        messages={[
+          { id: 'u1', sender: 'user', text: 'Compare L1 and L2 regularization' },
+          {
+            id: 'b1',
+            sender: 'bot',
+            text: 'L1 promotes sparsity while L2 penalizes squared weights.',
+            model: 'Gemini 2.0 Flash',
+            response_time_ms: 3140
+          }
+        ]}
+        input=""
+        setInput={vi.fn()}
+        loading={false}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const badge = screen.getByTestId('ai-response-time');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent('3.1s');
+  });
 });

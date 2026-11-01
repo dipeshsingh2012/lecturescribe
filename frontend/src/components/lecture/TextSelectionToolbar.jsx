@@ -16,6 +16,7 @@ import {
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function TextSelectionToolbar({
   position,
@@ -37,6 +38,7 @@ export default function TextSelectionToolbar({
   const [noteInput, setNoteInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState('');
+  const [aiResponseTimeMs, setAiResponseTimeMs] = useState(null);
   const [aiPromptType, setAiPromptType] = useState('explain');
   const [copied, setCopied] = useState(false);
   const [aiCopied, setAiCopied] = useState(false);
@@ -159,8 +161,10 @@ export default function TextSelectionToolbar({
     setAiPromptType(promptType);
     setAiLoading(true);
     setAiResponse('');
+    setAiResponseTimeMs(null);
     setIsPinned(false);
     setActionError(null);
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/explain-selection`, {
         method: 'POST',
@@ -178,6 +182,7 @@ export default function TextSelectionToolbar({
       }
       const data = await res.json();
       setAiResponse(data.explanation || 'No explanation generated.');
+      setAiResponseTimeMs(data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0)));
     } catch (err) {
       console.error('Error asking AI:', err);
       setAiResponse(`Failed to generate AI explanation: ${err.message}`);
@@ -203,7 +208,8 @@ export default function TextSelectionToolbar({
           end_seconds: endSeconds || 0.0,
           ai_prompt: aiPromptType,
           ai_response: aiResponse,
-          note_text: aiResponse
+          note_text: aiResponse,
+          ...(aiResponseTimeMs ? { response_time_ms: aiResponseTimeMs } : {})
         })
       });
       if (!res.ok) {
@@ -535,11 +541,12 @@ export default function TextSelectionToolbar({
       {mode === 'ai' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
               <Sparkles size={13} color="#a855f7" />
               <span style={{ fontSize: isExpandedEffective ? '0.82rem' : '0.74rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                 AI Selection Explainer
               </span>
+              {!aiLoading && <ResponseTimeBadge ms={aiResponseTimeMs} />}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <button

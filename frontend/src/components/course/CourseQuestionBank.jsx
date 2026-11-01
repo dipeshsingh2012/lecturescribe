@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Filter
 } from 'lucide-react';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseQuestionBank({
   courseName,
@@ -35,6 +36,7 @@ export default function CourseQuestionBank({
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [lastAiResponseTimeMs, setLastAiResponseTimeMs] = useState(null);
 
   // Taxonomy filters
   const [filterDifficulty, setFilterDifficulty] = useState('all');
@@ -88,6 +90,8 @@ export default function CourseQuestionBank({
     setGenerating(true);
     setError('');
     setNotice('');
+    setLastAiResponseTimeMs(null);
+    const t0 = performance.now();
     try {
       const selectedLec = lectures.find((l) => (l.video_id || l.videoId) === genLectureId);
       const res = await fetch(`/api/course/${encodeURIComponent(courseName)}/question-bank/ai-generate`, {
@@ -104,6 +108,9 @@ export default function CourseQuestionBank({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'AI generation failed');
+      setLastAiResponseTimeMs(
+        data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0))
+      );
       setNotice(`Generated ${data.generated_count || (data.questions || []).length} Bloom-tagged questions into the bank!`);
       fetchBank();
     } catch (err) {
@@ -145,6 +152,7 @@ export default function CourseQuestionBank({
       setNewQuestionText('');
       setNewExplanation('');
       setShowAddModal(false);
+      setLastAiResponseTimeMs(null);
       setNotice('Saved custom question to the Course Question Bank.');
       fetchBank();
     } catch (err) {
@@ -171,6 +179,7 @@ export default function CourseQuestionBank({
     setPublishing(true);
     setError('');
     setNotice('');
+    setLastAiResponseTimeMs(null);
     try {
       const res = await fetch(`/api/course/${encodeURIComponent(courseName)}/question-bank/publish-quiz`, {
         method: 'POST',
@@ -378,9 +387,12 @@ export default function CourseQuestionBank({
         </Box>
 
         {notice && (
-          <Typography variant="body2" sx={{ mt: 1.5, color: '#10b981', fontWeight: 600 }}>
-            {notice}
-          </Typography>
+          <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="body2" sx={{ color: '#10b981', fontWeight: 600 }}>
+              {notice}
+            </Typography>
+            <ResponseTimeBadge ms={lastAiResponseTimeMs} />
+          </Box>
         )}
         {error && (
           <Typography variant="body2" sx={{ mt: 1.5, color: '#ef4444', fontWeight: 600 }}>

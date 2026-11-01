@@ -1169,9 +1169,11 @@ def execute_and_finish_assignment(
     title: str,
     overview: str,
     work_dir: str,
-    assignment_text: str = ""
+    assignment_text: str = "",
+    t_start: Optional[float] = None
 ) -> Dict[str, Any]:
     """Execute generated notebook code in the assignment workspace and compile final deliverables."""
+    t_exec_start = t_start if t_start is not None else time.perf_counter()
     slug = to_course_slug(course_name)
     logger.info(f"[Assignment Execution] Starting solution generation and runner for ID={assignment_id} in {work_dir}")
 
@@ -1208,15 +1210,17 @@ def execute_and_finish_assignment(
     gcs_storage_service.upload_blob_bytes(pdf_blob, pdf_bytes_out, content_type="application/pdf")
 
     # 5. Mark Completed
+    elapsed_ms = max(1, int(round((time.perf_counter() - t_exec_start) * 1000)))
     updated = db_manager.update_assignment(
         assignment_id=assignment_id,
         status="completed",
         notebook_blob_name=ipynb_blob,
         pdf_blob_name=pdf_blob,
         questions_summary=enriched_questions,
-        error_message=None
+        error_message=None,
+        response_time_ms=elapsed_ms
     )
-    logger.info(f"[Assignment Execution] Successfully completed ID={assignment_id}")
+    logger.info(f"[Assignment Execution] Successfully completed ID={assignment_id} in {elapsed_ms}ms")
     return updated or {}
 
 
@@ -1228,6 +1232,7 @@ def process_assignment_pipeline(
     filename: str
 ) -> Dict[str, Any]:
     """Execute complete assignment planning and generation pipeline with interactive pause-and-prompt."""
+    t_start = time.perf_counter()
     slug = to_course_slug(course_name)
     logger.info(f"[Assignment Pipeline] Starting for ID={assignment_id}, Course={course_name}, File={filename}")
 
@@ -1290,7 +1295,8 @@ def process_assignment_pipeline(
             title=title,
             overview=overview,
             work_dir=ws,
-            assignment_text=extracted_text
+            assignment_text=extracted_text,
+            t_start=t_start
         )
 
     except Exception as e:
@@ -1386,6 +1392,7 @@ def evaluate_student_submission_with_ai(
     AI SpeedGrader: Evaluate a student's submission against the assignment questions and reference solution.
     Returns {"ai_suggested_score": float, "max_marks": float, "ai_feedback": str, "rubric_breakdown": list}.
     """
+    t_start = time.perf_counter()
     max_marks = float(submission_record.get("max_marks") or assignment_record.get("max_marks") or 100.0)
     questions = assignment_record.get("questions_summary") or []
     student_text = (submission_record.get("submission_text") or "").strip()
@@ -1430,6 +1437,7 @@ def evaluate_student_submission_with_ai(
                 "max_marks": max_marks,
                 "ai_feedback": feedback,
                 "rubric_breakdown": parsed.get("rubric_breakdown") or [],
+                "response_time_ms": max(1, int(round((time.perf_counter() - t_start) * 1000))),
             }
         except Exception:
             pass
@@ -1460,4 +1468,5 @@ def evaluate_student_submission_with_ai(
         "max_marks": max_marks,
         "ai_feedback": fb,
         "rubric_breakdown": [],
+        "response_time_ms": max(1, int(round((time.perf_counter() - t_start) * 1000))),
     }

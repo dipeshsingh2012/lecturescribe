@@ -154,6 +154,7 @@ export function useAITutor(activeData, googleUser) {
     setChatInput('');
     setChatLoading(true);
 
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/rag/query`, {
         method: 'POST',
@@ -171,13 +172,15 @@ export function useAITutor(activeData, googleUser) {
 
       if (res.ok) {
         const data = await res.json();
+        const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
         const botMsg = {
           id: data.message_id || `msg_bot_${Date.now()}`,
           sender: 'bot',
           text: data.answer,
           citations: data.citations || [],
           model: data.model || 'Groq GPT-OSS 120B',
-          web_sources: data.web_sources || []
+          web_sources: data.web_sources || [],
+          response_time_ms: elapsedMs
         };
         setChatMessages([...newMessages, botMsg]);
       } else {
@@ -244,6 +247,7 @@ export function useAITutor(activeData, googleUser) {
     if (!promptText.trim()) return;
 
     setRegeneratingId(messageId);
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/rag/query`, {
         method: 'POST',
@@ -263,13 +267,15 @@ export function useAITutor(activeData, googleUser) {
 
       if (res.ok) {
         const data = await res.json();
+        const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
         const updatedMsg = {
           id: data.message_id || messageId || Date.now().toString(),
           sender: 'bot',
           text: data.answer,
           citations: data.citations || [],
           model: data.model || 'Groq GPT-OSS 120B',
-          web_sources: data.web_sources || []
+          web_sources: data.web_sources || [],
+          response_time_ms: elapsedMs
         };
 
         setChatMessages(prev => prev.map((m, i) => (i === botMsgIdx ? updatedMsg : m)));

@@ -26,6 +26,7 @@ import {
   ShieldAlert,
   RefreshCw
 } from 'lucide-react';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseSyllabusSpine({
   courseName,
@@ -42,6 +43,7 @@ export default function CourseSyllabusSpine({
   const [organizing, setOrganizing] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [organizeResponseTimeMs, setOrganizeResponseTimeMs] = useState(null);
 
   // New section form state (Tutor)
   const [showAddSection, setShowAddSection] = useState(false);
@@ -89,6 +91,8 @@ export default function CourseSyllabusSpine({
     setOrganizing(true);
     setError('');
     setNotice('');
+    setOrganizeResponseTimeMs(null);
+    const t0 = performance.now();
     try {
       const res = await fetch(`/api/course/${encodeURIComponent(courseName)}/syllabus/ai-organize`, {
         method: 'POST',
@@ -97,6 +101,9 @@ export default function CourseSyllabusSpine({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Failed to auto-organize syllabus');
+      setOrganizeResponseTimeMs(
+        data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0))
+      );
       setSections(data.sections || []);
       setNotice(`Auto-organized ${data.count || (data.sections || []).length} weekly curriculum modules!`);
     } catch (err) {
@@ -132,6 +139,7 @@ export default function CourseSyllabusSpine({
       setSecSummary('');
       setSecObjectives('');
       setShowAddSection(false);
+      setOrganizeResponseTimeMs(null);
       setNotice(`Added syllabus module "${data.section?.title}".`);
       fetchSyllabusAndCompletion();
     } catch (err) {
@@ -194,6 +202,7 @@ export default function CourseSyllabusSpine({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Failed to save Restrict Access rule');
+      setOrganizeResponseTimeMs(null);
       setNotice(`Saved Restrict Access prerequisite rule for "${data.rule?.target_title}".`);
       setShowRuleForm(false);
       fetchSyllabusAndCompletion();
@@ -306,9 +315,12 @@ export default function CourseSyllabusSpine({
         </Box>
 
         {notice && (
-          <Typography variant="body2" sx={{ mt: 1.5, color: '#10b981', fontWeight: 600 }}>
-            {notice}
-          </Typography>
+          <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="body2" sx={{ color: '#10b981', fontWeight: 600 }}>
+              {notice}
+            </Typography>
+            <ResponseTimeBadge ms={organizeResponseTimeMs} />
+          </Box>
         )}
         {error && (
           <Typography variant="body2" sx={{ mt: 1.5, color: '#ef4444', fontWeight: 600 }}>

@@ -17,6 +17,7 @@ import {
   Sliders
 } from 'lucide-react';
 import QuizSettingsSelector from './QuizSettingsSelector';
+import ResponseTimeBadge from '../../common/ResponseTimeBadge';
 
 export default function QuizBriefingCard({
   courseName,
@@ -37,6 +38,7 @@ export default function QuizBriefingCard({
   },
   onUpdateSettings,
   handleBackToOverview,
+  responseTimeMs = null,
   themeStyles = {}
 }) {
   const {
@@ -159,6 +161,11 @@ export default function QuizBriefingCard({
       <Typography variant="h5" sx={{ fontWeight: 800, color: textPrimary, mb: 1 }}>
         {courseName} Comprehensive Exam
       </Typography>
+      {Boolean(responseTimeMs) && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1.5 }}>
+          <ResponseTimeBadge ms={responseTimeMs} size="sm" prefix="Generated in" />
+        </Box>
+      )}
       <Typography variant="body2" sx={{ color: textSecondary, mb: 3.5, lineHeight: 1.6, maxWidth: 520, mx: 'auto' }}>
         The exam covers key theories, formulas, and proofs across all {lectureCount > 0 ? lectureCount : ''} lectures.
         {isTimed

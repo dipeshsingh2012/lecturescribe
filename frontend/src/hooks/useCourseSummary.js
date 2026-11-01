@@ -17,6 +17,7 @@ export default function useCourseSummary(courseName) {
     setLoading(true);
     setError(null);
 
+    const t0 = performance.now();
     try {
       let res;
       if (regenerate) {
@@ -36,7 +37,15 @@ export default function useCourseSummary(courseName) {
 
       const data = await res.json();
       const resolved = data?.summary || (data?.executive_summary ? data : null);
-      setSummaryData(resolved);
+      if (resolved) {
+        const elapsedMs =
+          resolved.response_time_ms ??
+          data?.response_time_ms ??
+          (regenerate ? Math.max(1, Math.round(performance.now() - t0)) : null);
+        setSummaryData(elapsedMs ? { ...resolved, response_time_ms: elapsedMs } : resolved);
+      } else {
+        setSummaryData(null);
+      }
     } catch (err) {
       console.error('Failed to load course summary:', err);
       setError(err.message || 'Unable to load course summary.');

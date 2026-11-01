@@ -288,6 +288,7 @@ def start_studio_session(
     3. Persists session in database with status='discussing'.
     """
     clean_course = db_manager.resolve_course_canonical_name((course_name or "").strip())
+    t_start = time.perf_counter()
     clean_prompt = (prompt or "").strip()
     clean_role = (role or "student").strip().lower()
     clean_email = (user_email or "").strip().lower() if user_email else None
@@ -336,6 +337,7 @@ def start_studio_session(
             "or do you have specific sections in mind? You can reply with adjustments or say **'Generate First Draft'** to begin drafting."
         )
 
+    response_time_ms = max(1, int(round((time.perf_counter() - t_start) * 1000)))
     initial_chat = [
         {
             "role": "user",
@@ -345,6 +347,7 @@ def start_studio_session(
         {
             "role": "assistant",
             "content": co_pilot_reply,
+            "response_time_ms": response_time_ms,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
     ]
@@ -371,6 +374,7 @@ def start_studio_session(
         "draft_markdown": "",
         "citations": citations,
         "selected_model": model_name,
+        "response_time_ms": response_time_ms,
         "record": record
     }
 
@@ -598,6 +602,7 @@ def studio_chat_turn(
     - Step 2: Ongoing Discussion & Scoping (if still in planning)
     """
     clean_msg = (user_message or "").strip()
+    t_start = time.perf_counter()
     record = db_manager.get_assignment_by_id(session_id)
     if not record:
         raise ValueError(f"Session with ID '{session_id}' not found.")
@@ -724,9 +729,11 @@ def studio_chat_turn(
         ai_reply = f"I encountered a temporary issue processing your request ({str(llm_err)[:120]}). Please click **'Preview'** or send your message again."
         current_status = "drafting" if current_draft.strip() else "discussing"
 
+    response_time_ms = max(1, int(round((time.perf_counter() - t_start) * 1000)))
     chat_history.append({
         "role": "assistant",
         "content": ai_reply,
+        "response_time_ms": response_time_ms,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
     })
 
@@ -748,6 +755,7 @@ def studio_chat_turn(
         "citations": citations,
         "selected_model": active_model,
         "studio_status": current_status,
+        "response_time_ms": response_time_ms,
         "record": updated_record
     }
 

@@ -44,6 +44,7 @@ import { formatRelativeTime, formatBytes, getFileTypeBadge } from '../../utils/f
 import { normalizeCourseSlug } from '../../utils/routing';
 import BookReaderModal from '../modals/BookReaderModal';
 import ResearchLiteratureModal from '../modals/ResearchLiteratureModal';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 const DEFAULT_SECTION_ORDER = ['notes', 'slides', 'books'];
 
@@ -109,6 +110,7 @@ export default function CourseLibrary({
   const [webSearchResults, setWebSearchResults] = useState([]);
   const [webSearchLoading, setWebSearchLoading] = useState(false);
   const [extractSuccessMsg, setExtractSuccessMsg] = useState('');
+  const [extractResponseTimeMs, setExtractResponseTimeMs] = useState(null);
   const [activeReaderBook, setActiveReaderBook] = useState(null);
   const [refreshingReadingId, setRefreshingReadingId] = useState(null);
 
@@ -195,9 +197,14 @@ export default function CourseLibrary({
   const handleExtractClick = async (regenerate = false) => {
     if (!triggerExtractReadings) return;
     setExtractSuccessMsg('');
+    setExtractResponseTimeMs(null);
+    const t0 = performance.now();
     const res = await triggerExtractReadings(exactCourseSlug || courseDisplayName, regenerate);
     if (res && res.status === 'success') {
       const added = res.newly_extracted_count || 0;
+      setExtractResponseTimeMs(
+        res.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0))
+      );
       setExtractSuccessMsg(
         regenerate
           ? `Regeneration complete! Extracted and verified ${res.count || 0} books afresh.`
@@ -860,6 +867,7 @@ export default function CourseLibrary({
               border: '1px solid rgba(16, 185, 129, 0.3)',
               display: 'flex',
               alignItems: 'center',
+              flexWrap: 'wrap',
               gap: 1.5,
               color: '#10b981'
             }}
@@ -868,6 +876,7 @@ export default function CourseLibrary({
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
               {extractSuccessMsg}
             </Typography>
+            <ResponseTimeBadge ms={extractResponseTimeMs} />
           </Paper>
         )}
 

@@ -54,6 +54,7 @@ export function useCourseTutor(courseName, userEmail = null) {
     setLoading(true);
     setError(null);
 
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/tutor/chat`, {
         method: 'POST',
@@ -71,12 +72,14 @@ export function useCourseTutor(courseName, userEmail = null) {
       }
 
       const data = await res.json();
+      const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
       const botMsg = {
         id: `msg_bot_${Date.now()}`,
         sender: 'bot',
         text: data.reply || 'No response generated.',
         citations: data.citations || [],
         model: data.model || '',
+        response_time_ms: elapsedMs,
         created_at: new Date().toISOString()
       };
 

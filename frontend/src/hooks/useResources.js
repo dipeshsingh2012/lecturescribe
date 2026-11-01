@@ -208,6 +208,7 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
     if (!cname) return { status: "error", error: "Course name required" };
     const slug = normalizeCourseSlug(cname) || cname;
     setIsExtractingReadings(true);
+    const t0 = performance.now();
     try {
       const url = `${API_BASE}/api/course/${encodeURIComponent(slug)}/extract-readings${regenerate ? '?regenerate=true' : ''}`;
       const res = await fetch(url, {
@@ -215,10 +216,11 @@ export function useResources(activeVideoId, selectedCourse, googleUser) {
       });
       if (res.ok) {
         const data = await res.json();
+        const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
         if (data.readings) {
           setCourseReadings(data.readings);
         }
-        return data;
+        return { ...data, response_time_ms: elapsedMs };
       }
     } catch (err) {
       console.error("Failed to extract course readings:", err);

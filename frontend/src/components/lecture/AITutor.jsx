@@ -20,6 +20,7 @@ import {
   X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export const TUTOR_QUICK_PROMPTS = [
   "What are the core concepts and definitions?",
@@ -771,6 +772,7 @@ export default function AITutor({
                         <Zap size={10} /> {msg.model}
                       </span>
                     )}
+                    <ResponseTimeBadge ms={msg.response_time_ms || msg.responseTimeMs} />
                     {msg.web_sources && msg.web_sources.length > 0 && (
                       <span style={{
                         display: 'inline-flex',

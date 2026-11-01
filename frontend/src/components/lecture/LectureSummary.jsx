@@ -16,6 +16,7 @@ import {
   X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 import LecturePodcastPlayer from './LecturePodcastPlayer';
 
 export default function LectureSummary({
@@ -34,6 +35,7 @@ export default function LectureSummary({
 
   const {
     currentSummary,
+    currentSummaryResponseTimeMs,
     viewMode,
     setViewMode,
     loading,
@@ -582,6 +584,8 @@ export default function LectureSummary({
               • {wordCount} words
             </span>
           )}
+
+          <ResponseTimeBadge ms={currentSummary?.responseTimeMs ?? currentSummary?.response_time_ms ?? currentSummaryResponseTimeMs} />
 
           {currentSummary && (
             <button

@@ -32,6 +32,7 @@ import {
   X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
 import PastQuizzesAccordion from './quiz/PastQuizzesAccordion';
 import QuizBriefingCard from './quiz/QuizBriefingCard';
@@ -60,6 +61,8 @@ export default function CourseQuiz({
   handleSelectLecture,
   currentTheme,
   detailedExplanations = {},
+  explanationResponseTimes = {},
+  quizResponseTimeMs = null,
   explanationLoading = {},
   expandedExplanation = {},
   setExpandedExplanation,
@@ -430,6 +433,7 @@ export default function CourseQuiz({
           quizSettings={quizSettings}
           onUpdateSettings={updateQuizSettings || setQuizSettings}
           handleBackToOverview={handleBackToOverview}
+          responseTimeMs={quizData?.response_time_ms ?? quizData?.responseTimeMs ?? quizResponseTimeMs}
           themeStyles={themeStyles}
         />
       </Box>
@@ -681,6 +685,7 @@ export default function CourseQuiz({
                 }}
               />
             )}
+            <ResponseTimeBadge ms={quizData?.response_time_ms ?? quizData?.responseTimeMs ?? quizResponseTimeMs} size="sm" />
           </Box>
           <Typography variant="caption" sx={{ color: textSecondary }}>
             Question {currentIdx + 1} of {totalQuestions} • {answeredCount} marked • {totalQuestions - answeredCount} remaining
@@ -1147,17 +1152,20 @@ export default function CourseQuiz({
                       <CircularProgress size={14} sx={{ color: primaryColor }} />
                     )}
                     {detailedExplanations[currentQ.id] && !explanationLoading[currentQ.id] && (
-                      <Chip
-                        label="Ready"
-                        size="small"
-                        sx={{
-                          height: 20,
-                          fontSize: '0.65rem',
-                          fontWeight: 700,
-                          bgcolor: 'rgba(16, 185, 129, 0.15)',
-                          color: '#10b981'
-                        }}
-                      />
+                      <>
+                        <Chip
+                          label="Ready"
+                          size="small"
+                          sx={{
+                            height: 20,
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            bgcolor: 'rgba(16, 185, 129, 0.15)',
+                            color: '#10b981'
+                          }}
+                        />
+                        <ResponseTimeBadge ms={explanationResponseTimes[currentQ.id]} />
+                      </>
                     )}
                   </Box>
                 </AccordionSummary>

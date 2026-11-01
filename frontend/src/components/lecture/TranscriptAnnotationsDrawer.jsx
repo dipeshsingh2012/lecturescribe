@@ -18,6 +18,7 @@ import {
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp, parseTimestampToSeconds } from '../../utils/formatters';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function TranscriptAnnotationsDrawer({
   open,
@@ -207,6 +208,7 @@ export default function TranscriptAnnotationsDrawer({
     if (!textToExplain) return;
     setExplainingId(item.id);
     setDeleteError(null);
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/explain-selection`, {
         method: 'POST',
@@ -224,12 +226,14 @@ export default function TranscriptAnnotationsDrawer({
       }
       const data = await res.json();
       const explanation = data.explanation;
+      const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
       if (explanation) {
         if (typeof onUpdateAnnotation === 'function') {
           await onUpdateAnnotation(item.id, item.noteText || item.note_text || explanation, {
             ai_response: explanation,
             ai_prompt: promptType,
-            annotation_type: 'ai_explanation'
+            annotation_type: 'ai_explanation',
+            response_time_ms: elapsedMs
           });
         } else if (videoId) {
           await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/annotations/${item.id}`, {
@@ -238,7 +242,8 @@ export default function TranscriptAnnotationsDrawer({
             body: JSON.stringify({
               ai_response: explanation,
               ai_prompt: promptType,
-              annotation_type: 'ai_explanation'
+              annotation_type: 'ai_explanation',
+              response_time_ms: elapsedMs
             })
           });
         }
@@ -870,8 +875,9 @@ export default function TranscriptAnnotationsDrawer({
                     lineHeight: 1.5
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#a855f7', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#a855f7', display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
                         <Sparkles size={11} /> AI Explanation
+                        <ResponseTimeBadge ms={item.responseTimeMs || item.response_time_ms} />
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         {typeof onDiscussInTutor === 'function' && (

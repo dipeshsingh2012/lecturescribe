@@ -6,6 +6,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
   const email = userEmail || activeData?.user_email || null;
 
   const [summaries, setSummaries] = useState({});
+  const [summaryResponseTimes, setSummaryResponseTimes] = useState({});
   const [activeSummaryType, setActiveSummaryType] = useState('comprehensive');
   const [viewMode, setViewMode] = useState('study'); // 'study' | 'submission'
   const [loading, setLoading] = useState(false);
@@ -66,6 +67,7 @@ export default function useLectureSummary(activeData, userEmail = null) {
     setGenerating(true);
     setError(null);
 
+    const t0 = performance.now();
     try {
       const payload = {
         video_id: videoId,
@@ -89,6 +91,17 @@ export default function useLectureSummary(activeData, userEmail = null) {
 
       const data = await res.json();
       if (data.summary) {
+        const elapsedMs =
+          data.summary.response_time_ms ??
+          data.summary.responseTimeMs ??
+          data.response_time_ms ??
+          (!data.cached ? Math.max(1, Math.round(performance.now() - t0)) : null);
+        if (elapsedMs) {
+          setSummaryResponseTimes(prev => ({
+            ...prev,
+            [summaryType]: elapsedMs
+          }));
+        }
         setSummaries(prev => ({
           ...prev,
           [summaryType]: data.summary
@@ -221,6 +234,11 @@ export default function useLectureSummary(activeData, userEmail = null) {
   return {
     summaries,
     currentSummary,
+    currentSummaryResponseTimeMs:
+      currentSummary?.responseTimeMs ??
+      currentSummary?.response_time_ms ??
+      (currentSummary ? summaryResponseTimes[currentSummary.summaryType || activeSummaryType] : null) ??
+      null,
     activeSummaryType,
     setActiveSummaryType,
     viewMode,

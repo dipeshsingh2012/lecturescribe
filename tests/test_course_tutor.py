@@ -161,6 +161,9 @@ class TestCourseTutor(unittest.TestCase):
             self.assertIn("Convolutional layers", data["reply"])
             self.assertEqual(len(data["citations"]), 1)
             self.assertEqual(data["citations"][0]["timestamp"], "14:20")
+            self.assertIn("response_time_ms", data)
+            self.assertIsInstance(data["response_time_ms"], int)
+            self.assertGreaterEqual(data["response_time_ms"], 1)
 
             # 2. GET history
             hist_res = self.client.get(f"/api/course/{course}/tutor/history?user_email={user}")

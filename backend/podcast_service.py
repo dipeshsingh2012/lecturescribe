@@ -392,11 +392,13 @@ def create_or_refresh_podcast(
         _active_generations.add(key)
 
     try:
+        t_start = time.perf_counter()
         # Pure 2-layer SLM pipeline (Writer SLM -> Voice Director SLM)
         script = generate_podcast_script_2layer(title=title, text=text, mode=clean_mode)
 
         # Synthesize audio with Google Cloud TTS
         audio_bytes = synthesize_speech_google(script)
+        response_time_ms = max(1, int(round((time.perf_counter() - t_start) * 1000)))
 
         metadata = {
             "exists": True,
@@ -405,6 +407,7 @@ def create_or_refresh_podcast(
             "title": title,
             "script": script,
             "file_size": len(audio_bytes),
+            "response_time_ms": response_time_ms,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "status": "ready"
         }

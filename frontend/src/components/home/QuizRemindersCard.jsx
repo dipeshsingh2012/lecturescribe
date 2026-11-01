@@ -20,6 +20,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function QuizRemindersCard({
   currentTheme,
@@ -251,6 +252,7 @@ export default function QuizRemindersCard({
                       border: '1px solid rgba(16, 185, 129, 0.25)'
                     }}
                   />
+                  <ResponseTimeBadge ms={quiz.response_time_ms || quiz.responseTimeMs} />
                 </Box>
 
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 0.8 }}>

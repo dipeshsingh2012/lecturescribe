@@ -378,4 +378,40 @@ describe('useAITutor hook functionality', () => {
     expect(deletedUrl).toContain('video_id=v123');
     expect(deletedUrl).toContain('email=student%40example.com');
   });
+
+  it('records response_time_ms on bot messages during handleSendMessage and regenerateResponse', async () => {
+    let callIdx = 0;
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/rag/query')) {
+        callIdx += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            answer: callIdx === 1 ? 'Initial answer' : 'Regenerated answer',
+            submission_text: 'Submission text',
+            response_time_ms: callIdx === 1 ? 1850 : 920
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+    });
+
+    const { result } = renderHook(() => useAITutor({ videoId: 'v10' }, null));
+
+    await act(async () => {
+      await result.current.handleSendMessage('What is PCA?');
+    });
+
+    const botMsg = result.current.chatMessages.find((m) => m.sender === 'bot');
+    expect(botMsg).toBeDefined();
+    expect(botMsg.response_time_ms).toBe(1850);
+
+    await act(async () => {
+      await result.current.regenerateResponse(botMsg.id);
+    });
+
+    const updatedBotMsg = result.current.chatMessages.find((m) => m.id === botMsg.id);
+    expect(updatedBotMsg.text).toBe('Regenerated answer');
+    expect(updatedBotMsg.response_time_ms).toBe(920);
+  });
 });

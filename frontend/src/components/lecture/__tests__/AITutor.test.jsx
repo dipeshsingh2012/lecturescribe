@@ -521,4 +521,35 @@ describe('AITutor', () => {
 
     expect(scrollIntoViewMock).toHaveBeenCalled();
   });
+
+  it('displays formatted AI response time badge on bot messages with response_time_ms', () => {
+    render(
+      <AITutor
+        chatMessages={[
+          { id: 'u1', sender: 'user', text: 'Explain SVD' },
+          {
+            id: 'b1',
+            sender: 'bot',
+            text: 'Singular Value Decomposition factorizes a matrix into three matrices.',
+            response_time_ms: 2430
+          },
+          {
+            id: 'b2',
+            sender: 'bot',
+            text: 'Fast cached follow-up answer.',
+            responseTimeMs: 380
+          }
+        ]}
+        chatLoading={false}
+        chatInput=""
+        setChatInput={vi.fn()}
+        handleSendMessage={vi.fn()}
+      />
+    );
+
+    const badges = screen.getAllByTestId('ai-response-time');
+    expect(badges).toHaveLength(2);
+    expect(badges[0]).toHaveTextContent('2.4s');
+    expect(badges[1]).toHaveTextContent('380ms');
+  });
 });

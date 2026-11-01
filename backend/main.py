@@ -262,6 +262,7 @@ class CreateAnnotationRequest(BaseModel):
     note_text: Optional[str] = Field(default=None, validation_alias=AliasChoices("note_text", "noteText"))
     ai_prompt: Optional[str] = Field(default=None, validation_alias=AliasChoices("ai_prompt", "aiPrompt"))
     ai_response: Optional[str] = Field(default=None, validation_alias=AliasChoices("ai_response", "aiResponse"))
+    response_time_ms: Optional[int] = Field(default=None, validation_alias=AliasChoices("response_time_ms", "responseTimeMs"))
 
 
 class ExplainSelectionRequest(BaseModel):
@@ -894,6 +895,7 @@ def generate_lecture_quiz_endpoint(
 
     # Generate with LLM (No Fallbacks) with continuous feedback guidance
     feedback_guidance = db_manager.get_learned_generation_guidance("lecture", clean_vid)
+    t_quiz = time.perf_counter()
     try:
         quiz_data = pinecone_rag_engine.generate_lecture_quiz(
             video_id=clean_vid,
@@ -902,6 +904,8 @@ def generate_lecture_quiz_endpoint(
             num_questions=target_count,
             feedback_guidance=feedback_guidance
         )
+        quiz_data = dict(quiz_data)
+        quiz_data["response_time_ms"] = max(1, int(round((time.perf_counter() - t_quiz) * 1000)))
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -1056,6 +1060,7 @@ def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
     cues = saved.get("cues", [])
 
     # 3. Generate detailed explanation using RAG
+    t_exp = time.perf_counter()
     try:
         explanation_data = pinecone_rag_engine.generate_detailed_quiz_explanation(
             video_id=clean_vid,
@@ -1067,6 +1072,8 @@ def get_detailed_quiz_explanation(video_id: str, req: QuizExplanationRequest):
             timestamp=req.timestamp,
             cues=cues
         )
+        explanation_data = dict(explanation_data)
+        explanation_data["response_time_ms"] = max(1, int(round((time.perf_counter() - t_exp) * 1000)))
 
         # 4. Save to database
         db_manager.save_quiz_explanation(
@@ -1261,6 +1268,7 @@ def generate_and_store_comprehensive_summary(
     if not transcript:
         raise ValueError(f"No transcript text available for video {video_id}.")
 
+    t_sum = time.perf_counter()
     res = pinecone_rag_engine.generate_full_transcript_summary(
         transcript_str=transcript,
         lecture_title=title,
@@ -1287,6 +1295,7 @@ def generate_and_store_comprehensive_summary(
     submission_text = pinecone_rag_engine._clean_for_submission(
         submission_text or markdown_text, preserve_paragraphs=True
     )
+    response_time_ms = max(1, int(round((time.perf_counter() - t_sum) * 1000)))
 
     saved = db_manager.save_lecture_summary(
         video_id=video_id,
@@ -1297,6 +1306,7 @@ def generate_and_store_comprehensive_summary(
         word_count=len([w for w in submission_text.split() if w]),
         model=res.get("model") or "",
         user_email=user_email,
+        response_time_ms=response_time_ms,
     )
     if not saved:
         return None
@@ -1307,7 +1317,10 @@ def generate_and_store_comprehensive_summary(
     except Exception as p_err:
         logger.warning(f"⚠️ [Quiz Predictor Ingestion Notice] {video_id}: {p_err}")
 
-    return db_manager.get_lecture_summary(video_id, "comprehensive", user_email=user_email)
+    fetched = db_manager.get_lecture_summary(video_id, "comprehensive", user_email=user_email)
+    if isinstance(fetched, dict) and not fetched.get("response_time_ms"):
+        fetched = {**fetched, "response_time_ms": response_time_ms, "responseTimeMs": response_time_ms}
+    return fetched
 
 
 def predict_and_store_quizzes(
@@ -1847,7 +1860,7 @@ def create_transcript_annotation_endpoint(video_id: str, req: CreateAnnotationRe
     if not req.selected_text or not req.selected_text.strip():
         raise HTTPException(status_code=400, detail="Selected text is required.")
 
-    annotation = db_manager.add_annotation(
+    add_kwargs = dict(
         video_id=vid,
         user_email=req.user_email or "anonymous",
         selected_text=req.selected_text.strip(),
@@ -1858,8 +1871,11 @@ def create_transcript_annotation_endpoint(video_id: str, req: CreateAnnotationRe
         color=req.color,
         note_text=req.note_text,
         ai_prompt=req.ai_prompt,
-        ai_response=req.ai_response
+        ai_response=req.ai_response,
     )
+    if req.response_time_ms is not None:
+        add_kwargs["response_time_ms"] = req.response_time_ms
+    annotation = db_manager.add_annotation(**add_kwargs)
     if not annotation:
         raise HTTPException(status_code=500, detail="Failed to save annotation.")
 
@@ -1884,11 +1900,14 @@ def delete_transcript_annotation_endpoint(
 
 
 class UpdateAnnotationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     note_text: Optional[str] = None
     ai_prompt: Optional[str] = None
     ai_response: Optional[str] = None
     annotation_type: Optional[str] = None
     user_email: Optional[str] = None
+    response_time_ms: Optional[int] = Field(default=None, validation_alias=AliasChoices("response_time_ms", "responseTimeMs"))
 
 
 @app.patch("/api/lecture/{video_id}/annotations/{annotation_id}")
@@ -1902,14 +1921,17 @@ def update_transcript_annotation_endpoint(
     has_ai = req.ai_response is not None and req.ai_response.strip() != ""
     if not has_note and not has_ai and not req.annotation_type:
         raise HTTPException(status_code=400, detail="Updated note text or AI response cannot be empty.")
-    updated = db_manager.update_annotation(
+    upd_kwargs = dict(
         annotation_id=annotation_id,
         note_text=req.note_text.strip() if req.note_text is not None else None,
         ai_prompt=req.ai_prompt.strip() if req.ai_prompt is not None else None,
         ai_response=req.ai_response.strip() if req.ai_response is not None else None,
         annotation_type=req.annotation_type.strip() if req.annotation_type is not None else None,
-        user_email=req.user_email
+        user_email=req.user_email,
     )
+    if req.response_time_ms is not None:
+        upd_kwargs["response_time_ms"] = req.response_time_ms
+    updated = db_manager.update_annotation(**upd_kwargs)
     if not updated:
         raise HTTPException(status_code=404, detail="Annotation not found.")
     return {"status": "success", "annotation": updated}
@@ -1935,6 +1957,7 @@ def explain_selection_endpoint(video_id: str, req: ExplainSelectionRequest):
         ]
         context_window = " ".join(nearby)
 
+    t_exp = time.perf_counter()
     explanation = explain_selected_transcript_text(
         selected_text=req.selected_text.strip(),
         prompt_type=req.prompt_type or "explain",
@@ -1942,13 +1965,15 @@ def explain_selection_endpoint(video_id: str, req: ExplainSelectionRequest):
         lecture_title=title,
         context_window=context_window
     )
+    response_time_ms = max(1, int(round((time.perf_counter() - t_exp) * 1000)))
 
     return {
         "status": "success",
         "video_id": vid,
         "selected_text": req.selected_text.strip(),
         "prompt_type": req.prompt_type,
-        "explanation": explanation
+        "explanation": explanation,
+        "response_time_ms": response_time_ms,
     }
 
 
@@ -2003,17 +2028,20 @@ def trigger_lecture_quiz_prediction_endpoint(video_id: str):
     saved = db_manager.get_saved_video(vid)
     if not saved or not saved.get("cues"):
         raise HTTPException(status_code=404, detail=f"No cues found for lecture {vid}.")
+    t_pred = time.perf_counter()
     quizzes = predict_and_store_quizzes(
         vid,
         saved.get("title", f"Lecture {vid}"),
         saved["cues"],
         course_name=saved.get("course_name"),
     )
+    response_time_ms = max(1, int(round((time.perf_counter() - t_pred) * 1000)))
     return {
         "status": "success",
         "video_id": vid,
         "count": len(quizzes),
-        "quizzes": quizzes
+        "quizzes": quizzes,
+        "response_time_ms": response_time_ms,
     }
 
 
@@ -2035,6 +2063,7 @@ def trigger_transcript_review_endpoint(video_id: str, req: ReviewTranscriptReque
     job_id = db_manager.create_review_job(vid, review_mode=req.review_mode or "audio_grounded")
 
     audio_path = None
+    t_rev = time.perf_counter()
     try:
         audio_path = resolve_lecture_audio_file(vid, course_name=saved.get("course_name"))
         suggestions = review_transcript_cues(
@@ -2043,16 +2072,20 @@ def trigger_transcript_review_endpoint(video_id: str, req: ReviewTranscriptReque
             audio_path=audio_path,
             review_mode=req.review_mode or "audio_grounded"
         )
+        response_time_ms = max(1, int(round((time.perf_counter() - t_rev) * 1000)))
         saved_suggs = db_manager.save_review_suggestions(job_id, vid, suggestions)
-        db_manager.update_review_job(job_id, "completed")
+        db_manager.update_review_job(job_id, "completed", response_time_ms=response_time_ms)
+        job_obj = db_manager.get_review_job(job_id=job_id, video_id=vid)
         return {
             "status": "completed",
             "job_id": job_id,
+            "job": job_obj,
             "video_id": vid,
             "review_mode": req.review_mode,
             "audio_verified": bool(audio_path is not None),
             "count": len(saved_suggs),
-            "suggestions": saved_suggs
+            "suggestions": saved_suggs,
+            "response_time_ms": response_time_ms,
         }
     except Exception as e:
         db_manager.update_review_job(job_id, "failed", error_message=str(e))
@@ -2219,7 +2252,10 @@ def rag_query(req: RAGQueryRequest):
             elapsed = time.time() - t_start
             print(f"⚡ [API /api/rag/query Cache HIT] Returned from Hosted Redis in {elapsed*1000:.2f}ms")
             print("=" * 60 + "\n")
-            return cached_result
+            cached_out = dict(cached_result)
+            if not cached_out.get("response_time_ms"):
+                cached_out["response_time_ms"] = max(1, int(round(elapsed * 1000)))
+            return cached_out
 
     # 2. Direct Conversational RAG Query (Router Decoupled)
     print("🔍 [API /api/rag/query] Executing conversational RAG via Hybrid Search + RRF pipeline")
@@ -2269,6 +2305,10 @@ def rag_query(req: RAGQueryRequest):
         result["submission_text"] = ""
         result["submission_word_count"] = 0
 
+    elapsed = time.time() - t_start
+    response_time_ms = max(1, int(round(elapsed * 1000)))
+    result["response_time_ms"] = response_time_ms
+
     if req.video_id:
         try:
             db_manager.save_chat_log(
@@ -2279,7 +2319,8 @@ def rag_query(req: RAGQueryRequest):
                 user_email=req.user_email,
                 submission_text=result.get("submission_text", ""),
                 model=result.get("model", ""),
-                web_sources=result.get("web_sources", [])
+                web_sources=result.get("web_sources", []),
+                response_time_ms=response_time_ms,
             )
         except Exception as e:
             print(f"⚠️ [Chat Log Notice]: {e}")
@@ -2288,7 +2329,6 @@ def rag_query(req: RAGQueryRequest):
     if req.video_id and redis_cache:
         redis_cache.set_query(req.video_id, req.query, "auto", result)
 
-    elapsed = time.time() - t_start
     print(f"✅ [API /api/rag/query] Completed in {elapsed:.2f}s | Citations: {len(result.get('citations', []))} | Model: {result.get('model')}")
     print("=" * 60 + "\n")
     return result
@@ -2335,6 +2375,7 @@ def process_chat_message(
                 "model": cached_result.get("model", ""),
                 "submission_text": cached_result.get("submission_text", ""),
                 "submission_word_count": cached_result.get("submission_word_count", 0),
+                "response_time_ms": cached_result.get("response_time_ms") or max(1, int(round(elapsed * 1000))),
                 "cached": True
             }
 
@@ -2391,6 +2432,9 @@ def process_chat_message(
         except Exception as e:
             print(f"⚠️ [Submission Gen Notice]: {e}")
 
+    elapsed = time.time() - t_start
+    response_time_ms = max(1, int(round(elapsed * 1000)))
+
     # Save to Chat History DB
     if save_to_db:
         try:
@@ -2402,7 +2446,8 @@ def process_chat_message(
                 user_email=user_email,
                 submission_text=sub_text,
                 model=rag_res.get("model", ""),
-                web_sources=rag_res.get("web_sources", [])
+                web_sources=rag_res.get("web_sources", []),
+                response_time_ms=response_time_ms,
             )
         except Exception as e:
             print(f"⚠️ [Chat Log Notice]: {e}")
@@ -2416,12 +2461,12 @@ def process_chat_message(
             "model": rag_res.get("model", ""),
             "submission_text": sub_text,
             "submission_word_count": sub_word_count,
+            "response_time_ms": response_time_ms,
             "lecture_title": title,
             "video_id": vid
         }
         redis_cache.set_query(vid, user_prompt, "auto", cache_data)
 
-    elapsed = time.time() - t_start
     print(f"✅ [Chat Engine] Completed in {elapsed:.2f}s | Citations: {len(citations)} | Model: {rag_res.get('model')}")
     print("=" * 60 + "\n")
 
@@ -2431,7 +2476,8 @@ def process_chat_message(
         "web_sources": rag_res.get("web_sources", []),
         "model": rag_res.get("model", ""),
         "submission_text": sub_text,
-        "submission_word_count": sub_word_count
+        "submission_word_count": sub_word_count,
+        "response_time_ms": response_time_ms,
     }
 
 
@@ -2525,11 +2571,15 @@ def condense_for_submission(req: SubmissionRequest):
     """Condense learning answer into an authentic 100-150 word academic submission."""
     if not req.original_text.strip():
         raise HTTPException(status_code=400, detail="original_text cannot be empty")
-    return pinecone_rag_engine.generate_submission_version(
+    t_sub = time.perf_counter()
+    res = pinecone_rag_engine.generate_submission_version(
         original_text=req.original_text,
         video_id=req.video_id or "",
         word_count=req.word_count or 120
     )
+    res = dict(res)
+    res["response_time_ms"] = max(1, int(round((time.perf_counter() - t_sub) * 1000)))
+    return res
 
 
 # ==============================================================================
@@ -2545,7 +2595,9 @@ def regenerate_summary(req: RegenerateSummaryRequest):
         raise HTTPException(status_code=404, detail=f"No cues found in database for video {video_id}.")
 
     title = saved.get("title", f"Lecture {video_id}")
+    t_regen = time.perf_counter()
     new_summary = generate_summary_sections(saved["cues"], title)
+    response_time_ms = max(1, int(round((time.perf_counter() - t_regen) * 1000)))
 
     # Persist updated dynamic summary to PostgreSQL
     db_manager.update_summary_sections(video_id, new_summary)
@@ -2570,7 +2622,8 @@ def regenerate_summary(req: RegenerateSummaryRequest):
         "status": "success",
         "video_id": video_id,
         "title": title,
-        "summarySections": new_summary
+        "summarySections": new_summary,
+        "response_time_ms": response_time_ms,
     }
 
 
@@ -2677,6 +2730,7 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
         "status": "success",
         "video_id": vid,
         "summary": stored,
+        "response_time_ms": stored.get("response_time_ms") or stored.get("responseTimeMs"),
         "cached": False
     }
 
@@ -2866,7 +2920,8 @@ def generate_lecture_podcast_endpoint(
         )
         return {
             "status": "success",
-            "data": meta
+            "data": meta,
+            "response_time_ms": meta.get("response_time_ms") if isinstance(meta, dict) else None,
         }
     except Exception as e:
         logger.error(f"[Podcast API] Generation error for '{clean_vid}': {e}", exc_info=True)
@@ -3257,6 +3312,7 @@ def get_or_generate_course_quiz(
 
     # 5. Generate Course Quiz (No Fallbacks) with continuous feedback guidance
     feedback_guidance = db_manager.get_learned_generation_guidance("course", course_slug)
+    t_cquiz = time.perf_counter()
     try:
         quiz_data = pinecone_rag_engine.generate_course_quiz(
             course_name=canonical_title,
@@ -3267,12 +3323,14 @@ def get_or_generate_course_quiz(
             question_types=req_types,
             time_limit_minutes=req_time_limit
         )
+        quiz_data = dict(quiz_data)
         quiz_id = f"cquiz_{course_slug}_{req_difficulty}_{int(time.time())}"
         quiz_data["quiz_id"] = quiz_id
         quiz_data["difficulty"] = req_difficulty
         quiz_data["question_types"] = req_types
         quiz_data["timed"] = is_timed
         quiz_data["time_limit_minutes"] = req_time_limit
+        quiz_data["response_time_ms"] = max(1, int(round((time.perf_counter() - t_cquiz) * 1000)))
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -3447,11 +3505,14 @@ def get_or_generate_course_summary(
         )
 
     # 5. Generate Course Summary
+    t_csum = time.perf_counter()
     try:
         summary_data = pinecone_rag_engine.generate_course_summary(
             course_name=canonical_title,
             lectures_data=lectures_with_summaries
         )
+        summary_data = dict(summary_data)
+        summary_data["response_time_ms"] = max(1, int(round((time.perf_counter() - t_csum) * 1000)))
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -3544,6 +3605,7 @@ def get_detailed_course_quiz_explanation(course_name: str, req: CourseQuizExplan
                         cues.extend(v_saved["cues"][:15])
 
     # 3. Generate detailed explanation using RAG
+    t_cexp = time.perf_counter()
     try:
         explanation_data = pinecone_rag_engine.generate_detailed_quiz_explanation(
             video_id=target_vid or course_slug,
@@ -3555,6 +3617,8 @@ def get_detailed_course_quiz_explanation(course_name: str, req: CourseQuizExplan
             timestamp=req.timestamp or "00:00",
             cues=cues
         )
+        explanation_data = dict(explanation_data)
+        explanation_data["response_time_ms"] = max(1, int(round((time.perf_counter() - t_cexp) * 1000)))
 
         # 4. Save to database
         db_manager.save_course_quiz_explanation(
@@ -3619,6 +3683,7 @@ def course_tutor_chat(course_name: str, req: CourseTutorChatRequest):
     if not prompt:
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
+    t_ctut = time.perf_counter()
     try:
         res = pinecone_rag_engine.query_course_rag(
             query=prompt,
@@ -3626,6 +3691,9 @@ def course_tutor_chat(course_name: str, req: CourseTutorChatRequest):
             user_email=req.user_email,
             chat_history=req.chat_history
         )
+        res = dict(res)
+        response_time_ms = max(1, int(round((time.perf_counter() - t_ctut) * 1000)))
+        res["response_time_ms"] = response_time_ms
     except Exception as e:
         print(f"❌ [Course Tutor Error]: {e}")
         raise HTTPException(status_code=500, detail=f"Course Tutor query failed: {str(e)}")
@@ -3638,7 +3706,8 @@ def course_tutor_chat(course_name: str, req: CourseTutorChatRequest):
             ai_reply=res.get("reply", ""),
             citations=res.get("citations", []),
             user_email=req.user_email,
-            model=res.get("model", "")
+            model=res.get("model", ""),
+            response_time_ms=response_time_ms,
         )
     except Exception as e:
         print(f"⚠️ [Course Chat Save Notice]: {e}")
@@ -4142,6 +4211,7 @@ def extract_course_readings(course_name: str, regenerate: bool = Query(False, de
         raise HTTPException(status_code=400, detail="course_name is required.")
 
     logger.info(f"[ExtractReadings] === Initiating reading extraction for course '{raw_name}' (regenerate={regenerate}) ===")
+    t_read = time.perf_counter()
     try:
         cname = db_manager.resolve_course_canonical_name(raw_name)
         slug_norm = to_course_slug(raw_name)
@@ -4318,12 +4388,14 @@ def extract_course_readings(course_name: str, regenerate: bool = Query(False, de
             f"[ExtractReadings] Extraction complete for '{cname}'. "
             f"Newly extracted: {len(saved_items)}, Total in catalog: {len(all_readings)}"
         )
+        response_time_ms = max(1, int(round((time.perf_counter() - t_read) * 1000)))
         return {
             "status": "success",
             "course_name": cname,
             "newly_extracted_count": len(saved_items),
             "readings": all_readings,
-            "count": len(all_readings)
+            "count": len(all_readings),
+            "response_time_ms": response_time_ms,
         }
     except Exception as e:
         full_err = traceback.format_exc()
@@ -5076,6 +5148,7 @@ def extract_calendar_from_pdf_endpoint(
     if not pdf_bytes:
         raise HTTPException(status_code=400, detail="Uploaded PDF file is empty.")
 
+    t_pdf = time.perf_counter()
     try:
         extracted = extract_calendar_events_from_pdf(
             pdf_bytes=pdf_bytes,
@@ -5086,12 +5159,14 @@ def extract_calendar_from_pdf_endpoint(
             auto_save=auto_save,
             approval_status="approved",
         )
+        response_time_ms = max(1, int(round((time.perf_counter() - t_pdf) * 1000)))
         return {
             "status": "success",
             "filename": filename,
             "auto_saved": auto_save,
             "count": len(extracted),
             "events": extracted,
+            "response_time_ms": response_time_ms,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to extract dates from PDF: {str(e)}")
@@ -5103,6 +5178,7 @@ def extract_calendar_from_transcript_endpoint(payload: Dict[str, Any]):
     Scan a specific lecture transcript (`video_id`) or all lectures in a course (`course_name`)
     for verbal announcements of exams, quizzes, assignment deadlines, or class schedule changes.
     """
+    t_scan = time.perf_counter()
     video_id = str(payload.get("video_id") or "").strip()
     course_name = str(payload.get("course_name") or "").strip()
     user_email = str(payload.get("user_email") or "").strip()
@@ -5152,12 +5228,14 @@ def extract_calendar_from_transcript_endpoint(payload: Dict[str, Any]):
         )
         extracted_all.extend(evts)
 
+    response_time_ms = max(1, int(round((time.perf_counter() - t_scan) * 1000)))
     return {
         "status": "success",
         "scanned_lectures": len(videos_to_scan),
         "auto_saved": auto_save,
         "count": len(extracted_all),
         "events": extracted_all,
+        "response_time_ms": response_time_ms,
     }
 
 
@@ -6254,7 +6332,9 @@ def ai_speedgrade_submission_endpoint(
     if not target_sub:
         raise HTTPException(status_code=404, detail=f"Submission '{submission_id}' not found.")
 
+    t_grade = time.perf_counter()
     ai_eval = evaluate_student_submission_with_ai(asgn, target_sub)
+    response_time_ms = ai_eval.get("response_time_ms") or max(1, int(round((time.perf_counter() - t_grade) * 1000)))
     updated = db_manager.grade_assignment_submission(
         submission_id=submission_id.strip(),
         score=ai_eval["ai_suggested_score"] if apply_grade else target_sub.get("score"),
@@ -6263,11 +6343,13 @@ def ai_speedgrade_submission_endpoint(
         ai_feedback=ai_eval["ai_feedback"],
         graded_by_email=actor_email,
         apply_grade=apply_grade,
+        response_time_ms=response_time_ms,
     )
     return {
         "status": "success",
         "submission": updated,
         "ai_evaluation": ai_eval,
+        "response_time_ms": response_time_ms,
     }
 
 
@@ -6537,6 +6619,7 @@ def generate_ai_ta_forum_reply_endpoint(
 
     ai_body = ""
     citations: List[Dict[str, Any]] = []
+    t_ta = time.perf_counter()
     try:
         from backend.course_rag_service import course_rag_service
         rag_res = course_rag_service.query_course(clean_course, prompt_text)
@@ -6560,6 +6643,7 @@ def generate_ai_ta_forum_reply_endpoint(
             f"*(An instructor can endorse or expand on this response below.)*"
         )
 
+    response_time_ms = max(1, int(round((time.perf_counter() - t_ta) * 1000)))
     reply = db_manager.add_forum_reply(
         thread_id=thread_id.strip(),
         author_email="ai-ta@lecturescribe.ai",
@@ -6568,8 +6652,9 @@ def generate_ai_ta_forum_reply_endpoint(
         body=ai_body,
         is_ai_generated=True,
         citations=citations,
+        response_time_ms=response_time_ms,
     )
-    return {"status": "success", "reply": reply}
+    return {"status": "success", "reply": reply, "response_time_ms": response_time_ms}
 
 
 @app.patch("/api/course/{course_name}/forum/{thread_id}/endorse/{reply_id}")
@@ -6766,6 +6851,7 @@ def ai_generate_question_bank_endpoint(
     """Generate Bloom's Taxonomy-aligned questions for the Question Bank from lecture transcripts."""
     if req.actor_email:
         require_tutor_role(req.actor_email, course_name, action_label="generate AI Question Bank items")
+    t_qb = time.perf_counter()
     generated = db_manager.generate_questions_for_bank(
         course_name=course_name.strip(),
         video_id=req.video_id,
@@ -6775,7 +6861,13 @@ def ai_generate_question_bank_endpoint(
         bloom_level=req.bloom_level,
         created_by_email=req.actor_email or "",
     )
-    return {"status": "success", "generated_count": len(generated), "questions": generated}
+    response_time_ms = max(1, int(round((time.perf_counter() - t_qb) * 1000)))
+    return {
+        "status": "success",
+        "generated_count": len(generated),
+        "questions": generated,
+        "response_time_ms": response_time_ms,
+    }
 
 
 @app.post("/api/course/{course_name}/question-bank/publish-quiz")
@@ -6868,12 +6960,15 @@ def ai_auto_organize_syllabus_endpoint(
     """Auto-organize course lectures, readings, assignments, and exams into weekly curriculum modules."""
     if req and req.actor_email:
         require_tutor_role(req.actor_email, course_name, action_label="auto-organize the course syllabus")
+    t_org = time.perf_counter()
     sections = db_manager.ai_auto_organize_course_syllabus(course_name.strip())
+    response_time_ms = max(1, int(round((time.perf_counter() - t_org) * 1000)))
     return {
         "status": "success",
         "course_name": course_name.strip(),
         "count": len(sections),
         "sections": sections,
+        "response_time_ms": response_time_ms,
     }
 
 
@@ -6961,6 +7056,7 @@ def ai_generate_course_rubric_endpoint(
     """Generate a 2D Criterion x Level Grading Rubric with AI."""
     if req.actor_email:
         require_tutor_role(req.actor_email, course_name, action_label="generate AI grading rubrics")
+    t_rub = time.perf_counter()
     rubric = db_manager.ai_generate_assignment_rubric(
         course_name=course_name.strip(),
         assignment_id=req.assignment_id,
@@ -6968,7 +7064,8 @@ def ai_generate_course_rubric_endpoint(
         max_marks=req.max_marks,
         created_by_email=req.actor_email or "",
     )
-    return {"status": "success", "rubric": rubric}
+    response_time_ms = max(1, int(round((time.perf_counter() - t_rub) * 1000)))
+    return {"status": "success", "rubric": rubric, "response_time_ms": response_time_ms}
 
 
 # =========================================================================
@@ -7022,8 +7119,15 @@ def ai_extract_course_competencies_endpoint(
     """Auto-extract Course Learning Outcomes / Competencies from syllabus and lectures."""
     if actor_email:
         require_tutor_role(actor_email, course_name, action_label="extract course competencies")
+    t_comp = time.perf_counter()
     comps = db_manager.ai_extract_course_competencies(course_name.strip())
-    return {"status": "success", "count": len(comps), "competencies": comps}
+    response_time_ms = max(1, int(round((time.perf_counter() - t_comp) * 1000)))
+    return {
+        "status": "success",
+        "count": len(comps),
+        "competencies": comps,
+        "response_time_ms": response_time_ms,
+    }
 
 
 # =========================================================================
@@ -7117,7 +7221,7 @@ def submit_workshop_peer_review_endpoint(
         peer_score=req.peer_score,
         feedback=req.feedback,
     )
-    return {"status": "success", "review": rev}
+    return {"status": "success", "review": rev, "response_time_ms": rev.get("response_time_ms")}
 
 
 # =========================================================================

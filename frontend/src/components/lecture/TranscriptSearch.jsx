@@ -202,6 +202,12 @@ export default function TranscriptSearch({
       if (extraFields.annotation_type) {
         updateData.annotationType = extraFields.annotation_type;
       }
+      if (extraFields.ai_response) {
+        updateData.aiResponse = extraFields.ai_response;
+      }
+      if (extraFields.response_time_ms) {
+        updateData.responseTimeMs = extraFields.response_time_ms;
+      }
       setAnnotations(prev => prev.map(a =>
         a.id === annId
           ? { ...a, ...updateData }
@@ -340,6 +346,7 @@ export default function TranscriptSearch({
     if (!videoId) return;
     setReviewLoading(true);
     setReviewError(null);
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/lecture/${encodeURIComponent(videoId)}/review`, {
         method: 'POST',
@@ -353,7 +360,11 @@ export default function TranscriptSearch({
         throw new Error(errData.detail || 'Failed to start AI review');
       }
       const data = await res.json();
-      setReviewJob(data.job);
+      const elapsedMs = data.response_time_ms ?? data.job?.response_time_ms ?? data.job?.responseTimeMs ?? Math.max(1, Math.round(performance.now() - t0));
+      setReviewJob(data.job ? { ...data.job, response_time_ms: elapsedMs, responseTimeMs: elapsedMs } : { status: data.status || 'completed', response_time_ms: elapsedMs, responseTimeMs: elapsedMs });
+      if (Array.isArray(data.suggestions)) {
+        setSuggestions(data.suggestions);
+      }
       startPollingReview(videoId);
     } catch (err) {
       setReviewError(err.message);

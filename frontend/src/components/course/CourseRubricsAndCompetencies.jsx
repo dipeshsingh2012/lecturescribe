@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Target
 } from 'lucide-react';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseRubricsAndCompetencies({
   courseName,
@@ -33,6 +34,8 @@ export default function CourseRubricsAndCompetencies({
   const [extractingComp, setExtractingComp] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [rubricResponseTimeMs, setRubricResponseTimeMs] = useState(null);
+  const [compResponseTimeMs, setCompResponseTimeMs] = useState(null);
 
   // Interactive 2D Rubric cell selection state: { [rubricId_criterionId]: points }
   const [selectedCells, setSelectedCells] = useState({});
@@ -75,6 +78,7 @@ export default function CourseRubricsAndCompetencies({
     setGeneratingRubric(true);
     setError('');
     setNotice('');
+    const t0 = performance.now();
     try {
       const firstAsgn = assignments[0] || {};
       const res = await fetch(`/api/course/${encodeURIComponent(courseName)}/rubrics/ai-generate`, {
@@ -89,6 +93,9 @@ export default function CourseRubricsAndCompetencies({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Failed to generate rubric');
+      setRubricResponseTimeMs(
+        data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0))
+      );
       setNotice(`Generated 2D Grading Rubric: "${data.rubric?.title}"!`);
       fetchAll();
     } catch (err) {
@@ -102,12 +109,16 @@ export default function CourseRubricsAndCompetencies({
     setExtractingComp(true);
     setError('');
     setNotice('');
+    const t0 = performance.now();
     try {
       const res = await fetch(`/api/course/${encodeURIComponent(courseName)}/competencies/ai-extract`, {
         method: 'POST'
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Failed to extract competencies');
+      setCompResponseTimeMs(
+        data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0))
+      );
       setNotice(`Extracted ${data.count || (data.competencies || []).length} Course Learning Outcomes!`);
       fetchAll();
     } catch (err) {
@@ -169,7 +180,8 @@ export default function CourseRubricsAndCompetencies({
             </Box>
           </Box>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <ResponseTimeBadge ms={rubricResponseTimeMs} />
             {isTutor && (
               <Button
                 variant="contained"
@@ -324,7 +336,8 @@ export default function CourseRubricsAndCompetencies({
           </Box>
 
           {isTutor && (
-            <Box sx={{ display: 'flex', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <ResponseTimeBadge ms={compResponseTimeMs} />
               <Button
                 variant="outlined"
                 size="small"

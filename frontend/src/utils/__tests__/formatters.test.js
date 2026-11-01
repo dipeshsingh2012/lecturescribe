@@ -10,7 +10,8 @@ import {
   getUserDisplayName,
   getUserFirstName,
   cleanSubmissionFallback,
-  truncateEnd
+  truncateEnd,
+  formatResponseTime
 } from '../formatters';
 
 describe('formatters utility functions', () => {
@@ -254,6 +255,37 @@ describe('formatters utility functions', () => {
     it('falls back to default fallback when both are missing', () => {
       expect(getUserDisplayName(null, null, 'CustomFallback')).toBe('CustomFallback');
       expect(getUserFirstName(null, null, 'Scholar')).toBe('Scholar');
+    });
+  });
+
+  describe('formatResponseTime', () => {
+    it('returns null for null, undefined, zero, negative, boolean, or non-numeric inputs', () => {
+      expect(formatResponseTime(null)).toBeNull();
+      expect(formatResponseTime(undefined)).toBeNull();
+      expect(formatResponseTime('')).toBeNull();
+      expect(formatResponseTime(0)).toBeNull();
+      expect(formatResponseTime(-200)).toBeNull();
+      expect(formatResponseTime(true)).toBeNull();
+      expect(formatResponseTime('invalid')).toBeNull();
+      expect(formatResponseTime(NaN)).toBeNull();
+    });
+
+    it('formats sub-second latencies in milliseconds', () => {
+      expect(formatResponseTime(320)).toBe('320ms');
+      expect(formatResponseTime(0.4)).toBe('1ms');
+      expect(formatResponseTime(999)).toBe('999ms');
+    });
+
+    it('formats latencies under 1 minute in tenths of seconds', () => {
+      expect(formatResponseTime(1000)).toBe('1.0s');
+      expect(formatResponseTime(2430)).toBe('2.4s');
+      expect(formatResponseTime(59900)).toBe('59.9s');
+    });
+
+    it('formats latencies of 1 minute or more in minutes and seconds', () => {
+      expect(formatResponseTime(60000)).toBe('1m 0.0s');
+      expect(formatResponseTime(72340)).toBe('1m 12.3s');
+      expect(formatResponseTime(125000)).toBe('2m 5.0s');
     });
   });
 });

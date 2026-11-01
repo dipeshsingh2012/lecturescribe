@@ -41,6 +41,7 @@ import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function AssignmentStudio({
   courseName = 'Active Course',
@@ -333,6 +334,7 @@ export default function AssignmentStudio({
 
     setSendingMessage(true);
     setErrorMsg(null);
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/studio/start`, {
         method: 'POST',
@@ -352,9 +354,17 @@ export default function AssignmentStudio({
       }
 
       const data = await res.json();
+      const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
+      const historyWithTime = Array.isArray(data.chat_history)
+        ? data.chat_history.map((m, i, arr) =>
+            i === arr.length - 1 && m.role === 'assistant' && !m.response_time_ms
+              ? { ...m, response_time_ms: elapsedMs }
+              : m
+          )
+        : [];
       setSessionId(data.session_id);
       setTitle(data.title);
-      setChatHistory(data.chat_history || []);
+      setChatHistory(historyWithTime);
       setDraftMarkdown(data.draft_markdown || '');
       latestDraftRef.current = data.draft_markdown || '';
       setCitations(data.citations || []);
@@ -399,6 +409,7 @@ export default function AssignmentStudio({
     };
     setChatHistory((prev) => [...prev, optimisticMessage]);
 
+    const t0 = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/studio/${encodeURIComponent(sessionId)}/chat`, {
         method: 'POST',
@@ -417,7 +428,15 @@ export default function AssignmentStudio({
       }
 
       const data = await res.json();
-      setChatHistory(data.chat_history || []);
+      const elapsedMs = data.response_time_ms ?? Math.max(1, Math.round(performance.now() - t0));
+      const historyWithTime = Array.isArray(data.chat_history)
+        ? data.chat_history.map((m, i, arr) =>
+            i === arr.length - 1 && m.role === 'assistant' && !m.response_time_ms
+              ? { ...m, response_time_ms: elapsedMs }
+              : m
+          )
+        : [];
+      setChatHistory(historyWithTime);
       if (data.draft_markdown) {
         setDraftMarkdown(data.draft_markdown);
         latestDraftRef.current = data.draft_markdown;
@@ -974,9 +993,12 @@ export default function AssignmentStudio({
                     alignItems: isUser ? 'flex-end' : 'flex-start'
                   }}
                 >
-                  <Typography variant="caption" sx={{ color: palette.textSecondary, mb: 0.5, px: 1 }}>
-                    {isUser ? 'You' : 'Co-Pilot'}
-                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, px: 1 }}>
+                    <Typography variant="caption" sx={{ color: palette.textSecondary }}>
+                      {isUser ? 'You' : 'Co-Pilot'}
+                    </Typography>
+                    {!isUser && <ResponseTimeBadge ms={msg.response_time_ms || msg.responseTimeMs} />}
+                  </Box>
                   <Paper
                     elevation={0}
                     sx={{

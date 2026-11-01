@@ -43,6 +43,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
   const courseSlug = normalizeCourseSlug(cleanCourse);
 
   const [quizData, setQuizData] = useState(null);
+  const [quizResponseTimeMs, setQuizResponseTimeMs] = useState(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizGenerating, setQuizGenerating] = useState(false);
   const [quizError, setQuizError] = useState(null);
@@ -50,6 +51,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
 
   // Deep Explainer states
   const [detailedExplanations, setDetailedExplanations] = useState({});
+  const [explanationResponseTimes, setExplanationResponseTimes] = useState({});
   const [explanationLoading, setExplanationLoading] = useState({});
   const [expandedExplanation, setExpandedExplanation] = useState({});
 
@@ -128,6 +130,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     if (regenerate) {
       setTimeLeft(initialSeconds);
     }
+    const t0 = performance.now();
     try {
       const payload = !generate
         ? { regenerate, generate }
@@ -186,11 +189,17 @@ export default function useCourseQuiz(courseName, userEmail = null) {
         }));
       }
 
+      const elapsedQuizMs =
+        sanitized.response_time_ms ??
+        data.response_time_ms ??
+        (generate ? Math.max(1, Math.round(performance.now() - t0)) : null);
+      setQuizResponseTimeMs(elapsedQuizMs);
       setQuizData(sanitized);
 
       if (regenerate) {
         setSelectedAnswers({});
         setDetailedExplanations({});
+        setExplanationResponseTimes({});
         setQuizSubmitted(false);
         setAutoSubmitted(false);
         setExamStarted(false);
@@ -245,6 +254,7 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     const loadingKey = `${questionId}`;
     setExplanationLoading(prev => ({ ...prev, [loadingKey]: true }));
 
+    const t0 = performance.now();
     try {
       const emailParam = userEmail ? `?email=${encodeURIComponent(userEmail)}` : '';
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/quiz/explanation${emailParam}`, {
@@ -269,10 +279,17 @@ export default function useCourseQuiz(courseName, userEmail = null) {
       }
 
       const data = await res.json();
+      const elapsedMs = data.response_time_ms ?? (!data.cached ? Math.max(1, Math.round(performance.now() - t0)) : null);
       setDetailedExplanations(prev => ({
         ...prev,
         [questionId]: data.detailed_explanation
       }));
+      if (elapsedMs) {
+        setExplanationResponseTimes(prev => ({
+          ...prev,
+          [questionId]: elapsedMs
+        }));
+      }
     } catch (err) {
       console.error('Failed to fetch detailed course quiz explanation:', err);
     } finally {
@@ -540,6 +557,8 @@ export default function useCourseQuiz(courseName, userEmail = null) {
     finishQuiz,
     resetQuiz,
     detailedExplanations,
+    explanationResponseTimes,
+    quizResponseTimeMs,
     explanationLoading,
     expandedExplanation,
     setExpandedExplanation,

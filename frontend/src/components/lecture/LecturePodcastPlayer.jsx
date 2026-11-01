@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
+import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function LecturePodcastPlayer({
   videoId,
@@ -132,6 +133,7 @@ export default function LecturePodcastPlayer({
     if (!videoId) return;
     setGenerating(true);
     setError(null);
+    const t0 = performance.now();
     try {
       const payload = {
         video_id: videoId,
@@ -151,7 +153,11 @@ export default function LecturePodcastPlayer({
       }
       const data = await res.json();
       if (data?.data?.exists && data?.data?.status === 'ready') {
-        setPodcastData(data.data);
+        const elapsedMs =
+          data.data.response_time_ms ??
+          data.response_time_ms ??
+          Math.max(1, Math.round(performance.now() - t0));
+        setPodcastData({ ...data.data, response_time_ms: elapsedMs });
         setGenerating(false);
         // Autoplay once generated
         setTimeout(() => {
@@ -299,6 +305,7 @@ export default function LecturePodcastPlayer({
             <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>
               {mode === 'submission' ? 'Defense Narration' : 'Podcast Recap'}
             </span>
+            <ResponseTimeBadge ms={podcastData?.response_time_ms || podcastData?.responseTimeMs} />
           </div>
 
           {/* Quick Skip Buttons */}
@@ -465,6 +472,7 @@ export default function LecturePodcastPlayer({
             }}>
               {mode === 'submission' ? 'Student Academic Defense' : 'Single Narrator • Google TTS'}
             </span>
+            <ResponseTimeBadge ms={podcastData?.response_time_ms || podcastData?.responseTimeMs} style={{ marginLeft: '6px' }} />
           </div>
         </div>
 

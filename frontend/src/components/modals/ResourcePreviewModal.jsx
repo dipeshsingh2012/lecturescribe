@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import { formatBytes } from '../../utils/formatters';
 import { getPublisherInfo, isRestrictedPublisherUrl } from '../../utils/publisherDetect';
+import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import { hasLatexMath } from '../common/MathRenderer';
 
 export default function ResourcePreviewModal({ open, onClose, resource }) {
   const [isLoading, setIsLoading] = useState(true);
@@ -372,16 +374,20 @@ export default function ResourcePreviewModal({ open, onClose, resource }) {
                 flex: 1,
                 padding: '20px',
                 overflowY: 'auto',
-                fontFamily: 'monospace, "Fira Code", Courier',
-                fontSize: '0.85rem',
+                fontFamily: ext === 'md' || (ext === 'txt' && hasLatexMath(textContent)) ? 'inherit' : 'monospace, "Fira Code", Courier',
+                fontSize: ext === 'md' || (ext === 'txt' && hasLatexMath(textContent)) ? '0.92rem' : '0.85rem',
                 lineHeight: 1.6,
                 color: 'var(--text-primary)',
                 background: 'var(--panel-bg)',
-                whiteSpace: 'pre-wrap',
+                whiteSpace: ext === 'md' || (ext === 'txt' && hasLatexMath(textContent)) ? 'normal' : 'pre-wrap',
                 wordBreak: 'break-word'
               }}
             >
-              {textContent}
+              {ext === 'md' || (ext === 'txt' && hasLatexMath(textContent)) ? (
+                <MarkdownWithTimestamps content={textContent} />
+              ) : (
+                textContent
+              )}
             </div>
           )}
 

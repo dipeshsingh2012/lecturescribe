@@ -30,5 +30,15 @@ describe('MathRenderer Component', () => {
     const mathSpan = container.querySelector('.cue-math-expression');
     expect(mathSpan).toHaveStyle({ color: 'var(--theme-primary)' });
   });
+
+  it('renders display math $$...$$ and \\[...\\] as well as inline \\(...\\)', () => {
+    const { container } = render(
+      <MathRenderer text={'Display $$\\int_0^1 x^2 dx$$ and bracket \\[a^2 + b^2 = c^2\\] and paren \\(\\alpha + \\beta\\)'} />
+    );
+    const mathSpans = container.querySelectorAll('.cue-math-expression');
+    expect(mathSpans.length).toBe(3);
+    expect(container.querySelectorAll('.cue-math-display').length).toBe(2);
+    expect(container.querySelectorAll('.katex').length).toBe(3);
+  });
 });
 

@@ -16,6 +16,7 @@ import {
   X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import MathRenderer, { hasLatexMath } from '../common/MathRenderer';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 import LecturePodcastPlayer from './LecturePodcastPlayer';
 
@@ -761,6 +762,31 @@ export default function LectureSummary({
                 }}
               />
             )}
+            {hasLatexMath(viewMode === 'study' ? editMarkdownText : editSubmissionText) && (
+              <div
+                data-testid="custom-summary-math-preview"
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  background: 'rgba(59, 130, 246, 0.06)',
+                  border: '1px solid rgba(59, 130, 246, 0.2)',
+                  maxHeight: '220px',
+                  overflowY: 'auto',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.86rem',
+                  lineHeight: 1.6
+                }}
+              >
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--theme-primary)', marginBottom: '4px' }}>
+                  Live LaTeX & Markdown Preview
+                </div>
+                <MarkdownWithTimestamps
+                  content={viewMode === 'study' ? editMarkdownText : editSubmissionText}
+                  onCueClick={handleCueClick}
+                  onCrossLectureClick={handleCrossLectureClick}
+                />
+              </div>
+            )}
           </div>
         ) : !transcriptAvailable ? (
           <div style={{
@@ -909,7 +935,7 @@ export default function LectureSummary({
                     }}
                   >
                     <h5 style={{ margin: '0 0 10px', fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: 700 }}>
-                      {sec.title}
+                      <MathRenderer text={sec.title} />
                     </h5>
                     <ul style={{ margin: 0, paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.84rem', lineHeight: '1.6' }}>
                       {(sec.points || []).map((pt, pIdx) => {
@@ -934,11 +960,11 @@ export default function LectureSummary({
                               >
                                 [{timeStr}]
                               </button>
-                              <span>{body}</span>
+                              <span><MathRenderer text={body} /></span>
                             </li>
                           );
                         }
-                        return <li key={pIdx} style={{ marginBottom: '6px' }}>{pt}</li>;
+                        return <li key={pIdx} style={{ marginBottom: '6px' }}><MathRenderer text={pt} /></li>;
                       })}
                     </ul>
                   </div>

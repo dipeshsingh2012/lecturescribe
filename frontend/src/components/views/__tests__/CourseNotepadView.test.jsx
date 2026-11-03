@@ -173,4 +173,47 @@ describe('CourseNotepadView', () => {
       })
     );
   });
+
+  it('toggles VSCode-style vertical split preview with KaTeX math when Preview button is clicked', () => {
+    const mathNote = {
+      note_id: 'note_math_1',
+      title: 'Attention Complexity $O(N^2)$',
+      content: '<p>Scaled dot-product attention is $$\\text{Attention}(Q,K,V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V$$ with inline $d_k$.</p>',
+      updated_at: '2026-10-11T12:00:00Z'
+    };
+
+    render(
+      <CourseNotepadView
+        courseName="Master of Technology"
+        noteId={mathNote.note_id}
+        activeNote={mathNote}
+        activeNoteLoading={false}
+        saveStatus="saved"
+        saveNote={vi.fn()}
+        deleteNote={vi.fn()}
+        onNavigateBack={vi.fn()}
+        googleUser={mockUser}
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Title math preview should render KaTeX
+    const titlePreview = screen.getByTestId('course-notepad-title-math-preview');
+    expect(titlePreview).toBeInTheDocument();
+    expect(titlePreview.querySelector('.katex')).toBeInTheDocument();
+
+    // Preview pane should be hidden initially
+    expect(screen.queryByTestId('course-notepad-rendered-view')).toBeNull();
+
+    // Click the Preview button to open the VSCode-style side-by-side vertical split preview
+    fireEvent.click(screen.getByTestId('notepad-preview-toggle'));
+    const renderedView = screen.getByTestId('course-notepad-rendered-view');
+    expect(renderedView).toBeInTheDocument();
+    expect(renderedView.querySelectorAll('.katex').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole('separator', { name: /resize editor and preview panels/i })).toBeInTheDocument();
+
+    // Clicking Close Preview hides the side-by-side preview pane
+    fireEvent.click(screen.getByRole('button', { name: /close preview/i }));
+    expect(screen.queryByTestId('course-notepad-rendered-view')).toBeNull();
+  });
 });

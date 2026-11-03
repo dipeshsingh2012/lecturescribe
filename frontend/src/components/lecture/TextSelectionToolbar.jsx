@@ -16,6 +16,7 @@ import {
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp } from '../../utils/formatters';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import { hasLatexMath } from '../common/MathRenderer';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function TextSelectionToolbar({
@@ -494,7 +495,7 @@ export default function TextSelectionToolbar({
           <textarea
             autoFocus
             rows={3}
-            placeholder="Write study notes or key thoughts on this line..."
+            placeholder="Write study notes or LaTeX formulas ($...$ or $$...$$) on this line..."
             value={noteInput}
             onChange={(e) => setNoteInput(e.target.value)}
             onKeyDown={(e) => {
@@ -515,6 +516,25 @@ export default function TextSelectionToolbar({
               boxSizing: 'border-box'
             }}
           />
+          {hasLatexMath(noteInput) && (
+            <div
+              data-testid="selection-note-latex-preview"
+              style={{
+                padding: '5px 8px',
+                borderRadius: '4px',
+                background: 'rgba(59, 130, 246, 0.06)',
+                border: '1px solid rgba(59, 130, 246, 0.2)',
+                fontSize: '0.76rem',
+                color: 'var(--text-primary)',
+                lineHeight: 1.4
+              }}
+            >
+              <div style={{ fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--theme-primary)', marginBottom: '2px' }}>
+                LaTeX Math Preview
+              </div>
+              <MarkdownWithTimestamps content={noteInput} />
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px' }}>
             <span style={{ fontSize: '0.66rem', color: 'var(--text-secondary)' }}>
               Press <kbd style={{ padding: '0 4px', background: 'var(--card-bg)', borderRadius: '3px', border: '1px solid var(--border-color)', fontSize: '0.64rem' }}>Enter</kbd> to save

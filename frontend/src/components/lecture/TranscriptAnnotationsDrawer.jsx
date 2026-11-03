@@ -18,6 +18,7 @@ import {
 import { API_BASE } from '../../utils/constants';
 import { formatSecondsToTimestamp, parseTimestampToSeconds } from '../../utils/formatters';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import MathRenderer, { hasLatexMath } from '../common/MathRenderer';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function TranscriptAnnotationsDrawer({
@@ -464,6 +465,26 @@ export default function TranscriptAnnotationsDrawer({
             }}
           />
 
+          {hasLatexMath(newNoteText) && (
+            <div
+              data-testid="drawer-new-note-math-preview"
+              style={{
+                padding: '6px 10px',
+                borderRadius: '6px',
+                background: 'rgba(59, 130, 246, 0.06)',
+                border: '1px solid rgba(59, 130, 246, 0.2)',
+                fontSize: '0.8rem',
+                color: 'var(--text-primary)',
+                lineHeight: 1.5
+              }}
+            >
+              <div style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--theme-primary)', marginBottom: '2px' }}>
+                LaTeX Math Preview
+              </div>
+              <MarkdownWithTimestamps content={newNoteText} onCueClick={handleCueClick} />
+            </div>
+          )}
+
           {createError && (
             <div style={{ color: '#ef4444', fontSize: '0.72rem' }}>{createError}</div>
           )}
@@ -760,7 +781,7 @@ export default function TranscriptAnnotationsDrawer({
                     cursor: 'pointer'
                   }}
                 >
-                  "{selectedText}"
+                  "<MathRenderer text={selectedText} />"
                 </blockquote>
 
                 {/* Comment / Edit Mode / AI Note */}
@@ -783,7 +804,7 @@ export default function TranscriptAnnotationsDrawer({
                         }
                       }}
                       rows={2}
-                      placeholder="Write your note... (Press Enter to save)"
+                      placeholder="Write your note... (Markdown & LaTeX supported)"
                       style={{
                         width: '100%',
                         boxSizing: 'border-box',
@@ -797,6 +818,25 @@ export default function TranscriptAnnotationsDrawer({
                         outline: 'none'
                       }}
                     />
+                    {hasLatexMath(editNoteText) && (
+                      <div
+                        data-testid="drawer-edit-note-math-preview"
+                        style={{
+                          padding: '6px 8px',
+                          borderRadius: '6px',
+                          background: 'rgba(59, 130, 246, 0.06)',
+                          border: '1px solid rgba(59, 130, 246, 0.2)',
+                          fontSize: '0.78rem',
+                          color: 'var(--text-primary)',
+                          lineHeight: 1.45
+                        }}
+                      >
+                        <div style={{ fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--theme-primary)', marginBottom: '2px' }}>
+                          LaTeX Math Preview
+                        </div>
+                        <MarkdownWithTimestamps content={editNoteText} onCueClick={handleCueClick} />
+                      </div>
+                    )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
                         Press Enter to save • Shift+Enter for new line

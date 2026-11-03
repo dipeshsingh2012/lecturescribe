@@ -67,6 +67,7 @@ export const VALID_COURSE_TABS = new Set([
   'tutor',
   'resources',
   'library',
+  'notes',
   'calendar',
   'grades',
   'forum',

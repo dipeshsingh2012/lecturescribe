@@ -40,6 +40,7 @@ import HeroBanner from '../home/HeroBanner';
 import QuickAddBar from '../home/QuickAddBar';
 import CourseGrid from '../course/CourseGrid';
 import CourseLibrary from '../course/CourseLibrary';
+import CourseNotesTab from '../course/CourseNotesTab';
 import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
 import CourseTutor from '../course/CourseTutor';
@@ -247,7 +248,7 @@ export default function HomeView({
   };
 
   return (
-    <Box sx={{ maxWidth: '1200px', mx: 'auto', p: { xs: 1.5, sm: 2.5, md: 4 } }}>
+    <Box sx={{ maxWidth: '1600px', width: '100%', mx: 'auto', p: { xs: 1.5, sm: 2.5, md: 4 } }}>
       {!selectedCourse && (
         <HeroBanner
           googleUser={googleUser}
@@ -580,7 +581,7 @@ export default function HomeView({
                   : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
               }}
             >
-              Library ({courseResources.length + (courseReadings?.length || 0) + (courseNotes?.length || 0)})
+              Library ({courseResources.length + (courseReadings?.length || 0)})
             </Button>
             <Button
               variant={courseViewTab === 'assignments' ? 'contained' : 'outlined'}
@@ -599,6 +600,24 @@ export default function HomeView({
               }}
             >
               Assignments ({courseAssignments.assignments.length})
+            </Button>
+            <Button
+              variant={courseViewTab === 'notes' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<FileText size={15} />}
+              onClick={() => setCourseViewTab('notes')}
+              aria-label="Course Notes"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...(courseViewTab === 'notes'
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Notes ({courseNotes?.length || 0})
             </Button>
             <Button
               variant={courseViewTab === 'calendar' ? 'contained' : 'outlined'}
@@ -797,6 +816,7 @@ export default function HomeView({
                 courseViewTab === 'rubrics' ? 'Rubrics & Outcomes' :
                 courseViewTab === 'workshops' ? 'Workshops & Broadcasts' :
                 courseViewTab === 'assignments' ? 'Assignments' :
+                courseViewTab === 'notes' ? 'Notes' :
                 courseViewTab === 'question-bank' ? 'Question Bank' :
                 courseViewTab === 'analytics' ? 'Analytics' : 'Library'
               }
@@ -1044,6 +1064,17 @@ export default function HomeView({
           isTutor={isTutor}
           userEmail={googleUser?.email || ''}
           userName={googleUser?.name || ''}
+        />
+      ) : courseViewTab === 'notes' ? (
+        /* LEVEL 2N: COURSE NOTES & SCRATCHPADS TAB */
+        <CourseNotesTab
+          courseNotes={courseNotes}
+          courseNotesLoading={courseNotesLoading}
+          onCreateNewNote={onCreateNewNote}
+          onOpenNote={onOpenNote}
+          onDeleteNote={onDeleteNote}
+          googleUser={googleUser}
+          currentTheme={currentTheme}
         />
       ) : courseViewTab === 'grades' ? (
         /* LEVEL 2G: CENTRALIZED COURSE GRADEBOOK & STUDENT SUBMISSIONS */

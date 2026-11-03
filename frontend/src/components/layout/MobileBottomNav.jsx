@@ -27,6 +27,7 @@ import {
   Target,
   Megaphone,
   FileCode,
+  FileText,
   Database,
   Activity,
   X
@@ -68,7 +69,8 @@ export default function MobileBottomNav({
     const studyTools = [
       { id: 'quiz', label: 'Course Quiz & Exam', desc: 'Comprehensive practice exam', icon: Award },
       { id: 'summary', label: 'Course Summary', desc: 'AI synthesis across lectures', icon: BookOpen },
-      { id: 'library', label: 'Library & Scratchpad', desc: 'Slides, readings, and notes', icon: BookOpen },
+      { id: 'library', label: 'Library', desc: 'Slides and academic readings', icon: BookOpen },
+      { id: 'notes', label: 'Notes & Scratchpads', desc: 'Personal course notes & LaTeX', icon: FileText },
       { id: 'calendar', label: 'Course Calendar', desc: 'Deadlines & exam timeline', icon: CalendarIcon }
     ];
 

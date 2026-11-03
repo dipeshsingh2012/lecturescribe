@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
+import katex from 'katex';
+import DOMPurify from 'dompurify';
 import {
   Box,
   Typography,
@@ -24,9 +26,111 @@ import {
   FileText,
   AlertCircle,
   Save,
-  Calendar as CalendarIcon
+  Calendar as CalendarIcon,
+  Eye,
+  Columns,
+  X
 } from 'lucide-react';
 import CalendarAlertCard from '../calendar/CalendarAlertCard';
+import MathRenderer, { hasLatexMath } from '../common/MathRenderer';
+import { repairCorruptedLatex } from '../../utils/formatters';
+
+if (typeof window !== 'undefined') {
+  window.katex = katex;
+}
+
+const decodeHtmlEntities = (str) => {
+  if (!str) return '';
+  return str
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, '&');
+};
+
+export const renderNotepadHtmlWithLatex = (rawContent) => {
+  if (!rawContent || typeof rawContent !== 'string') return '';
+
+  let html = repairCorruptedLatex(rawContent);
+
+  // If plain text without HTML tags, wrap lines in paragraphs
+  if (!/<[a-z][\s\S]*>/i.test(html)) {
+    html = html
+      .split('\n')
+      .map((line) => `<p>${line || '<br>'}</p>`)
+      .join('');
+  }
+
+  // 1. Ensure Quill formula blots (<span class="ql-formula" data-value="...">) are rendered with KaTeX
+  html = html.replace(
+    /<span[^>]*class=["'][^"']*ql-formula[^"']*["'][^>]*data-value=["']([^"']+)["'][^>]*>[\s\S]*?<\/span>/gi,
+    (_match, rawVal) => {
+      const formula = decodeHtmlEntities(rawVal).trim();
+      if (!formula) return _match;
+      try {
+        const rendered = katex.renderToString(formula, { throwOnError: false, displayMode: false });
+        return `<span class="ql-formula cue-math-expression" data-value="${rawVal}">${rendered}</span>`;
+      } catch {
+        return _match;
+      }
+    }
+  );
+
+  // 2. Render display math blocks ($$...$$ and \[...\]) even if split across <p> or <br> tags
+  html = html.replace(
+    /\$\$([\s\S]+?)\$\$|\\{1,2}\[([\s\S]+?)\\{1,2}\]/g,
+    (fullMatch, dollarBlock, bracketBlock) => {
+      const rawInner = dollarBlock ?? bracketBlock ?? '';
+      const cleanedInner = decodeHtmlEntities(
+        rawInner
+          .replace(/<\/p>\s*<p[^>]*>/gi, '\n')
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+      ).trim();
+
+      if (!cleanedInner) return fullMatch;
+      try {
+        const rendered = katex.renderToString(cleanedInner, {
+          throwOnError: false,
+          displayMode: true
+        });
+        return `<span class="cue-math-expression cue-math-display" style="display:block;margin:0.75rem 0;text-align:center;overflow-x:auto;">${rendered}</span>`;
+      } catch {
+        return fullMatch;
+      }
+    }
+  );
+
+  // 3. Render inline math (\(...\) and $...$) inside text nodes (outside HTML tags)
+  html = html
+    .split(/(<[^>]+>)/g)
+    .map((segment) => {
+      if (segment.startsWith('<')) return segment;
+      if (!segment.includes('$') && !segment.includes('\\(')) return segment;
+      return segment.replace(/\\{1,2}\(([\s\S]+?)\\{1,2}\)|\$([^$\n]+)\$/g, (m, parenInline, dollarInline) => {
+        const rawFormula = parenInline ?? dollarInline ?? '';
+        const cleanedFormula = decodeHtmlEntities(rawFormula).trim();
+        if (!cleanedFormula) return m;
+        try {
+          const rendered = katex.renderToString(cleanedFormula, {
+            throwOnError: false,
+            displayMode: false
+          });
+          return `<span class="cue-math-expression" style="padding:0 2px;font-weight:600;">${rendered}</span>`;
+        } catch {
+          return m;
+        }
+      });
+    })
+    .join('');
+
+  return DOMPurify.sanitize(html, {
+    ADD_TAGS: ['semantics', 'annotation'],
+    ADD_ATTR: ['aria-hidden', 'style', 'target', 'data-value']
+  });
+};
 
 const QUILL_MODULES = {
   toolbar: [
@@ -36,7 +140,7 @@ const QUILL_MODULES = {
     [{ list: 'ordered' }, { list: 'bullet' }],
     [{ align: [] }],
     ['blockquote', 'code-block'],
-    ['link'],
+    ['link', 'formula'],
     ['clean']
   ]
 };
@@ -53,7 +157,8 @@ const QUILL_FORMATS = [
   'align',
   'blockquote',
   'code-block',
-  'link'
+  'link',
+  'formula'
 ];
 
 export default function CourseNotepadView({
@@ -74,10 +179,38 @@ export default function CourseNotepadView({
   const [lastSavedTime, setLastSavedTime] = useState(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showCalendarWidget, setShowCalendarWidget] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(50);
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
 
   const quillRef = useRef(null);
+  const splitContainerRef = useRef(null);
   const initialLoadedRef = useRef(false);
   const currentNoteIdRef = useRef(null);
+
+  useEffect(() => {
+    if (!isDraggingSplit) return;
+
+    const handleMouseMove = (e) => {
+      if (!splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const relX = e.clientX - rect.left;
+      const pct = Math.min(75, Math.max(25, (relX / rect.width) * 100));
+      setSplitRatio(pct);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingSplit(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingSplit]);
 
   // Sync state when activeNote loads for a new/different noteId or when fetched content arrives
   useEffect(() => {
@@ -192,6 +325,11 @@ export default function CourseNotepadView({
   const charCount = plainText.length;
   const wordCount = plainText ? plainText.split(/\s+/).filter(Boolean).length : 0;
 
+  const renderedMathHtml = useMemo(
+    () => (showPreview ? renderNotepadHtmlWithLatex(content) : ''),
+    [content, showPreview]
+  );
+
   if (activeNoteLoading && !initialLoadedRef.current) {
     return (
       <Box
@@ -218,12 +356,12 @@ export default function CourseNotepadView({
         display: 'flex',
         flexDirection: 'column',
         width: '100%',
-        height: 'calc(100vh - 120px)',
-        minHeight: '600px',
-        maxWidth: 1060,
+        height: 'calc(100vh - 76px)',
+        minHeight: '640px',
+        maxWidth: '1680px',
         mx: 'auto',
         boxSizing: 'border-box',
-        px: { xs: 2, sm: 3 }
+        px: { xs: 2, sm: 3, md: 4 }
       }}
     >
       {/* ========================================================================= */}
@@ -384,6 +522,28 @@ export default function CourseNotepadView({
             }}
           />
 
+          {/* VSCODE-STYLE VERTICAL SPLIT PREVIEW BUTTON */}
+          <Tooltip title={showPreview ? 'Hide Side-by-Side Preview' : 'Open Preview to the Side (LaTeX & Rich Text)'}>
+            <Button
+              data-testid="notepad-preview-toggle"
+              size="small"
+              variant={showPreview ? 'contained' : 'outlined'}
+              startIcon={<Columns size={13} />}
+              onClick={() => setShowPreview((prev) => !prev)}
+              sx={{
+                height: 28,
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                borderRadius: 2,
+                px: 1.25,
+                borderColor: currentTheme?.palette?.cardBorder
+              }}
+            >
+              Preview
+            </Button>
+          </Tooltip>
+
           {/* TOGGLE COURSE CALENDAR WIDGET */}
           <Button
             size="small"
@@ -466,19 +626,55 @@ export default function CourseNotepadView({
             letterSpacing: '-0.02em'
           }}
         />
+        {hasLatexMath(title) && (
+          <Box
+            data-testid="course-notepad-title-math-preview"
+            sx={{
+              mt: 0.5,
+              px: 1.2,
+              py: 0.6,
+              borderRadius: 1.5,
+              bgcolor: currentTheme?.palette?.badgeBg || 'rgba(59, 130, 246, 0.06)',
+              color: currentTheme?.palette?.textPrimary || '#0f172a',
+              fontSize: '1.05rem',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1
+            }}
+          >
+            <Typography
+              variant="caption"
+              sx={{
+                fontWeight: 800,
+                textTransform: 'uppercase',
+                fontSize: '0.65rem',
+                letterSpacing: '0.05em',
+                color: currentTheme?.palette?.primary || '#3b82f6'
+              }}
+            >
+              Title Math:
+            </Typography>
+            <Box component="span">
+              <MathRenderer text={title} />
+            </Box>
+          </Box>
+        )}
       </Box>
 
       {/* ========================================================================= */}
-      {/* VISUAL WORD-STYLE RICH TEXT QUILL EDITOR */}
+      {/* VISUAL WORD-STYLE RICH TEXT QUILL EDITOR & VSCODE VERTICAL SPLIT PREVIEW */}
       {/* ========================================================================= */}
       <Box
+        ref={splitContainerRef}
         sx={{
           flex: 1,
           display: 'flex',
-          flexDirection: 'column',
+          flexDirection: { xs: 'column', md: 'row' },
           position: 'relative',
           minHeight: 0,
           pb: 2,
+          userSelect: isDraggingSplit ? 'none' : 'auto',
           '& .quill': {
             display: 'flex',
             flexDirection: 'column',
@@ -538,15 +734,114 @@ export default function CourseNotepadView({
           }
         }}
       >
-        <ReactQuill
-          ref={quillRef}
-          theme="snow"
-          value={content}
-          onChange={handleContentChange}
-          modules={QUILL_MODULES}
-          formats={QUILL_FORMATS}
-          placeholder="Start writing notes, formatting headings, lists, or lecture takeaways..."
-        />
+        <Box
+          sx={{
+            flex: showPreview ? { xs: '1 1 100%', md: `0 0 ${splitRatio}%` } : '1 1 100%',
+            width: showPreview ? { xs: '100%', md: `${splitRatio}%` } : '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            minWidth: 0,
+            pr: showPreview ? { xs: 0, md: 1 } : 0
+          }}
+        >
+          <ReactQuill
+            ref={quillRef}
+            theme="snow"
+            value={content}
+            onChange={handleContentChange}
+            modules={QUILL_MODULES}
+            formats={QUILL_FORMATS}
+            placeholder="Start writing notes, formatting headings, lists, or LaTeX math ($...$ or $$...$$)..."
+          />
+        </Box>
+
+        {showPreview && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize editor and preview panels"
+              tabIndex={0}
+              className={`workspace-split-resizer ${isDraggingSplit ? 'active' : ''}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setIsDraggingSplit(true);
+              }}
+              onDoubleClick={() => setSplitRatio(50)}
+              title="Drag to resize • Double-click to reset 50/50"
+            />
+            <Box
+              data-testid="course-notepad-rendered-view"
+              sx={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: '350px',
+                minWidth: 0,
+                ml: { xs: 0, md: 1 },
+                mt: { xs: 2, md: 0 },
+                borderRadius: '12px',
+                border: `1px solid ${currentTheme?.palette?.cardBorder || 'rgba(0,0,0,0.12)'}`,
+                bgcolor: currentTheme?.palette?.surface || currentTheme?.palette?.cardBg || '#ffffff',
+                overflow: 'hidden'
+              }}
+            >
+              <Box
+                sx={{
+                  px: 2,
+                  py: 1,
+                  borderBottom: `1px solid ${currentTheme?.palette?.cardBorder || 'rgba(0,0,0,0.08)'}`,
+                  bgcolor: currentTheme?.palette?.cardBg || '#f8fafc',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Eye size={14} color={currentTheme?.palette?.primary || '#3b82f6'} />
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      color: currentTheme?.palette?.primary || '#3b82f6'
+                    }}
+                  >
+                    Preview
+                  </Typography>
+                </Box>
+                <Tooltip title="Close Preview">
+                  <IconButton
+                    size="small"
+                    aria-label="Close Preview"
+                    onClick={() => setShowPreview(false)}
+                    sx={{ p: 0.4, color: currentTheme?.palette?.textSecondary || '#64748b' }}
+                  >
+                    <X size={14} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              <Box
+                sx={{
+                  flex: 1,
+                  overflowY: 'auto',
+                  p: 2.5,
+                  color: currentTheme?.palette?.textPrimary || '#0f172a',
+                  fontSize: '1.02rem',
+                  lineHeight: 1.7,
+                  '& p': { margin: '0 0 0.75rem 0' }
+                }}
+                dangerouslySetInnerHTML={{
+                  __html:
+                    renderedMathHtml ||
+                    '<p style="color:#94a3b8;font-style:italic;">Nothing to preview yet. Write notes or LaTeX formulas ($...$ or $$...$$) to see them rendered.</p>'
+                }}
+              />
+            </Box>
+          </>
+        )}
       </Box>
 
       {/* ========================================================================= */}

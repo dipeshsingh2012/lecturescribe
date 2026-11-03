@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import katex from 'katex';
 import DOMPurify from 'dompurify';
-import MathRenderer from '../common/MathRenderer';
+import MathRenderer, { hasLatexMath } from '../common/MathRenderer';
 import { API_BASE } from '../../utils/constants';
 import { parseTimestampToSeconds, formatSecondsToTimestamp } from '../../utils/formatters';
 import TranscriptReviewDrawer from './TranscriptReviewDrawer';
@@ -1828,7 +1828,7 @@ export default function TranscriptSearch({
                 <strong style={{ color: 'var(--theme-primary)', fontFamily: 'monospace' }}>
                   [{matchedGoToCueInfo.cue.time}]
                 </strong>{' '}
-                {matchedGoToCueInfo.cue.text}
+                <MathRenderer text={matchedGoToCueInfo.cue.text} />
               </div>
             ) : null}
           </dialog>
@@ -2264,7 +2264,7 @@ export default function TranscriptSearch({
                         <X size={12} />
                       </button>
                     </div>
-                    {editingText.includes('$') && (
+                    {hasLatexMath(editingText) && (
                       <div
                         data-testid="katex-edit-preview"
                         style={{
@@ -2720,7 +2720,7 @@ export default function TranscriptSearch({
                           }
                         }}
                         rows={2}
-                        placeholder="Write note... (Press Enter to save)"
+                        placeholder="Write note... (Markdown & LaTeX supported)"
                         style={{
                           width: '100%',
                           boxSizing: 'border-box',
@@ -2734,6 +2734,22 @@ export default function TranscriptSearch({
                           outline: 'none'
                         }}
                       />
+                      {hasLatexMath(editingMarkNoteText) && (
+                        <div
+                          data-testid="mark-note-latex-preview"
+                          style={{
+                            padding: '4px 7px',
+                            borderRadius: '5px',
+                            background: 'rgba(59, 130, 246, 0.06)',
+                            border: '1px solid rgba(59, 130, 246, 0.2)',
+                            fontSize: '0.76rem',
+                            color: 'var(--text-primary)',
+                            lineHeight: 1.4
+                          }}
+                        >
+                          <MarkdownWithTimestamps content={editingMarkNoteText} onCueClick={handleCueClick} />
+                        </div>
+                      )}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)' }}>Enter to save</span>
                         <div style={{ display: 'flex', gap: '4px' }}>
@@ -2869,7 +2885,7 @@ export default function TranscriptSearch({
                       }
                     }}
                     rows={2}
-                    placeholder="Edit note... (Enter to save)"
+                    placeholder="Edit note... (Markdown & LaTeX supported)"
                     style={{
                       width: '100%',
                       boxSizing: 'border-box',
@@ -2883,6 +2899,22 @@ export default function TranscriptSearch({
                       outline: 'none'
                     }}
                   />
+                  {hasLatexMath(editingMarkNoteText) && (
+                    <div
+                      data-testid="mark-note-latex-preview"
+                      style={{
+                        padding: '4px 7px',
+                        borderRadius: '5px',
+                        background: 'rgba(59, 130, 246, 0.06)',
+                        border: '1px solid rgba(59, 130, 246, 0.2)',
+                        fontSize: '0.76rem',
+                        color: 'var(--text-primary)',
+                        lineHeight: 1.4
+                      }}
+                    >
+                      <MarkdownWithTimestamps content={editingMarkNoteText} onCueClick={handleCueClick} />
+                    </div>
+                  )}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>Enter to save • Shift+Enter newline</span>
                     <div style={{ display: 'flex', gap: '4px' }}>
@@ -2927,7 +2959,7 @@ export default function TranscriptSearch({
                     fontSize: '0.72rem',
                     fontWeight: 600,
                     color: (activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) === 'ai_explanation' ? '#a855f7' : 'var(--text-secondary)',
-                    maxWidth: '120px',
+                    maxWidth: '180px',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
@@ -2935,7 +2967,11 @@ export default function TranscriptSearch({
                     {(activeMarkAction.annotation?.annotationType || activeMarkAction.annotation?.annotation_type) === 'ai_explanation'
                       ? 'AI Explanation'
                       : (activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text
-                        ? `Note: ${activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text}`
+                        ? (
+                          <>
+                            Note: <MathRenderer text={activeMarkAction.annotation?.noteText || activeMarkAction.annotation?.note_text} />
+                          </>
+                        )
                         : `Highlight (${activeMarkAction.annotation?.color || 'yellow'})`)}
                   </span>
 

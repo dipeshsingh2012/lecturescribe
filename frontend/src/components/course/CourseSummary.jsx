@@ -31,6 +31,7 @@ import {
   ListOrdered
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
+import MathRenderer from '../common/MathRenderer';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseSummary({
@@ -509,7 +510,7 @@ export default function CourseSummary({
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 1.5 }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 800, color: textPrimary, fontSize: '0.98rem' }}>
-                    {mod.module_title}
+                    <MathRenderer text={mod.module_title} />
                   </Typography>
                   {mod.lectures_covered?.length > 0 && (
                     <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap' }}>
@@ -526,7 +527,7 @@ export default function CourseSummary({
                 </Box>
 
                 <Typography variant="body2" sx={{ color: textSecondary, mb: 2, lineHeight: 1.6 }}>
-                  {mod.core_themes}
+                  <MathRenderer text={mod.core_themes} />
                 </Typography>
 
                 {mod.key_takeaways?.length > 0 && (
@@ -538,7 +539,7 @@ export default function CourseSummary({
                       <Box key={tIdx} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
                         <CheckCircle2 size={15} color={primaryColor} style={{ marginTop: 2, flexShrink: 0 }} />
                         <Typography variant="body2" sx={{ color: textPrimary, fontSize: '0.88rem', lineHeight: 1.5 }}>
-                          {takeaway}
+                          <MathRenderer text={takeaway} />
                         </Typography>
                       </Box>
                     ))}
@@ -594,7 +595,7 @@ export default function CourseSummary({
                   }}
                 >
                   <Typography variant="subtitle2" sx={{ fontWeight: 800, color: primaryColor, fontSize: '0.92rem' }}>
-                    {term}
+                    <MathRenderer text={term} />
                   </Typography>
                   {formula ? (
                     <Box
@@ -613,7 +614,7 @@ export default function CourseSummary({
                   ) : null}
                   {significance && (
                     <Typography variant="caption" sx={{ color: textSecondary, lineHeight: 1.4, mt: 0.5 }}>
-                      <strong>Significance:</strong> {significance}
+                      <strong>Significance:</strong> <MathRenderer text={significance} />
                     </Typography>
                   )}
                 </Box>
@@ -714,7 +715,7 @@ export default function CourseSummary({
                 <AccordionDetails sx={{ pt: 0, pb: 2.5, px: { xs: 1.5, sm: 2.5 } }}>
                   {lec.synopsis && (
                     <Typography variant="body2" sx={{ color: textPrimary, mb: 2, lineHeight: 1.6 }}>
-                      {lec.synopsis}
+                      <MathRenderer text={lec.synopsis} />
                     </Typography>
                   )}
                   {lec.key_points?.length > 0 && (
@@ -735,7 +736,7 @@ export default function CourseSummary({
                             }}
                           />
                           <Typography variant="body2" sx={{ color: textSecondary, fontSize: '0.85rem', lineHeight: 1.5 }}>
-                            {pt}
+                            <MathRenderer text={pt} />
                           </Typography>
                         </Box>
                       ))}
@@ -818,7 +819,7 @@ export default function CourseSummary({
                       flex: 1
                     }}
                   >
-                    {item}
+                    <MathRenderer text={item} />
                   </Typography>
                 </Box>
               );

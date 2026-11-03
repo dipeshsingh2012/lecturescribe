@@ -335,9 +335,9 @@ export default function App() {
               setActiveNoteId(null);
               const c = effectiveCourse || 'Master of Technology';
               if (typeof resources?.setCourseViewTab === 'function') {
-                resources.setCourseViewTab('library');
+                resources.setCourseViewTab('notes');
               }
-              navigateTo(`/course/${normalizeCourseSlug(c)}?tab=library`, false, setCurrentPath);
+              navigateTo(`/course/${normalizeCourseSlug(c)}?tab=notes`, false, setCurrentPath);
             }}
             googleUser={auth.googleUser}
             currentTheme={currentTheme}

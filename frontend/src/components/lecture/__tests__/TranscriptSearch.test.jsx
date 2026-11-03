@@ -2417,4 +2417,59 @@ describe('TranscriptSearch', () => {
 
     vi.unstubAllGlobals();
   });
+
+  describe('Go to Timestamp (Ctrl+G / Cmd+G)', () => {
+    it('opens the Go to Timestamp dialog on Ctrl+G, previews matching cue, seeks on Enter, and closes on Escape', () => {
+      const cues = [
+        { id: 'cue_1', time: '00:00', seconds: 0, text: 'Welcome to the lecture.' },
+        { id: 'cue_2', time: '04:00', seconds: 240, text: 'Now let us define eigenvalues.' },
+        { id: 'cue_3', time: '08:30', seconds: 510, text: 'Matrix diagonalization example.' }
+      ];
+      const mockHandleCueClick = vi.fn();
+
+      render(
+        <TranscriptSearch
+          displayCues={cues}
+          searchQuery=""
+          setSearchQuery={vi.fn()}
+          handleCueClick={mockHandleCueClick}
+          activeCueIdx={0}
+          activeData={{ videoId: 'vid_goto_1', cues }}
+        />
+      );
+
+      // Press Ctrl+G to open dialog
+      fireEvent.keyDown(window, { key: 'g', ctrlKey: true });
+
+      const input = screen.getByTestId('goto-timestamp-input');
+      expect(input).toBeInTheDocument();
+
+      // Type VS Code style leading-colon timestamp ':04:20' (between 04:00 and 08:30)
+      fireEvent.change(input, { target: { value: ':04:20' } });
+
+      // Live preview shows Nearest cue at 04:00
+      const preview = screen.getByTestId('goto-timestamp-preview');
+      expect(preview).toHaveTextContent('04:00');
+      expect(preview).toHaveTextContent('Now let us define eigenvalues.');
+
+      // Submit form via Enter
+      fireEvent.submit(input.closest('form'));
+
+      expect(mockHandleCueClick).toHaveBeenCalledWith('04:20');
+
+      // Reopen via header button, test invalid input and Escape key dismissal
+      const headerBtn = screen.getByTestId('goto-timestamp-btn');
+      fireEvent.click(headerBtn);
+
+      const reopenedInput = screen.getByTestId('goto-timestamp-input');
+      fireEvent.change(reopenedInput, { target: { value: 'invalid_time' } });
+      fireEvent.submit(reopenedInput.closest('form'));
+
+      expect(screen.getByTestId('goto-timestamp-error')).toHaveTextContent(/enter a valid timestamp/i);
+
+      // Dismiss with Escape
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('goto-timestamp-error')).not.toBeInTheDocument();
+    });
+  });
 });

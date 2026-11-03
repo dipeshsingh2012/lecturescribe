@@ -732,6 +732,7 @@ describe('useLecturePlayer hook functionality', () => {
     Object.defineProperty(videoEl, 'readyState', { value: 1, configurable: true });
     Object.defineProperty(videoEl, 'duration', { value: 600, configurable: true });
     videoEl.currentTime = 0;
+    videoEl.play = vi.fn().mockResolvedValue();
 
     const { result, rerender } = renderHook(
       ({ data }) => {
@@ -761,6 +762,37 @@ describe('useLecturePlayer hook functionality', () => {
 
     // Must still be exactly 1 call, NEVER looping!
     expect(getCallCount).toBe(1);
+  });
+
+  it('resolves activeCueIdx to the nearest preceding cue when handleCueClick is called with an intermediate timestamp', () => {
+    const activeData = {
+      videoId: 'v_goto_nearest',
+      cues: [
+        { time: '00:00', text: 'Intro' },
+        { time: '04:00', text: 'Eigenvalues' },
+        { time: '08:30', text: 'Diagonalization' }
+      ]
+    };
+
+    const videoEl = document.createElement('video');
+    Object.defineProperty(videoEl, 'readyState', { value: 1, configurable: true });
+    Object.defineProperty(videoEl, 'duration', { value: 600, configurable: true });
+    videoEl.currentTime = 0;
+    videoEl.play = vi.fn().mockResolvedValue();
+
+    const { result } = renderHook(() => {
+      const hook = useLecturePlayer(activeData, null);
+      hook.iframeRef.current = videoEl;
+      return hook;
+    });
+
+    act(() => {
+      result.current.handleCueClick('04:20');
+    });
+
+    // 04:20 (260s) is between cue 1 (04:00 = 240s) and cue 2 (08:30 = 510s), so activeCueIdx resolves to 1
+    expect(result.current.activeCueIdx).toBe(1);
+    expect(videoEl.currentTime).toBe(260);
   });
 });
 

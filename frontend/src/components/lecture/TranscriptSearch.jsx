@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react';
 import {
   Search,
   Copy,
@@ -58,6 +58,35 @@ const sanitizeCueHighlight = (dirtyHtml) => {
   });
 };
 
+export const parseGoToTimestampInput = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  let cleaned = String(raw).trim();
+  if (!cleaned) return null;
+  if (cleaned.startsWith(':')) {
+    const afterColon = cleaned.slice(1).trim();
+    if (!afterColon) return null;
+    if (/^\d{1,2}$/.test(afterColon)) {
+      return parseInt(afterColon, 10);
+    }
+    cleaned = afterColon;
+  }
+  if (/^\d{1,3}:\d{1,2}(?::\d{1,2})?$/.test(cleaned)) {
+    return parseTimestampToSeconds(cleaned);
+  }
+  const hmMatch = cleaned.match(/^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?$/i);
+  if (hmMatch && (hmMatch[1] || hmMatch[2] || hmMatch[3])) {
+    return (
+      parseInt(hmMatch[1] || '0', 10) * 3600 +
+      parseInt(hmMatch[2] || '0', 10) * 60 +
+      parseInt(hmMatch[3] || '0', 10)
+    );
+  }
+  if (/^\d+$/.test(cleaned)) {
+    return parseInt(cleaned, 10);
+  }
+  return null;
+};
+
 export default function TranscriptSearch({
   displayCues = [],
   searchQuery,
@@ -96,6 +125,18 @@ export default function TranscriptSearch({
   // Transcript Appearance Menu state
   const [showAppearanceMenu, setShowAppearanceMenu] = useState(false);
   const appearanceBtnRef = useRef(null);
+
+  // Ctrl+G / Cmd+G Go to Timestamp state
+  const [showGoToTimestamp, setShowGoToTimestamp] = useState(false);
+  const [goToInputValue, setGoToInputValue] = useState('');
+  const [goToError, setGoToError] = useState('');
+  const goToDialogRef = useRef(null);
+  const goToInputRef = useRef(null);
+  const goToBaseId = useId();
+  const goToLabelId = `${goToBaseId}-goto-label`;
+  const goToInputId = `${goToBaseId}-goto-input`;
+  const goToHintId = `${goToBaseId}-goto-hint`;
+  const goToErrorId = `${goToBaseId}-goto-error`;
   const appearanceFontFamily = useTranscriptAppearanceStore((s) => s.fontFamily);
   const appearanceFontColor = useTranscriptAppearanceStore((s) => s.fontColor);
   const appearanceFontSize = useTranscriptAppearanceStore((s) => s.fontSize);
@@ -169,6 +210,27 @@ export default function TranscriptSearch({
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key?.toLowerCase() === 'g') {
+        e.preventDefault();
+        setGoToError('');
+        setShowGoToTimestamp((prev) => {
+          const next = !prev;
+          if (next) {
+            const currentCue = displayCues[activeCueIdx] || activeData?.cues?.[activeCueIdx];
+            if (currentCue?.time && !goToInputValue) {
+              setGoToInputValue(currentCue.time);
+            }
+          }
+          return next;
+        });
+        return;
+      }
+      if (e.key === 'Escape' && showGoToTimestamp) {
+        e.preventDefault();
+        setShowGoToTimestamp(false);
+        setGoToError('');
+        return;
+      }
       if (e.defaultPrevented) return;
       if (e.code !== 'Space' && e.key !== ' ') return;
       const activeEl = document.activeElement;
@@ -188,7 +250,98 @@ export default function TranscriptSearch({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onToggleVideoPlayback]);
+  }, [onToggleVideoPlayback, showGoToTimestamp, activeCueIdx, displayCues, activeData, goToInputValue]);
+
+  useEffect(() => {
+    const dialogEl = goToDialogRef.current;
+    if (!dialogEl) return;
+    if (showGoToTimestamp) {
+      if (typeof dialogEl.show === 'function' && !dialogEl.open) {
+        try {
+          dialogEl.show();
+        } catch {
+          dialogEl.setAttribute('open', '');
+        }
+      } else if (!dialogEl.hasAttribute('open')) {
+        dialogEl.setAttribute('open', '');
+      }
+      setTimeout(() => {
+        goToInputRef.current?.focus();
+        goToInputRef.current?.select?.();
+      }, 0);
+    } else {
+      if (typeof dialogEl.close === 'function' && dialogEl.open) {
+        try {
+          dialogEl.close();
+        } catch {
+          dialogEl.removeAttribute('open');
+        }
+      } else {
+        dialogEl.removeAttribute('open');
+      }
+    }
+  }, [showGoToTimestamp]);
+
+  const parsedGoToSeconds = useMemo(() => parseGoToTimestampInput(goToInputValue), [goToInputValue]);
+
+  const matchedGoToCueInfo = useMemo(() => {
+    if (parsedGoToSeconds === null || parsedGoToSeconds < 0) return null;
+    const allCues = (Array.isArray(activeData?.cues) && activeData.cues.length > 0)
+      ? activeData.cues
+      : displayCues;
+    if (!allCues.length) return null;
+    let idx = allCues.findIndex((c) => parseTimeToSeconds(c.time) === parsedGoToSeconds);
+    if (idx === -1) {
+      for (let i = allCues.length - 1; i >= 0; i--) {
+        if (parsedGoToSeconds >= parseTimeToSeconds(allCues[i].time)) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    if (idx === -1) idx = 0;
+    return { index: idx, cue: allCues[idx] };
+  }, [parsedGoToSeconds, activeData?.cues, displayCues]);
+
+  const handleGoToTimestampSubmit = (e) => {
+    if (e) e.preventDefault();
+    const parsedSecs = parseGoToTimestampInput(goToInputValue);
+    if (parsedSecs === null || parsedSecs < 0) {
+      setGoToError('Enter a valid timestamp (e.g., 14:20, 1:05:30, :45, or 14m20s).');
+      return;
+    }
+    setGoToError('');
+    const formattedTarget = formatSecondsToTimestamp(parsedSecs);
+    if (searchQuery && typeof setSearchQuery === 'function') {
+      setSearchQuery('');
+    }
+    setAutoScroll(true);
+    setLocalPlaying(true);
+    userScrolledManuallyRef.current = false;
+    if (typeof handleCueClick === 'function') {
+      handleCueClick(formattedTarget);
+    }
+    const targetIdx = matchedGoToCueInfo ? matchedGoToCueInfo.index : -1;
+    if (targetIdx >= 0 && cueRefs.current[targetIdx] && scrollContainerRef.current) {
+      const container = scrollContainerRef.current;
+      const cueEl = cueRefs.current[targetIdx];
+      isProgrammaticScrollRef.current = true;
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      const targetTop = cueEl.offsetTop - (container.clientHeight / 2) + (cueEl.clientHeight / 2);
+      try {
+        container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+      } catch {
+        container.scrollTop = Math.max(0, targetTop);
+      }
+      if (typeof cueEl.scrollIntoView === 'function') {
+        cueEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      scrollTimeoutRef.current = setTimeout(() => {
+        isProgrammaticScrollRef.current = false;
+      }, 500);
+    }
+    setShowGoToTimestamp(false);
+  };
 
   const handleUpdateAnnotation = async (annId, newNoteText, extraFields = {}) => {
     if (!annId) return;
@@ -1411,6 +1564,57 @@ export default function TranscriptSearch({
                 <span>Sync {autoScroll ? 'ON' : 'OFF'}</span>
               </button>
 
+              {/* Go to Timestamp (Ctrl+G) Button */}
+              <button
+                type="button"
+                data-testid="goto-timestamp-btn"
+                onClick={() => {
+                  setGoToError('');
+                  setShowGoToTimestamp((prev) => {
+                    const next = !prev;
+                    if (next) {
+                      const currentCue = displayCues[activeCueIdx] || activeData?.cues?.[activeCueIdx];
+                      if (currentCue?.time && !goToInputValue) {
+                        setGoToInputValue(currentCue.time);
+                      }
+                    }
+                    return next;
+                  });
+                }}
+                title="Go to timestamp (Ctrl+G)"
+                aria-label="Go to timestamp"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  background: showGoToTimestamp ? 'rgba(0, 117, 237, 0.12)' : 'var(--card-bg)',
+                  color: showGoToTimestamp ? 'var(--theme-primary)' : 'var(--text-secondary)',
+                  border: showGoToTimestamp ? '1px solid rgba(0, 117, 237, 0.4)' : '1px solid var(--border-color)',
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <LocateFixed size={11} aria-hidden="true" />
+                <span>Go to</span>
+                <kbd
+                  aria-hidden="true"
+                  style={{
+                    fontSize: '0.64rem',
+                    padding: '0 4px',
+                    borderRadius: '4px',
+                    background: 'rgba(100, 116, 139, 0.14)',
+                    color: 'var(--text-secondary)',
+                    fontFamily: 'monospace'
+                  }}
+                >
+                  Ctrl+G
+                </kbd>
+              </button>
+
               {displayCues.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
                   <button
@@ -1465,6 +1669,169 @@ export default function TranscriptSearch({
               )}
             </div>
           </div>
+
+          <style>{`
+            dialog.goto-timestamp-dialog[open] {
+              display: flex;
+              flex-direction: column;
+              gap: 6px;
+            }
+            dialog.goto-timestamp-dialog input:focus-visible,
+            dialog.goto-timestamp-dialog button:focus-visible {
+              outline: 2px solid var(--theme-primary, #0075ed);
+              outline-offset: 2px;
+            }
+          `}</style>
+          <dialog
+            ref={goToDialogRef}
+            open={showGoToTimestamp}
+            aria-labelledby={goToLabelId}
+            data-testid="goto-timestamp-dialog"
+            className="goto-timestamp-dialog"
+            style={{
+              position: 'relative',
+              inset: 'auto',
+              width: '100%',
+              margin: '0 0 8px 0',
+              padding: '10px 12px',
+              borderRadius: '8px',
+              background: 'var(--card-bg)',
+              border: '1px solid rgba(0, 117, 237, 0.45)',
+              boxShadow: '0 6px 18px rgba(0, 0, 0, 0.22)',
+              color: 'var(--text-primary)',
+              boxSizing: 'border-box'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <label
+                id={goToLabelId}
+                htmlFor={goToInputId}
+                style={{
+                  fontSize: '0.76rem',
+                  fontWeight: 700,
+                  color: 'var(--text-primary)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <LocateFixed size={13} color="var(--theme-primary)" aria-hidden="true" />
+                <span>Go to Timestamp</span>
+              </label>
+              <span
+                id={goToHintId}
+                style={{
+                  fontSize: '0.72rem',
+                  color: 'var(--text-secondary)'
+                }}
+              >
+                Format: MM:SS, H:MM:SS, :SS, or 14m20s · Enter to jump · Esc to close
+              </span>
+            </div>
+
+            <form
+              onSubmit={handleGoToTimestampSubmit}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <input
+                ref={goToInputRef}
+                id={goToInputId}
+                data-testid="goto-timestamp-input"
+                type="text"
+                value={goToInputValue}
+                onChange={(e) => {
+                  setGoToInputValue(e.target.value);
+                  if (goToError) setGoToError('');
+                }}
+                placeholder="e.g. 14:20 or 1:05:30"
+                aria-describedby={goToError ? `${goToHintId} ${goToErrorId}` : goToHintId}
+                aria-invalid={Boolean(goToError)}
+                autoComplete="off"
+                style={{
+                  flex: 1,
+                  background: 'var(--bg-dark)',
+                  border: goToError ? '1px solid #ef4444' : '1px solid var(--border-color)',
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.84rem',
+                  fontFamily: 'monospace'
+                }}
+              />
+              <button
+                type="submit"
+                data-testid="goto-timestamp-submit"
+                style={{
+                  background: 'var(--theme-primary)',
+                  color: '#ffffff',
+                  border: 'none',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  minBlockSize: '28px',
+                  minInlineSize: '44px'
+                }}
+              >
+                Go
+              </button>
+              <button
+                type="button"
+                data-testid="goto-timestamp-close"
+                aria-label="Close go to timestamp"
+                onClick={() => {
+                  setShowGoToTimestamp(false);
+                  setGoToError('');
+                }}
+                style={{
+                  background: 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)',
+                  padding: '5px 8px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minBlockSize: '28px',
+                  minInlineSize: '28px'
+                }}
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            </form>
+
+            {goToError ? (
+              <div
+                id={goToErrorId}
+                role="alert"
+                data-testid="goto-timestamp-error"
+                style={{
+                  fontSize: '0.74rem',
+                  color: '#ef4444'
+                }}
+              >
+                {goToError}
+              </div>
+            ) : matchedGoToCueInfo?.cue ? (
+              <div
+                data-testid="goto-timestamp-preview"
+                style={{
+                  fontSize: '0.75rem',
+                  color: 'var(--text-secondary)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                <strong style={{ color: 'var(--theme-primary)', fontFamily: 'monospace' }}>
+                  [{matchedGoToCueInfo.cue.time}]
+                </strong>{' '}
+                {matchedGoToCueInfo.cue.text}
+              </div>
+            ) : null}
+          </dialog>
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <div style={{ position: 'relative', flex: 1 }}>

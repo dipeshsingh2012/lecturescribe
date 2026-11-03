@@ -752,6 +752,14 @@ export function useLecturePlayer(activeData, userEmail = null) {
     if (clickedIdx === -1 && Number.isFinite(secs)) {
       clickedIdx = cues.findIndex(c => parseTimestampToSeconds(c.time) === secs);
     }
+    if (clickedIdx === -1 && Number.isFinite(secs) && cues.length > 0) {
+      for (let i = cues.length - 1; i >= 0; i--) {
+        if (secs >= parseTimestampToSeconds(cues[i].time)) {
+          clickedIdx = i;
+          break;
+        }
+      }
+    }
     const targetIdx = clickedIdx !== -1 ? clickedIdx : 0;
     setActiveCueIdx(targetIdx);
     activeCueIdxRef.current = targetIdx;

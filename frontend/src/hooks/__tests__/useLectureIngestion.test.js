@@ -213,7 +213,7 @@ describe('useLectureIngestion hook functionality', () => {
     const cachedItem = {
       videoId: '999',
       title: 'Cached Lecture',
-      cues: [],
+      cues: [{ time: '00:00', text: 'Cached lecture opening' }],
       course_name: 'History'
     };
     localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '999': cachedItem }));
@@ -244,6 +244,61 @@ describe('useLectureIngestion hook functionality', () => {
     );
     expect(result.current.activeData.videoId).toBe('999');
     expect(result.current.activeData.cached).toBe(true);
+  });
+
+  it('re-fetches from /api/transcript when cached entry in localStorage has empty cues', async () => {
+    const staleCachedItem = {
+      videoId: '1240897687',
+      title: 'Machine Learning Paradigms Live Session -10 ( 29 / 10 / 2026)',
+      cues: [],
+      transcript_available: false,
+      course_name: '1.2 Machine Learning Paradigms'
+    };
+    localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '1240897687': staleCachedItem }));
+
+    const freshPayload = {
+      videoId: '1240897687',
+      title: 'Machine Learning Paradigms Live Session -10 ( 29 / 10 / 2026)',
+      cues: [{ time: '02:02', text: 'You can keep that for the end of the session.' }],
+      transcript_available: true,
+      course_name: '1.2 Machine Learning Paradigms'
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => freshPayload
+    });
+
+    const initChatMessages = vi.fn();
+    const { result } = renderHook(() =>
+      useLectureIngestion({
+        userEmail: 'student@example.com',
+        selectedCourse: '1.2 Machine Learning Paradigms',
+        setSelectedCourse: vi.fn(),
+        activeCourseData: null,
+        effectiveCourses: [],
+        fetchUserLibrary: vi.fn(),
+        navigateTo: vi.fn(),
+        initChatMessages
+      })
+    );
+
+    await act(async () => {
+      await result.current.handleTranscribe('1240897687', true, '1.2 Machine Learning Paradigms');
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/transcript?url=1240897687')
+    );
+    expect(result.current.activeData.cues).toEqual(freshPayload.cues);
+    expect(result.current.activeData.transcript_available).toBe(true);
+    expect(initChatMessages).toHaveBeenCalledWith(
+      freshPayload.title,
+      '1240897687',
+      freshPayload.cues
+    );
+    const updatedStore = JSON.parse(localStorage.getItem('lecturescribe_cached_videos') || '{}');
+    expect(updatedStore['1240897687'].cues).toEqual(freshPayload.cues);
   });
 
   it('extracts video ID from complex video URL during ingestion', async () => {
@@ -286,7 +341,7 @@ describe('useLectureIngestion hook functionality', () => {
     const cachedItem = {
       videoId: '12345678',
       title: 'Deep Learning',
-      cues: [],
+      cues: [{ time: '00:00', text: 'Neural networks' }],
       course_name: 'AI'
     };
     localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '12345678': cachedItem }));
@@ -360,7 +415,7 @@ describe('useLectureIngestion hook functionality', () => {
     const cachedItem = {
       videoId: '88776655',
       title: 'Operating Systems',
-      cues: [],
+      cues: [{ time: '00:00', text: 'Kernel overview' }],
       course_name: 'CS'
     };
     localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '88776655': cachedItem }));
@@ -476,7 +531,7 @@ describe('useLectureIngestion hook functionality', () => {
     const cachedItem = {
       videoId: '998877',
       title: 'Cached Intro to AI',
-      cues: [],
+      cues: [{ time: '00:00', text: 'Intro to AI' }],
       course_name: 'Old Course'
     };
     localStorage.setItem('lecturescribe_cached_videos', JSON.stringify({ '998877': cachedItem }));

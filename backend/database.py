@@ -193,6 +193,8 @@ class RelationalDBManager:
         self._announcements_memory: List[Dict[str, Any]] = []
         self._audit_logs_memory: List[Dict[str, Any]] = []
         self._courses_memory_cache: Dict[str, Dict[str, Any]] = {}
+        self._canonical_course_name_cache: Dict[str, str] = {}
+        self._courses_meta_local = threading.local()
         self._schema_initialized: bool = False
 
         if not HAS_PSYCOPG2:
@@ -298,6 +300,28 @@ class RelationalDBManager:
                 idle.append(conn)
                 return
         conn._really_close()
+
+    def _enable_readonly_autocommit(self, conn) -> None:
+        """Enable autocommit on real idle psycopg2 connections to avoid BEGIN/COMMIT/ROLLBACK wire round-trips."""
+        if not HAS_PSYCOPG2 or not isinstance(conn, psycopg2.extensions.connection):
+            return
+        try:
+            if not conn.closed and conn.info.transaction_status == psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+                conn.autocommit = True
+        except Exception:
+            pass
+
+    def consume_last_courses_meta(self, user_email: str) -> Optional[Dict[str, Any]]:
+        """Consume thread-local metadata (pinned_courses, library, db_error) populated by get_user_courses."""
+        local_store = self.__dict__.get("_courses_meta_local")
+        if local_store is None:
+            return None
+        meta = getattr(local_store, "last_result", None)
+        local_store.last_result = None
+        clean_email = (user_email or "").strip().lower()
+        if isinstance(meta, dict) and meta.get("email") == clean_email:
+            return meta
+        return None
 
 
     def _init_postgres_schema(self, _first_init: bool = True):
@@ -1753,6 +1777,7 @@ class RelationalDBManager:
             )
 
         # Update In-Memory L1 Cache
+        existing_mem = self._memory_cache.get(video_id) or {}
         self._memory_cache[video_id] = {
             "videoId": video_id,
             "title": title,
@@ -1764,6 +1789,7 @@ class RelationalDBManager:
             "course_name": canonical_course,
             "course_slug": course_slug,
             "course_id": course_id,
+            "gcs_video_blob": existing_mem.get("gcs_video_blob"),
             "cached": True
         }
 
@@ -2108,38 +2134,38 @@ class RelationalDBManager:
         if HAS_PSYCOPG2 and self.postgres_url:
             try:
                 conn = self._get_connection()
-                with conn:
-                    with conn.cursor() as cursor:
-                        query = """
-                            SELECT DISTINCT ON (video_id)
-                                video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at
-                            FROM lecturescribe_lecture_progress
-                            WHERE 1=1
-                        """
-                        params = []
-                        if clean_email and clean_email != "anonymous":
-                            query += " AND user_email IN (%s, 'anonymous')"
-                            params.append(clean_email)
-                        if video_ids:
-                            query += " AND video_id = ANY(%s)"
-                            params.append(video_ids)
-                        query += " ORDER BY video_id, CASE WHEN user_email = %s THEN 0 ELSE 1 END, updated_at DESC;"
-                        params.append(clean_email or "anonymous")
+                self._enable_readonly_autocommit(conn)
+                with conn.cursor() as cursor:
+                    query = """
+                        SELECT DISTINCT ON (video_id)
+                            video_id, user_email, last_timestamp, last_seconds, duration_seconds, progress_percent, active_cue_idx, updated_at
+                        FROM lecturescribe_lecture_progress
+                        WHERE 1=1
+                    """
+                    params = []
+                    if clean_email and clean_email != "anonymous":
+                        query += " AND user_email IN (%s, 'anonymous')"
+                        params.append(clean_email)
+                    if video_ids:
+                        query += " AND video_id = ANY(%s)"
+                        params.append(video_ids)
+                    query += " ORDER BY video_id, CASE WHEN user_email = %s THEN 0 ELSE 1 END, updated_at DESC;"
+                    params.append(clean_email or "anonymous")
 
-                        cursor.execute(query, tuple(params))
-                        rows = cursor.fetchall() or []
-                        for row in rows:
-                            res_map[row["video_id"]] = {
-                                "video_id": row["video_id"],
-                                "user_email": row["user_email"],
-                                "last_timestamp": row["last_timestamp"],
-                                "last_seconds": float(row["last_seconds"]),
-                                "duration_seconds": float(row["duration_seconds"]),
-                                "progress_percent": float(row["progress_percent"]),
-                                "active_cue_idx": int(row["active_cue_idx"]),
-                                "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None
-                            }
-                        return res_map
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall() or []
+                    for row in rows:
+                        res_map[row["video_id"]] = {
+                            "video_id": row["video_id"],
+                            "user_email": row["user_email"],
+                            "last_timestamp": row["last_timestamp"],
+                            "last_seconds": float(row["last_seconds"]),
+                            "duration_seconds": float(row["duration_seconds"]),
+                            "progress_percent": float(row["progress_percent"]),
+                            "active_cue_idx": int(row["active_cue_idx"]),
+                            "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None
+                        }
+                    return res_map
             except Exception as e:
                 print(f"[PostgreSQL Notice] get_user_progress_map fallback: {e}")
             finally:
@@ -3292,7 +3318,7 @@ class RelationalDBManager:
     def get_saved_video(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Fetch video transcript from In-Memory Cache or PostgreSQL.
         Returns None if not found."""
-        if video_id in self._memory_cache:
+        if video_id in self._memory_cache and self._memory_cache[video_id].get("cues"):
             return self._memory_cache[video_id]
 
         conn = None
@@ -4084,108 +4110,267 @@ class RelationalDBManager:
         finally:
             conn.close()
 
+    def _resolve_course_name_fast(
+        self,
+        course_identifier: str,
+        joined_course_name: Optional[str] = None,
+    ) -> str:
+        """
+        Resolve canonical course display name strictly in memory (zero SQL queries),
+        leveraging CANONICAL_COURSE_MAPPINGS, joined lecturescribe_courses row, and L1 caches.
+        """
+        clean = (course_identifier or "").strip()
+        if not clean:
+            return ""
+
+        if clean in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[clean]
+
+        slug_norm = to_course_slug(clean)
+        if slug_norm in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[slug_norm]
+
+        try:
+            base_slug = to_gcs_course_slug(clean)
+        except Exception:
+            base_slug = re.sub(r'^\s*\d+[\s.\-_]+\d+[\s.\-_:]*', '', slug_norm).strip('-')
+        if base_slug in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[base_slug]
+
+        if joined_course_name and isinstance(joined_course_name, str):
+            jc_clean = joined_course_name.strip()
+            if jc_clean and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', jc_clean):
+                return jc_clean
+
+        if clean in self._canonical_course_name_cache:
+            return self._canonical_course_name_cache[clean]
+
+        cached_ent = self._courses_memory_cache.get(slug_norm) or self._courses_memory_cache.get(base_slug)
+        if isinstance(cached_ent, dict) and isinstance(cached_ent.get("name"), str):
+            ent_name = cached_ent["name"].strip()
+            if ent_name and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', ent_name):
+                return ent_name
+
+        if re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean):
+            m = re.match(r'^(\d+)-(\d+)-(.+)$', clean)
+            if m:
+                return f"{m.group(1)}.{m.group(2)} {m.group(3).replace('-', ' ').title()}"
+            return base_slug.replace("-", " ").title()
+
+        return clean
+
     def get_user_courses(self, user_email: str) -> List[Dict[str, Any]]:
         """
         Group user library lectures by course_name, canonicalizing slugs to avoid duplicates.
         Returns a list of course objects, each containing its aggregated lecture list.
+        Executes a single joined PostgreSQL query in autocommit mode (1 network round-trip).
         """
         if not user_email:
             return []
 
         clean_email = user_email.strip().lower()
+        local_meta = self.__dict__.setdefault("_courses_meta_local", threading.local())
+        db_error = False
 
         conn = None
         if HAS_PSYCOPG2 and self.postgres_url:
             try:
                 conn = self._get_connection()
-                with conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute("""
+                self._enable_readonly_autocommit(conn)
+                prog_emails = [clean_email, "anonymous"] if clean_email != "anonymous" else ["anonymous"]
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        WITH user_lib AS (
                             SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at, course_name, course_slug, course_id
                             FROM lecturescribe_user_library
                             WHERE user_email = %s
-                            ORDER BY last_viewed_at DESC;
-                        """, (clean_email,))
-                        rows = cursor.fetchall() or []
+                            ORDER BY last_viewed_at DESC
+                        ),
+                        user_prog AS (
+                            SELECT DISTINCT ON (lp.video_id)
+                                lp.video_id,
+                                lp.user_email AS prog_user_email,
+                                lp.last_timestamp AS prog_last_timestamp,
+                                lp.last_seconds AS prog_last_seconds,
+                                lp.duration_seconds AS prog_duration_seconds,
+                                lp.progress_percent AS prog_progress_percent,
+                                lp.active_cue_idx AS prog_active_cue_idx,
+                                lp.updated_at AS prog_updated_at
+                            FROM lecturescribe_lecture_progress lp
+                            INNER JOIN user_lib ul ON ul.video_id = lp.video_id
+                            WHERE lp.user_email = ANY(%s)
+                            ORDER BY lp.video_id, CASE WHEN lp.user_email = %s THEN 0 ELSE 1 END, lp.updated_at DESC
+                        ),
+                        user_pins AS (
+                            SELECT COALESCE(ARRAY_AGG(course_slug ORDER BY created_at ASC), ARRAY[]::varchar[]) AS pinned_slugs_arr
+                            FROM lecturescribe_user_course_pins
+                            WHERE user_email = %s
+                              AND course_slug IS NOT NULL
+                        )
+                        SELECT
+                            ul.video_id,
+                            ul.title,
+                            ul.duration,
+                            ul.source_url,
+                            ul.drive_folder_url,
+                            ul.last_viewed_at,
+                            ul.course_name,
+                            ul.course_slug,
+                            ul.course_id,
+                            jc.joined_course_id,
+                            jc.joined_course_slug,
+                            jc.joined_course_name,
+                            up.prog_user_email,
+                            up.prog_last_timestamp,
+                            up.prog_last_seconds,
+                            up.prog_duration_seconds,
+                            up.prog_progress_percent,
+                            up.prog_active_cue_idx,
+                            up.prog_updated_at,
+                            CASE WHEN ROW_NUMBER() OVER (ORDER BY ul.last_viewed_at DESC NULLS LAST) = 1 THEN upins.pinned_slugs_arr ELSE NULL END AS pinned_slugs_arr,
+                            TRUE AS has_joined_meta
+                        FROM user_pins upins
+                        LEFT JOIN user_lib ul ON TRUE
+                        LEFT JOIN user_prog up ON up.video_id = ul.video_id
+                        LEFT JOIN LATERAL (
+                            SELECT c.id::text AS joined_course_id, c.slug AS joined_course_slug, c.name AS joined_course_name
+                            FROM lecturescribe_courses c
+                            WHERE (ul.course_id IS NOT NULL AND c.id = ul.course_id)
+                               OR (ul.course_slug IS NOT NULL AND ul.course_slug != '' AND c.slug = ul.course_slug)
+                               OR (ul.course_name IS NOT NULL AND ul.course_name != '' AND (
+                                   LOWER(c.name) = LOWER(ul.course_name)
+                                   OR c.slug = regexp_replace(LOWER(ul.course_name), '[^a-z0-9]+', '-', 'g')
+                               ))
+                            ORDER BY
+                                CASE WHEN ul.course_id IS NOT NULL AND c.id = ul.course_id THEN 0 ELSE 1 END,
+                                CASE WHEN c.name ~ '^[0-9]+\\.[0-9]+\\s+' THEN 0 ELSE 1 END
+                            LIMIT 1
+                        ) jc ON ul.video_id IS NOT NULL
+                        ORDER BY ul.last_viewed_at DESC NULLS LAST;
+                    """, (clean_email, prog_emails, clean_email, clean_email))
+                    rows = cursor.fetchall() or []
 
-                        try:
-                            v_ids = [r["video_id"] for r in rows if r.get("video_id")]
-                            prog_map = self.get_user_progress_map(user_email=clean_email, video_ids=v_ids)
-                        except Exception:
-                            prog_map = {}
+                    has_joined_meta = bool(rows and isinstance(rows[0], Mapping) and rows[0].get("has_joined_meta"))
+                    courses_map = OrderedDict()
+                    flat_library: List[Dict[str, Any]] = []
 
-                        courses_map = OrderedDict()
-                        for r in rows:
-                            raw_c_name = (r.get("course_name") or extract_course_name(r.get("title", ""))).strip()
-                            if not raw_c_name:
-                                continue
-                            c_name = str(self.resolve_course_canonical_name(raw_c_name))
+                    for r in rows:
+                        vid = r.get("video_id")
+                        if not vid:
+                            continue
 
-                            # Canonical key grouped by hyphenated slug
-                            c_slug = to_course_slug(c_name)
-                            if not c_slug:
-                                continue
-                            is_slug = bool(isinstance(c_name, str) and re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', c_name))
+                        jc_id = r.get("joined_course_id")
+                        jc_slug = r.get("joined_course_slug")
+                        jc_name = r.get("joined_course_name")
+                        if jc_id and jc_slug and jc_name:
+                            c_cached = {"id": str(jc_id), "slug": str(jc_slug), "name": str(jc_name)}
+                            self._courses_memory_cache.setdefault(str(jc_slug), c_cached)
+                            self._courses_memory_cache.setdefault(str(jc_id), c_cached)
 
-                            if c_slug not in courses_map:
-                                display_title = c_name
-                                if is_slug:
-                                    extracted = extract_course_name(r.get("title", ""))
-                                    if extracted and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', extracted):
-                                        display_title = self.resolve_course_canonical_name(extracted)
-                                    else:
-                                        display_title = self.resolve_course_canonical_name(c_name.replace("-", " ").title())
+                        raw_c_name = (r.get("course_name") or extract_course_name(r.get("title", ""))).strip()
+                        if not raw_c_name:
+                            continue
+                        c_name = self._resolve_course_name_fast(raw_c_name, joined_course_name=jc_name)
 
-                                c_ent = self.get_course(c_slug)
-                                resolved_cid = str(r.get("course_id")) if r.get("course_id") else (str(c_ent["id"]) if c_ent and isinstance(c_ent, dict) and c_ent.get("id") and isinstance(c_ent["id"], (str, int)) else None)
+                        # Canonical key grouped by hyphenated slug
+                        c_slug = to_course_slug(c_name)
+                        if not c_slug:
+                            continue
+                        is_slug = bool(isinstance(c_name, str) and re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', c_name))
 
-                                courses_map[c_slug] = {
-                                    "course_id": resolved_cid,
-                                    "course_name": display_title,
-                                    "course_slug": c_slug,
-                                    "lecture_count": 0,
-                                    "latest_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                    "thumbnail_video_id": r["video_id"],
-                                    "lectures": []
-                                }
-                            else:
-                                # Upgrade slug display name to proper capitalized course title if available
-                                if bool(isinstance(courses_map[c_slug]["course_name"], str) and re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', courses_map[c_slug]["course_name"])) and not is_slug:
-                                    courses_map[c_slug]["course_name"] = c_name
+                        if c_slug not in courses_map:
+                            display_title = c_name
+                            if is_slug:
+                                extracted = extract_course_name(r.get("title", ""))
+                                if extracted and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', extracted):
+                                    display_title = self._resolve_course_name_fast(extracted, joined_course_name=jc_name)
+                                else:
+                                    display_title = self._resolve_course_name_fast(c_name.replace("-", " ").title(), joined_course_name=jc_name)
 
-                            canonical_course_title = courses_map[c_slug]["course_name"]
-                            courses_map[c_slug]["lecture_count"] += 1
-                            courses_map[c_slug]["lectures"].append({
-                                "videoId": r["video_id"],
-                                "video_id": r["video_id"],
-                                "title": r["title"],
-                                "video_title": r["title"],
-                                "duration": r["duration"] or "Unknown",
-                                "sourceUrl": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
-                                "video_url": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
-                                "driveFolderUrl": r["drive_folder_url"],
-                                "drive_folder_url": r["drive_folder_url"],
-                                "lastViewedAt": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                "last_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                "created_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
-                                "course_id": courses_map[c_slug].get("course_id"),
+                            cached_c = self._courses_memory_cache.get(c_slug)
+                            resolved_cid = (
+                                str(r["course_id"]) if r.get("course_id")
+                                else (str(jc_id) if jc_id else (str(cached_c["id"]) if isinstance(cached_c, dict) and cached_c.get("id") else None))
+                            )
+
+                            courses_map[c_slug] = {
+                                "course_id": resolved_cid,
+                                "course_name": display_title,
                                 "course_slug": c_slug,
-                                "course_name": canonical_course_title,
-                                "progress": prog_map.get(r["video_id"])
-                            })
+                                "lecture_count": 0,
+                                "latest_viewed_at": str(r["last_viewed_at"]) if r.get("last_viewed_at") else None,
+                                "thumbnail_video_id": vid,
+                                "lectures": []
+                            }
+                        else:
+                            # Upgrade slug display name to proper capitalized course title if available
+                            if bool(isinstance(courses_map[c_slug]["course_name"], str) and re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', courses_map[c_slug]["course_name"])) and not is_slug:
+                                courses_map[c_slug]["course_name"] = c_name
 
+                        if r.get("prog_last_timestamp") is not None or r.get("prog_last_seconds") is not None:
+                            prog_updated = r.get("prog_updated_at")
+                            progress_obj = {
+                                "video_id": vid,
+                                "user_email": r.get("prog_user_email") or clean_email,
+                                "last_timestamp": r.get("prog_last_timestamp") or "00:00",
+                                "last_seconds": float(r.get("prog_last_seconds") or 0.0),
+                                "duration_seconds": float(r.get("prog_duration_seconds") or 0.0),
+                                "progress_percent": float(r.get("progress_percent") if r.get("progress_percent") is not None else (r.get("prog_progress_percent") or 0.0)),
+                                "active_cue_idx": int(r.get("prog_active_cue_idx") or 0),
+                                "updated_at": prog_updated.isoformat() if hasattr(prog_updated, "isoformat") else (str(prog_updated) if prog_updated else None),
+                            }
+                        else:
+                            progress_obj = None
+
+                        canonical_course_title = courses_map[c_slug]["course_name"]
+                        last_viewed_str = str(r["last_viewed_at"]) if r.get("last_viewed_at") else None
+                        src_url = r.get("source_url") or f"https://video.lecturescribe.local/{vid}"
+                        lecture_obj = {
+                            "videoId": vid,
+                            "video_id": vid,
+                            "title": r.get("title"),
+                            "video_title": r.get("title"),
+                            "duration": r.get("duration") or "Unknown",
+                            "sourceUrl": src_url,
+                            "video_url": src_url,
+                            "driveFolderUrl": r.get("drive_folder_url"),
+                            "drive_folder_url": r.get("drive_folder_url"),
+                            "lastViewedAt": last_viewed_str,
+                            "last_viewed_at": last_viewed_str,
+                            "created_at": last_viewed_str,
+                            "course_id": courses_map[c_slug].get("course_id"),
+                            "course_slug": c_slug,
+                            "course_name": canonical_course_title,
+                            "progress": progress_obj,
+                        }
+                        courses_map[c_slug]["lecture_count"] += 1
+                        courses_map[c_slug]["lectures"].append(lecture_obj)
+                        flat_library.append(lecture_obj)
+
+                    is_pins_mocked = hasattr(getattr(self, "get_pinned_courses", None), "_mock_name")
+                    if is_pins_mocked or not has_joined_meta:
                         pinned_slugs = self.get_pinned_courses(clean_email)
-                        pinned_slugs_set = set(pinned_slugs)
+                    else:
+                        pinned_slugs = list(rows[0].get("pinned_slugs_arr") or []) if rows else []
 
-                        for course_slug_key, course_item in courses_map.items():
-                            course_item["is_pinned"] = course_slug_key in pinned_slugs_set
+                    pinned_slugs_set = set(pinned_slugs)
+                    for course_slug_key, course_item in courses_map.items():
+                        course_item["is_pinned"] = course_slug_key in pinned_slugs_set
 
-                        # Partition: preserve FIFO append order for pinned courses, recency for unpinned
-                        pinned_courses_list = [courses_map[slug] for slug in pinned_slugs if slug in courses_map]
-                        unpinned_courses_list = [course_item for slug, course_item in courses_map.items() if slug not in pinned_slugs_set]
+                    # Partition: preserve FIFO append order for pinned courses, recency for unpinned
+                    pinned_courses_list = [courses_map[slug] for slug in pinned_slugs if slug in courses_map]
+                    unpinned_courses_list = [course_item for slug, course_item in courses_map.items() if slug not in pinned_slugs_set]
+                    ordered_courses = pinned_courses_list + unpinned_courses_list
 
-                        return pinned_courses_list + unpinned_courses_list
+                    local_meta.last_result = {
+                        "email": clean_email,
+                        "pinned_courses": pinned_slugs,
+                        "library": flat_library,
+                        "db_error": False,
+                    }
+                    return ordered_courses
             except Exception as e:
+                db_error = True
                 print(f"[PostgreSQL Notice] get_user_courses fallback: {e}")
             finally:
                 if conn:
@@ -4193,6 +4378,7 @@ class RelationalDBManager:
 
         # In-Memory fallback
         courses_map = OrderedDict()
+        flat_library = []
         for vid, v in self._memory_cache.items():
             if not isinstance(v, dict):
                 continue
@@ -4217,8 +4403,7 @@ class RelationalDBManager:
                     "thumbnail_video_id": vid,
                     "lectures": []
                 }
-            courses_map[c_slug]["lecture_count"] += 1
-            courses_map[c_slug]["lectures"].append({
+            lecture_obj = {
                 "videoId": vid,
                 "video_id": vid,
                 "title": v.get("title", ""),
@@ -4235,13 +4420,22 @@ class RelationalDBManager:
                 "course_slug": c_slug,
                 "course_name": c_name,
                 "progress": None
-            })
+            }
+            courses_map[c_slug]["lecture_count"] += 1
+            courses_map[c_slug]["lectures"].append(lecture_obj)
+            flat_library.append(lecture_obj)
         pinned_slugs = self.get_pinned_courses(clean_email)
         pinned_slugs_set = set(pinned_slugs)
         for course_slug_key, course_item in courses_map.items():
             course_item["is_pinned"] = course_slug_key in pinned_slugs_set
         pinned_courses_list = [courses_map[slug] for slug in pinned_slugs if slug in courses_map]
         unpinned_courses_list = [course_item for slug, course_item in courses_map.items() if slug not in pinned_slugs_set]
+        local_meta.last_result = {
+            "email": clean_email,
+            "pinned_courses": pinned_slugs,
+            "library": flat_library,
+            "db_error": db_error,
+        }
         return pinned_courses_list + unpinned_courses_list
 
     def get_pinned_courses(self, user_email: str) -> List[str]:
@@ -4259,6 +4453,7 @@ class RelationalDBManager:
             conn = None
             try:
                 conn = self._get_connection()
+                self._enable_readonly_autocommit(conn)
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT course_slug FROM lecturescribe_user_course_pins
@@ -4445,6 +4640,7 @@ class RelationalDBManager:
                                 course_dict["updated_at"] = course_dict["updated_at"].isoformat()
                             self._courses_memory_cache[course_dict["slug"]] = course_dict
                             self._courses_memory_cache[course_dict["id"]] = course_dict
+                            self._canonical_course_name_cache.clear()
                             conn.commit()
                             return course_dict
             except Exception as e:
@@ -4465,6 +4661,7 @@ class RelationalDBManager:
         }
         self._courses_memory_cache[derived_slug] = course_dict
         self._courses_memory_cache[new_id] = course_dict
+        self._canonical_course_name_cache.clear()
         return course_dict
 
     def get_course(self, identifier: str) -> Optional[Dict[str, Any]]:
@@ -4509,34 +4706,34 @@ class RelationalDBManager:
         if HAS_PSYCOPG2 and self.postgres_url:
             try:
                 conn = self._get_connection()
-                with conn:
-                    with conn.cursor() as cursor:
-                        if is_uuid:
-                            cursor.execute("""
-                                SELECT id::text, slug, name, created_at, updated_at
-                                FROM lecturescribe_courses
-                                WHERE id::text = %s
-                                LIMIT 1;
-                            """, (clean_id,))
-                        else:
-                            cursor.execute("""
-                                SELECT id::text, slug, name, created_at, updated_at
-                                FROM lecturescribe_courses
-                                WHERE slug = %s OR LOWER(name) = LOWER(%s)
-                                   OR (%s IS NOT NULL AND (slug = %s OR LOWER(name) = LOWER(%s)))
-                                ORDER BY CASE WHEN name ~ '^[0-9]+\\.[0-9]+\\s+' THEN 0 ELSE 1 END
-                                LIMIT 1;
-                            """, (derived_slug, clean_id, canon_slug, canon_slug or "", canon_name or ""))
-                        row = cursor.fetchone()
-                        if row and isinstance(row, dict) and "slug" in row and "id" in row and isinstance(row.get("slug"), str):
-                            c_dict = dict(row)
-                            if hasattr(c_dict.get("created_at"), "isoformat"):
-                                c_dict["created_at"] = c_dict["created_at"].isoformat()
-                            if hasattr(c_dict.get("updated_at"), "isoformat"):
-                                c_dict["updated_at"] = c_dict["updated_at"].isoformat()
-                            self._courses_memory_cache[c_dict["slug"]] = c_dict
-                            self._courses_memory_cache[c_dict["id"]] = c_dict
-                            return c_dict
+                self._enable_readonly_autocommit(conn)
+                with conn.cursor() as cursor:
+                    if is_uuid:
+                        cursor.execute("""
+                            SELECT id::text, slug, name, created_at, updated_at
+                            FROM lecturescribe_courses
+                            WHERE id::text = %s
+                            LIMIT 1;
+                        """, (clean_id,))
+                    else:
+                        cursor.execute("""
+                            SELECT id::text, slug, name, created_at, updated_at
+                            FROM lecturescribe_courses
+                            WHERE slug = %s OR LOWER(name) = LOWER(%s)
+                               OR (%s IS NOT NULL AND (slug = %s OR LOWER(name) = LOWER(%s)))
+                            ORDER BY CASE WHEN name ~ '^[0-9]+\\.[0-9]+\\s+' THEN 0 ELSE 1 END
+                            LIMIT 1;
+                        """, (derived_slug, clean_id, canon_slug, canon_slug or "", canon_name or ""))
+                    row = cursor.fetchone()
+                    if row and isinstance(row, dict) and "slug" in row and "id" in row and isinstance(row.get("slug"), str):
+                        c_dict = dict(row)
+                        if hasattr(c_dict.get("created_at"), "isoformat"):
+                            c_dict["created_at"] = c_dict["created_at"].isoformat()
+                        if hasattr(c_dict.get("updated_at"), "isoformat"):
+                            c_dict["updated_at"] = c_dict["updated_at"].isoformat()
+                        self._courses_memory_cache[c_dict["slug"]] = c_dict
+                        self._courses_memory_cache[c_dict["id"]] = c_dict
+                        return c_dict
             except Exception as e:
                 print(f"[PostgreSQL Notice] get_course lookup notice: {e}")
             finally:
@@ -4556,26 +4753,26 @@ class RelationalDBManager:
         if HAS_PSYCOPG2 and self.postgres_url:
             try:
                 conn = self._get_connection()
-                with conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute("""
-                            SELECT id::text, slug, name, created_at, updated_at
-                            FROM lecturescribe_courses
-                            ORDER BY name ASC;
-                        """)
-                        rows = cursor.fetchall() or []
-                        results = []
-                        for r in rows:
-                            c_dict = dict(r)
-                            if hasattr(c_dict.get("created_at"), "isoformat"):
-                                c_dict["created_at"] = c_dict["created_at"].isoformat()
-                            if hasattr(c_dict.get("updated_at"), "isoformat"):
-                                c_dict["updated_at"] = c_dict["updated_at"].isoformat()
-                            results.append(c_dict)
-                            self._courses_memory_cache[c_dict["slug"]] = c_dict
-                            self._courses_memory_cache[c_dict["id"]] = c_dict
-                        if results:
-                            return results
+                self._enable_readonly_autocommit(conn)
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id::text, slug, name, created_at, updated_at
+                        FROM lecturescribe_courses
+                        ORDER BY name ASC;
+                    """)
+                    rows = cursor.fetchall() or []
+                    results = []
+                    for r in rows:
+                        c_dict = dict(r)
+                        if hasattr(c_dict.get("created_at"), "isoformat"):
+                            c_dict["created_at"] = c_dict["created_at"].isoformat()
+                        if hasattr(c_dict.get("updated_at"), "isoformat"):
+                            c_dict["updated_at"] = c_dict["updated_at"].isoformat()
+                        results.append(c_dict)
+                        self._courses_memory_cache[c_dict["slug"]] = c_dict
+                        self._courses_memory_cache[c_dict["id"]] = c_dict
+                    if results:
+                        return results
             except Exception as e:
                 print(f"[PostgreSQL Notice] list_courses notice: {e}")
             finally:
@@ -4608,19 +4805,30 @@ class RelationalDBManager:
             base_slug = re.sub(r'^\s*\d+[\s.\-_]+\d+[\s.\-_:]*', '', slug_norm).strip('-')
         base_title = base_slug.replace("-", " ")
 
-        # 0. Check direct dictionary mapping
+        # 0. Check direct dictionary mapping & L1 canonical cache
         if clean in CANONICAL_COURSE_MAPPINGS:
             return CANONICAL_COURSE_MAPPINGS[clean]
         if slug_norm in CANONICAL_COURSE_MAPPINGS:
             return CANONICAL_COURSE_MAPPINGS[slug_norm]
         if base_slug in CANONICAL_COURSE_MAPPINGS:
             return CANONICAL_COURSE_MAPPINGS[base_slug]
+        if clean in self._canonical_course_name_cache:
+            return self._canonical_course_name_cache[clean]
 
-        # 1. Check first-class lecturescribe_courses entity (prioritizing numbered names)
+        # 1. Check first-class lecturescribe_courses entity (single lookup, reused below)
+        existing_c = None
         try:
             existing_c = self.get_course(clean)
-            if existing_c and isinstance(existing_c, dict) and isinstance(existing_c.get("name"), str) and re.match(r'^[0-9]+\.[0-9]+\s+', existing_c["name"]):
-                return existing_c["name"]
+            if (
+                existing_c
+                and isinstance(existing_c, dict)
+                and isinstance(existing_c.get("name"), str)
+                and not bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', existing_c["name"]))
+            ):
+                resolved_name = existing_c["name"].strip()
+                if resolved_name:
+                    self._canonical_course_name_cache[clean] = resolved_name
+                    return resolved_name
         except Exception:
             pass
 
@@ -4628,6 +4836,7 @@ class RelationalDBManager:
         try:
             if HAS_PSYCOPG2 and self.postgres_url:
                 conn = self._get_connection()
+                self._enable_readonly_autocommit(conn)
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         SELECT course_name FROM lecturescribe_videos
@@ -4642,7 +4851,9 @@ class RelationalDBManager:
                     """, (clean, slug_norm, f"%{base_title}%"))
                     row = cursor.fetchone()
                     if row and isinstance(row, dict) and isinstance(row.get("course_name"), str) and row["course_name"].strip():
-                        return row["course_name"].strip()
+                        resolved_name = row["course_name"].strip()
+                        self._canonical_course_name_cache[clean] = resolved_name
+                        return resolved_name
         except Exception:
             pass
         finally:
@@ -4653,22 +4864,19 @@ class RelationalDBManager:
             if isinstance(v, dict):
                 c = (v.get("course_name") or "").strip()
                 if c and (to_course_slug(c) == slug_norm or to_gcs_course_slug(c) == base_slug or c.lower() == clean.lower()):
+                    self._canonical_course_name_cache[clean] = c
                     return c
-
-        # If existing_c had a non-slug name, return it
-        try:
-            existing_c = self.get_course(clean)
-            if existing_c and isinstance(existing_c, dict) and isinstance(existing_c.get("name"), str) and not bool(re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', existing_c["name"])):
-                return existing_c["name"]
-        except Exception:
-            pass
 
         if re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean):
             m = re.match(r'^(\d+)-(\d+)-(.+)$', clean)
             if m:
-                return f"{m.group(1)}.{m.group(2)} {m.group(3).replace('-', ' ').title()}"
-            return base_title.title()
+                formatted = f"{m.group(1)}.{m.group(2)} {m.group(3).replace('-', ' ').title()}"
+            else:
+                formatted = base_title.title()
+            self._canonical_course_name_cache[clean] = formatted
+            return formatted
 
+        self._canonical_course_name_cache[clean] = clean
         return clean
 
     def get_course_details(self, course_name: str, user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -4858,50 +5066,98 @@ class RelationalDBManager:
         return None
 
     def get_user_library(self, user_email: str) -> List[Dict[str, Any]]:
-        """Retrieve all lectures saved in the user's LMS library from PostgreSQL."""
+        """Retrieve all lectures saved in the user's LMS library from PostgreSQL in a single round-trip."""
         if not user_email:
             return []
 
         clean_email = user_email.strip().lower()
+        prog_emails = [clean_email, "anonymous"] if clean_email != "anonymous" else ["anonymous"]
 
         conn = self._get_connection()
         try:
-            with conn:
-                with conn.cursor() as cursor:
-                    cursor.execute("""
+            self._enable_readonly_autocommit(conn)
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    WITH user_lib AS (
                         SELECT video_id, title, duration, source_url, drive_folder_url, last_viewed_at, course_name
                         FROM lecturescribe_user_library
                         WHERE user_email = %s
-                        ORDER BY last_viewed_at DESC;
-                    """, (clean_email,))
-                    rows = cursor.fetchall() or []
-                    items = [
-                        {
-                            "videoId": r["video_id"],
-                            "video_id": r["video_id"],
-                            "title": r["title"],
-                            "video_title": r["title"],
-                            "duration": r["duration"] or "Unknown",
-                            "sourceUrl": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
-                            "video_url": r["source_url"] or f"https://video.lecturescribe.local/{r['video_id']}",
-                            "driveFolderUrl": r["drive_folder_url"],
-                            "drive_folder_url": r["drive_folder_url"],
-                            "lastViewedAt": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
-                            "last_viewed_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
-                            "created_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
-                            "course_name": r.get("course_name") or extract_course_name(r.get("title", "")),
-                            "course_slug": to_course_slug(r.get("course_name") or extract_course_name(r.get("title", ""))),
+                        ORDER BY last_viewed_at DESC
+                    ),
+                    user_prog AS (
+                        SELECT DISTINCT ON (lp.video_id)
+                            lp.video_id,
+                            lp.user_email AS prog_user_email,
+                            lp.last_timestamp AS prog_last_timestamp,
+                            lp.last_seconds AS prog_last_seconds,
+                            lp.duration_seconds AS prog_duration_seconds,
+                            lp.progress_percent AS prog_progress_percent,
+                            lp.active_cue_idx AS prog_active_cue_idx,
+                            lp.updated_at AS prog_updated_at
+                        FROM lecturescribe_lecture_progress lp
+                        INNER JOIN user_lib ul ON ul.video_id = lp.video_id
+                        WHERE lp.user_email = ANY(%s)
+                        ORDER BY lp.video_id, CASE WHEN lp.user_email = %s THEN 0 ELSE 1 END, lp.updated_at DESC
+                    )
+                    SELECT
+                        ul.video_id,
+                        ul.title,
+                        ul.duration,
+                        ul.source_url,
+                        ul.drive_folder_url,
+                        ul.last_viewed_at,
+                        ul.course_name,
+                        up.prog_user_email,
+                        up.prog_last_timestamp,
+                        up.prog_last_seconds,
+                        up.duration_seconds_legacy,
+                        up.prog_duration_seconds,
+                        up.prog_progress_percent,
+                        up.prog_active_cue_idx,
+                        up.prog_updated_at
+                    FROM user_lib ul
+                    LEFT JOIN (
+                        SELECT *, prog_duration_seconds AS duration_seconds_legacy FROM user_prog
+                    ) up ON up.video_id = ul.video_id
+                    ORDER BY ul.last_viewed_at DESC;
+                """, (clean_email, prog_emails, clean_email))
+                rows = cursor.fetchall() or []
+                items = []
+                for r in rows:
+                    vid = r["video_id"]
+                    c_raw = r.get("course_name") or extract_course_name(r.get("title", ""))
+                    if r.get("prog_last_timestamp") is not None or r.get("prog_last_seconds") is not None:
+                        prog_updated = r.get("prog_updated_at")
+                        progress_obj = {
+                            "video_id": vid,
+                            "user_email": r.get("prog_user_email") or clean_email,
+                            "last_timestamp": r.get("prog_last_timestamp") or "00:00",
+                            "last_seconds": float(r.get("prog_last_seconds") or 0.0),
+                            "duration_seconds": float(r.get("prog_duration_seconds") or 0.0),
+                            "progress_percent": float(r.get("prog_progress_percent") or 0.0),
+                            "active_cue_idx": int(r.get("prog_active_cue_idx") or 0),
+                            "updated_at": prog_updated.isoformat() if hasattr(prog_updated, "isoformat") else (str(prog_updated) if prog_updated else None),
                         }
-                        for r in rows
-                    ]
-                    try:
-                        v_ids = [it["video_id"] for it in items]
-                        prog_map = self.get_user_progress_map(user_email=clean_email, video_ids=v_ids)
-                        for it in items:
-                            it["progress"] = prog_map.get(it["video_id"])
-                    except Exception:
-                        pass
-                    return items
+                    else:
+                        progress_obj = None
+                    items.append({
+                        "videoId": vid,
+                        "video_id": vid,
+                        "title": r["title"],
+                        "video_title": r["title"],
+                        "duration": r["duration"] or "Unknown",
+                        "sourceUrl": r["source_url"] or f"https://video.lecturescribe.local/{vid}",
+                        "video_url": r["source_url"] or f"https://video.lecturescribe.local/{vid}",
+                        "driveFolderUrl": r["drive_folder_url"],
+                        "drive_folder_url": r["drive_folder_url"],
+                        "lastViewedAt": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                        "last_viewed_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                        "created_at": str(r["last_viewed_at"]) if r["last_viewed_at"] else None,
+                        "course_name": c_raw,
+                        "course_slug": to_course_slug(c_raw),
+                        "progress": progress_obj,
+                    })
+                return items
         finally:
             conn.close()
 

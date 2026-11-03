@@ -178,6 +178,62 @@ class TestRedisCache(unittest.TestCase):
         genai_course = next(c for c in updated_courses if "Generative AI" in c["course_name"])
         self.assertEqual(genai_course["lecture_count"], 3)
 
+    def test_update_user_course_preserves_pinned_fifo_order(self):
+        """Pinned courses must stay ahead of newly updated or added unpinned courses in FIFO order."""
+        mock_redis = MagicMock()
+        service = RedisCacheService(redis_url="redis://localhost:6379")
+        service.client = mock_redis
+        service.enabled = True
+
+        existing_courses = [
+            {"course_name": "Pinned A", "course_slug": "pinned-a", "is_pinned": True, "lecture_count": 1, "lectures": [{"video_id": "a1"}]},
+            {"course_name": "Pinned B", "course_slug": "pinned-b", "is_pinned": True, "lecture_count": 1, "lectures": [{"video_id": "b1"}]},
+            {"course_name": "Unpinned C", "course_slug": "unpinned-c", "is_pinned": False, "lecture_count": 1, "lectures": [{"video_id": "c1"}]},
+            {"course_name": "Unpinned D", "course_slug": "unpinned-d", "is_pinned": False, "lecture_count": 1, "lectures": [{"video_id": "d1"}]},
+        ]
+        mock_redis.get.side_effect = [json.dumps(existing_courses), None]
+
+        ok = service.update_user_course(
+            "student@example.com",
+            "Unpinned D",
+            {"video_id": "d2", "title": "Session 2", "course_name": "Unpinned D"},
+        )
+        self.assertTrue(ok)
+        _, _, saved_json = mock_redis.setex.call_args.args
+        reordered = json.loads(saved_json)
+        self.assertEqual([c["course_slug"] for c in reordered], ["pinned-a", "pinned-b", "unpinned-d", "unpinned-c"])
+
+    def test_user_courses_bundle_and_surgical_progress_update(self):
+        """Bundle MGET/pipeline and surgical progress update avoid extra DB/cache churn."""
+        mock_redis = MagicMock()
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        service = RedisCacheService(redis_url="redis://localhost:6379")
+        service.client = mock_redis
+        service.enabled = True
+
+        sample_courses = [{"course_slug": "cs-101", "lectures": [{"video_id": "v1", "progress": None}]}]
+        sample_pins = ["cs-101"]
+        sample_lib = [{"video_id": "v1", "progress": None}]
+
+        self.assertTrue(service.set_user_courses_bundle("u@test.com", sample_courses, sample_pins, library_data=sample_lib, ttl_seconds=1800))
+        self.assertEqual(mock_pipe.set.call_count, 3)
+        mock_pipe.execute.assert_called_once()
+
+        mock_redis.mget.return_value = [json.dumps(sample_courses), json.dumps(sample_pins)]
+        courses, pins = service.get_user_courses_bundle("u@test.com")
+        self.assertEqual(courses, sample_courses)
+        self.assertEqual(pins, sample_pins)
+
+        # Surgical progress update updates both courses and library in place
+        mock_pipe.reset_mock()
+        new_prog = {"video_id": "v1", "last_timestamp": "12:30", "progress_percent": 50.0}
+        mock_redis.mget.return_value = [json.dumps(sample_courses), json.dumps(sample_lib)]
+        updated = service.update_lecture_progress("u@test.com", "v1", new_prog, ttl_seconds=1800)
+        self.assertTrue(updated)
+        self.assertEqual(mock_pipe.set.call_count, 2)
+        mock_pipe.execute.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

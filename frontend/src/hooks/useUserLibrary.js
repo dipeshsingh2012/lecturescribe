@@ -20,19 +20,44 @@ export function useUserLibrary(userEmail) {
     lastFetchedEmailRef.current = email;
     setLibraryLoading(true);
     try {
-      const [libRes, coursesRes] = await Promise.all([
-        fetch(`${API_BASE}/api/user/library?email=${encodeURIComponent(email)}`),
-        fetch(`${API_BASE}/api/user/courses?email=${encodeURIComponent(email)}`)
-      ]);
-      if (libRes.ok) {
-        const data = await libRes.json();
-        setUserLibrary(data.lectures || data.library || []);
-      }
+      const coursesRes = await fetch(`${API_BASE}/api/user/courses?email=${encodeURIComponent(email)}`);
+      let hydratedLibrary = false;
+
       if (coursesRes.ok) {
         const cData = await coursesRes.json();
-        setUserCourses(cData.courses || []);
+        const coursesList = cData.courses || [];
+        setUserCourses(coursesList);
         if (Array.isArray(cData.pinned_courses)) {
           setPinnedCourses(cData.pinned_courses);
+        }
+
+        if (Array.isArray(cData.library) || Array.isArray(cData.lectures)) {
+          setUserLibrary(cData.library || cData.lectures);
+          hydratedLibrary = true;
+        } else {
+          const derivedLectures = [];
+          coursesList.forEach(c => {
+            if (Array.isArray(c?.lectures)) {
+              c.lectures.forEach(lec => derivedLectures.push(lec));
+            }
+          });
+          if (derivedLectures.length > 0) {
+            derivedLectures.sort((a, b) =>
+              String(b.last_viewed_at || b.lastViewedAt || '').localeCompare(
+                String(a.last_viewed_at || a.lastViewedAt || '')
+              )
+            );
+            setUserLibrary(derivedLectures);
+            hydratedLibrary = true;
+          }
+        }
+      }
+
+      if (!hydratedLibrary) {
+        const libRes = await fetch(`${API_BASE}/api/user/library?email=${encodeURIComponent(email)}`);
+        if (libRes.ok) {
+          const data = await libRes.json();
+          setUserLibrary(data.lectures || data.library || []);
         }
       }
     } catch (err) {

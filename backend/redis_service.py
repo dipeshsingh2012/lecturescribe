@@ -14,7 +14,7 @@ import json
 import time
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 try:
     from dotenv import load_dotenv
@@ -431,6 +431,123 @@ class RedisCacheService:
             print(f"[Redis Cache Warning] User courses cache write error: {e}")
             return False
 
+    def get_user_courses_bundle(
+        self,
+        user_email: str,
+    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[str]]]:
+        """Fetch cached courses and pinned course slugs in a single Redis MGET round-trip."""
+        if not self.client or not self.enabled or not user_email:
+            return None, None
+        clean_email = user_email.strip().lower()
+        courses_key = f"ls:user_courses:{clean_email}"
+        pins_key = f"ls:user_pins:{clean_email}"
+        try:
+            raw_courses, raw_pins = self.client.mget([courses_key, pins_key])
+            courses = json.loads(raw_courses) if raw_courses else None
+            pins = json.loads(raw_pins) if raw_pins else None
+            if courses is not None and not isinstance(courses, list):
+                courses = None
+            if pins is not None and not isinstance(pins, list):
+                pins = None
+            return courses, pins
+        except Exception as e:
+            print(f"[Redis Cache Warning] User courses bundle read error: {e}")
+            return self.get_user_courses(clean_email), None
+
+    def set_user_courses_bundle(
+        self,
+        user_email: str,
+        courses_data: List[Dict[str, Any]],
+        pinned_courses: List[str],
+        library_data: Optional[List[Dict[str, Any]]] = None,
+        ttl_seconds: int = 1800,
+    ) -> bool:
+        """Pipeline courses, pinned slugs, and optional flat library in a single Redis round-trip."""
+        if not self.client or not self.enabled or not user_email:
+            return False
+        clean_email = user_email.strip().lower()
+        courses_key = f"ls:user_courses:{clean_email}"
+        pins_key = f"ls:user_pins:{clean_email}"
+        lib_key = f"ls:user_library:{clean_email}"
+        try:
+            pipe = self.client.pipeline(transaction=False)
+            pipe.set(courses_key, json.dumps(courses_data), ex=ttl_seconds)
+            pipe.set(pins_key, json.dumps(pinned_courses), ex=ttl_seconds)
+            if library_data is not None:
+                pipe.set(lib_key, json.dumps(library_data), ex=ttl_seconds)
+            pipe.execute()
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] User courses bundle write error: {e}")
+            return self.set_user_courses(clean_email, courses_data, ttl_seconds=ttl_seconds)
+
+    def set_user_pins(self, user_email: str, pinned_courses: List[str], ttl_seconds: int = 1800) -> bool:
+        """Cache user's ordered pinned course slugs."""
+        if not self.client or not self.enabled or not user_email:
+            return False
+        clean_email = user_email.strip().lower()
+        key = f"ls:user_pins:{clean_email}"
+        try:
+            self.client.set(key, json.dumps(pinned_courses), ex=ttl_seconds)
+            return True
+        except Exception as e:
+            print(f"[Redis Cache Warning] User pins cache write error: {e}")
+            return False
+
+    def update_lecture_progress(
+        self,
+        user_email: str,
+        video_id: str,
+        progress_data: Optional[Dict[str, Any]],
+        ttl_seconds: int = 1800,
+    ) -> bool:
+        """Surgically update a lecture's playback progress in cached courses/library without busting the cache."""
+        if not self.client or not self.enabled or not user_email or not video_id or not isinstance(progress_data, dict):
+            return False
+        clean_email = user_email.strip().lower()
+        clean_vid = str(video_id).strip()
+        courses_key = f"ls:user_courses:{clean_email}"
+        lib_key = f"ls:user_library:{clean_email}"
+        try:
+            raw_courses, raw_lib = self.client.mget([courses_key, lib_key])
+            if not raw_courses and not raw_lib:
+                return False
+
+            pipe = self.client.pipeline(transaction=False)
+            wrote = False
+
+            if raw_courses:
+                courses = json.loads(raw_courses)
+                if isinstance(courses, list):
+                    changed = False
+                    for course in courses:
+                        for lec in (course.get("lectures") or []):
+                            if str(lec.get("video_id") or lec.get("videoId") or "") == clean_vid:
+                                lec["progress"] = progress_data
+                                changed = True
+                    if changed:
+                        pipe.set(courses_key, json.dumps(courses), ex=ttl_seconds)
+                        wrote = True
+
+            if raw_lib:
+                lib_items = json.loads(raw_lib)
+                if isinstance(lib_items, list):
+                    changed = False
+                    for lec in lib_items:
+                        if str(lec.get("video_id") or lec.get("videoId") or "") == clean_vid:
+                            lec["progress"] = progress_data
+                            changed = True
+                    if changed:
+                        pipe.set(lib_key, json.dumps(lib_items), ex=ttl_seconds)
+                        wrote = True
+
+            if wrote:
+                pipe.execute()
+            return wrote
+        except Exception as e:
+            print(f"[Redis Cache Warning] Surgical progress update error for '{clean_email}' / '{clean_vid}': {e}")
+            return False
+
     def get_user_library(self, user_email: str) -> Optional[List[Dict[str, Any]]]:
         """Retrieve cached library list for a user."""
         if not self.client or not self.enabled or not user_email:
@@ -568,18 +685,27 @@ class RedisCacheService:
                     target_course["latest_viewed_at"] = lecture_entry.get("last_viewed_at") or target_course.get("latest_viewed_at")
                     target_course["thumbnail_video_id"] = vid
                     target_course["lectures"] = updated_lectures
-                    remaining_courses = [c for i, c in enumerate(cached_courses) if i != target_idx]
-                    self.set_user_courses(clean_email, [target_course] + remaining_courses, ttl_seconds=ttl_seconds)
+                    if target_course.get("is_pinned"):
+                        # Keep pinned course in its existing FIFO pin position
+                        reordered = [target_course if i == target_idx else c for i, c in enumerate(cached_courses)]
+                    else:
+                        pinned_part = [c for i, c in enumerate(cached_courses) if i != target_idx and c.get("is_pinned")]
+                        unpinned_part = [c for i, c in enumerate(cached_courses) if i != target_idx and not c.get("is_pinned")]
+                        reordered = pinned_part + [target_course] + unpinned_part
+                    self.set_user_courses(clean_email, reordered, ttl_seconds=ttl_seconds)
                 else:
                     new_course = {
                         "course_name": clean_course,
                         "course_slug": c_slug,
+                        "is_pinned": False,
                         "lecture_count": 1,
                         "latest_viewed_at": lecture_entry.get("last_viewed_at"),
                         "thumbnail_video_id": vid,
                         "lectures": [lecture_entry]
                     }
-                    self.set_user_courses(clean_email, [new_course] + cached_courses, ttl_seconds=ttl_seconds)
+                    pinned_part = [c for c in cached_courses if c.get("is_pinned")]
+                    unpinned_part = [c for c in cached_courses if not c.get("is_pinned")]
+                    self.set_user_courses(clean_email, pinned_part + [new_course] + unpinned_part, ttl_seconds=ttl_seconds)
 
             # 2. Surgical update of ls:user_library:{clean_email} if cached
             cached_lib = self.get_user_library(clean_email)

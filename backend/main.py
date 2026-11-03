@@ -127,7 +127,8 @@ async def lifespan(app: FastAPI):
     print("📦 [1/4] Verifying Relational DB (PostgreSQL)...")
     try:
         if db_manager and db_manager.postgres_url:
-            db_manager._init_postgres_schema(_first_init=False)
+            if not getattr(db_manager, "_schema_initialized", False):
+                db_manager._init_postgres_schema(_first_init=False)
             print("✅ [Database Startup] PostgreSQL database ready.")
         else:
             print("⚠️ [Database Startup Warning]: DATABASE_URL not yet configured. Deferring schema initialization.")
@@ -420,10 +421,6 @@ def transcribe_lecture(
     if not re.fullmatch(r"\d+", video_id):
         raise HTTPException(status_code=400, detail="A valid video ID is required.")
 
-    service_url = os.getenv("TRANSCRIPTION_SERVICE_URL", "").strip().rstrip("/")
-    if not service_url:
-        raise HTTPException(status_code=503, detail="Video transcription is not configured.")
-
     saved = db_manager.get_saved_video(video_id)
     if not saved:
         raise HTTPException(status_code=404, detail="Import this lecture before generating its transcript.")
@@ -437,6 +434,10 @@ def transcribe_lecture(
             "transcript_message": None,
             "cached": True,
         }
+
+    service_url = os.getenv("TRANSCRIPTION_SERVICE_URL", "").strip().rstrip("/")
+    if not service_url:
+        raise HTTPException(status_code=503, detail="Video transcription is not configured.")
 
     if async_transcription_is_enabled():
         try:
@@ -910,6 +911,13 @@ def generate_lecture_quiz_endpoint(
                             summary_sections=[],
                             course_name=c_name
                         )
+                        if redis_cache:
+                            redis_cache.invalidate_video(clean_vid)
+                        threading.Thread(
+                            target=_async_post_import_indexing,
+                            args=(clean_vid, title, fetched_cues, clean_email, c_name),
+                            daemon=True
+                        ).start()
                         cues = fetched_cues
                         saved["cues"] = cues
                         saved["duration"] = dur_str
@@ -1525,6 +1533,89 @@ def process_lecture_import(
 
     # 1. Check relational DB first for cached video
     saved = db_manager.get_saved_video(clean_vid)
+    if saved and not saved.get("cues") and str(clean_vid).isdigit():
+        # Attempt on-demand caption fetch in case captions became available after initial import or GCS sync
+        try:
+            ref_url = (
+                (lms_page_url and str(lms_page_url).strip())
+                or saved.get("sourceUrl")
+                or saved.get("source_url")
+                or ""
+            )
+            cfg = (
+                player_config
+                if (player_config and isinstance(player_config, dict))
+                else fetch_player_config(clean_vid, referer=_resolve_video_referer(ref_url))
+            )
+            tracks = get_text_tracks(cfg)
+            if tracks:
+                track = next((t for t in tracks if t.get("default")), tracks[0])
+                vtt_url = track.get("url") or track.get("src")
+                if vtt_url:
+                    vtt_content = fetch_vtt(vtt_url)
+                    raw_segments = parse_vtt(vtt_content)
+                    fetched_cues = [
+                        {"time": format_timestamp(s["start"]), "text": s["text"]}
+                        for s in raw_segments
+                        if str(s.get("text") or "").strip()
+                    ]
+                    if fetched_cues:
+                        title_val = (
+                            (video_details or {}).get("title")
+                            or saved.get("title")
+                            or cfg.get("video", {}).get("title")
+                            or f"Video {clean_vid}"
+                        )
+                        raw_dur = (
+                            (video_details or {}).get("duration")
+                            or cfg.get("video", {}).get("duration")
+                            or saved.get("duration")
+                        )
+                        if isinstance(raw_dur, (int, float)):
+                            mins = int(raw_dur) // 60
+                            hrs = mins // 60
+                            dur_str = f"{hrs}h {mins % 60}m" if hrs > 0 else f"{mins}m"
+                        else:
+                            dur_str = str(raw_dur or "Unknown")
+                        cap_lbl = track.get("label") or "Caption track"
+                        c_name = (
+                            saved.get("course_name")
+                            or (course_name and course_name.strip())
+                            or extract_course_name(title_val)
+                        )
+                        if c_name:
+                            c_name = db_manager.resolve_course_canonical_name(c_name)
+                        src_url = ref_url or f"https://video.lecturescribe.local/{clean_vid}"
+                        db_manager.save_video_transcript(
+                            clean_vid,
+                            title_val,
+                            dur_str,
+                            src_url,
+                            cap_lbl,
+                            fetched_cues,
+                            saved.get("summarySections") or [],
+                            user_email=email,
+                            course_name=c_name,
+                        )
+                        if redis_cache:
+                            redis_cache.invalidate_video(clean_vid)
+                        threading.Thread(
+                            target=_async_post_import_indexing,
+                            args=(clean_vid, title_val, fetched_cues, email, c_name),
+                            daemon=True,
+                        ).start()
+                        saved = db_manager.get_saved_video(clean_vid) or {
+                            **saved,
+                            "title": title_val,
+                            "duration": dur_str,
+                            "sourceUrl": src_url,
+                            "captionLabel": cap_lbl,
+                            "cues": fetched_cues,
+                            "course_name": c_name,
+                        }
+        except Exception as auto_cap_err:
+            print(f"⚠️ [Transcript Auto-Fetch Notice] Could not auto-fetch captions for '{clean_vid}': {auto_cap_err}")
+
     if saved and (saved.get("cues") or saved.get("caption_label") == "Unavailable" or saved.get("captionLabel") == "Unavailable"):
         print(f"[DB Cache Hit] Video '{clean_vid}' found in database. Skipping transcript and summary re-generation.")
         # Shallow copy so per-request fields (signed URLs, upload status) don't leak into the shared L1 cache entry.
@@ -3068,7 +3159,7 @@ def save_lecture_progress_endpoint(req: SaveLectureProgressRequest):
     )
     if redis_cache:
         target_email = req.user_email.strip().lower() if req.user_email and req.user_email.strip() else "anonymous"
-        redis_cache.invalidate_user(target_email)
+        redis_cache.update_lecture_progress(target_email, vid, item, ttl_seconds=1800)
     return {
         "status": "success",
         "video_id": vid,
@@ -3145,6 +3236,18 @@ def list_courses_endpoint():
     }
 
 
+def _flatten_courses_to_library(courses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Derive a flat library list ordered by last_viewed_at DESC from grouped courses."""
+    lectures: List[Dict[str, Any]] = []
+    for c in (courses or []):
+        if isinstance(c, dict):
+            for lec in (c.get("lectures") or []):
+                if isinstance(lec, dict):
+                    lectures.append(lec)
+    lectures.sort(key=lambda x: str(x.get("last_viewed_at") or x.get("lastViewedAt") or ""), reverse=True)
+    return lectures
+
+
 @app.get("/api/user/courses")
 def get_user_courses(
     email: Optional[str] = Query(None, description="User Google email"),
@@ -3156,16 +3259,49 @@ def get_user_courses(
         raise HTTPException(status_code=400, detail="email query parameter is required.")
 
     if redis_cache:
-        cached = redis_cache.get_user_courses(target_email)
+        cached, cached_pins = redis_cache.get_user_courses_bundle(target_email)
         if cached is not None:
-            pinned_courses = db_manager.get_pinned_courses(target_email)
-            return {"status": "success", "email": target_email, "count": len(cached), "courses": cached, "pinned_courses": pinned_courses, "cached": True}
+            if cached_pins is None:
+                cached_pins = db_manager.get_pinned_courses(target_email)
+                redis_cache.set_user_pins(target_email, cached_pins, ttl_seconds=1800)
+            flat_lib = _flatten_courses_to_library(cached)
+            return {
+                "status": "success",
+                "email": target_email,
+                "count": len(cached),
+                "courses": cached,
+                "library": flat_lib,
+                "pinned_courses": cached_pins,
+                "cached": True,
+            }
 
     courses = db_manager.get_user_courses(target_email)
-    pinned_courses = db_manager.get_pinned_courses(target_email)
-    if redis_cache:
-        redis_cache.set_user_courses(target_email, courses, ttl_seconds=300)
-    return {"status": "success", "email": target_email, "count": len(courses), "courses": courses, "pinned_courses": pinned_courses}
+    meta = db_manager.consume_last_courses_meta(target_email) if hasattr(db_manager, "consume_last_courses_meta") else None
+    if isinstance(meta, dict):
+        pinned_courses = meta.get("pinned_courses") or []
+        flat_lib = meta.get("library") if isinstance(meta.get("library"), list) else _flatten_courses_to_library(courses)
+        db_error = bool(meta.get("db_error"))
+    else:
+        pinned_courses = db_manager.get_pinned_courses(target_email)
+        flat_lib = _flatten_courses_to_library(courses)
+        db_error = False
+
+    if redis_cache and not db_error:
+        redis_cache.set_user_courses_bundle(
+            target_email,
+            courses,
+            pinned_courses,
+            library_data=flat_lib,
+            ttl_seconds=1800,
+        )
+    return {
+        "status": "success",
+        "email": target_email,
+        "count": len(courses),
+        "courses": courses,
+        "library": flat_lib,
+        "pinned_courses": pinned_courses,
+    }
 
 
 @app.post("/api/user/courses/pin")
@@ -3180,11 +3316,12 @@ def toggle_user_course_pin(req: CoursePinRequest):
         raise HTTPException(status_code=400, detail="email and course_slug (or course_name) are required.")
 
     is_pinned_now = db_manager.toggle_course_pin(target_email, target_slug)
+    pinned_courses = db_manager.get_pinned_courses(target_email)
 
     if redis_cache:
         redis_cache.invalidate_user(target_email)
+        redis_cache.set_user_pins(target_email, pinned_courses, ttl_seconds=1800)
 
-    pinned_courses = db_manager.get_pinned_courses(target_email)
     print(f"📌 [API /api/user/courses/pin] '{target_email}' {'pinned' if is_pinned_now else 'unpinned'} '{target_slug}'. Total pinned: {len(pinned_courses)}")
     return {
         "status": "success",

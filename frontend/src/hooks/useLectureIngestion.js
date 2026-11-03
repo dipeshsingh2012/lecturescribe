@@ -3,6 +3,14 @@ import { API_BASE } from '../utils/constants';
 import { extractVideoId, isGcsSignedUrlFresh } from '../utils/formatters';
 import { normalizeCourseSlug } from '../utils/routing';
 
+function hasTranscriptCues(entry) {
+  return Boolean(
+    entry &&
+    Array.isArray(entry.cues) &&
+    entry.cues.some((cue) => String(cue?.text || '').trim().length > 0)
+  );
+}
+
 function sanitizeCachedEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
   const copy = { ...entry };
@@ -101,9 +109,9 @@ export function useLectureIngestion({
     const pasted = e.clipboardData?.getData('text') || '';
     if (pasted.trim()) {
       const vidId = extractVideoId(pasted);
-      if (activeData && activeData.videoId === vidId) {
+      if (activeData && activeData.videoId === vidId && hasTranscriptCues(activeData)) {
         setCacheNotice("⚡ Video is already active. Transcripts and summary will be reused.");
-      } else if (cachedVideos[vidId]) {
+      } else if (hasTranscriptCues(cachedVideos[vidId])) {
         setCacheNotice("⚡ Pasted video is already cached! Transcripts and summary will load instantly.");
       }
     }
@@ -340,7 +348,7 @@ export function useLectureIngestion({
       }
     }
 
-    if (!stayOnCoursePage && activeData && (activeData.videoId === vidId || extractVideoId(activeData.sourceUrl) === vidId)) {
+    if (!stayOnCoursePage && activeData && hasTranscriptCues(activeData) && (activeData.videoId === vidId || extractVideoId(activeData.sourceUrl) === vidId)) {
       if (targetSeek) {
         const coursePath = effectiveCourse
           ? `/course/${normalizeCourseSlug(effectiveCourse)}/lecture/${vidId}${timeParam}`
@@ -351,7 +359,7 @@ export function useLectureIngestion({
       return;
     }
 
-    if (cachedVideos[vidId]) {
+    if (hasTranscriptCues(cachedVideos[vidId])) {
       const cached = sanitizeCachedEntry(cachedVideos[vidId]);
       const transcriptAvailable = Array.isArray(cached.cues) &&
         cached.cues.some((cue) => String(cue?.text || '').trim().length > 0);

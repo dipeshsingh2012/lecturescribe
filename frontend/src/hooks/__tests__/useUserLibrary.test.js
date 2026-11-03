@@ -139,5 +139,30 @@ describe('useUserLibrary hook functionality', () => {
     expect(result.current.pinnedCourses).toEqual(['chemistry']);
     expect(result.current.filteredCourses[0].course_slug).toBe('chemistry');
   });
+
+  it('hydrates both userCourses and userLibrary from single /api/user/courses call when library is included', async () => {
+    const mockLecture = { video_id: 'v200', course_name: 'Deep Learning', title: 'CNNs' };
+    const mockCourses = [
+      { course_name: 'Deep Learning', course_slug: 'deep-learning', lecture_count: 1, lectures: [mockLecture] }
+    ];
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        courses: mockCourses,
+        library: [mockLecture],
+        pinned_courses: ['deep-learning']
+      })
+    });
+
+    const { result } = renderHook(() => useUserLibrary('fast@example.com'));
+    await act(async () => {});
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toContain('/api/user/courses');
+    expect(result.current.userLibrary).toEqual([mockLecture]);
+    expect(result.current.pinnedCourses).toEqual(['deep-learning']);
+  });
 });
 

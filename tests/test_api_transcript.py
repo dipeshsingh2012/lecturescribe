@@ -369,9 +369,10 @@ Today we discuss forward kinematics.
         self.assertEqual(data["course_name"], "Machine Learning Paradigms")
         self.assertEqual(data["course_slug"], "machine-learning-paradigms")
 
+    @patch("backend.main.fetch_player_config", return_value={})
     @patch("backend.main.db_manager.get_saved_video")
     @patch("backend.main.db_manager.get_video_id_by_source_url")
-    def test_transcript_resolves_moodle_page_url_via_source_url_lookup(self, mock_get_source_vid, mock_get_saved):
+    def test_transcript_resolves_moodle_page_url_via_source_url_lookup(self, mock_get_source_vid, mock_get_saved, _mock_fetch_cfg):
         mock_get_source_vid.return_value = "1240897687"
         mock_get_saved.return_value = {
             "videoId": "1240897687",
@@ -393,6 +394,63 @@ Today we discuss forward kinematics.
         self.assertEqual(data["title"], "Machine Learning Paradigms Live Session -10 ( 29 / 10 / 2026)")
         mock_get_source_vid.assert_called_once_with(moodle_url)
         mock_get_saved.assert_called_once_with("1240897687")
+
+    @patch("backend.main.db_manager.save_video_transcript")
+    @patch("backend.main.fetch_vtt")
+    @patch("backend.main.get_text_tracks")
+    @patch("backend.main.fetch_player_config")
+    @patch("backend.main.db_manager.get_saved_video")
+    def test_transcript_backfills_captions_when_db_cached_video_has_empty_cues(
+        self,
+        mock_get_saved,
+        mock_fetch_cfg,
+        mock_get_tracks,
+        mock_fetch_vtt,
+        mock_save_transcript,
+    ):
+        empty_record = {
+            "videoId": "1240897687",
+            "title": "Machine Learning Paradigms Live Session -10 ( 29 / 10 / 2026)",
+            "duration": "1h 35m",
+            "sourceUrl": "https://learning.iiitdwd.ac.in/mod/page/view.php?id=3301",
+            "captionLabel": "Unavailable",
+            "cues": [],
+            "summarySections": [],
+            "course_name": "1.2 Machine Learning Paradigms",
+            "course_slug": "1-2-machine-learning-paradigms",
+            "cached": True,
+        }
+        populated_record = {
+            **empty_record,
+            "captionLabel": "English (auto-generated)",
+            "cues": [
+                {"time": "00:01", "text": "Welcome to Robotics 101."},
+                {"time": "00:05", "text": "Today we discuss forward kinematics."},
+            ],
+        }
+        mock_get_saved.side_effect = [empty_record, populated_record]
+        mock_fetch_cfg.return_value = {
+            "video": {
+                "title": "Machine Learning Paradigms Live Session -10 ( 29 / 10 / 2026)",
+                "duration": 5716,
+            }
+        }
+        mock_get_tracks.return_value = [
+            {
+                "url": "https://video.lecturescribe.local/1240897687.vtt",
+                "label": "English (auto-generated)",
+                "lang": "en-x-autogen",
+            }
+        ]
+        mock_fetch_vtt.return_value = self.sample_vtt
+
+        response = self.client.get("/api/transcript?url=1240897687&email=student%40example.com")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["videoId"], "1240897687")
+        self.assertTrue(data["transcript_available"])
+        self.assertEqual(len(data["cues"]), 2)
+        mock_save_transcript.assert_called_once()
 
     @patch("backend.main.db_manager.get_saved_video")
     @patch("backend.main.fetch_player_config")

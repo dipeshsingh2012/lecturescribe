@@ -124,6 +124,81 @@ class TestCoursePins(unittest.TestCase):
                 self.assertEqual(courses[2]["course_slug"], "biology")
                 self.assertFalse(courses[2]["is_pinned"])
 
+    def test_single_query_courses_and_zero_db_redis_hit_and_no_empty_poisoning(self):
+        """
+        Verify:
+        1. Joined query executes 1 SQL statement total (no N+1 get_course / get_pinned_courses / progress queries).
+        2. Redis cache hit on /api/user/courses executes 0 DB calls.
+        3. Transient DB exception fallback sets db_error=True so empty [] is NOT cached in Redis.
+        """
+        from unittest.mock import MagicMock, patch
+        import backend.main as main_mod
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [
+            {
+                "video_id": "v10",
+                "title": "Master of Technology Session 1",
+                "duration": "40:00",
+                "source_url": None,
+                "drive_folder_url": None,
+                "last_viewed_at": "2026-10-20T10:00:00",
+                "course_name": "Master of Technology",
+                "course_slug": "master-of-technology",
+                "course_id": "11111111-1111-1111-1111-111111111111",
+                "joined_course_id": "11111111-1111-1111-1111-111111111111",
+                "joined_course_slug": "master-of-technology",
+                "joined_course_name": "Master of Technology",
+                "prog_user_email": self.test_email,
+                "prog_last_timestamp": "20:00",
+                "prog_last_seconds": 1200.0,
+                "prog_duration_seconds": 2400.0,
+                "prog_progress_percent": 50.0,
+                "prog_active_cue_idx": 12,
+                "prog_updated_at": "2026-10-20T10:20:00",
+                "pinned_slugs_arr": ["master-of-technology"],
+                "has_joined_meta": True,
+            }
+        ]
+
+        with patch.object(db_manager, "_explicit_url", "postgresql://mock/db"), \
+             patch.object(db_manager, "_get_connection", return_value=mock_conn) as mock_get_conn:
+            courses = db_manager.get_user_courses(self.test_email)
+            self.assertEqual(mock_get_conn.call_count, 1)
+            self.assertEqual(mock_cursor.execute.call_count, 1)
+            self.assertEqual(len(courses), 1)
+            self.assertTrue(courses[0]["is_pinned"])
+            self.assertEqual(courses[0]["lectures"][0]["progress"]["progress_percent"], 50.0)
+            meta = db_manager.consume_last_courses_meta(self.test_email)
+            self.assertEqual(meta["pinned_courses"], ["master-of-technology"])
+            self.assertFalse(meta["db_error"])
+
+        # Redis cache hit path: 0 DB calls
+        mock_cache = MagicMock()
+        mock_cache.get_user_courses_bundle.return_value = (courses, ["master-of-technology"])
+        with patch.object(main_mod, "redis_cache", mock_cache), \
+             patch.object(db_manager, "get_user_courses") as mock_db_courses, \
+             patch.object(db_manager, "get_pinned_courses") as mock_db_pins:
+            resp = self.client.get(f"/api/user/courses?email={self.test_email}")
+            self.assertEqual(resp.status_code, 200)
+            body = resp.json()
+            self.assertTrue(body["cached"])
+            self.assertEqual(body["pinned_courses"], ["master-of-technology"])
+            mock_db_courses.assert_not_called()
+            mock_db_pins.assert_not_called()
+
+        # Transient DB timeout fallback: must NOT poison Redis with empty []
+        mock_cache_miss = MagicMock()
+        mock_cache_miss.get_user_courses_bundle.return_value = (None, None)
+        with patch.object(main_mod, "redis_cache", mock_cache_miss), \
+             patch.object(db_manager, "_explicit_url", "postgresql://mock/db"), \
+             patch.object(db_manager, "_get_connection", side_effect=RuntimeError("Neon connect timeout")), \
+             patch.object(db_manager, "get_pinned_courses", return_value=[]):
+            resp_err = self.client.get(f"/api/user/courses?email={self.test_email}")
+            self.assertEqual(resp_err.status_code, 200)
+            mock_cache_miss.set_user_courses_bundle.assert_not_called()
 
 
 if __name__ == "__main__":

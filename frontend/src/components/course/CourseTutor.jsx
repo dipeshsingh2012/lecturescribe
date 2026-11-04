@@ -22,7 +22,8 @@ import {
   Clock,
   BookOpen,
   HelpCircle,
-  GraduationCap
+  GraduationCap,
+  Square
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
@@ -63,6 +64,8 @@ export default function CourseTutor({
   chatEndRef,
   chatInputRef,
   handleSelectLecture = () => {},
+  abortStream = () => {},
+  streamingStatus = '',
   currentTheme
 }) {
   const handleKeyDown = (e) => {
@@ -337,6 +340,26 @@ export default function CourseTutor({
                       citations={msg.citations || []}
                       onCrossLectureClick={(vid, ts, vTitle) => handleSelectLecture(vid, courseName, ts)}
                     />
+                    {msg.isStreaming && (
+                      <Box
+                        component="span"
+                        data-testid="streaming-cursor"
+                        sx={{
+                          display: 'inline-block',
+                          width: '6px',
+                          height: '14px',
+                          bgcolor: currentTheme.palette.primary,
+                          ml: 0.5,
+                          borderRadius: '1px',
+                          verticalAlign: '-2px',
+                          animation: 'cursorBlink 0.8s infinite',
+                          '@keyframes cursorBlink': {
+                            '0%, 100%': { opacity: 1 },
+                            '50%': { opacity: 0 }
+                          }
+                        }}
+                      />
+                    )}
 
                     {/* Citations block */}
                     {msg.citations && msg.citations.length > 0 && (
@@ -428,7 +451,7 @@ export default function CourseTutor({
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 2, color: currentTheme.palette.textSecondary }}>
             <CircularProgress size={18} thickness={5} sx={{ color: currentTheme.palette.primary }} />
             <Typography variant="body2" sx={{ fontSize: '0.85rem', fontWeight: 600 }}>
-              Course AI Tutor is searching lecture transcripts and synthesizing an answer...
+              {streamingStatus || "Course AI Tutor is searching lecture transcripts and synthesizing an answer..."}
             </Typography>
           </Box>
         )}
@@ -474,28 +497,29 @@ export default function CourseTutor({
         />
         <Button
           variant="contained"
-          onClick={() => sendMessage()}
-          disabled={!input.trim() || loading}
+          onClick={loading ? abortStream : () => sendMessage()}
+          disabled={!loading && !input.trim()}
           sx={{
             minWidth: { xs: 38, sm: 44 },
             width: { xs: 38, sm: 44 },
             height: { xs: 38, sm: 44 },
             borderRadius: 2.5,
-            bgcolor: currentTheme.palette.primary,
+            bgcolor: loading ? '#ef4444' : currentTheme.palette.primary,
             color: '#fff',
             p: 0,
             flexShrink: 0,
             '&:hover': {
-              bgcolor: 'var(--theme-primary-hover, #005ecb)'
+              bgcolor: loading ? '#dc2626' : 'var(--theme-primary-hover, #005ecb)'
             },
             '&.Mui-disabled': {
               bgcolor: 'rgba(0, 117, 237, 0.3)',
               color: '#fff'
             }
           }}
-          aria-label="Send query"
+          aria-label={loading ? "Stop generating" : "Send query"}
+          title={loading ? "Stop generating" : "Send query"}
         >
-          {loading ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
+          {loading ? <Square size={14} style={{ fill: 'currentColor' }} /> : <Send size={16} />}
         </Button>
       </Paper>
     </Box>

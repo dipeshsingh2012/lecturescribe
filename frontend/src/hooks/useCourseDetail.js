@@ -234,7 +234,7 @@ export function useCourseDetail(effectiveCourses, userEmail, librarySearch = '',
     } else if (canonicalCourse) {
       document.title = `${canonicalCourse} | Course | LectureScribe`;
     } else {
-      document.title = 'LectureScribe - LMS & Lecture AI Workspace';
+      document.title = 'LectureScribe | Personal AI-Assisted LMS';
     }
   }, [activeData, selectedCourse, activeCourseData]);
 

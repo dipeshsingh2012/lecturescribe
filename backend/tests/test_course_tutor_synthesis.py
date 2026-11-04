@@ -150,3 +150,68 @@ def test_query_course_rag_synthesizes_10_mark_answer():
         system_msg = sent_messages[0]["content"]
         assert "10-mark exam questions" in system_msg
         assert any("lecture summaries" in m["content"] or "cues" in m["content"] for m in sent_messages if m["role"] == "system")
+
+
+def test_stream_course_rag_yields_sse_events():
+    """Verify stream_course_rag yields status, citations, streamed tokens, and done event."""
+    course_name = "1.8 Introduction to Research"
+    db_manager._memory_cache["vid-res-1"] = {
+        "title": "Sampling Techniques & Probability Designs",
+        "course_name": course_name,
+        "cues": [
+            {"timestamp": "05:20", "text": "Probability sampling guarantees each unit has a known non-zero probability."}
+        ],
+        "summaryMarkdown": "## Key Takeaways\nSampling error decreases with larger sample sizes."
+    }
+
+    mock_sse_lines = [
+        b'data: {"choices": [{"delta": {"content": "Probability "}}]}\n\n',
+        b'data: {"choices": [{"delta": {"content": "sampling ensures "}}]}\n\n',
+        b'data: {"choices": [{"delta": {"content": "representativeness."}}]}\n\n',
+        b'data: [DONE]\n\n'
+    ]
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_lines.return_value = mock_sse_lines
+
+    with patch("requests.post", return_value=mock_response), \
+         patch("backend.algolia_service.algolia_service.search", side_effect=Exception("Offline")):
+        chunks = list(pinecone_rag_engine.stream_course_rag(
+            query="Explain probability sampling",
+            course_name=course_name
+        ))
+
+        assert any("status" in c for c in chunks)
+        assert any("citations" in c for c in chunks)
+        assert any("Probability " in c for c in chunks)
+        assert any("representativeness." in c for c in chunks)
+        assert any("done" in c for c in chunks)
+        assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_course_tutor_chat_stream_endpoint():
+    """Verify FastAPI endpoint /api/course/{course_name}/tutor/chat/stream returns streaming response."""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    client = TestClient(app)
+
+    with patch.object(
+        pinecone_rag_engine,
+        "stream_course_rag",
+        return_value=[
+            'data: {"type": "status", "message": "Searching..."}\n\n',
+            'data: {"type": "token", "delta": "Hello"}\n\n',
+            'data: {"type": "done", "model": "TestModel", "response_time_ms": 100}\n\n',
+            'data: [DONE]\n\n'
+        ]
+    ):
+        res = client.post(
+            "/api/course/1.8%20Introduction%20to%20Research/tutor/chat/stream",
+            json={"message": "What is research design?"}
+        )
+        assert res.status_code == 200
+        assert "text/event-stream" in res.headers["content-type"]
+        assert 'data: {"type": "token", "delta": "Hello"}' in res.text
+        assert 'data: [DONE]' in res.text
+

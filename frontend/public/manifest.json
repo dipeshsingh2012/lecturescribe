@@ -1,7 +1,7 @@
 {
-  "name": "LearnScribe LMS - AI Course & Lecture Workspace",
-  "short_name": "LearnScribe",
-  "description": "Enterprise AI-Native Learning Management System with lecture transcripts, AI speedgrader, calendar, and study tools",
+  "name": "LectureScribe - Personal AI-Assisted LMS",
+  "short_name": "LectureScribe",
+  "description": "Your personal AI-assisted learning management system for lecture transcripts, summaries, and study tools.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "any",
@@ -17,4 +17,3 @@
     }
   ]
 }
-

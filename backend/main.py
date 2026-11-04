@@ -2517,6 +2517,52 @@ def rag_query(req: RAGQueryRequest):
     print("=" * 60 + "\n")
     return result
 
+
+@app.post("/api/rag/query/stream")
+def rag_query_stream(req: RAGQueryRequest):
+    """
+    Stream Lecture-Level AI Tutor response token-by-token using Server-Sent Events (SSE).
+    Provides instant <300ms time-to-first-token with live thinking and citations.
+    """
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="Query string cannot be empty")
+
+    video_id = str(req.video_id or "").strip()
+    video_title = (req.video_title or "").strip()
+    if video_id and not video_title:
+        saved_vid = db_manager.get_saved_video(video_id)
+        if saved_vid and saved_vid.get("title"):
+            video_title = saved_vid["title"]
+
+    def event_stream():
+        try:
+            for event in pinecone_rag_engine.stream_rag(
+                req.query,
+                video_id=video_id,
+                video_title=video_title,
+                cues=req.cues,
+                top_k=req.top_k or 10,
+                enable_web_search=req.enable_web_search if req.enable_web_search is not None else True,
+                user_email=req.user_email,
+                chat_history=req.chat_history,
+                enforce_regenerate=req.enforce_regenerate or False
+            ):
+                yield event
+        except Exception as e:
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
 def process_chat_message(
     user_prompt: str,
     video_id: str = "active",
@@ -4097,6 +4143,44 @@ def course_tutor_chat(course_name: str, req: CourseTutorChatRequest):
         print(f"⚠️ [Course Chat Save Notice]: {e}")
 
     return res
+
+
+@app.post("/api/course/{course_name}/tutor/chat/stream")
+def course_tutor_chat_stream(course_name: str, req: CourseTutorChatRequest):
+    """
+    Stream Course-Level AI Tutor response token-by-token using Server-Sent Events (SSE).
+    Provides instant <300ms time-to-first-token with live thinking and citations.
+    """
+    cname = course_name.strip()
+    if not cname:
+        raise HTTPException(status_code=400, detail="course_name is required.")
+
+    prompt = req.message.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    def event_stream():
+        try:
+            for event in pinecone_rag_engine.stream_course_rag(
+                query=prompt,
+                course_name=cname,
+                user_email=req.user_email,
+                chat_history=req.chat_history
+            ):
+                yield event
+        except Exception as e:
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @app.get("/api/course/{course_name}/tutor/history")

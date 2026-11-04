@@ -124,7 +124,7 @@ export default function App() {
     } else if (canonicalCourse) {
       document.title = `${canonicalCourse} | Course | LectureScribe`;
     } else {
-      document.title = 'LectureScribe - LMS & Lecture AI Workspace';
+      document.title = 'LectureScribe | Personal AI-Assisted LMS';
     }
   }, [activeData?.title, activeData?.course_name, selectedCourse, course.activeCourseData]);
 
@@ -515,7 +515,7 @@ export default function App() {
         />
 
         {/* Global Mobile Bottom Navigation Bar (Hidden when watching lecture) */}
-        {!activeData && (
+        {auth.googleUser && !activeData && (
           <MobileBottomNav
             selectedCourse={selectedCourse}
             courseViewTab={resources.courseViewTab}

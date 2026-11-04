@@ -41,12 +41,31 @@ describe('HomeView', () => {
     currentTheme: mockTheme
   };
 
-  it('renders home hub view with My Courses and empty grid when selectedCourse is null', () => {
-    render(<HomeView {...baseProps} />);
+  it('renders the signed-in home hub with My Courses and empty grid', () => {
+    render(
+      <HomeView
+        {...baseProps}
+        googleUser={{ name: 'Ada Lovelace', email: 'ada@example.com' }}
+        userRole="tutor"
+      />
+    );
 
     expect(screen.getByText('My Courses')).toBeInTheDocument();
     expect(screen.getByText('Your Course Library is Empty')).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Paste any lecture video URL or ID/i)).toBeInTheDocument();
+  });
+
+  it('shows only the public welcome state on the signed-out landing page', () => {
+    render(<HomeView {...baseProps} />);
+
+    expect(screen.getByRole('heading', { name: /Make every lecture easier to learn/i })).toBeInTheDocument();
+    expect(screen.getByText('Your learning workspace')).toBeInTheDocument();
+    expect(screen.getByText('Built around the way you learn')).toBeInTheDocument();
+    expect(screen.queryByText('My Courses')).not.toBeInTheDocument();
+    expect(screen.queryByText('Your Course Library is Empty')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Paste any lecture video URL or ID/i)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Search courses or lectures/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sign in with Google/i })).not.toBeInTheDocument();
   });
 
   it('renders selected course view with back button and lectures when selectedCourse is provided', () => {
@@ -335,6 +354,7 @@ describe('HomeView', () => {
     render(
       <HomeView
         {...baseProps}
+        googleUser={{ name: 'Test Student', email: 'student@example.com' }}
         handleTranscribe={handleTranscribe}
         handleCueClick={handleCueClick}
       />
@@ -482,4 +502,3 @@ describe('HomeView', () => {
     expect(screen.getByText('Course AI Tutor')).toBeInTheDocument();
   });
 });
-

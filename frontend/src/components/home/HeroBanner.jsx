@@ -55,12 +55,14 @@ export default function HeroBanner({
         )}
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 1 }}>
-            Welcome back, {getUserFirstName(googleUser, null, 'Scholar')}! 🎓
+            {googleUser
+              ? `Welcome back, ${getUserFirstName(googleUser, null, 'Scholar')}! 🎓`
+              : 'Welcome to LectureScribe 🎓'}
           </Typography>
           <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.85)', mt: 0.5, fontSize: '0.88rem' }}>
             {googleUser
-              ? 'Personal Learning Management System • Verified Study History & Cloud Backups'
-              : 'Personal Learning Management System • Transcripts, summaries & interactive AI Tutor'}
+              ? 'Personal AI-Assisted LMS • Verified Study History & Cloud Backups'
+              : 'Turn lectures into searchable transcripts, summaries, and AI-powered study tools.'}
           </Typography>
         </Box>
       </Box>

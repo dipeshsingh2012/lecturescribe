@@ -188,4 +188,32 @@ describe('CourseTutor Component', () => {
     fireEvent.click(clearBtn);
     expect(clearHistory).toHaveBeenCalledTimes(1);
   });
+
+  it('renders streaming cursor and stop button during active generation', () => {
+    const abortStream = vi.fn();
+    render(
+      <CourseTutor
+        courseName="Machine Learning"
+        lectureCount={4}
+        messages={[
+          { id: 'u1', sender: 'user', text: 'Explain SVM' },
+          { id: 'b1', sender: 'bot', text: 'Support Vector Machines find optimal hyperplane', isStreaming: true }
+        ]}
+        input=""
+        setInput={vi.fn()}
+        loading={true}
+        streamingStatus="Synthesizing grounded response..."
+        abortStream={abortStream}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByTestId('streaming-cursor')).toBeInTheDocument();
+    expect(screen.getByText('Synthesizing grounded response...')).toBeInTheDocument();
+
+    const stopBtn = screen.getByRole('button', { name: /Stop generating/i });
+    expect(stopBtn).toBeInTheDocument();
+    fireEvent.click(stopBtn);
+    expect(abortStream).toHaveBeenCalledTimes(1);
+  });
 });

@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
+import GuestLandingPage from '../home/GuestLandingPage';
 import QuickAddBar from '../home/QuickAddBar';
 import CourseGrid from '../course/CourseGrid';
 import CourseRenameDialog from '../course/CourseRenameDialog';
@@ -165,6 +166,7 @@ export default function HomeView({
     ? (isTutorProp ? 'tutor' : 'student')
     : (userRole || (googleUser ? 'student' : 'tutor'));
   const isTutor = effectiveRole === 'tutor';
+  const isGuestLanding = !googleUser && !selectedCourse;
 
   const courseQuiz = useCourseQuiz(
     activeCourseData?.course_name || selectedCourse,
@@ -270,6 +272,10 @@ export default function HomeView({
     if (typeof setUrlInput === 'function') setUrlInput('');
     if (typeof setCacheNotice === 'function') setCacheNotice(null);
   };
+
+  if (isGuestLanding) {
+    return <GuestLandingPage currentTheme={currentTheme} />;
+  }
 
   return (
     <Box sx={{ maxWidth: '1600px', width: '100%', mx: 'auto', p: { xs: 1.5, sm: 2.5, md: 4 } }}>
@@ -1078,6 +1084,8 @@ export default function HomeView({
           chatEndRef={courseTutor.chatEndRef}
           chatInputRef={courseTutor.chatInputRef}
           handleSelectLecture={(vid, cName, ts) => handleTranscribe(vid, false, cName)}
+          abortStream={courseTutor.abortStream}
+          streamingStatus={courseTutor.streamingStatus}
           currentTheme={currentTheme}
         />
       ) : (courseViewTab === 'resources' || courseViewTab === 'library') ? (

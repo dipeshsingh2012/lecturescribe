@@ -80,7 +80,7 @@ export default function Header({
             }
           }}
         >
-          LearnScribe LMS
+          Personal AI-Assisted LMS
         </span>
       </div>
 

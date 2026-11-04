@@ -32,7 +32,7 @@ describe('Header', () => {
       />
     );
 
-    const brand = screen.getByText('LearnScribe LMS');
+    const brand = screen.getByText('Personal AI-Assisted LMS');
     expect(brand).toBeInTheDocument();
     fireEvent.click(brand);
     expect(handleBackToHub).toHaveBeenCalledTimes(1);
@@ -59,7 +59,7 @@ describe('Header', () => {
       />
     );
 
-    const brand = screen.getByText('LearnScribe LMS');
+    const brand = screen.getByText('Personal AI-Assisted LMS');
     fireEvent.click(brand);
     expect(handleNavigateHome).toHaveBeenCalledTimes(1);
 

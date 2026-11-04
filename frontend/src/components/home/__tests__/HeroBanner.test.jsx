@@ -17,8 +17,9 @@ describe('HeroBanner', () => {
       />
     );
 
-    expect(screen.getByText(/Welcome back, Scholar!/i)).toBeInTheDocument();
-    expect(screen.getByText(/Personal Learning Management System/i)).toBeInTheDocument();
+    expect(screen.getByText(/Welcome to LectureScribe/i)).toBeInTheDocument();
+    expect(screen.getByText(/Turn lectures into searchable transcripts/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sign in with Google/i })).not.toBeInTheDocument();
   });
 
   it('renders authenticated user profile and stats when googleUser is provided', () => {

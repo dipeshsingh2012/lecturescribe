@@ -13,7 +13,7 @@ import math
 import time
 import random
 import hashlib
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Generator
 from pathlib import Path
 _env_file = Path(__file__).resolve().parent.parent / ".env"
 try:
@@ -1518,6 +1518,259 @@ class Llama3PineconeRAGStore:
 
         raise RuntimeError(f"All unified LLM providers failed. Last error: {last_error}")
 
+    def stream_rag(
+        self,
+        query: str,
+        video_id: Optional[str] = None,
+        video_title: Optional[str] = None,
+        cues: Optional[List[Dict[str, Any]]] = None,
+        top_k: int = 10,
+        enable_web_search: bool = True,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        user_email: Optional[str] = None,
+        enforce_regenerate: bool = False
+    ) -> Generator[str, None, None]:
+        """
+        Lecture-Level RAG with Real-Time SSE Token Streaming.
+        Yields status updates, citations, streamed tokens, and done event.
+        """
+        import requests
+        t_start = time.perf_counter()
+
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Searching lecture transcript...'})}\n\n"
+
+        target_video_id = str(video_id).strip() if video_id else ""
+        if not video_title and target_video_id and target_video_id != "active":
+            try:
+                from backend.database import db_manager
+                saved = db_manager.get_saved_video(target_video_id)
+                if saved and saved.get("title"):
+                    video_title = saved["title"]
+            except Exception:
+                pass
+        lecture_title = video_title or (self.video_title if self.video_id == target_video_id else "") or "Active Lecture"
+
+        # Sync singleton state to target video if switching lectures
+        if target_video_id and target_video_id != "active" and target_video_id != self.video_id:
+            target_cues = cues
+            if not target_cues:
+                try:
+                    from backend.database import db_manager
+                    saved = db_manager.get_saved_video(target_video_id)
+                    if saved and saved.get("cues"):
+                        target_cues = saved["cues"]
+                except Exception:
+                    pass
+            if target_cues:
+                self.ingest_transcript(target_video_id, lecture_title, target_cues, upsert=False)
+        elif cues:
+            self.cues = list(cues)
+
+        # Pre-fetch cues and outline
+        is_holistic = self.is_holistic_query(query)
+        pre_outline_json = ""
+        pre_outline_citations = []
+        if is_holistic:
+            try:
+                out_res, out_cit, _ = self.execute_tool(
+                    "get_lecture_outline",
+                    {"video_id": target_video_id},
+                    target_video_id,
+                    lecture_title
+                )
+                if out_res and out_res != "[]":
+                    pre_outline_json = out_res
+                    pre_outline_citations = out_cit
+            except Exception as e_out:
+                print(f"⚠️ [Stream RAG Outline Notice] {e_out}")
+
+        # Search transcript cues
+        search_res, search_cit = "", []
+        try:
+            search_res, search_cit, _ = self.execute_tool(
+                "search_transcript",
+                {"query": query, "top_k": top_k},
+                target_video_id,
+                lecture_title
+            )
+        except Exception as e_st:
+            print(f"⚠️ [Stream RAG Search Notice] {e_st}")
+
+        all_citations = list(pre_outline_citations)
+        if search_cit:
+            all_citations.extend(search_cit)
+
+        # Yield early citations
+        yield f"data: {json.dumps({'type': 'citations', 'citations': all_citations})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Synthesizing grounded explanation...'})}\n\n"
+
+        system_prompt = (
+            f"You are an Academic AI Tutor for lecture: '{lecture_title}'.\n"
+            "You are helpful, precise, non-hallucinatory, and academically rigorous.\n"
+            "Always format mathematical and scientific formulas using standard LaTeX notation: "
+            "use single dollar signs for inline formulas like $E=mc^2$ or $\\sigma(z)$, and double dollar signs for standalone block equations like $$\\text{MSE} = \\frac{1}{n} \\sum_{i=1}^{n} (y_i - \\hat{y}_i)^2$$. "
+            "Always use `_` for subscripts (for example, $\\hat{\\beta}_{1}$), never `*`; wrap every equation in the appropriate dollar-sign delimiters and do not put display equations inside square brackets. "
+            "Ground your explanations with [MM:SS] timestamps where relevant. Start directly with the answer."
+        )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        if pre_outline_json:
+            messages.append({
+                "role": "system",
+                "content": f"Structured lecture outline for '{lecture_title}':\n{pre_outline_json}"
+            })
+        if search_res and search_res != "[]":
+            messages.append({
+                "role": "system",
+                "content": f"Relevant lecture transcript segments for this query:\n{search_res}"
+            })
+        if chat_history:
+            for h in chat_history[-6:]:
+                r = "assistant" if h.get("sender") in ("bot", "assistant") else "user"
+                txt = (h.get("text") or "").strip()
+                if txt:
+                    messages.append({"role": r, "content": txt})
+        messages.append({"role": "user", "content": f"Student Request: {query}"})
+
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
+
+        candidates = []
+        if gemini_key:
+            for gem_m, gem_disp in [
+                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
+                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+            ]:
+                candidates.append({
+                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    "auth_header": f"Bearer {gemini_key}",
+                    "model_name": gem_m,
+                    "display": f"{gem_disp} (OpenAI API)"
+                })
+        if groq_key:
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "openai/gpt-oss-120b",
+                "display": "Groq GPT-OSS 120B"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "qwen/qwen3.8-27b",
+                "display": "Groq Qwen 3.8 27B"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "openai/gpt-oss-20b",
+                "display": "Groq GPT-OSS 20B"
+            })
+
+        stream_succeeded = False
+        last_error = None
+        accumulated_tokens = []
+        chosen_model = ""
+
+        for prov in candidates:
+            endpoint = prov["endpoint"]
+            auth_header = prov["auth_header"]
+            model_name = prov["model_name"]
+            display_model = prov["display"]
+            headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "max_tokens": 2048,
+                "temperature": 0.3,
+                "stream": True
+            }
+
+            try:
+                resp = requests.post(endpoint, headers=headers, json=payload, stream=True, timeout=60)
+                if resp.status_code != 200:
+                    last_error = f"{display_model} status {resp.status_code}"
+                    continue
+
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    line_str = line.decode("utf-8") if isinstance(line, bytes) else line
+                    line_str = line_str.strip()
+                    if line_str.startswith("data: "):
+                        data_part = line_str[6:].strip()
+                        if data_part == "[DONE]":
+                            break
+                        try:
+                            data_obj = json.loads(data_part)
+                            delta = data_obj.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            if delta:
+                                accumulated_tokens.append(delta)
+                                yield f"data: {json.dumps({'type': 'token', 'delta': delta})}\n\n"
+                        except Exception:
+                            continue
+
+                full_text = "".join(accumulated_tokens).strip()
+                if full_text:
+                    stream_succeeded = True
+                    chosen_model = display_model
+                    elapsed_ms = max(1, int(round((time.perf_counter() - t_start) * 1000)))
+
+                    filtered_citations = self._filter_and_deduplicate_citations(
+                        citations=all_citations,
+                        answer=full_text,
+                        target_video_id=target_video_id
+                    )
+
+                    if target_video_id:
+                        try:
+                            from backend.database import db_manager
+                            db_manager.save_chat_log(
+                                video_id=target_video_id,
+                                user_prompt=query,
+                                ai_reply=full_text,
+                                citations=filtered_citations,
+                                user_email=user_email,
+                                model=chosen_model,
+                                response_time_ms=elapsed_ms
+                            )
+                        except Exception as dbe:
+                            print(f"⚠️ [Lecture Tutor Stream Save Error]: {dbe}")
+
+                    yield f"data: {json.dumps({'type': 'done', 'model': chosen_model, 'response_time_ms': elapsed_ms, 'citations': filtered_citations})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+            except Exception as pe:
+                last_error = pe
+                print(f"⚠️ [Lecture Tutor Stream Candidate Error]: {display_model} ({pe})")
+                continue
+
+        # Fallback to sync query_rag
+        if not stream_succeeded:
+            try:
+                sync_res = self.query_rag(
+                    query=query,
+                    video_id=video_id,
+                    video_title=video_title,
+                    cues=cues,
+                    top_k=top_k,
+                    enable_web_search=enable_web_search,
+                    chat_history=chat_history,
+                    user_email=user_email,
+                    enforce_regenerate=enforce_regenerate
+                )
+                ans = sync_res.get("answer", "")
+                cits = sync_res.get("citations", all_citations)
+                mod = sync_res.get("model", "Academic Tutor")
+                ms = sync_res.get("response_time_ms", max(1, int(round((time.perf_counter() - t_start) * 1000))))
+                yield f"data: {json.dumps({'type': 'token', 'delta': ans})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'model': mod, 'response_time_ms': ms, 'citations': cits})}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as fe:
+                yield f"data: {json.dumps({'type': 'error', 'error': f'Failed to generate response: {last_error or fe}'})}\n\n"
+
     def query_course_rag(
         self,
         query: str,
@@ -1780,6 +2033,253 @@ class Llama3PineconeRAGStore:
                 continue
 
         raise RuntimeError(f"All LLM providers failed for Course Tutor. Last error: {last_error}")
+
+    def stream_course_rag(
+        self,
+        query: str,
+        course_name: str,
+        user_email: Optional[str] = None,
+        chat_history: Optional[List[Dict[str, Any]]] = None
+    ) -> Generator[str, None, None]:
+        """
+        Course-Level RAG with Real-Time SSE Token Streaming.
+        Yields status updates, citations, streamed tokens, and done event.
+        """
+        import requests
+        cname = (course_name or "").strip()
+        if not cname:
+            yield f"data: {json.dumps({'type': 'error', 'error': 'course_name cannot be empty.'})}\n\n"
+            return
+
+        t_start = time.perf_counter()
+
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Searching lecture transcripts & course materials...'})}\n\n"
+
+        # 1. Pre-fetch course transcript cues
+        pre_res, pre_cit = "", []
+        try:
+            pre_res, pre_cit = self.execute_course_tool(
+                "search_course_transcripts",
+                {"query": query, "top_k": 8},
+                cname,
+                user_email=user_email
+            )
+        except Exception as e_pre:
+            print(f"⚠️ [Course Tutor Stream Pre-fetch Transcripts Notice]: {e_pre}")
+
+        # 2. Pre-fetch course lecture summaries
+        sum_res, sum_cit = "", []
+        try:
+            sum_res, sum_cit = self.execute_course_tool(
+                "search_course_summaries",
+                {"query": query, "top_k": 4},
+                cname,
+                user_email=user_email
+            )
+        except Exception as e_sum:
+            print(f"⚠️ [Course Tutor Stream Pre-fetch Summaries Notice]: {e_sum}")
+
+        # 3. Pre-fetch course outline if holistic
+        is_course_holistic = self.is_holistic_query(query)
+        course_outline_res = ""
+        course_outline_cit = []
+        if is_course_holistic:
+            try:
+                course_outline_res, course_outline_cit = self.execute_course_tool(
+                    "get_course_outline_and_lectures",
+                    {},
+                    cname,
+                    user_email=user_email
+                )
+            except Exception as e_co:
+                print(f"⚠️ [Course Tutor Stream Outline Notice]: {e_co}")
+
+        # 4. Consolidate and deduplicate citations
+        all_citations = list(pre_cit)
+        if sum_cit:
+            all_citations.extend(sum_cit)
+        if course_outline_cit:
+            all_citations.extend(course_outline_cit)
+
+        seen_cites = set()
+        deduped_citations = []
+        for c in all_citations:
+            k = (c.get("video_id"), c.get("timestamp"))
+            if k not in seen_cites:
+                seen_cites.add(k)
+                deduped_citations.append(c)
+        final_citations = deduped_citations[:10]
+
+        # Send early citations & status to UI
+        yield f"data: {json.dumps({'type': 'citations', 'citations': final_citations})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Synthesizing grounded response...'})}\n\n"
+
+        # 5. Build prompt & context
+        system_prompt = (
+            f"You are the Academic AI Tutor for the course: '{cname}'.\n"
+            "Your mission is to help students synthesize knowledge across all lectures in the course, "
+            "master core concepts, compare topics across lectures, and prepare thoroughly for academic exams.\n\n"
+            "Strict Instructions:\n"
+            "1. Ground your answers strictly and directly in the course lecture transcripts, lecture summaries, and professor slides. "
+            "When referencing or explaining a concept from a lecture, cite the source: "
+            "e.g. `[Lecture Title · MM:SS]`, `[Lecture Title · Summary]`, or `[Deck Name · Slide X]`.\n"
+            "2. When answering subjective, descriptive, or 10-mark exam questions, provide a comprehensive, academically structured answer with clear headings: "
+            "Conceptual Definition & Foundations, Methodological Procedure / Design, Real-World Research Examples, and Threats to Validity / Limitations.\n"
+            "3. Always format mathematical formulas and equations using standard LaTeX notation: "
+            "single dollar signs for inline math ($...$) and double dollar signs ($$...$$) for standalone block equations. "
+            "Always use `_` for subscripts (for example, $\\hat{\\beta}_{1}$), never `*`; wrap every equation in the appropriate dollar-sign delimiters and do not put display equations inside square brackets. "
+            "When using math expressions inside markdown tables, never use raw unescaped pipe `|` characters (e.g. use `\\mid` or `\\vert` in set-builder notation like `\\{ x \\mid P(x) \\}`).\n"
+            "4. If a student asks to compare topics, synthesize the similarities and differences across the lectures.\n"
+            "5. If a concept was NOT covered in any lecture or material in this course, explicitly state that it was not covered in the course syllabus or lecture recordings. Do not generate or substitute external unverified information.\n"
+            "6. Maintain an encouraging, academically rigorous, clear, and structured tone (use markdown sections and bullet points).\n"
+            "7. Start directly with the response content. DO NOT output raw function call tokens or JSON objects."
+        )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        if course_outline_res and course_outline_res != "[]":
+            messages.append({
+                "role": "system",
+                "content": f"Complete Course Outline and Lecture List for '{cname}':\n{course_outline_res}"
+            })
+        if pre_res and pre_res != "[]":
+            messages.append({
+                "role": "system",
+                "content": f"Relevant course lecture excerpts retrieved for this query:\n{pre_res}"
+            })
+        if sum_res and sum_res != "[]":
+            messages.append({
+                "role": "system",
+                "content": f"Relevant course lecture summaries and core concepts:\n{sum_res}"
+            })
+        if chat_history:
+            for h in chat_history[-6:]:
+                r = "assistant" if h.get("sender") in ("bot", "assistant") else "user"
+                txt = h.get("text", "")
+                if txt:
+                    messages.append({"role": r, "content": txt})
+        messages.append({"role": "user", "content": query})
+
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
+
+        candidates = []
+        if gemini_key:
+            for gem_m, gem_disp in [
+                ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+                ("gemini-flash-lite-latest", "Gemini Flash Lite Latest"),
+                ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+            ]:
+                candidates.append({
+                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    "auth_header": f"Bearer {gemini_key}",
+                    "model_name": gem_m,
+                    "display": f"{gem_disp} (OpenAI API)"
+                })
+        if groq_key:
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "openai/gpt-oss-120b",
+                "display": "Groq GPT-OSS 120B"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "qwen/qwen3.8-27b",
+                "display": "Groq Qwen 3.8 27B"
+            })
+            candidates.append({
+                "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+                "auth_header": f"Bearer {groq_key}",
+                "model_name": "openai/gpt-oss-20b",
+                "display": "Groq GPT-OSS 20B"
+            })
+
+        stream_succeeded = False
+        last_error = None
+        accumulated_tokens = []
+        chosen_model = ""
+
+        for prov in candidates:
+            endpoint = prov["endpoint"]
+            auth_header = prov["auth_header"]
+            model_name = prov["model_name"]
+            display_model = prov["display"]
+            headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "max_tokens": 2048,
+                "temperature": 0.3,
+                "stream": True
+            }
+
+            try:
+                resp = requests.post(endpoint, headers=headers, json=payload, stream=True, timeout=60)
+                if resp.status_code != 200:
+                    last_error = f"{display_model} status {resp.status_code}"
+                    continue
+
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    line_str = line.decode("utf-8") if isinstance(line, bytes) else line
+                    line_str = line_str.strip()
+                    if line_str.startswith("data: "):
+                        data_part = line_str[6:].strip()
+                        if data_part == "[DONE]":
+                            break
+                        try:
+                            data_obj = json.loads(data_part)
+                            delta = data_obj.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            if delta:
+                                accumulated_tokens.append(delta)
+                                yield f"data: {json.dumps({'type': 'token', 'delta': delta})}\n\n"
+                        except Exception:
+                            continue
+
+                full_text = "".join(accumulated_tokens).strip()
+                if full_text:
+                    stream_succeeded = True
+                    chosen_model = display_model
+                    elapsed_ms = max(1, int(round((time.perf_counter() - t_start) * 1000)))
+
+                    try:
+                        from backend.database import db_manager
+                        db_manager.save_course_chat_log(
+                            course_name=cname,
+                            user_prompt=query,
+                            ai_reply=full_text,
+                            citations=final_citations,
+                            user_email=user_email,
+                            model=chosen_model,
+                            response_time_ms=elapsed_ms
+                        )
+                    except Exception as dbe:
+                        print(f"⚠️ [Course Tutor Stream Save Error]: {dbe}")
+
+                    yield f"data: {json.dumps({'type': 'done', 'model': chosen_model, 'response_time_ms': elapsed_ms, 'citations': final_citations})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+            except Exception as pe:
+                last_error = pe
+                print(f"⚠️ [Course Tutor Stream Candidate Error]: {display_model} ({pe})")
+                continue
+
+        # If streaming candidates could not produce tokens, fallback to synchronous query_course_rag
+        if not stream_succeeded:
+            try:
+                sync_res = self.query_course_rag(query, cname, user_email=user_email, chat_history=chat_history)
+                reply = sync_res.get("reply", "")
+                cits = sync_res.get("citations", final_citations)
+                mod = sync_res.get("model", "Academic Course Tutor")
+                ms = sync_res.get("response_time_ms", max(1, int(round((time.perf_counter() - t_start) * 1000))))
+                yield f"data: {json.dumps({'type': 'token', 'delta': reply})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'model': mod, 'response_time_ms': ms, 'citations': cits})}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as fe:
+                yield f"data: {json.dumps({'type': 'error', 'error': f'Failed to generate response: {last_error or fe}'})}\n\n"
 
     def _clean_for_submission(
         self,

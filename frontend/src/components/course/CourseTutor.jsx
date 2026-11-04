@@ -76,30 +76,30 @@ export default function CourseTutor({
     <Box sx={{
       display: 'flex',
       flexDirection: 'column',
-      height: { xs: 'calc(100dvh - 180px)', md: 'calc(100vh - 220px)' },
-      minHeight: { xs: 'auto', md: '600px' },
-      gap: 2
+      height: { xs: 'calc(100dvh - 130px)', md: 'calc(100vh - 200px)' },
+      minHeight: { xs: 'auto', md: '580px' },
+      gap: { xs: 1.25, sm: 2 }
     }}>
       {/* Header Bar */}
       <Paper
         elevation={0}
         sx={{
-          p: 2,
+          p: { xs: 1.2, sm: 1.75 },
           borderRadius: 3,
           bgcolor: currentTheme.palette.cardBg,
           border: `1px solid ${currentTheme.palette.cardBorder}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          flexWrap: 'wrap',
           gap: 1.5
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
           <Box
             sx={{
-              width: 38,
-              height: 38,
+              width: 36,
+              height: 36,
+              minWidth: 36,
               borderRadius: 2,
               display: 'flex',
               alignItems: 'center',
@@ -109,19 +109,19 @@ export default function CourseTutor({
               boxShadow: '0 4px 12px rgba(0, 117, 237, 0.25)'
             }}
           >
-            <Sparkles size={20} />
+            <Sparkles size={18} />
           </Box>
-          <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1.05rem', color: currentTheme.palette.textPrimary }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography variant="h6" sx={{ fontWeight: 800, fontSize: { xs: '0.95rem', sm: '1.05rem' }, color: currentTheme.palette.textPrimary, whiteSpace: 'nowrap' }}>
                 Course AI Tutor
               </Typography>
               <Chip
                 label={`${lectureCount} ${lectureCount === 1 ? 'lecture' : 'lectures'} indexed`}
                 size="small"
                 sx={{
-                  height: 22,
-                  fontSize: '0.72rem',
+                  height: 20,
+                  fontSize: '0.7rem',
                   fontWeight: 700,
                   bgcolor: currentTheme.palette.badgeBg,
                   color: currentTheme.palette.badgeColor,
@@ -129,35 +129,33 @@ export default function CourseTutor({
                 }}
               />
             </Box>
-            <Typography variant="body2" sx={{ fontSize: '0.8rem', color: currentTheme.palette.textSecondary }}>
+            <Typography variant="body2" sx={{ fontSize: '0.78rem', color: currentTheme.palette.textSecondary, display: { xs: 'none', sm: 'block' } }}>
               Grounded in all lecture transcripts and course syllabus for <strong>{courseName}</strong>
             </Typography>
           </Box>
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
           {messages.length > 0 && (
-            <Tooltip title="Clear Course Chat History">
-              <Button
-                variant="outlined"
+            <Tooltip title="Clear Chat History">
+              <IconButton
                 size="small"
-                startIcon={<Trash2 size={14} />}
+                aria-label="Clear Chat History"
                 onClick={clearHistory}
                 sx={{
-                  textTransform: 'none',
-                  fontSize: '0.78rem',
-                  fontWeight: 600,
-                  borderRadius: 2,
                   color: '#ef4444',
-                  borderColor: 'rgba(239, 68, 68, 0.3)',
+                  p: 0.8,
+                  borderRadius: 2,
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  bgcolor: 'rgba(239, 68, 68, 0.04)',
                   '&:hover': {
                     borderColor: '#ef4444',
-                    bgcolor: 'rgba(239, 68, 68, 0.08)'
+                    bgcolor: 'rgba(239, 68, 68, 0.12)'
                   }
                 }}
               >
-                Clear Chat
-              </Button>
+                <Trash2 size={16} />
+              </IconButton>
             </Tooltip>
           )}
         </Box>
@@ -442,21 +440,22 @@ export default function CourseTutor({
       <Paper
         elevation={0}
         sx={{
-          p: 1.5,
+          p: { xs: 0.75, sm: 1.25 },
           borderRadius: 3,
           bgcolor: currentTheme.palette.cardBg,
           border: `1px solid ${currentTheme.palette.cardBorder}`,
           display: 'flex',
           alignItems: 'flex-end',
-          gap: 1.5
+          gap: 1
         }}
       >
         <TextField
           inputRef={chatInputRef}
           fullWidth
           multiline
+          minRows={1}
           maxRows={4}
-          placeholder={`Ask anything about ${courseName} (e.g. explain a concept, compare lectures, exam formulas)...`}
+          placeholder="Ask anything about this course..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -464,9 +463,10 @@ export default function CourseTutor({
           slotProps={{
             input: {
               sx: {
-                fontSize: '0.9rem',
+                fontSize: { xs: '0.85rem', sm: '0.9rem' },
                 color: currentTheme.palette.textPrimary,
-                p: '6px 12px',
+                p: { xs: '4px 8px', sm: '6px 12px' },
+                lineHeight: 1.4,
                 '& fieldset': { border: 'none' }
               }
             }
@@ -477,12 +477,14 @@ export default function CourseTutor({
           onClick={() => sendMessage()}
           disabled={!input.trim() || loading}
           sx={{
-            minWidth: 44,
-            height: 44,
+            minWidth: { xs: 38, sm: 44 },
+            width: { xs: 38, sm: 44 },
+            height: { xs: 38, sm: 44 },
             borderRadius: 2.5,
             bgcolor: currentTheme.palette.primary,
             color: '#fff',
             p: 0,
+            flexShrink: 0,
             '&:hover': {
               bgcolor: 'var(--theme-primary-hover, #005ecb)'
             },
@@ -493,7 +495,7 @@ export default function CourseTutor({
           }}
           aria-label="Send query"
         >
-          {loading ? <CircularProgress size={18} color="inherit" /> : <Send size={18} />}
+          {loading ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
         </Button>
       </Paper>
     </Box>

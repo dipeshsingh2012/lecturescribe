@@ -113,7 +113,7 @@ export default function MobileBottomNav({
                 aria-current={isActive ? 'page' : undefined}
                 style={{ color: isActive ? palette.primary : palette.textSecondary }}
               >
-                <Icon size={20} strokeWidth={isActive ? 2.4 : 1.8} />
+                <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} />
                 <span>{tab.label}</span>
               </button>
             );
@@ -133,7 +133,7 @@ export default function MobileBottomNav({
               invisible={isPrimaryActive}
               sx={{ '& .MuiBadge-badge': { bgcolor: palette.primary } }}
             >
-              <MoreHorizontal size={20} strokeWidth={!isPrimaryActive ? 2.4 : 1.8} />
+              <MoreHorizontal size={18} strokeWidth={!isPrimaryActive ? 2.2 : 1.8} />
             </Badge>
             <span>More</span>
           </button>
@@ -314,7 +314,7 @@ export default function MobileBottomNav({
         aria-current={!isCalendarPage ? 'page' : undefined}
         style={{ color: !isCalendarPage ? palette.primary : palette.textSecondary }}
       >
-        <Home size={20} strokeWidth={!isCalendarPage ? 2.4 : 1.8} />
+        <Home size={18} strokeWidth={!isCalendarPage ? 2.2 : 1.8} />
         <span>Courses</span>
       </button>
 
@@ -326,7 +326,7 @@ export default function MobileBottomNav({
         aria-current={isCalendarPage ? 'page' : undefined}
         style={{ color: isCalendarPage ? palette.primary : palette.textSecondary }}
       >
-        <CalendarIcon size={20} strokeWidth={isCalendarPage ? 2.4 : 1.8} />
+        <CalendarIcon size={18} strokeWidth={isCalendarPage ? 2.2 : 1.8} />
         <span>Calendar</span>
       </button>
 
@@ -338,7 +338,7 @@ export default function MobileBottomNav({
           aria-label="New Note"
           style={{ color: palette.textSecondary }}
         >
-          <PlusCircle size={20} strokeWidth={1.8} />
+          <PlusCircle size={18} strokeWidth={1.8} />
           <span>New Note</span>
         </button>
       )}

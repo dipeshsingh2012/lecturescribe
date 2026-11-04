@@ -164,4 +164,28 @@ describe('CourseTutor Component', () => {
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveTextContent('3.1s');
   });
+
+  it('renders minimal placeholder and calls clearHistory when clear chat icon is clicked', () => {
+    const clearHistory = vi.fn();
+    render(
+      <CourseTutor
+        courseName="Machine Learning"
+        lectureCount={4}
+        messages={[{ id: 'u1', sender: 'user', text: 'Hi' }]}
+        input=""
+        setInput={vi.fn()}
+        loading={false}
+        clearHistory={clearHistory}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const inputEl = screen.getByPlaceholderText(/Ask anything about this course\.\.\./i);
+    expect(inputEl).toBeInTheDocument();
+
+    const clearBtn = screen.getByRole('button', { name: /Clear Chat History/i });
+    expect(clearBtn).toBeInTheDocument();
+    fireEvent.click(clearBtn);
+    expect(clearHistory).toHaveBeenCalledTimes(1);
+  });
 });

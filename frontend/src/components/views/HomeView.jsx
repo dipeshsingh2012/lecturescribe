@@ -492,7 +492,7 @@ export default function HomeView({
       {/* Course View Tabs (Lectures vs Course Quiz vs Course Materials) */}
       {selectedCourse && (
         <Box sx={{
-          display: 'flex',
+          display: { xs: 'none', md: 'flex' },
           alignItems: 'center',
           justifyContent: 'space-between',
           mb: 2.5,
@@ -829,56 +829,6 @@ export default function HomeView({
               </>
             )}
           </Box>
-        </Box>
-      )}
-
-      {/* Mobile Active Course Module Banner (< 900px) */}
-      {selectedCourse && (
-        <Box sx={{
-          display: { xs: 'flex', md: 'none' },
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 2,
-          p: 1.5,
-          borderRadius: 2.5,
-          bgcolor: currentTheme.palette.cardBg,
-          border: `1px solid ${currentTheme.palette.cardBorder}`
-        }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Chip
-              label={
-                courseViewTab === 'lectures' ? 'Lectures' :
-                courseViewTab === 'syllabus' ? 'Syllabus & Progress' :
-                courseViewTab === 'quiz' ? 'Course Quiz' :
-                courseViewTab === 'summary' ? 'Summary' :
-                courseViewTab === 'tutor' ? 'AI Tutor' :
-                courseViewTab === 'grades' ? 'Gradebook' :
-                courseViewTab === 'forum' ? 'Forum' :
-                courseViewTab === 'participants' ? 'Participants' :
-                courseViewTab === 'calendar' ? 'Calendar' :
-                courseViewTab === 'rubrics' ? 'Rubrics & Outcomes' :
-                courseViewTab === 'workshops' ? 'Workshops & Broadcasts' :
-                courseViewTab === 'assignments' ? 'Assignments' :
-                courseViewTab === 'notes' ? 'Notes' :
-                courseViewTab === 'question-bank' ? 'Question Bank' :
-                courseViewTab === 'analytics' ? 'Analytics' : 'Library'
-              }
-              size="small"
-              sx={{ bgcolor: currentTheme.palette.primary, color: '#fff', fontWeight: 800, fontSize: '0.75rem' }}
-            />
-            <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary }}>
-              Use bottom bar to switch modules
-            </Typography>
-          </Box>
-
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={handleClearCourse}
-            sx={{ textTransform: 'none', fontSize: '0.75rem', fontWeight: 700, borderRadius: 2 }}
-          >
-            All Courses
-          </Button>
         </Box>
       )}
 

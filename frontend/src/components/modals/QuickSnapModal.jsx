@@ -11,8 +11,7 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
-  HelpCircle,
-  FileText
+  Image as ImageIcon
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
@@ -35,7 +34,8 @@ export default function QuickSnapModal({
   const [isExplaining, setIsExplaining] = useState(false);
   const [detailedSolution, setDetailedSolution] = useState(null);
 
-  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
   const timerRef = useRef(null);
 
   // Sync default course context when changed from outside
@@ -59,7 +59,7 @@ export default function QuickSnapModal({
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [isOpen]);
 
-  // Listen to open-quick-solver event (triggered from Mobile Bottom Nav or Header)
+  // Listen to open-quick-solver event (triggered from Mobile Bottom Nav, Header, CourseTutor, AITutor)
   useEffect(() => {
     const handleOpenEvent = () => setIsOpen(true);
     window.addEventListener('open-quick-solver', handleOpenEvent);
@@ -89,7 +89,7 @@ export default function QuickSnapModal({
       return;
     }
     setError(null);
-    setImageFileName(file.name || 'Pasted Screenshot');
+    setImageFileName(file.name || 'Handwritten Question');
     setResult(null);
     setDetailedSolution(null);
 
@@ -130,7 +130,7 @@ export default function QuickSnapModal({
   const executeSolve = async (imgB64 = imageData, extraPrompt = prompt, detailed = false) => {
     const targetImage = imgB64 || imageData;
     if (!targetImage) {
-      setError('Please paste or upload an image of the question.');
+      setError('Please snap or upload an image of the question.');
       return;
     }
 
@@ -251,24 +251,46 @@ export default function QuickSnapModal({
       {/* Quick Snap Modal Overlay */}
       {isOpen && (
         <div
+          className="quick-solver-overlay"
           style={{
             position: 'fixed',
             top: 0,
             left: 0,
             right: 0,
             bottom: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
+            background: 'rgba(0, 0, 0, 0.78)',
             backdropFilter: 'blur(8px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 9999,
+            zIndex: 10000,
             padding: '16px'
           }}
           onClick={(e) => {
             if (e.target === e.currentTarget) setIsOpen(false);
           }}
         >
+          {/* Hidden File Inputs: Camera & Gallery */}
+          <input
+            type="file"
+            ref={cameraInputRef}
+            accept="image/*"
+            capture="environment"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              if (e.target.files?.[0]) processImageFile(e.target.files[0]);
+            }}
+          />
+          <input
+            type="file"
+            ref={galleryInputRef}
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              if (e.target.files?.[0]) processImageFile(e.target.files[0]);
+            }}
+          />
+
           <div
             className="quick-solver-modal-card"
             style={{
@@ -280,26 +302,37 @@ export default function QuickSnapModal({
               maxHeight: '90vh',
               display: 'flex',
               flexDirection: 'column',
-              boxShadow: '0 24px 64px rgba(0, 0, 0, 0.6)',
-              overflow: 'hidden',
-              animation: 'fadeInScale 0.2s ease-out'
+              boxShadow: '0 24px 64px rgba(0, 0, 0, 0.65)',
+              overflow: 'hidden'
             }}
           >
+            {/* Mobile Touch Drag Handle (Visual affordance) */}
+            <div className="quick-solver-drag-handle" style={{
+              display: 'none',
+              width: '38px',
+              height: '4px',
+              background: 'rgba(255, 255, 255, 0.25)',
+              borderRadius: '2px',
+              margin: '8px auto 0 auto'
+            }} />
+
             {/* Modal Header */}
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '16px 20px',
+                padding: '14px 18px',
                 borderBottom: '1px solid var(--border-color, #2d3340)',
-                background: 'var(--card-bg, #181b22)'
+                background: 'var(--card-bg, #181b22)',
+                flexShrink: 0
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
                 <div style={{
                   width: '32px',
                   height: '32px',
+                  minWidth: '32px',
                   borderRadius: '8px',
                   background: 'linear-gradient(135deg, #0075ed 0%, #3b82f6 100%)',
                   display: 'flex',
@@ -310,9 +343,9 @@ export default function QuickSnapModal({
                 }}>
                   <Zap size={18} style={{ fill: '#ffd700', stroke: '#ffd700' }} />
                 </div>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary, #fff)' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary, #fff)', whiteSpace: 'nowrap' }}>
                       Quick Snap & Solve
                     </h3>
                     <span style={{
@@ -321,14 +354,21 @@ export default function QuickSnapModal({
                       color: '#10b981',
                       background: 'rgba(16, 185, 129, 0.12)',
                       border: '1px solid rgba(16, 185, 129, 0.3)',
-                      padding: '2px 6px',
+                      padding: '1px 6px',
                       borderRadius: '4px'
                     }}>
                       &lt; 1s Speed
                     </span>
                   </div>
-                  <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary, #94a3b8)', marginTop: '2px' }}>
-                    Paste handwritten question or MCQ snapshot (Ctrl+V) for instant answer
+                  <div style={{
+                    fontSize: '0.72rem',
+                    color: 'var(--text-secondary, #94a3b8)',
+                    marginTop: '2px',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}>
+                    Instant answer for handwritten math & MCQs
                   </div>
                 </div>
               </div>
@@ -340,11 +380,14 @@ export default function QuickSnapModal({
                   border: 'none',
                   color: 'var(--text-secondary, #94a3b8)',
                   cursor: 'pointer',
-                  padding: '6px',
-                  borderRadius: '6px',
+                  padding: '8px',
+                  minWidth: '40px',
+                  minHeight: '40px',
+                  borderRadius: '8px',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  flexShrink: 0
                 }}
                 aria-label="Close modal"
               >
@@ -353,113 +396,170 @@ export default function QuickSnapModal({
             </div>
 
             {/* Modal Body */}
-            <div style={{ padding: '20px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{
+              padding: '16px',
+              overflowY: 'auto',
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              WebkitOverflowScrolling: 'touch'
+            }}>
 
-              {/* Context Hint Input / Pill */}
+              {/* Context Hint Input */}
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                fontSize: '0.78rem',
+                fontSize: '0.8rem',
                 color: 'var(--text-secondary, #94a3b8)',
                 background: 'rgba(255, 255, 255, 0.03)',
-                padding: '6px 12px',
+                padding: '6px 10px',
                 borderRadius: '8px',
                 border: '1px solid var(--border-color, #2d3340)'
               }}>
-                <Sparkles size={14} color="var(--theme-primary, #0075ed)" />
-                <span style={{ fontWeight: 600 }}>Subject / Course Hint:</span>
+                <Sparkles size={14} color="var(--theme-primary, #0075ed)" style={{ flexShrink: 0 }} />
+                <span style={{ fontWeight: 600, flexShrink: 0, fontSize: '0.76rem' }}>Subject:</span>
                 <input
                   type="text"
-                  placeholder="e.g. Calculus, Linear Algebra, or leave blank"
+                  placeholder="e.g. Calculus, Physics, or leave blank"
                   value={customCourseContext}
                   onChange={(e) => setCustomCourseContext(e.target.value)}
+                  className="quick-solver-input"
                   style={{
                     background: 'transparent',
                     border: 'none',
                     color: 'var(--text-primary, #fff)',
-                    fontSize: '0.78rem',
+                    fontSize: '0.82rem',
                     flex: 1,
-                    outline: 'none'
+                    outline: 'none',
+                    minWidth: 0
                   }}
                 />
               </div>
 
-              {/* Drop / Paste Area (when no image) */}
+              {/* NO IMAGE LOADED: Mobile Camera & Gallery Action Cards */}
               {!imageData && (
-                <div
-                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{
-                    border: `2px dashed ${isDragging ? 'var(--theme-primary, #0075ed)' : 'var(--border-color, #2d3340)'}`,
-                    borderRadius: '12px',
-                    padding: '36px 20px',
-                    textAlign: 'center',
-                    background: isDragging ? 'rgba(0, 117, 237, 0.08)' : 'var(--card-bg, #181b22)',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: '12px'
-                  }}
-                >
-                  <div style={{
-                    width: '52px',
-                    height: '52px',
-                    borderRadius: '50%',
-                    background: 'rgba(0, 117, 237, 0.12)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--theme-primary, #0075ed)'
-                  }}>
-                    <Camera size={26} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {/* Mobile-Friendly Big Action Buttons */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <button
+                      type="button"
+                      onClick={() => cameraInputRef.current?.click()}
+                      style={{
+                        padding: '16px 12px',
+                        borderRadius: '12px',
+                        border: '1.5px solid rgba(255, 215, 0, 0.45)',
+                        background: 'linear-gradient(135deg, rgba(255, 215, 0, 0.12) 0%, rgba(255, 180, 0, 0.06) 100%)',
+                        color: 'var(--text-primary, #fff)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <div style={{
+                        width: '42px',
+                        height: '42px',
+                        borderRadius: '50%',
+                        background: 'rgba(255, 215, 0, 0.2)',
+                        color: '#ffd700',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        <Camera size={22} />
+                      </div>
+                      <span style={{ fontWeight: 800, fontSize: '0.9rem' }}>Snap Photo</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary, #94a3b8)' }}>Open Camera</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => galleryInputRef.current?.click()}
+                      style={{
+                        padding: '16px 12px',
+                        borderRadius: '12px',
+                        border: '1px solid var(--border-color, #2d3340)',
+                        background: 'var(--card-bg, #181b22)',
+                        color: 'var(--text-primary, #fff)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <div style={{
+                        width: '42px',
+                        height: '42px',
+                        borderRadius: '50%',
+                        background: 'rgba(0, 117, 237, 0.15)',
+                        color: 'var(--theme-primary, #0075ed)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        <ImageIcon size={22} />
+                      </div>
+                      <span style={{ fontWeight: 800, fontSize: '0.9rem' }}>Photo Gallery</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary, #94a3b8)' }}>Upload File</span>
+                    </button>
                   </div>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: '0.98rem', color: 'var(--text-primary, #fff)' }}>
-                      Paste screenshot here (<kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 5px', borderRadius: '4px' }}>Ctrl+V</kbd>)
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary, #94a3b8)', marginTop: '4px' }}>
-                      or drag & drop image, or click to snap photo
-                    </div>
-                  </div>
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    accept="image/*"
-                    capture="environment"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) processImageFile(e.target.files[0]);
+
+                  {/* Desktop Drag & Paste Area */}
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleDrop}
+                    onClick={() => galleryInputRef.current?.click()}
+                    style={{
+                      border: `1.5px dashed ${isDragging ? 'var(--theme-primary, #0075ed)' : 'var(--border-color, #2d3340)'}`,
+                      borderRadius: '12px',
+                      padding: '20px 14px',
+                      textAlign: 'center',
+                      background: isDragging ? 'rgba(0, 117, 237, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '10px'
                     }}
-                  />
+                  >
+                    <Upload size={18} color="var(--theme-primary, #0075ed)" />
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary, #94a3b8)' }}>
+                      Or paste screenshot here (<kbd style={{ background: 'rgba(255,255,255,0.1)', padding: '1px 5px', borderRadius: '4px' }}>Ctrl+V</kbd>)
+                    </span>
+                  </div>
                 </div>
               )}
 
-              {/* Image Preview & Prompt Row (when image is loaded) */}
+              {/* IMAGE LOADED: Responsive Preview & Action Layout */}
               {imageData && (
                 <div style={{
                   display: 'flex',
-                  gap: '14px',
-                  alignItems: 'flex-start',
+                  flexDirection: 'column',
+                  gap: '12px',
                   background: 'var(--card-bg, #181b22)',
                   padding: '12px',
                   borderRadius: '12px',
                   border: '1px solid var(--border-color, #2d3340)'
                 }}>
-                  <div style={{ position: 'relative', flexShrink: 0 }}>
+                  {/* Image Display & Remove Row */}
+                  <div style={{ position: 'relative', width: '100%', maxHeight: '180px', overflow: 'hidden', borderRadius: '8px', background: '#000' }}>
                     <img
                       src={imageData}
                       alt="Question preview"
                       style={{
-                        width: '120px',
-                        height: '90px',
-                        objectFit: 'cover',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border-color, #2d3340)'
+                        width: '100%',
+                        maxHeight: '180px',
+                        objectFit: 'contain',
+                        display: 'block'
                       }}
                     />
                     <button
@@ -467,85 +567,97 @@ export default function QuickSnapModal({
                       title="Remove image"
                       style={{
                         position: 'absolute',
-                        top: '-6px',
-                        right: '-6px',
-                        background: '#ef4444',
+                        top: '8px',
+                        right: '8px',
+                        background: 'rgba(239, 68, 68, 0.9)',
                         color: '#fff',
                         border: 'none',
-                        borderRadius: '50%',
-                        width: '20px',
-                        height: '20px',
+                        borderRadius: '20px',
+                        padding: '4px 10px',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
+                        gap: '4px',
                         cursor: 'pointer',
-                        padding: 0
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.4)'
                       }}
                     >
-                      <X size={12} />
+                      <X size={13} />
+                      Remove
                     </button>
                   </div>
 
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary, #94a3b8)' }}>
-                      {imageFileName}
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Optional question clarification (e.g. 'Solve part b only')"
-                      value={prompt}
-                      onChange={(e) => setPrompt(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') executeSolve(imageData, prompt, false);
-                      }}
+                  {/* Clarification Input */}
+                  <input
+                    type="text"
+                    placeholder="Optional: 'Part (b) only' or leave blank"
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') executeSolve(imageData, prompt, false);
+                    }}
+                    className="quick-solver-input"
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color, #2d3340)',
+                      background: 'var(--panel-bg, #1e222a)',
+                      color: 'var(--text-primary, #fff)',
+                      fontSize: '0.88rem',
+                      outline: 'none',
+                      width: '100%',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+
+                  {/* Big Touch-Friendly Action Buttons */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px' }}>
+                    <button
+                      onClick={() => executeSolve(imageData, prompt, false)}
+                      disabled={loading}
                       style={{
-                        padding: '8px 12px',
+                        padding: '12px 16px',
+                        minHeight: '44px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: 'linear-gradient(135deg, var(--theme-primary, #0075ed) 0%, #3b82f6 100%)',
+                        color: '#fff',
+                        fontWeight: 800,
+                        fontSize: '0.88rem',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        boxShadow: '0 2px 8px rgba(0, 117, 237, 0.3)'
+                      }}
+                    >
+                      <Zap size={16} style={{ fill: '#ffd700', stroke: '#ffd700' }} />
+                      {loading ? `Solving (${elapsedSec}s)...` : '⚡ Solve Now (< 1s)'}
+                    </button>
+
+                    <button
+                      onClick={() => cameraInputRef.current?.click()}
+                      style={{
+                        padding: '12px 14px',
+                        minHeight: '44px',
                         borderRadius: '8px',
                         border: '1px solid var(--border-color, #2d3340)',
                         background: 'var(--panel-bg, #1e222a)',
                         color: 'var(--text-primary, #fff)',
                         fontSize: '0.82rem',
-                        outline: 'none',
-                        width: '100%',
-                        boxSizing: 'border-box'
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
                       }}
-                    />
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
-                      <button
-                        onClick={() => executeSolve(imageData, prompt, false)}
-                        disabled={loading}
-                        style={{
-                          padding: '7px 14px',
-                          borderRadius: '6px',
-                          border: 'none',
-                          background: 'linear-gradient(135deg, var(--theme-primary, #0075ed) 0%, #3b82f6 100%)',
-                          color: '#fff',
-                          fontWeight: 700,
-                          fontSize: '0.8rem',
-                          cursor: loading ? 'not-allowed' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px'
-                        }}
-                      >
-                        <Zap size={14} style={{ fill: '#ffd700', stroke: '#ffd700' }} />
-                        {loading ? `Solving (${elapsedSec}s)...` : '⚡ Re-Solve'}
-                      </button>
-                      <button
-                        onClick={handleReset}
-                        style={{
-                          padding: '7px 12px',
-                          borderRadius: '6px',
-                          border: '1px solid var(--border-color, #2d3340)',
-                          background: 'transparent',
-                          color: 'var(--text-secondary, #94a3b8)',
-                          fontSize: '0.78rem',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Paste New
-                      </button>
-                    </div>
+                      title="Retake photo"
+                    >
+                      <Camera size={16} />
+                      <span className="quick-solver-hide-mobile">Retake</span>
+                    </button>
                   </div>
                 </div>
               )}
@@ -553,7 +665,7 @@ export default function QuickSnapModal({
               {/* Error Message */}
               {error && (
                 <div style={{
-                  padding: '12px 14px',
+                  padding: '10px 14px',
                   background: 'rgba(239, 68, 68, 0.1)',
                   border: '1px solid rgba(239, 68, 68, 0.3)',
                   borderRadius: '8px',
@@ -571,7 +683,7 @@ export default function QuickSnapModal({
               {/* Loading Indicator */}
               {loading && (
                 <div style={{
-                  padding: '24px',
+                  padding: '20px',
                   textAlign: 'center',
                   background: 'var(--card-bg, #181b22)',
                   borderRadius: '12px',
@@ -582,18 +694,18 @@ export default function QuickSnapModal({
                   gap: '10px'
                 }}>
                   <div style={{
-                    width: '36px',
-                    height: '36px',
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     border: '3px solid rgba(0, 117, 237, 0.2)',
                     borderTopColor: 'var(--theme-primary, #0075ed)',
                     animation: 'spin 0.8s linear infinite'
                   }} />
-                  <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-primary, #fff)' }}>
-                    Analyzing handwritten question...
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary, #fff)' }}>
+                    Reading handwritten symbols & solving...
                   </div>
-                  <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary, #94a3b8)' }}>
-                    Running Gemini Flash-Lite multimodal vision ({elapsedSec}s)
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary, #94a3b8)' }}>
+                    Gemini Flash-Lite Multimodal Vision ({elapsedSec}s)
                   </div>
                 </div>
               )}
@@ -603,30 +715,30 @@ export default function QuickSnapModal({
                 <div style={{
                   background: 'var(--card-bg, #181b22)',
                   borderRadius: '12px',
-                  border: '1px solid rgba(16, 185, 129, 0.3)',
-                  padding: '16px 18px',
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  padding: '14px 16px',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '12px',
+                  gap: '10px',
                   boxShadow: '0 4px 16px rgba(0,0,0,0.2)'
                 }}>
                   {/* Top Result Banner */}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '1.2rem' }}>🎯</span>
-                      <span style={{ fontWeight: 800, fontSize: '0.98rem', color: '#10b981' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '1.15rem' }}>🎯</span>
+                      <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#10b981' }}>
                         Final Answer
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {result.response_time_ms && (
                         <span style={{
                           fontSize: '0.7rem',
                           fontWeight: 700,
                           color: '#10b981',
                           background: 'rgba(16, 185, 129, 0.1)',
-                          padding: '2px 8px',
+                          padding: '2px 7px',
                           borderRadius: '999px',
                           border: '1px solid rgba(16, 185, 129, 0.2)'
                         }}>
@@ -636,17 +748,18 @@ export default function QuickSnapModal({
                       <button
                         onClick={() => handleCopy(result.answer)}
                         style={{
-                          background: 'transparent',
-                          border: 'none',
+                          background: 'rgba(255, 255, 255, 0.06)',
+                          border: '1px solid var(--border-color, #2d3340)',
                           color: copied ? '#10b981' : 'var(--text-secondary, #94a3b8)',
                           cursor: 'pointer',
                           display: 'flex',
                           alignItems: 'center',
                           gap: '4px',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          padding: '4px 8px',
-                          borderRadius: '6px'
+                          fontSize: '0.76rem',
+                          fontWeight: 700,
+                          padding: '5px 10px',
+                          borderRadius: '6px',
+                          minHeight: '34px'
                         }}
                       >
                         {copied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
@@ -655,19 +768,28 @@ export default function QuickSnapModal({
                     </div>
                   </div>
 
-                  {/* Render Answer Text with LaTeX Math */}
+                  {/* Render Answer Text with LaTeX Math (Horizontally scrollable for long equations) */}
                   <div style={{
-                    fontSize: '1.05rem',
+                    fontSize: '1rem',
                     lineHeight: 1.6,
                     color: 'var(--text-primary, #fff)',
                     padding: '8px 0',
-                    borderBottom: '1px solid var(--border-color, #2d3340)'
+                    borderBottom: '1px solid var(--border-color, #2d3340)',
+                    overflowX: 'auto',
+                    WebkitOverflowScrolling: 'touch'
                   }}>
                     <MarkdownWithTimestamps content={result.answer} />
                   </div>
 
                   {/* Action Row: Explain / Show Steps */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '4px' }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    paddingTop: '4px',
+                    flexWrap: 'wrap'
+                  }}>
                     <button
                       onClick={() => {
                         if (!detailedSolution) {
@@ -681,9 +803,10 @@ export default function QuickSnapModal({
                         background: 'rgba(0, 117, 237, 0.1)',
                         border: '1px solid rgba(0, 117, 237, 0.3)',
                         color: 'var(--theme-primary, #0075ed)',
-                        borderRadius: '6px',
-                        padding: '6px 12px',
-                        fontSize: '0.78rem',
+                        borderRadius: '8px',
+                        padding: '8px 14px',
+                        minHeight: '40px',
+                        fontSize: '0.8rem',
                         fontWeight: 700,
                         cursor: isExplaining ? 'not-allowed' : 'pointer',
                         display: 'flex',
@@ -693,7 +816,7 @@ export default function QuickSnapModal({
                     >
                       {detailedSolution ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                       {isExplaining
-                        ? 'Deriving full steps...'
+                        ? 'Deriving steps...'
                         : detailedSolution
                         ? 'Hide Steps'
                         : 'Explain / Show Steps'}
@@ -703,16 +826,20 @@ export default function QuickSnapModal({
                       onClick={handleReset}
                       style={{
                         background: 'transparent',
-                        border: 'none',
+                        border: '1px solid var(--border-color, #2d3340)',
+                        borderRadius: '8px',
                         color: 'var(--text-secondary, #94a3b8)',
-                        fontSize: '0.78rem',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        padding: '8px 14px',
+                        minHeight: '40px',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '4px'
+                        gap: '6px'
                       }}
                     >
-                      <RotateCcw size={13} />
+                      <RotateCcw size={14} />
                       Solve Another
                     </button>
                   </div>
@@ -725,9 +852,11 @@ export default function QuickSnapModal({
                       borderRadius: '8px',
                       background: 'var(--panel-bg, #1e222a)',
                       border: '1px solid var(--border-color, #2d3340)',
-                      fontSize: '0.88rem',
+                      fontSize: '0.86rem',
                       lineHeight: 1.6,
-                      color: 'var(--text-primary, #fff)'
+                      color: 'var(--text-primary, #fff)',
+                      overflowX: 'auto',
+                      WebkitOverflowScrolling: 'touch'
                     }}>
                       <MarkdownWithTimestamps content={detailedSolution} />
                     </div>
@@ -740,11 +869,15 @@ export default function QuickSnapModal({
         </div>
       )}
 
-      {/* Global CSS animation for modal & spinner */}
+      {/* Global CSS animation for modal & mobile bottom-sheet styling */}
       <style>{`
         @keyframes fadeInScale {
           from { opacity: 0; transform: scale(0.96); }
           to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes slideUpMobile {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
         }
         @keyframes spin {
           0% { transform: rotate(0deg); }
@@ -757,23 +890,46 @@ export default function QuickSnapModal({
           border-radius: 9999px;
           font-size: 0.86rem;
         }
+
+        /* Mobile Viewports (< 900px, smartphones and tablets) */
         @media (max-width: 899px) {
+          .quick-solver-overlay {
+            align-items: flex-end !important;
+            padding: 0 !important;
+          }
+          .quick-solver-modal-card {
+            width: 100% !important;
+            max-width: 100% !important;
+            max-height: 92dvh !important;
+            border-bottom-left-radius: 0 !important;
+            border-bottom-right-radius: 0 !important;
+            border-top-left-radius: 20px !important;
+            border-top-right-radius: 20px !important;
+            border-left: none !important;
+            border-right: none !important;
+            border-bottom: none !important;
+            padding-bottom: max(16px, env(safe-area-inset-bottom, 16px)) !important;
+            animation: slideUpMobile 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+          }
+          .quick-solver-drag-handle {
+            display: block !important;
+          }
+          .quick-solver-input {
+            font-size: 16px !important; /* Critical: Stops iOS Safari from auto-zooming input */
+          }
           .quick-solver-fab {
             bottom: calc(var(--mobile-bottom-nav-height, 48px) + var(--safe-bottom, 0px) + 16px) !important;
             right: 14px !important;
             padding: 8px 14px !important;
-            font-size: 0.8rem !important;
+            font-size: 0.82rem !important;
             box-shadow: 0 4px 18px rgba(0, 117, 237, 0.6), 0 0 12px rgba(255, 215, 0, 0.4) !important;
             z-index: 9999 !important;
           }
           .quick-solver-fab-hotkey {
             display: none !important;
           }
-          .quick-solver-modal-card {
-            width: 95% !important;
-            max-height: 88vh !important;
-            margin: auto !important;
-            border-radius: 14px !important;
+          .quick-solver-hide-mobile {
+            display: none !important;
           }
         }
       `}</style>

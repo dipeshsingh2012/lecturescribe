@@ -48,4 +48,13 @@ describe('QuickSnapModal Component', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByText(/Paste screenshot here/i)).toBeNull();
   });
+
+  it('opens modal when receiving open-quick-solver custom event', () => {
+    render(<QuickSnapModal courseContext="Physics 101" />);
+    expect(screen.queryByText(/Paste screenshot here/i)).toBeNull();
+
+    fireEvent(window, new CustomEvent('open-quick-solver'));
+    expect(screen.getByText('Quick Snap & Solve')).toBeInTheDocument();
+    expect(screen.getByText(/Paste screenshot here/i)).toBeInTheDocument();
+  });
 });

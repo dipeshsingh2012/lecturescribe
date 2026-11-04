@@ -30,6 +30,7 @@ import {
   FileText,
   Database,
   Activity,
+  Zap,
   X
 } from 'lucide-react';
 
@@ -67,6 +68,7 @@ export default function MobileBottomNav({
     const isPrimaryActive = primaryTabs.some((t) => t.id === courseViewTab);
 
     const studyTools = [
+      { id: 'quick-solver', label: 'Quick Snap Solver', desc: 'Solve handwritten questions & MCQs in <1s', icon: Zap },
       { id: 'quiz', label: 'Course Quiz & Exam', desc: 'Comprehensive practice exam', icon: Award },
       { id: 'summary', label: 'Course Summary', desc: 'AI synthesis across lectures', icon: BookOpen },
       { id: 'library', label: 'Library', desc: 'Slides and academic readings', icon: BookOpen },
@@ -88,6 +90,11 @@ export default function MobileBottomNav({
     ];
 
     const handleSelectSecondaryTab = (tabId) => {
+      if (tabId === 'quick-solver') {
+        window.dispatchEvent(new CustomEvent('open-quick-solver'));
+        setMoreDrawerOpen(false);
+        return;
+      }
       setCourseViewTab(tabId);
       setMoreDrawerOpen(false);
     };
@@ -328,6 +335,17 @@ export default function MobileBottomNav({
       >
         <CalendarIcon size={18} strokeWidth={isCalendarPage ? 2.2 : 1.8} />
         <span>Calendar</span>
+      </button>
+
+      <button
+        type="button"
+        className="mobile-nav-item"
+        onClick={() => window.dispatchEvent(new CustomEvent('open-quick-solver'))}
+        aria-label="Quick Snap Solver"
+        style={{ color: '#eab308' }}
+      >
+        <Zap size={18} strokeWidth={2.2} style={{ fill: '#eab308' }} />
+        <span>Quick Solve</span>
       </button>
 
       {typeof onCreateNewNote === 'function' && (

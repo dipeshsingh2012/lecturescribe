@@ -59,6 +59,13 @@ export default function QuickSnapModal({
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [isOpen]);
 
+  // Listen to open-quick-solver event (triggered from Mobile Bottom Nav or Header)
+  useEffect(() => {
+    const handleOpenEvent = () => setIsOpen(true);
+    window.addEventListener('open-quick-solver', handleOpenEvent);
+    return () => window.removeEventListener('open-quick-solver', handleOpenEvent);
+  }, []);
+
   // Handle elapsed timer during solving
   useEffect(() => {
     if (loading) {
@@ -195,6 +202,7 @@ export default function QuickSnapModal({
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
+          className="quick-solver-fab"
           title="⚡ Quick Snap & Solve (Ctrl+Shift+V)"
           aria-label="Quick Snap & Solve"
           style={{
@@ -228,15 +236,18 @@ export default function QuickSnapModal({
         >
           <Zap size={18} style={{ fill: '#ffd700', stroke: '#ffd700' }} />
           <span>Quick Solver</span>
-          <span style={{
-            fontSize: '0.68rem',
-            background: 'rgba(0, 0, 0, 0.25)',
-            padding: '2px 6px',
-            borderRadius: '4px',
-            opacity: 0.9,
-            fontWeight: 600,
-            letterSpacing: '0.2px'
-          }}>
+          <span
+            className="quick-solver-fab-hotkey"
+            style={{
+              fontSize: '0.68rem',
+              background: 'rgba(0, 0, 0, 0.25)',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              opacity: 0.9,
+              fontWeight: 600,
+              letterSpacing: '0.2px'
+            }}
+          >
             Ctrl+Shift+V
           </span>
         </button>
@@ -264,6 +275,7 @@ export default function QuickSnapModal({
           }}
         >
           <div
+            className="quick-solver-modal-card"
             style={{
               background: 'var(--panel-bg, #1e222a)',
               border: '1px solid var(--border-color, #2d3340)',
@@ -742,6 +754,25 @@ export default function QuickSnapModal({
         @keyframes spin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
+        }
+        @media (max-width: 899px) {
+          .quick-solver-fab {
+            bottom: calc(var(--mobile-bottom-nav-height, 48px) + var(--safe-bottom, 0px) + 14px) !important;
+            right: 14px !important;
+            padding: 8px 14px !important;
+            font-size: 0.8rem !important;
+            box-shadow: 0 4px 16px rgba(0, 117, 237, 0.5) !important;
+            z-index: 1050 !important;
+          }
+          .quick-solver-fab-hotkey {
+            display: none !important;
+          }
+          .quick-solver-modal-card {
+            width: 95% !important;
+            max-height: 88vh !important;
+            margin: auto !important;
+            border-radius: 14px !important;
+          }
         }
       `}</style>
     </>

@@ -23,7 +23,8 @@ import {
   BookOpen,
   HelpCircle,
   GraduationCap,
-  Square
+  Square,
+  Camera
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
@@ -472,6 +473,30 @@ export default function CourseTutor({
           gap: 1
         }}
       >
+        <Tooltip title="Quick Snap & Solve (Handwritten question or MCQ)" arrow>
+          <IconButton
+            onClick={() => window.dispatchEvent(new CustomEvent('open-quick-solver'))}
+            aria-label="Quick Snap & Solve"
+            sx={{
+              minWidth: { xs: 38, sm: 44 },
+              width: { xs: 38, sm: 44 },
+              height: { xs: 38, sm: 44 },
+              borderRadius: 2.5,
+              bgcolor: 'rgba(255, 215, 0, 0.12)',
+              color: '#eab308',
+              border: '1px solid rgba(234, 179, 8, 0.35)',
+              p: 0,
+              flexShrink: 0,
+              '&:hover': {
+                bgcolor: 'rgba(255, 215, 0, 0.22)',
+                borderColor: '#eab308'
+              }
+            }}
+          >
+            <Camera size={18} />
+          </IconButton>
+        </Tooltip>
+
         <TextField
           inputRef={chatInputRef}
           fullWidth

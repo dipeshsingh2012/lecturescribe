@@ -207,31 +207,26 @@ export default function QuickSnapModal({
           aria-label="Quick Snap & Solve"
           style={{
             position: 'fixed',
-            bottom: '24px',
-            right: '24px',
-            zIndex: 1100,
+            zIndex: 9999,
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
-            padding: '10px 18px',
-            borderRadius: '9999px',
             background: 'linear-gradient(135deg, var(--theme-primary, #0075ed) 0%, #3b82f6 100%)',
             color: '#ffffff',
-            border: '1px solid rgba(255, 255, 255, 0.25)',
-            boxShadow: '0 8px 24px rgba(0, 117, 237, 0.4), 0 2px 6px rgba(0,0,0,0.2)',
+            border: '1.5px solid rgba(255, 215, 0, 0.6)',
+            boxShadow: '0 8px 24px rgba(0, 117, 237, 0.4), 0 0 12px rgba(255, 215, 0, 0.3)',
             cursor: 'pointer',
             fontWeight: 700,
-            fontSize: '0.86rem',
             transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
             outline: 'none'
           }}
           onMouseEnter={(e) => {
             e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)';
-            e.currentTarget.style.boxShadow = '0 12px 28px rgba(0, 117, 237, 0.5)';
+            e.currentTarget.style.boxShadow = '0 12px 28px rgba(0, 117, 237, 0.5), 0 0 16px rgba(255, 215, 0, 0.5)';
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.transform = 'translateY(0) scale(1)';
-            e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 117, 237, 0.4)';
+            e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 117, 237, 0.4), 0 0 12px rgba(255, 215, 0, 0.3)';
           }}
         >
           <Zap size={18} style={{ fill: '#ffd700', stroke: '#ffd700' }} />
@@ -755,14 +750,21 @@ export default function QuickSnapModal({
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
         }
+        .quick-solver-fab {
+          bottom: 24px;
+          right: 24px;
+          padding: 10px 18px;
+          border-radius: 9999px;
+          font-size: 0.86rem;
+        }
         @media (max-width: 899px) {
           .quick-solver-fab {
-            bottom: calc(var(--mobile-bottom-nav-height, 48px) + var(--safe-bottom, 0px) + 14px) !important;
+            bottom: calc(var(--mobile-bottom-nav-height, 48px) + var(--safe-bottom, 0px) + 16px) !important;
             right: 14px !important;
             padding: 8px 14px !important;
             font-size: 0.8rem !important;
-            box-shadow: 0 4px 16px rgba(0, 117, 237, 0.5) !important;
-            z-index: 1050 !important;
+            box-shadow: 0 4px 18px rgba(0, 117, 237, 0.6), 0 0 12px rgba(255, 215, 0, 0.4) !important;
+            z-index: 9999 !important;
           }
           .quick-solver-fab-hotkey {
             display: none !important;

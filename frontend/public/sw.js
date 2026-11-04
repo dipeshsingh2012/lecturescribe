@@ -1,5 +1,5 @@
 // LearnScribe LMS Service Worker
-const CACHE_NAME = 'learnscribe-lms-v2';
+const CACHE_NAME = 'learnscribe-lms-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

@@ -68,7 +68,7 @@ export default function Header({
       boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)',
       paddingTop: 'var(--safe-top, 0px)'
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 700, minWidth: 0, flexShrink: 1 }}>
         <span
           className="app-brand-title"
           onClick={onHomeClick}
@@ -80,12 +80,13 @@ export default function Header({
               onHomeClick?.();
             }
           }}
+          style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
         >
           Personal AI-Assisted LMS
         </span>
       </div>
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 0.75 } }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 0.75 }, flexShrink: 0 }}>
         {activeData && (
           <>
             <Box sx={{

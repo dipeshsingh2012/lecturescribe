@@ -17,6 +17,7 @@ import {
   Check,
   Copy,
   ChevronDown,
+  Camera,
   X
 } from 'lucide-react';
 import MarkdownWithTimestamps from '../common/MarkdownWithTimestamps';
@@ -989,9 +990,33 @@ export default function AITutor({
           background: 'var(--card-bg)',
           border: '1px solid var(--border-color)',
           borderRadius: '10px',
-          padding: '6px 6px 6px 14px',
+          padding: '6px 6px 6px 10px',
           boxShadow: '0 1px 4px rgba(0,0,0,0.04)'
         }}>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('open-quick-solver'))}
+            title="Quick Snap & Solve (Handwritten question or MCQ)"
+            aria-label="Quick Snap & Solve"
+            style={{
+              background: 'rgba(255, 215, 0, 0.12)',
+              color: '#eab308',
+              border: '1px solid rgba(234, 179, 8, 0.35)',
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
+              marginBottom: '3px',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <Camera size={16} />
+          </button>
+
           <textarea
             ref={chatInputRef}
             rows={1}

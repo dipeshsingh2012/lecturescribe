@@ -66,6 +66,33 @@ export default function QuickSnapModal({
     return () => window.removeEventListener('open-quick-solver', handleOpenEvent);
   }, []);
 
+  // Prevent background scrolling when modal is open (Body & HTML Scroll Lock)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const originalHtmlOverflow = document.documentElement.style.overflow;
+    const originalBodyOverflow = document.body.style.overflow;
+    const originalPosition = document.body.style.position;
+    const originalTop = document.body.style.top;
+    const originalWidth = document.body.style.width;
+    const scrollY = window.scrollY;
+
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = '100%';
+
+    return () => {
+      document.documentElement.style.overflow = originalHtmlOverflow;
+      document.body.style.overflow = originalBodyOverflow;
+      document.body.style.position = originalPosition;
+      document.body.style.top = originalTop;
+      document.body.style.width = originalWidth;
+      window.scrollTo(0, scrollY);
+    };
+  }, [isOpen]);
+
   // Handle elapsed timer during solving
   useEffect(() => {
     if (loading) {
@@ -264,10 +291,17 @@ export default function QuickSnapModal({
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 10000,
-            padding: '16px'
+            padding: '16px',
+            boxSizing: 'border-box',
+            touchAction: 'none'
           }}
           onClick={(e) => {
             if (e.target === e.currentTarget) setIsOpen(false);
+          }}
+          onTouchMove={(e) => {
+            if (e.target === e.currentTarget) {
+              e.preventDefault();
+            }
           }}
         >
           {/* Hidden File Inputs: Camera & Gallery */}
@@ -298,24 +332,17 @@ export default function QuickSnapModal({
               border: '1px solid var(--border-color, #2d3340)',
               borderRadius: '16px',
               width: '100%',
-              maxWidth: '620px',
-              maxHeight: '90vh',
+              maxWidth: '560px',
+              maxHeight: 'min(88vh, 88dvh)',
               display: 'flex',
               flexDirection: 'column',
               boxShadow: '0 24px 64px rgba(0, 0, 0, 0.65)',
-              overflow: 'hidden'
+              overflow: 'hidden',
+              margin: 'auto',
+              touchAction: 'auto',
+              animation: 'fadeInScale 0.2s ease-out'
             }}
           >
-            {/* Mobile Touch Drag Handle (Visual affordance) */}
-            <div className="quick-solver-drag-handle" style={{
-              display: 'none',
-              width: '38px',
-              height: '4px',
-              background: 'rgba(255, 255, 255, 0.25)',
-              borderRadius: '2px',
-              margin: '8px auto 0 auto'
-            }} />
-
             {/* Modal Header */}
             <div
               style={{
@@ -399,6 +426,7 @@ export default function QuickSnapModal({
             <div style={{
               padding: '16px',
               overflowY: 'auto',
+              overscrollBehavior: 'contain',
               flex: 1,
               display: 'flex',
               flexDirection: 'column',
@@ -894,25 +922,22 @@ export default function QuickSnapModal({
         /* Mobile Viewports (< 900px, smartphones and tablets) */
         @media (max-width: 899px) {
           .quick-solver-overlay {
-            align-items: flex-end !important;
-            padding: 0 !important;
+            align-items: center !important;
+            justify-content: center !important;
+            padding: 14px !important;
           }
           .quick-solver-modal-card {
-            width: 100% !important;
-            max-width: 100% !important;
-            max-height: 92dvh !important;
-            border-bottom-left-radius: 0 !important;
-            border-bottom-right-radius: 0 !important;
-            border-top-left-radius: 20px !important;
-            border-top-right-radius: 20px !important;
-            border-left: none !important;
-            border-right: none !important;
-            border-bottom: none !important;
-            padding-bottom: max(16px, env(safe-area-inset-bottom, 16px)) !important;
-            animation: slideUpMobile 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            width: 95% !important;
+            max-width: 480px !important;
+            max-height: min(88vh, 88dvh) !important;
+            border-radius: 16px !important;
+            border: 1px solid var(--border-color, #2d3340) !important;
+            margin: auto !important;
+            animation: fadeInScale 0.2s ease-out !important;
+            overscroll-behavior: contain !important;
           }
           .quick-solver-drag-handle {
-            display: block !important;
+            display: none !important;
           }
           .quick-solver-input {
             font-size: 16px !important; /* Critical: Stops iOS Safari from auto-zooming input */

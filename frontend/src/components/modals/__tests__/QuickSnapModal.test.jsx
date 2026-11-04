@@ -57,4 +57,20 @@ describe('QuickSnapModal Component', () => {
     expect(screen.getByText('Quick Snap & Solve')).toBeInTheDocument();
     expect(screen.getByText(/Paste screenshot here/i)).toBeInTheDocument();
   });
+
+  it('locks background scrolling on body and html when opened and restores on close', () => {
+    render(<QuickSnapModal courseContext="Calculus" />);
+    expect(document.body.style.overflow).toBe('');
+
+    fireEvent.click(screen.getByRole('button', { name: /Quick Snap & Solve/i }));
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.body.style.position).toBe('fixed');
+    expect(document.documentElement.style.overflow).toBe('hidden');
+
+    const closeBtn = screen.getByRole('button', { name: /close modal/i });
+    fireEvent.click(closeBtn);
+    expect(document.body.style.overflow).toBe('');
+    expect(document.body.style.position).toBe('');
+    expect(document.documentElement.style.overflow).toBe('');
+  });
 });

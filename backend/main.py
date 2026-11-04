@@ -247,6 +247,13 @@ class CourseTutorChatRequest(BaseModel):
     chat_history: Optional[List[Dict[str, Any]]] = None
 
 
+class QuickSolveRequest(BaseModel):
+    image_data: str = Field(..., description="Base64 data URL or raw base64 string of the handwritten question or diagram")
+    prompt: Optional[str] = Field(default="", max_length=2000, description="Optional student instruction or question clarification")
+    course_context: Optional[str] = Field(default="", max_length=200, description="Optional course title or subject hint")
+    detailed: bool = Field(default=False, description="Whether to include step-by-step derivation")
+
+
 class UpdateCueRequest(BaseModel):
     text: str
 
@@ -4218,6 +4225,36 @@ def delete_course_tutor_message(course_name: str, message_id: str, user_email: O
     cname = course_name.strip()
     deleted = db_manager.delete_course_chat_message(message_id, course_name=cname, user_email=user_email)
     return {"status": "success" if deleted else "failed", "deleted": deleted}
+
+
+@app.post("/api/quick-solve")
+def quick_solve_endpoint(req: QuickSolveRequest):
+    """
+    Ultra-fast vision solver for handwritten exam/homework questions, math, and MCQs.
+    Bypasses heavy vector RAG to achieve sub-second TTFT and immediate final answer output.
+    """
+    from backend.quick_solver_service import quick_solve_handwritten_image, parse_image_data
+
+    try:
+        mime_type, image_bytes = parse_image_data(req.image_data)
+    except Exception as parse_err:
+        raise HTTPException(status_code=400, detail=str(parse_err))
+
+    if len(image_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image size exceeds 8MB limit.")
+
+    try:
+        res = quick_solve_handwritten_image(
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            prompt=req.prompt or "",
+            course_context=req.course_context or "",
+            detailed=req.detailed
+        )
+        return res
+    except Exception as e:
+        logger.error(f"[QuickSolver Error] {e}")
+        raise HTTPException(status_code=500, detail=f"Quick solve error: {e}")
 
 
 @app.post("/api/user/library/record")

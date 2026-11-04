@@ -31,6 +31,7 @@ class TaskType(str, Enum):
     CORRECTION = "correction"                        # multimodal audio + transcript text proofreading
     ASSIGNMENT = "assignment"                        # code + markdown generation with RAG context
     TOPIC_TAGS = "topic_tags"                        # < 2k tokens: ultra-fast SLM generation of 2-4 concept tags
+    QUICK_SOLVE = "quick_solve"                      # < 500 tokens: ultra-fast multimodal vision exam & MCQ solving
 
 
 @dataclass
@@ -500,6 +501,14 @@ class LLMRouter:
                 is_slm = 0 if any(k in name_low for k in ("flash-lite", "gemma", "20b", "27b", "8b")) else 1
                 return (is_slm, m.priority)
             candidates.sort(key=slm_sort)
+
+        elif task_type == TaskType.QUICK_SOLVE:
+            # Ultra-fast multimodal vision: prioritize Gemini Flash Lite models first for <1s TTFT
+            def quick_solve_sort(m: ModelSpec):
+                is_multimodal = 0 if m.supports_multimodal else 20
+                is_flash_lite = 0 if "flash-lite" in m.name.lower() else (1 if "flash" in m.name.lower() else 5)
+                return (is_multimodal, is_flash_lite, m.priority)
+            candidates.sort(key=quick_solve_sort)
 
         else:
             candidates.sort(key=lambda m: m.priority)

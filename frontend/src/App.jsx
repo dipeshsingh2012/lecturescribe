@@ -27,6 +27,7 @@ import ErrorBoundary from './components/common/ErrorBoundary';
 import DownloadModal from './components/modals/DownloadModal';
 import UploadResourceModal from './components/modals/UploadResourceModal';
 import ResourcePreviewModal from './components/modals/ResourcePreviewModal';
+import QuickSnapModal from './components/modals/QuickSnapModal';
 
 export default function App() {
   const [activeTab, setActiveTabState] = useState(() => getLectureTabFromPath());
@@ -512,6 +513,11 @@ export default function App() {
           open={Boolean(resources.previewResource)}
           onClose={resources.closePreviewModal}
           resource={resources.previewResource}
+        />
+
+        <QuickSnapModal
+          courseContext={selectedCourse || activeData?.course_name || ''}
+          currentTheme={currentTheme}
         />
 
         {/* Global Mobile Bottom Navigation Bar (Hidden when watching lecture) */}

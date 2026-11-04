@@ -32,7 +32,8 @@ export default function TextSelectionToolbar({
   onDeleteAnnotation,
   overlappingAnnotations = [],
   initialMode = 'menu',
-  onDiscussInTutor
+  onDiscussInTutor,
+  onCueClick
 }) {
   const [mode, setMode] = useState(initialMode || 'menu'); // 'menu' | 'note' | 'ai'
   const [isExpanded, setIsExpanded] = useState(false);
@@ -279,7 +280,14 @@ export default function TextSelectionToolbar({
       {isExpandedEffective && (
         <div
           className="ai-explainer-backdrop"
-          onClick={() => setIsExpanded(false)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsExpanded(false);
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
           style={{
             position: 'fixed',
             inset: 0,
@@ -318,6 +326,9 @@ export default function TextSelectionToolbar({
         }}
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
       >
       {actionError && (
         <div style={{
@@ -659,7 +670,7 @@ export default function TextSelectionToolbar({
               </div>
             ) : (
               <div className="ai-explainer-markdown">
-                <MarkdownWithTimestamps content={aiResponse} />
+                <MarkdownWithTimestamps content={aiResponse} onCueClick={onCueClick} />
               </div>
             )}
           </div>

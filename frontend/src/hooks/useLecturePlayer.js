@@ -343,7 +343,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
 
     const updateCueFromSeconds = (currentSec) => {
       if (typeof currentSec !== 'number' || isNaN(currentSec)) return 0;
-      const cues = activeData?.cues || [];
+      const cues = activeDataRef.current?.cues || activeData?.cues || [];
       if (!cues.length) return 0;
       let matchIdx = -1;
       for (let i = cues.length - 1; i >= 0; i--) {

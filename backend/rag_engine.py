@@ -2876,6 +2876,7 @@ class Llama3PineconeRAGStore:
             '    {\n'
             '      "lecture_id": "...",\n'
             '      "lecture_title": "...",\n'
+            '      "topics": ["K-Means", "PCA", "EM Algorithm"],\n'
             '      "synopsis": "1-2 paragraph overview of this lecture...",\n'
             '      "key_points": ["Point 1", "Point 2", "Point 3"]\n'
             '    }\n'
@@ -2957,6 +2958,18 @@ class Llama3PineconeRAGStore:
                             "description": ""
                         })
 
+            from backend.database import extract_lecture_topics
+            raw_lec_summaries = data.get("lecture_summaries") if isinstance(data.get("lecture_summaries"), list) else []
+            normalized_lec_summaries = []
+            for ls_item in raw_lec_summaries:
+                if isinstance(ls_item, dict):
+                    ls_copy = dict(ls_item)
+                    ls_copy["topics"] = extract_lecture_topics(
+                        course_summary_entry=ls_copy,
+                        explicit_topics=ls_copy.get("topics") or ls_copy.get("key_topics"),
+                    )
+                    normalized_lec_summaries.append(ls_copy)
+
             return {
                 "course_name": clean_course,
                 "course_slug": course_slug,
@@ -2964,7 +2977,7 @@ class Llama3PineconeRAGStore:
                 "executive_summary": exec_sum,
                 "thematic_modules": data.get("thematic_modules") if isinstance(data.get("thematic_modules"), list) else [],
                 "core_formulas_and_definitions": normalized_formulas,
-                "lecture_summaries": data.get("lecture_summaries") if isinstance(data.get("lecture_summaries"), list) else [],
+                "lecture_summaries": normalized_lec_summaries,
                 "master_exam_checklist": data.get("master_exam_checklist") if isinstance(data.get("master_exam_checklist"), list) else []
             }
 

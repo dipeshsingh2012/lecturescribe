@@ -695,7 +695,10 @@ export default function TranscriptSearch({
   }, []);
 
   const handleScroll = (e) => {
-    if (selectionToolbar) {
+    if (e?.target && e?.currentTarget && e.target !== e.currentTarget) {
+      return;
+    }
+    if (selectionToolbar && !isProgrammaticScrollRef.current && userScrolledManuallyRef.current) {
       setSelectionToolbar(null);
     }
     const el = e.currentTarget;
@@ -990,7 +993,7 @@ export default function TranscriptSearch({
         justDismissedToolbarRef.current = true;
         setTimeout(() => {
           justDismissedToolbarRef.current = false;
-        }, 120);
+        }, 400);
       }
       setActiveMarkAction(prev => (prev && !e.target.closest?.('.active-mark-action-popover') ? null : prev));
       setHoveredMark(prev => {
@@ -1001,6 +1004,11 @@ export default function TranscriptSearch({
       });
     };
     const handleDocMouseUp = (e) => {
+      if (justDismissedToolbarRef.current) {
+        setTimeout(() => {
+          justDismissedToolbarRef.current = false;
+        }, 50);
+      }
       if (e.target.closest?.('.text-selection-toolbar')) return;
       const sel = typeof window !== 'undefined' ? window.getSelection() : null;
       if (!sel || sel.isCollapsed) return;
@@ -1142,7 +1150,11 @@ export default function TranscriptSearch({
 
       const aStartSec = Number(ann.startSeconds ?? ann.start_seconds ?? 0);
       const aEndSec = Number(ann.endSeconds ?? ann.end_seconds ?? 0);
-      const isExplicitTimeRange = aEndSec > 0 && cueSec !== undefined && cueSec <= aEndSec && nextCueSec >= aStartSec;
+      const isExplicitTimeRange = aEndSec > 0 && cueSec !== undefined && (
+        aEndSec > aStartSec
+          ? (cueSec < aEndSec && nextCueSec > aStartSec)
+          : (cueSec <= aStartSec && nextCueSec > aStartSec)
+      );
 
       const occurrences = findAnnotationOccurrences(cueText, searchStr, isExplicitTimeRange);
       occurrences.forEach((occ, oIdx) => {
@@ -1247,7 +1259,11 @@ export default function TranscriptSearch({
             if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
               return;
             }
-            justDismissedToolbarRef.current = false;
+            if (justDismissedToolbarRef.current) {
+              justDismissedToolbarRef.current = false;
+              e.stopPropagation();
+              return;
+            }
             const cueTime = cue?.time || (cueSec !== undefined ? formatSecondsToTimestamp(cueSec) : '00:00');
             if (typeof onCueClick === 'function') {
               onCueClick(cueTime, idx);
@@ -1341,7 +1357,11 @@ export default function TranscriptSearch({
       const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
 
       if (aCueId !== undefined && aCueId !== null && (aCueId === cue.id || aCueId === idx)) return true;
-      if (aEndSec > 0 && cueSec <= aEndSec && nextCueSec >= aStartSec) {
+      if (aEndSec > 0 && (
+        aEndSec > aStartSec
+          ? (cueSec < aEndSec && nextCueSec > aStartSec)
+          : (cueSec <= aStartSec && nextCueSec > aStartSec)
+      )) {
         return true;
       }
       if (aText && cue.text) {
@@ -1977,17 +1997,49 @@ export default function TranscriptSearch({
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          onWheel={() => {
+          onWheel={(e) => {
+            if (
+              e.target?.closest?.(
+                '.text-selection-toolbar, .ai-explainer-backdrop, [data-testid="mark-hover-tooltip"], [data-testid="mark-hover-backdrop"], .active-mark-action-popover'
+              )
+            ) {
+              return;
+            }
             userScrolledManuallyRef.current = true;
             if (autoScroll) setAutoScroll(false);
           }}
-          onTouchMove={() => {
+          onTouchMove={(e) => {
+            if (
+              e.target?.closest?.(
+                '.text-selection-toolbar, .ai-explainer-backdrop, [data-testid="mark-hover-tooltip"], [data-testid="mark-hover-backdrop"], .active-mark-action-popover'
+              )
+            ) {
+              return;
+            }
             userScrolledManuallyRef.current = true;
             if (autoScroll) setAutoScroll(false);
           }}
-          onMouseUp={handleTextSelection}
+          onMouseUp={(e) => {
+            if (
+              e.target?.closest?.(
+                '.text-selection-toolbar, .ai-explainer-backdrop, [data-testid="mark-hover-tooltip"], [data-testid="mark-hover-backdrop"], .active-mark-action-popover'
+              )
+            ) {
+              return;
+            }
+            handleTextSelection();
+          }}
           onKeyUp={handleTextSelection}
-          onTouchEnd={handleTextSelection}
+          onTouchEnd={(e) => {
+            if (
+              e.target?.closest?.(
+                '.text-selection-toolbar, .ai-explainer-backdrop, [data-testid="mark-hover-tooltip"], [data-testid="mark-hover-backdrop"], .active-mark-action-popover'
+              )
+            ) {
+              return;
+            }
+            handleTextSelection();
+          }}
           tabIndex={0}
           style={{
             ...appearanceCssVars,
@@ -2067,7 +2119,10 @@ export default function TranscriptSearch({
                 ref={(el) => { cueRefs.current[idx] = el; }}
                 onClick={(e) => {
                   if (isEditing) return;
-                  if (justDismissedToolbarRef.current) return;
+                  if (justDismissedToolbarRef.current) {
+                    justDismissedToolbarRef.current = false;
+                    return;
+                  }
                   const sel = typeof window !== 'undefined' ? window.getSelection() : null;
                   if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
                     return;
@@ -2086,7 +2141,7 @@ export default function TranscriptSearch({
                     justDismissedToolbarRef.current = true;
                     setTimeout(() => {
                       justDismissedToolbarRef.current = false;
-                    }, 120);
+                    }, 400);
                   }
                 }}
                 onMouseEnter={() => setHoveredCueIdx(idx)}
@@ -2296,17 +2351,21 @@ export default function TranscriptSearch({
                         const aType = a.annotationType || a.annotation_type;
                         if (aType !== 'ai_explanation') return false;
                         const aCueId = a.cueId !== undefined ? a.cueId : a.cue_id;
-                        const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
-                        if (aCueId !== undefined && aCueId !== null) {
-                          if (aCueId === cue.id || aCueId === idx) return true;
-                        }
-                        if (aText && cue.text) {
-                          if (cue.text.toLowerCase().includes(aText)) return true;
-                        }
                         const aStartSec = Number(a.startSeconds ?? a.start_seconds ?? 0);
                         const aEndSec = Number(a.endSeconds ?? a.end_seconds ?? 0);
                         const cueSec = cue.seconds !== undefined ? Number(cue.seconds) : parseTimeToSeconds(cue.time);
-                        return aEndSec > 0 && cueSec >= aStartSec && cueSec < aEndSec;
+                        if (aCueId !== undefined && aCueId !== null) {
+                          if (aCueId === cue.id || aCueId === idx) return true;
+                          return aEndSec > 0 && cueSec >= aStartSec && cueSec < aEndSec;
+                        }
+                        if (aEndSec > 0) {
+                          return cueSec >= aStartSec && cueSec < aEndSec;
+                        }
+                        const aText = (a.selectedText || a.selected_text || '').trim().toLowerCase();
+                        if (aText && cue.text) {
+                          if (cue.text.toLowerCase().includes(aText)) return true;
+                        }
+                        return false;
                       }) && (
                         <button
                           onClick={(e) => {
@@ -2410,6 +2469,7 @@ export default function TranscriptSearch({
               onDeleteAnnotation={handleDeleteAnnotation}
               initialMode={selectionToolbar.initialMode || 'menu'}
               onDiscussInTutor={onDiscussInTutor}
+              onCueClick={handleCueClick}
               onClose={() => setSelectionToolbar(null)}
               onAnnotationCreated={(newAnnotation, shouldClose = true) => {
                 setAnnotations(prev => [newAnnotation, ...prev]);
@@ -2437,6 +2497,10 @@ export default function TranscriptSearch({
                       e.stopPropagation();
                       setHoveredMark(prev => (prev ? { ...prev, expanded: false } : null));
                     }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseUp={(e) => e.stopPropagation()}
+                    onWheel={(e) => e.stopPropagation()}
+                    onTouchMove={(e) => e.stopPropagation()}
                     style={{
                       position: 'fixed',
                       inset: 0,
@@ -2449,6 +2513,10 @@ export default function TranscriptSearch({
                 <div
                   data-testid="mark-hover-tooltip"
                   className={isExpanded ? 'mark-hover-tooltip-expanded' : ''}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onMouseUp={(e) => e.stopPropagation()}
+                  onWheel={(e) => e.stopPropagation()}
+                  onTouchMove={(e) => e.stopPropagation()}
                   onMouseEnter={() => {
                     if (hoverCloseTimeoutRef.current) clearTimeout(hoverCloseTimeoutRef.current);
                   }}
@@ -2866,6 +2934,10 @@ export default function TranscriptSearch({
                 animation: 'fadeIn 0.15s ease'
               }}
               onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onMouseUp={(e) => e.stopPropagation()}
+              onWheel={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
             >
               {activeMarkAction.editing ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

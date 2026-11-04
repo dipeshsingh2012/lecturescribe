@@ -43,7 +43,7 @@ import { getVideoSourceInfo } from '../../utils/publisherDetect';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
 
-const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5];
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 export default function LecturePlayer({
   activeData,

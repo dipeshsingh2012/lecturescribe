@@ -457,4 +457,87 @@ describe('CourseLectures', () => {
 
     expect(await screen.findByText(/No upcoming key dates for this course\./i)).toBeInTheDocument();
   });
+
+  it('renders 2 to 4 display-only topic chips on lecture cards from SLM-generated topics, courseSummaryData, or /api/course/lectures/topics', async () => {
+    const handleTranscribe = vi.fn();
+    const mockLectures = [
+      {
+        video_id: 'lec-1',
+        video_title: 'Lecture 4: Unsupervised Learning',
+        topics: ['K-Means', 'PCA', 'EM Algorithm', 'Hierarchical Clustering', 'Extra Ignored Tag'],
+        progress: { progress_percent: 40, last_timestamp: '18:00' }
+      },
+      {
+        video_id: 'lec-2',
+        video_title: 'Lecture 5: Deep Architectures',
+        progress: { progress_percent: 0, last_timestamp: '00:00' }
+      },
+      {
+        video_id: 'lec-3',
+        video_title: 'Lecture 6: Probabilistic Graphical Models',
+        progress: { progress_percent: 100, last_timestamp: '50:00' }
+      }
+    ];
+
+    const mockCourseSummaryData = {
+      lecture_summaries: [
+        {
+          lecture_id: 'lec-3',
+          lecture_title: 'Lecture 6: Probabilistic Graphical Models',
+          topics: ['Bayesian Networks', 'Markov Random Fields']
+        }
+      ]
+    };
+
+    vi.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (String(url).includes('/api/course/lectures/topics')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            topics: {
+              'lec-2': ['Backpropagation', 'Gradient Descent', 'Attention Mechanism']
+            }
+          })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ today: { all: [] }, upcoming: [], quizzes: [] })
+      });
+    });
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={mockLectures}
+        handleTranscribe={handleTranscribe}
+        handleDeleteFromLibrary={vi.fn()}
+        handleClearCourse={vi.fn()}
+        selectedCourse="1.2 Machine Learning Paradigms"
+        currentTheme={mockTheme}
+        courseSummaryData={mockCourseSummaryData}
+      />
+    );
+
+    // Lecture 1 shows up to 4 topics and caps the 5th
+    expect(screen.getByText('K-Means')).toBeInTheDocument();
+    expect(screen.getByText('PCA')).toBeInTheDocument();
+    expect(screen.getByText('EM Algorithm')).toBeInTheDocument();
+    expect(screen.getByText('Hierarchical Clustering')).toBeInTheDocument();
+    expect(screen.queryByText('Extra Ignored Tag')).not.toBeInTheDocument();
+
+    // Lecture 3 renders SLM/LLM topics from courseSummaryData.lecture_summaries
+    expect(screen.getByText('Bayesian Networks')).toBeInTheDocument();
+    expect(screen.getByText('Markov Random Fields')).toBeInTheDocument();
+
+    // Lecture 2 fetches SLM-generated tags on-demand from /api/course/lectures/topics
+    expect(await screen.findByText('Backpropagation')).toBeInTheDocument();
+    expect(screen.getByText('Gradient Descent')).toBeInTheDocument();
+    expect(screen.getByText('Attention Mechanism')).toBeInTheDocument();
+
+    // Clicking the card (or chip area) opens the lecture
+    fireEvent.click(screen.getByText('K-Means'));
+    expect(handleTranscribe).toHaveBeenCalledWith('lec-1', true, '1.2 Machine Learning Paradigms');
+  });
 });

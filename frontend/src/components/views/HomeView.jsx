@@ -1182,6 +1182,7 @@ export default function HomeView({
           onStatusFilterChange={setLectureStatusFilter || onStatusFilterChange}
           onOpenFullCalendar={() => setCourseViewTab('calendar')}
           googleUser={googleUser}
+          courseSummaryData={courseSummary?.summaryData || null}
         />
       )}
         </>

@@ -314,12 +314,14 @@ describe('LecturePlayer', () => {
     expect(speedBtn).toBeInTheDocument();
     expect(speedBtn).toHaveTextContent('1x');
 
-    // Open speed menu and select 2.5x playback speed
+    // Open speed menu and select 3x playback speed
     fireEvent.click(speedBtn);
     const speedOption25 = screen.getByRole('menuitem', { name: /2\.5x/i });
     expect(speedOption25).toBeInTheDocument();
-    fireEvent.click(speedOption25);
-    expect(speedBtn).toHaveTextContent('2.5x');
+    const speedOption3 = screen.getByRole('menuitem', { name: /3x/i });
+    expect(speedOption3).toBeInTheDocument();
+    fireEvent.click(speedOption3);
+    expect(speedBtn).toHaveTextContent('3x');
 
     // Subtitles and Fullscreen buttons
     expect(screen.getByRole('button', { name: /Disable Subtitles/i })).toBeInTheDocument();

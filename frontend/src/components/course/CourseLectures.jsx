@@ -45,6 +45,74 @@ import {
   getLectureProgress
 } from '../../utils/lectureSort';
 
+export function cleanTopicTag(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  const t = raw.trim().replace(/\s+/g, ' ');
+  if (t.length < 2 || t.length > 32) return '';
+  return t;
+}
+
+export function extractLectureTopics(item, courseSummaryData = null, slmTopicsByVideo = null, maxTopics = 4) {
+  if (!item || typeof item !== 'object') return [];
+  const topics = [];
+  const seenLower = new Set();
+
+  const addTopic = (candidate) => {
+    if (topics.length >= maxTopics || candidate == null) return;
+    const tag = cleanTopicTag(String(candidate));
+    if (!tag) return;
+    const low = tag.toLowerCase();
+    if (seenLower.has(low)) return;
+    seenLower.add(low);
+    topics.push(tag);
+  };
+
+  // 1. Explicit SLM-generated topics on the lecture object
+  const explicit = item.topics || item.key_topics;
+  if (Array.isArray(explicit)) {
+    for (const t of explicit) {
+      if (typeof t === 'string') addTopic(t);
+      else if (t && typeof t === 'object') addTopic(t.topic || t.title || t.name);
+    }
+  }
+
+  const vid = String(item.video_id || item.videoId || '').trim();
+
+  // 2. Topics fetched from the SLM /api/course/lectures/topics endpoint
+  if (vid && slmTopicsByVideo && Array.isArray(slmTopicsByVideo[vid])) {
+    for (const t of slmTopicsByVideo[vid]) {
+      addTopic(t);
+    }
+  }
+
+  // 3. Persisted SLM/LLM topics on matching courseSummaryData.lecture_summaries entry
+  const lecSummaries = courseSummaryData?.lecture_summaries || courseSummaryData?.summary?.lecture_summaries;
+  if (Array.isArray(lecSummaries) && lecSummaries.length > 0 && topics.length < maxTopics) {
+    const itemTitle = String(item.video_title || item.title || '').trim().toLowerCase();
+    let courseSummaryEntry = null;
+    if (vid) {
+      courseSummaryEntry = lecSummaries.find((entry) => {
+        const entryVid = String(entry?.video_id || entry?.lecture_id || entry?.videoId || '').trim();
+        return entryVid && entryVid === vid;
+      }) || null;
+    }
+    if (!courseSummaryEntry && itemTitle) {
+      courseSummaryEntry = lecSummaries.find((entry) => {
+        const entryTitle = String(entry?.lecture_title || entry?.title || '').trim().toLowerCase();
+        return entryTitle && (entryTitle === itemTitle || entryTitle.includes(itemTitle) || itemTitle.includes(entryTitle));
+      }) || null;
+    }
+    if (courseSummaryEntry) {
+      const entryTopics = courseSummaryEntry.topics || courseSummaryEntry.key_topics;
+      if (Array.isArray(entryTopics)) {
+        for (const t of entryTopics) addTopic(t);
+      }
+    }
+  }
+
+  return topics.slice(0, maxTopics);
+}
+
 export default function CourseLectures({
   courseLoading,
   filteredCourseLectures = [],
@@ -59,8 +127,49 @@ export default function CourseLectures({
   statusFilter: externalStatusFilter,
   onStatusFilterChange: externalOnStatusFilterChange,
   onOpenFullCalendar,
-  googleUser
+  googleUser,
+  courseSummaryData = null
 }) {
+  const [slmTopicsByVideo, setSlmTopicsByVideo] = React.useState({});
+  const requestedTopicVidsRef = React.useRef(new Set());
+
+  React.useEffect(() => {
+    if (!Array.isArray(filteredCourseLectures) || filteredCourseLectures.length === 0) return;
+    const missingVids = [];
+    for (const item of filteredCourseLectures) {
+      const vid = String(item?.video_id || item?.videoId || '').trim();
+      if (!vid || requestedTopicVidsRef.current.has(vid)) continue;
+      const existing = extractLectureTopics(item, courseSummaryData, slmTopicsByVideo);
+      if (existing.length === 0) {
+        missingVids.push(vid);
+      }
+    }
+    if (missingVids.length === 0) return;
+
+    missingVids.forEach((v) => requestedTopicVidsRef.current.add(v));
+    let isMounted = true;
+
+    fetch(`${API_BASE}/api/course/lectures/topics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        course_name: selectedCourse || '',
+        video_ids: missingVids,
+        user_email: googleUser?.email || null
+      })
+    })
+      .then((res) => (res && res.ok ? res.json() : null))
+      .then((data) => {
+        if (isMounted && data?.topics && typeof data.topics === 'object') {
+          setSlmTopicsByVideo((prev) => ({ ...prev, ...data.topics }));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, [filteredCourseLectures, selectedCourse, courseSummaryData, googleUser?.email]);
   const [internalSortBy, setInternalSortBy] = React.useState('title_desc');
   const [internalStatusFilter, setInternalStatusFilter] = React.useState('all');
   const [pulseData, setPulseData] = React.useState({ nextEvent: null, nextQuiz: null, loading: false });
@@ -750,6 +859,7 @@ export default function CourseLectures({
             const isCompleted = isLectureCompleted(item);
             const hasProgress = isLectureInProgress(item) || isCompleted;
             const resumeTimestamp = prog?.last_timestamp || '00:00';
+            const lectureTopics = extractLectureTopics(item, courseSummaryData, slmTopicsByVideo);
             const targetLectureParam = (
               item.video_url &&
               extractVideoId(item.video_url) &&
@@ -875,6 +985,42 @@ export default function CourseLectures({
                   >
                     {item.video_title || item.title || `Lecture ${item.video_id}`}
                   </Typography>
+
+                  {lectureTopics.length > 0 && (
+                    <Box
+                      data-testid="lecture-topic-chips"
+                      sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 0.75,
+                        mt: 1.25,
+                        mb: 1.5
+                      }}
+                    >
+                      {lectureTopics.map((topic) => (
+                        <Chip
+                          key={topic}
+                          label={topic}
+                          size="small"
+                          data-testid="lecture-topic-chip"
+                          sx={{
+                            height: 22,
+                            fontSize: '0.7rem',
+                            fontWeight: 600,
+                            bgcolor: 'var(--highlight-bg)',
+                            color: currentTheme.palette.primary,
+                            border: '1px solid var(--badge-border)',
+                            borderRadius: '6px',
+                            pointerEvents: 'none',
+                            '& .MuiChip-label': {
+                              px: 1,
+                              py: 0
+                            }
+                          }}
+                        />
+                      ))}
+                    </Box>
+                  )}
 
                   <Box sx={{ mt: 'auto', pt: 1.5, borderTop: '1px dashed var(--border-color)' }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>

@@ -215,3 +215,158 @@ def generate_summary_sections(cues: List[Dict[str, str]], title: str) -> List[Di
         return []
     return generate_llm_summary(cues, title) or []
 
+
+def _parse_slm_topics_payload(raw_text: str, max_topics: int = 4) -> List[str]:
+    """Parse JSON response from SLM into a deduplicated list of 2-4 concise topic tags."""
+    if not raw_text or not isinstance(raw_text, str):
+        return []
+    from backend.latex_utils import safe_json_loads_with_latex
+    try:
+        parsed = safe_json_loads_with_latex(raw_text.strip())
+    except Exception:
+        return []
+
+    raw_list: List[Any] = []
+    if isinstance(parsed, list):
+        raw_list = parsed
+    elif isinstance(parsed, dict):
+        for key in ("topics", "tags", "key_topics", "concepts", "labels"):
+            if isinstance(parsed.get(key), list):
+                raw_list = parsed[key]
+                break
+
+    topics: List[str] = []
+    seen: set[str] = set()
+    for item in raw_list:
+        if len(topics) >= max_topics:
+            break
+        val = item.get("topic") or item.get("name") or item.get("title") if isinstance(item, dict) else item
+        if not isinstance(val, str):
+            continue
+        tag = " ".join(val.strip().split()).strip(" :-–—,.;|/#*`\"'")
+        if not (2 <= len(tag) <= 32):
+            continue
+        low = tag.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        topics.append(tag)
+    return topics[:max_topics]
+
+
+def generate_lecture_topic_tags_slm(
+    title: str = "",
+    summary_text: str = "",
+    sections: Optional[List[Dict[str, Any]]] = None,
+    cues: Optional[List[Dict[str, Any]]] = None,
+    max_topics: int = 4,
+) -> List[str]:
+    """
+    Generate 2 to 4 concise technical topic/concept tags (e.g., ["K-Means", "PCA", "EM Algorithm"])
+    for a lecture card using a fast Small Language Model (SLM) routed via LLMRouter (TaskType.TOPIC_TAGS).
+    """
+    from backend.llm_router import llm_router, TaskType
+
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not (groq_key or gemini_key):
+        return []
+
+    context_parts: List[str] = []
+    if summary_text and isinstance(summary_text, str) and summary_text.strip():
+        context_parts.append(f"Lecture Summary:\n{summary_text.strip()[:3500]}")
+    if sections and isinstance(sections, list):
+        sec_lines = []
+        for s in sections[:8]:
+            if isinstance(s, dict):
+                stitle = str(s.get("title") or "").strip()
+                spoints = " ".join(str(p).strip() for p in (s.get("points") or [])[:3] if p)
+                if stitle or spoints:
+                    sec_lines.append(f"- {stitle}: {spoints[:300]}")
+            elif isinstance(s, str) and s.strip():
+                sec_lines.append(f"- {s.strip()}")
+        if sec_lines:
+            context_parts.append("Summary Sections:\n" + "\n".join(sec_lines))
+    if not context_parts and cues and isinstance(cues, list):
+        sentences = reconstruct_sentences(cues)
+        if sentences:
+            step = max(1, len(sentences) // 40)
+            sampled = sentences[::step][:40]
+            context_parts.append("Transcript Excerpt:\n" + "\n".join(s["text"] for s in sampled)[:3000])
+
+    if not context_parts:
+        return []
+
+    combined_context = "\n\n".join(context_parts)[:4000]
+    system_prompt = (
+        "You are an academic curriculum classifier using a fast Small Language Model (SLM).\n"
+        "Given a university lecture's summary or transcript excerpt, extract 2 to 4 concise, high-signal "
+        "technical topic or concept tags covered in the lecture (for example: [\"K-Means\", \"PCA\", \"EM Algorithm\"]).\n\n"
+        "STRICT RULES:\n"
+        "1. Return 2 to 4 specific algorithms, models, theorems, mathematical methods, or technical concepts actually taught in the lecture.\n"
+        "2. Keep each tag short: 1 to 3 words (maximum 28 characters). Use standard abbreviations when appropriate (e.g., 'PCA', 'SVM', 'K-Means', 'EM Algorithm', 'Gradient Descent').\n"
+        "3. NEVER output generic structural headers or meta-labels such as 'Introduction', 'Overview', 'Executive Summary', 'Conclusion', 'Key Takeaways', 'Q&A', 'Course Logistics', 'Foundational Concepts', or the lecture/session number.\n"
+        "4. Respond ONLY with a valid JSON object matching this exact schema: {\"topics\": [\"Topic 1\", \"Topic 2\", \"Topic 3\"]}"
+    )
+    user_prompt = f"Lecture Title: {title or 'Lecture'}\n\n{combined_context}\n\nJSON output:"
+    est_tokens = (len(system_prompt) + len(user_prompt)) // 4
+
+    candidates = llm_router.get_candidate_models(TaskType.TOPIC_TAGS, est_tokens=est_tokens)
+    for model_spec in candidates:
+        model_name = model_spec.name
+        if model_spec.provider == "gemini" and gemini_key:
+            try:
+                import requests
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "responseMimeType": "application/json",
+                        "maxOutputTokens": 256,
+                    },
+                }
+                resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=20)
+                if resp.status_code == 200:
+                    cand = (resp.json().get("candidates") or [{}])[0]
+                    parts = (cand.get("content") or {}).get("parts") or []
+                    raw = "".join(p.get("text", "") for p in parts).strip()
+                    topics = _parse_slm_topics_payload(raw, max_topics=max_topics)
+                    if topics:
+                        llm_router.record_success(model_name)
+                        return topics
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
+            except Exception as e:
+                llm_router.record_error(model_name, 500, str(e))
+                print(f"[SLM Topic Tags Gemini Notice] ({model_name}) Skipped: {e}")
+
+        elif model_spec.provider == "groq" and groq_key:
+            try:
+                import requests
+                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.1,
+                    "max_tokens": 256,
+                }
+                resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"]["content"].strip()
+                    topics = _parse_slm_topics_payload(raw, max_topics=max_topics)
+                    if topics:
+                        llm_router.record_success(model_name)
+                        return topics
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
+            except Exception as e:
+                llm_router.record_error(model_name, 500, str(e))
+                print(f"[SLM Topic Tags Groq Notice] ({model_name}) Skipped: {e}")
+
+    return []
+
+

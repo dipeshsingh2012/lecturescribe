@@ -129,6 +129,47 @@ class TestLectureSummary(unittest.TestCase):
         self.assertEqual(res.status_code, 502)
         mock_save.assert_not_called()
 
+    @patch("backend.summary_generator.generate_lecture_topic_tags_slm")
+    @patch("backend.main.db_manager.save_lecture_topics", return_value=True)
+    @patch("backend.main.db_manager.get_saved_video")
+    @patch("backend.main.db_manager.get_lecture_summaries")
+    def test_slm_topic_tags_generation_and_course_lectures_topics_endpoint(
+        self, mock_get_sums, mock_get_vid, mock_save_topics, mock_slm_gen
+    ):
+        from backend.database import extract_lecture_topics
+
+        mock_slm_gen.return_value = ["K-Means", "PCA", "EM Algorithm"]
+        mock_get_sums.return_value = {
+            "comprehensive": {
+                "markdownText": "This lecture covers K-Means clustering, Principal Component Analysis (PCA), and the EM algorithm."
+            }
+        }
+        mock_get_vid.return_value = {
+            "title": "Lecture 4: Unsupervised Learning",
+            "summarySections": [],
+            "cues": [{"time": "00:00", "text": "K-Means clustering and PCA."}]
+        }
+
+        # Direct extract_lecture_topics with use_slm=True delegates to SLM
+        topics = extract_lecture_topics(
+            markdown_text="This lecture covers K-Means, PCA, and EM Algorithm.",
+            title="Lecture 4: Unsupervised Learning",
+            use_slm=True,
+        )
+        self.assertEqual(topics, ["K-Means", "PCA", "EM Algorithm"])
+
+        # POST /api/course/lectures/topics generates and persists SLM tags for missing lectures
+        res = self.client.post("/api/course/lectures/topics", json={
+            "course_name": "1.2 Machine Learning Paradigms",
+            "video_ids": ["lec_4"],
+            "user_email": "student@example.com"
+        })
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["status"], "success")
+        self.assertEqual(body["topics"]["lec_4"], ["K-Means", "PCA", "EM Algorithm"])
+        mock_save_topics.assert_called_once_with("lec_4", ["K-Means", "PCA", "EM Algorithm"])
+
 
 if __name__ == "__main__":
     unittest.main()

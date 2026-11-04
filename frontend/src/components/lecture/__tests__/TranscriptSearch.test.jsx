@@ -2472,4 +2472,99 @@ describe('TranscriptSearch', () => {
       expect(screen.queryByTestId('goto-timestamp-error')).not.toBeInTheDocument();
     });
   });
+
+  it('keeps cues in sync and autoScroll enabled when scrolling inside or dismissing AI explainer', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url.includes('/annotations')) {
+        return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+      }
+      if (url.includes('/explain-selection') && opts?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            explanation: 'Detailed explanation of gradient descent optimization.'
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const cues = [
+      { id: 'cue_0', time: '00:00', seconds: 0, text: 'Introduction to optimization.' },
+      { id: 'cue_1', time: '00:15', seconds: 15, text: 'Gradient descent updates parameters iteratively.' },
+      { id: 'cue_2', time: '00:30', seconds: 30, text: 'Learning rate controls step size.' }
+    ];
+    const mockHandleCueClick = vi.fn();
+
+    const { rerender } = render(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={mockHandleCueClick}
+        activeCueIdx={0}
+        activeData={{ videoId: 'vid_sync_explainer', cues }}
+      />
+    );
+
+    const cueEl = screen.getByText('Gradient descent updates parameters iteratively.').closest('.transcript-cue');
+    const textNode = cueEl.firstChild;
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'Gradient descent',
+      getRangeAt: () => ({
+        startContainer: textNode,
+        endContainer: textNode,
+        commonAncestorContainer: cueEl,
+        getBoundingClientRect: () => ({ top: 120, left: 150, width: 80, height: 18 }),
+        getClientRects: () => [{ top: 120, left: 150, width: 80, height: 18 }]
+      }),
+      removeAllRanges: vi.fn()
+    });
+
+    const scrollContainer = cueEl.closest('[tabindex="0"]');
+    fireEvent.mouseUp(scrollContainer);
+
+    const askAiBtn = await screen.findByTitle(/Ask AI to explain selected text/i);
+    fireEvent.click(askAiBtn);
+
+    expect(await screen.findByText(/Detailed explanation of gradient descent/i)).toBeInTheDocument();
+
+    // Scrolling with wheel inside the AI explainer should NOT pause transcript auto-scroll
+    const toolbarEl = document.querySelector('.text-selection-toolbar');
+    fireEvent.wheel(toolbarEl);
+    expect(screen.queryByTestId('recenter-cue-btn')).not.toBeInTheDocument();
+
+    // Advancing activeCueIdx while explainer is open should keep explainer open and update active cue
+    rerender(
+      <TranscriptSearch
+        displayCues={cues}
+        searchQuery=""
+        setSearchQuery={vi.fn()}
+        handleCueClick={mockHandleCueClick}
+        activeCueIdx={2}
+        activeData={{ videoId: 'vid_sync_explainer', cues }}
+      />
+    );
+    expect(screen.getByText(/Detailed explanation of gradient descent/i)).toBeInTheDocument();
+    expect(screen.getByText('Learning rate controls step size.').closest('.transcript-cue-row')).toHaveClass('active');
+
+    // Dismissing the explainer by clicking on another cue row should not seek the video
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => ''
+    });
+    const firstCueRow = screen.getByText('Introduction to optimization.').closest('.transcript-cue-row');
+    fireEvent.mouseDown(firstCueRow, { clientX: 50, clientY: 50 });
+    fireEvent.click(firstCueRow, { clientX: 50, clientY: 50 });
+
+    expect(mockHandleCueClick).not.toHaveBeenCalled();
+
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
 });

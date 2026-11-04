@@ -30,6 +30,7 @@ class TaskType(str, Enum):
     QUIZ = "quiz"                                    # 2k - 4k tokens: multiple choice JSON
     CORRECTION = "correction"                        # multimodal audio + transcript text proofreading
     ASSIGNMENT = "assignment"                        # code + markdown generation with RAG context
+    TOPIC_TAGS = "topic_tags"                        # < 2k tokens: ultra-fast SLM generation of 2-4 concept tags
 
 
 @dataclass
@@ -491,6 +492,14 @@ class LLMRouter:
                 is_gemini_38 = 0 if m.name == "gemini-3.8-flash" else (1 if m.provider == "gemini" else 10)
                 return (is_gemini_38, m.priority)
             candidates.sort(key=assignment_sort)
+
+        elif task_type == TaskType.TOPIC_TAGS:
+            # Ultra-fast SLM tag generation: prioritize lightweight Flash-Lite / Gemma / 20B-27B SLMs first.
+            def slm_sort(m: ModelSpec):
+                name_low = m.name.lower()
+                is_slm = 0 if any(k in name_low for k in ("flash-lite", "gemma", "20b", "27b", "8b")) else 1
+                return (is_slm, m.priority)
+            candidates.sort(key=slm_sort)
 
         else:
             candidates.sort(key=lambda m: m.priority)

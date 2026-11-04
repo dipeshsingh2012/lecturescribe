@@ -155,7 +155,8 @@ export const filterAndSortLectures = (lectures, { search = '', status = 'all', s
     result = result.filter(item =>
       (item.video_title && item.video_title.toLowerCase().includes(q)) ||
       (item.title && item.title.toLowerCase().includes(q)) ||
-      (item.video_id && String(item.video_id).toLowerCase().includes(q))
+      (item.video_id && String(item.video_id).toLowerCase().includes(q)) ||
+      (Array.isArray(item.topics) && item.topics.some(t => String(t).toLowerCase().includes(q)))
     );
   }
 

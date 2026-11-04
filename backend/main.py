@@ -1402,6 +1402,12 @@ def generate_and_store_comprehensive_summary(
     if not saved:
         return None
 
+    if redis_cache and user_email:
+        try:
+            redis_cache.invalidate_user(user_email)
+        except Exception:
+            pass
+
     # Predict upcoming quizzes and dates from cues via LLM during summary ingestion
     try:
         predict_and_store_quizzes(video_id, title, cues)
@@ -2957,6 +2963,12 @@ def save_custom_summary_endpoint(req: SaveCustomSummaryRequest):
     if not saved:
         raise HTTPException(status_code=500, detail="Failed to save custom summary to database.")
 
+    if redis_cache and req.user_email:
+        try:
+            redis_cache.invalidate_user(req.user_email)
+        except Exception:
+            pass
+
     try:
         saved_vid = db_manager.get_saved_video(clean_vid) or db_manager.get_video(clean_vid)
         course_name = saved_vid.get("course_name") if saved_vid else None
@@ -3006,6 +3018,78 @@ def clear_summary_outdated_endpoint(video_id: str):
         "video_id": vid,
         "is_outdated": False,
         "summary_outdated": False
+    }
+
+
+class GenerateLectureTopicsRequest(BaseModel):
+    course_name: Optional[str] = None
+    video_ids: List[str] = []
+    user_email: Optional[str] = None
+
+
+@app.post("/api/course/lectures/topics")
+def generate_course_lecture_topics_endpoint(req: GenerateLectureTopicsRequest):
+    """
+    Generate and persist 2-4 concise topic tags per lecture using the SLM (TaskType.TOPIC_TAGS)
+    for lectures in video_ids that have summary/transcript context.
+    """
+    from backend.database import extract_lecture_topics, find_course_summary_lecture_entry
+    from backend.summary_generator import generate_lecture_topic_tags_slm
+
+    clean_vids = [str(v).strip() for v in (req.video_ids or []) if str(v).strip()]
+    if not clean_vids:
+        return {"status": "success", "topics": {}}
+
+    course_summary = db_manager.get_saved_course_summary(req.course_name) if req.course_name else None
+    topics_by_video: Dict[str, List[str]] = {}
+    any_persisted = False
+
+    for vid in clean_vids[:24]:
+        sums = db_manager.get_lecture_summaries(vid, user_email=req.user_email)
+        comp = sums.get("comprehensive") or (next(iter(sums.values()), None) if sums else None) or {}
+        saved_vid = db_manager.get_saved_video(vid) or {}
+        ltitle = str(saved_vid.get("title") or f"Lecture {vid}").strip()
+        cs_entry = find_course_summary_lecture_entry(course_summary, video_id=vid, lecture_title=ltitle)
+
+        existing_topics = extract_lecture_topics(
+            sections=saved_vid.get("summarySections"),
+            markdown_text=comp.get("markdownText"),
+            course_summary_entry=cs_entry,
+            explicit_topics=comp.get("topics") or saved_vid.get("topics"),
+            title=ltitle,
+            use_slm=False,
+        )
+        if existing_topics:
+            topics_by_video[vid] = existing_topics
+            continue
+
+        md_text = str(comp.get("markdownText") or "").strip()
+        if not md_text and isinstance(cs_entry, dict):
+            syn = str(cs_entry.get("synopsis") or "").strip()
+            kps = "\n".join(str(p) for p in (cs_entry.get("key_points") or []) if p)
+            md_text = f"{syn}\n{kps}".strip()
+
+        slm_topics = generate_lecture_topic_tags_slm(
+            title=ltitle,
+            summary_text=md_text,
+            sections=saved_vid.get("summarySections"),
+            cues=saved_vid.get("cues"),
+            max_topics=4,
+        )
+        if slm_topics:
+            db_manager.save_lecture_topics(vid, slm_topics)
+            topics_by_video[vid] = slm_topics
+            any_persisted = True
+
+    if any_persisted and redis_cache and req.user_email:
+        try:
+            redis_cache.invalidate_user(req.user_email)
+        except Exception:
+            pass
+
+    return {
+        "status": "success",
+        "topics": topics_by_video,
     }
 
 
@@ -3755,6 +3839,11 @@ def get_or_generate_course_summary(
         redis_cache.set_course_summary(course_slug, summary_data, ttl_seconds=86400)
         if canonical_slug and canonical_slug != course_slug:
             redis_cache.set_course_summary(canonical_slug, summary_data, ttl_seconds=86400)
+        if user_email:
+            try:
+                redis_cache.invalidate_user(user_email)
+            except Exception:
+                pass
 
     return {
         **summary_data,

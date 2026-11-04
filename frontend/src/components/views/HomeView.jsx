@@ -34,7 +34,8 @@ import {
   Target,
   Megaphone,
   X,
-  Edit3
+  Edit3,
+  Trash2
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -329,28 +330,63 @@ export default function HomeView({
       )}
 
       {/* Library Header & Search Bar */}
-      <Box sx={{ mb: 2.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+      <Box sx={{
+        mb: selectedCourse && courseViewTab === 'tutor' ? { xs: 1.25, md: 2.5 } : 2.5,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: { xs: 1, sm: 1.5, md: 2 }
+      }}>
+        {/* Back Button (Topmost Row on Mobile) */}
+        {selectedCourse && (
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<ArrowLeft size={16} />}
+            onClick={handleClearCourse}
+            aria-label="All Courses"
+            sx={{
+              order: 1,
+              textTransform: 'none',
+              fontWeight: 700,
+              fontSize: '0.82rem',
+              borderRadius: 2,
+              color: currentTheme.palette.primary,
+              borderColor: currentTheme.palette.cardBorder,
+              bgcolor: currentTheme.palette.cardBg,
+              minWidth: { xs: 36, sm: 'auto' },
+              px: { xs: 1, sm: 1.5 },
+              py: { xs: 0.7, sm: 0.6 },
+              flexShrink: 0,
+              '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary },
+              '& .MuiButton-startIcon': {
+                mr: { xs: 0, sm: 1 },
+                ml: 0
+              }
+            }}
+          >
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+              All Courses
+            </Box>
+          </Button>
+        )}
+
+        {/* Title & Metadata Group (Row 2 on Mobile when non-tutor; Right beside back button on Desktop) */}
+        <Box sx={{
+          order: { xs: 4, md: 2 },
+          display: {
+            xs: selectedCourse && courseViewTab === 'tutor' ? 'none' : 'flex',
+            md: 'flex'
+          },
+          alignItems: 'center',
+          gap: 1.25,
+          flexWrap: 'wrap',
+          width: { xs: selectedCourse ? '100%' : 'auto', md: 'auto' },
+          mt: { xs: selectedCourse ? 0.5 : 0, md: 0 }
+        }}>
           {selectedCourse ? (
             <>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<ArrowLeft size={16} />}
-                onClick={handleClearCourse}
-                sx={{
-                  textTransform: 'none',
-                  fontWeight: 700,
-                  fontSize: '0.82rem',
-                  borderRadius: 2,
-                  color: currentTheme.palette.primary,
-                  borderColor: currentTheme.palette.cardBorder,
-                  bgcolor: currentTheme.palette.cardBg,
-                  '&:hover': { bgcolor: 'var(--highlight-bg)', borderColor: currentTheme.palette.primary }
-                }}
-              >
-                All Courses
-              </Button>
               <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
                 {activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
               </Typography>
@@ -403,6 +439,7 @@ export default function HomeView({
           </Tooltip>
         </Box>
 
+        {/* Omnibar Search Input (Same line as Back button on Mobile) */}
         <TextField
           size="small"
           placeholder={
@@ -414,6 +451,11 @@ export default function HomeView({
           onChange={handleOmnibarChange}
           onPaste={handleOmnibarPaste}
           onKeyDown={handleOmnibarKeyDown}
+          sx={{
+            order: { xs: selectedCourse ? 2 : 3, md: 3 },
+            flex: selectedCourse ? { xs: 1, md: 'none' } : 'none',
+            ml: selectedCourse ? { md: 'auto' } : undefined
+          }}
           slotProps={{
             input: {
               startAdornment: (
@@ -479,7 +521,9 @@ export default function HomeView({
                 borderRadius: 2,
                 fontSize: '0.85rem',
                 color: currentTheme.palette.textPrimary,
-                width: { xs: '100%', sm: selectedCourse && isTutor ? 380 : 280, md: selectedCourse && isTutor ? 440 : 320 },
+                width: selectedCourse
+                  ? { xs: '100%', sm: isTutor ? 380 : 280, md: isTutor ? 440 : 320 }
+                  : { xs: '100%', sm: 280, md: 320 },
                 transition: 'all 0.2s ease',
                 '& fieldset': { borderColor: isOmnibarVideoUrl ? currentTheme.palette.primary : currentTheme.palette.cardBorder },
                 '&:hover fieldset': { borderColor: currentTheme.palette.primary }
@@ -487,6 +531,33 @@ export default function HomeView({
             }
           }}
         />
+
+        {/* Mobile Clear Chat Trash Icon (Topmost Bar, Course Tutor Tab) */}
+        {selectedCourse && courseViewTab === 'tutor' && courseTutor.messages.length > 0 && (
+          <Tooltip title="Clear Chat History">
+            <IconButton
+              size="small"
+              aria-label="Clear Chat History"
+              onClick={courseTutor.clearHistory}
+              sx={{
+                order: { xs: 3, md: 4 },
+                display: { xs: 'inline-flex', md: 'none' },
+                color: '#ef4444',
+                p: 0.8,
+                borderRadius: 2,
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                bgcolor: 'rgba(239, 68, 68, 0.04)',
+                flexShrink: 0,
+                '&:hover': {
+                  borderColor: '#ef4444',
+                  bgcolor: 'rgba(239, 68, 68, 0.12)'
+                }
+              }}
+            >
+              <Trash2 size={16} />
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       {/* Course View Tabs (Lectures vs Course Quiz vs Course Materials) */}

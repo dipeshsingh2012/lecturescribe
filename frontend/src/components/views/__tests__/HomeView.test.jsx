@@ -459,5 +459,27 @@ describe('HomeView', () => {
     expect(screen.queryByRole('heading', { name: /Key dates/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/No upcoming key dates for this course/i)).not.toBeInTheDocument();
   });
+
+  it('renders topmost back button and search input in same row on course tutor view', () => {
+    const handleClearCourse = vi.fn();
+    render(
+      <HomeView
+        {...baseProps}
+        selectedCourse="Biostatistics"
+        activeCourseData={{ course_name: 'Biostatistics' }}
+        courseViewTab="tutor"
+        handleClearCourse={handleClearCourse}
+      />
+    );
+
+    const backBtn = screen.getAllByRole('button', { name: /All Courses/i })[0];
+    expect(backBtn).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText(/Search lectures/i);
+    expect(searchInput).toBeInTheDocument();
+
+    // Verify Course AI Tutor component is rendered
+    expect(screen.getByText('Course AI Tutor')).toBeInTheDocument();
+  });
 });
 

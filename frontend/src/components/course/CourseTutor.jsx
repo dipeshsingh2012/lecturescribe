@@ -76,11 +76,11 @@ export default function CourseTutor({
     <Box sx={{
       display: 'flex',
       flexDirection: 'column',
-      height: { xs: 'calc(100dvh - 130px)', md: 'calc(100vh - 200px)' },
+      height: { xs: 'calc(100dvh - 120px)', md: 'calc(100vh - 200px)' },
       minHeight: { xs: 'auto', md: '580px' },
       gap: { xs: 1.25, sm: 2 }
     }}>
-      {/* Header Bar */}
+      {/* Header Bar - Hidden on mobile (< 900px), clear chat icon moved to topmost bar */}
       <Paper
         elevation={0}
         sx={{
@@ -88,7 +88,7 @@ export default function CourseTutor({
           borderRadius: 3,
           bgcolor: currentTheme.palette.cardBg,
           border: `1px solid ${currentTheme.palette.cardBorder}`,
-          display: 'flex',
+          display: { xs: 'none', md: 'flex' },
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 1.5

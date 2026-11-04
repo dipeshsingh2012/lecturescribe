@@ -35,7 +35,8 @@ import {
   Megaphone,
   X,
   Edit3,
-  Trash2
+  Trash2,
+  Zap
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
@@ -45,6 +46,7 @@ import CourseGrid from '../course/CourseGrid';
 import CourseRenameDialog from '../course/CourseRenameDialog';
 import CourseLibrary from '../course/CourseLibrary';
 import CourseNotesTab from '../course/CourseNotesTab';
+import CourseQuickSolvesTab from '../course/CourseQuickSolvesTab';
 import CourseLectures from '../course/CourseLectures';
 import CourseQuiz from '../course/CourseQuiz';
 import CourseTutor from '../course/CourseTutor';
@@ -740,6 +742,24 @@ export default function HomeView({
               Notes ({courseNotes?.length || 0})
             </Button>
             <Button
+              variant={courseViewTab === 'solves' || courseViewTab === 'quick-solves' ? 'contained' : 'outlined'}
+              size="small"
+              startIcon={<Zap size={15} style={{ fill: (courseViewTab === 'solves' || courseViewTab === 'quick-solves') ? '#ffd700' : 'none', color: '#ffd700' }} />}
+              onClick={() => setCourseViewTab('solves')}
+              aria-label="Course Quick Solves"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.82rem',
+                borderRadius: 2,
+                ...((courseViewTab === 'solves' || courseViewTab === 'quick-solves')
+                  ? { bgcolor: currentTheme.palette.primary, color: '#fff' }
+                  : { color: currentTheme.palette.textSecondary, borderColor: currentTheme.palette.cardBorder, bgcolor: currentTheme.palette.cardBg })
+              }}
+            >
+              Quick Solves
+            </Button>
+            <Button
               variant={courseViewTab === 'calendar' ? 'contained' : 'outlined'}
               size="small"
               startIcon={<CalendarIcon size={15} />}
@@ -1147,6 +1167,13 @@ export default function HomeView({
           onOpenNote={onOpenNote}
           onDeleteNote={onDeleteNote}
           googleUser={googleUser}
+          currentTheme={currentTheme}
+        />
+      ) : (courseViewTab === 'solves' || courseViewTab === 'quick-solves') ? (
+        /* LEVEL 2QS: COURSE QUICK SOLVES & HANDWRITTEN EXAM ARCHIVE */
+        <CourseQuickSolvesTab
+          courseName={activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
+          userEmail={googleUser?.email || ''}
           currentTheme={currentTheme}
         />
       ) : courseViewTab === 'grades' ? (

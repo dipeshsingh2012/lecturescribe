@@ -103,7 +103,10 @@ def test_quick_solve_endpoint_fastapi(mock_post):
         "image_data": f"data:image/jpeg;base64,{sample_b64}",
         "prompt": "Find correct option",
         "course_context": "Physics 101",
-        "detailed": False
+        "course_name": "Physics 101",
+        "user_email": "student@example.com",
+        "detailed": False,
+        "save_to_history": True
     }
 
     response = client.post("/api/quick-solve", json=payload)
@@ -111,3 +114,47 @@ def test_quick_solve_endpoint_fastapi(mock_post):
     data = response.json()
     assert data["status"] == "success"
     assert "Option (C)" in data["answer"]
+    assert "solve_id" in data
+    assert data["course_name"] == "Physics 101"
+
+
+def test_quick_solve_history_db_and_api():
+    from backend.database import db_manager
+
+    # 1. Clear existing test history for test course
+    db_manager.clear_quick_solves(course_name="Test Chemistry", user_email="chem@test.com")
+
+    # 2. Save solve
+    record = db_manager.save_quick_solve(
+        course_name="Test Chemistry",
+        user_email="chem@test.com",
+        final_answer="**Answer:** $pH = 7.4$",
+        image_data="data:image/jpeg;base64,fakedata",
+        prompt="Calculate buffer pH",
+        detailed_solution="Step 1: Henderson-Hasselbalch equation...",
+        execution_time_sec=0.8
+    )
+    assert record["solve_id"].startswith("solve_")
+    assert record["course_name"] == "Test Chemistry"
+
+    # 3. Retrieve via db_manager
+    history = db_manager.get_quick_solves(course_name="Test Chemistry", user_email="chem@test.com")
+    assert len(history) >= 1
+    assert history[0]["solve_id"] == record["solve_id"]
+    assert "pH = 7.4" in history[0]["final_answer"]
+
+    # 4. Retrieve via FastAPI GET endpoint
+    res = client.get("/api/quick-solve/history", params={"course_name": "Test Chemistry", "user_email": "chem@test.com"})
+    assert res.status_code == 200
+    items = res.json()
+    assert len(items) >= 1
+    assert items[0]["solve_id"] == record["solve_id"]
+
+    # 5. Delete specific solve via API
+    del_res = client.delete(f"/api/quick-solve/history/{record['solve_id']}", params={"user_email": "chem@test.com"})
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted"] is True
+
+    # 6. Verify deleted
+    history_after = db_manager.get_quick_solves(course_name="Test Chemistry", user_email="chem@test.com")
+    assert not any(h["solve_id"] == record["solve_id"] for h in history_after)

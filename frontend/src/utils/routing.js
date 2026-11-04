@@ -77,7 +77,9 @@ export const VALID_COURSE_TABS = new Set([
   'workshops',
   'assignments',
   'question-bank',
-  'analytics'
+  'analytics',
+  'solves',
+  'quick-solves'
 ]);
 
 export const getCourseTabFromPath = (path = (typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/')) => {

@@ -328,6 +328,7 @@ class RelationalDBManager:
         self._rubrics_memory: List[Dict[str, Any]] = []
         self._competencies_memory: List[Dict[str, Any]] = []
         self._workshops_memory: List[Dict[str, Any]] = []
+        self._quick_solves_memory: List[Dict[str, Any]] = []
         self._workshop_submissions_memory: List[Dict[str, Any]] = []
         self._workshop_reviews_memory: List[Dict[str, Any]] = []
         self._announcements_memory: List[Dict[str, Any]] = []
@@ -949,6 +950,25 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_course_notes_course ON lecturescribe_course_notes(course_name);
                         CREATE INDEX IF NOT EXISTS idx_course_notes_email ON lecturescribe_course_notes(user_email);
                         CREATE INDEX IF NOT EXISTS idx_course_notes_id ON lecturescribe_course_notes(note_id);
+
+                        CREATE TABLE IF NOT EXISTS lecturescribe_quick_solves (
+                            id SERIAL PRIMARY KEY,
+                            solve_id VARCHAR(128) UNIQUE NOT NULL,
+                            course_name VARCHAR(255) NOT NULL,
+                            course_slug VARCHAR(255) NOT NULL,
+                            course_id UUID,
+                            user_email VARCHAR(255) NOT NULL,
+                            image_data TEXT DEFAULT '',
+                            prompt TEXT DEFAULT '',
+                            final_answer TEXT NOT NULL,
+                            detailed_solution TEXT DEFAULT '',
+                            execution_time_sec REAL DEFAULT 0,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_quick_solves_course ON lecturescribe_quick_solves(course_name);
+                        CREATE INDEX IF NOT EXISTS idx_quick_solves_slug ON lecturescribe_quick_solves(course_slug);
+                        CREATE INDEX IF NOT EXISTS idx_quick_solves_user ON lecturescribe_quick_solves(user_email);
+                        CREATE INDEX IF NOT EXISTS idx_quick_solves_id ON lecturescribe_quick_solves(solve_id);
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_user_course_pins (
                             id SERIAL PRIMARY KEY,
@@ -12816,6 +12836,210 @@ class RelationalDBManager:
         clean_slug = to_course_slug(course_name or "")
         logs = [dict(l) for l in self._audit_logs_memory if l.get("course_slug") == clean_slug]
         return logs[:limit]
+
+    def save_quick_solve(
+        self,
+        course_name: str,
+        user_email: str,
+        final_answer: str,
+        image_data: str = "",
+        prompt: str = "",
+        detailed_solution: str = "",
+        execution_time_sec: float = 0.0,
+        solve_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Persist a quick solve problem and answer to PostgreSQL / memory cache."""
+        clean_email = (user_email or "anonymous").strip().lower()
+        clean_course = (course_name or "General").strip() or "General"
+        clean_slug = to_course_slug(clean_course)
+        sid = solve_id or f"solve_{uuid.uuid4().hex[:12]}"
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        record = {
+            "id": len(self._quick_solves_memory) + 1,
+            "solve_id": sid,
+            "course_name": clean_course,
+            "course_slug": clean_slug,
+            "user_email": clean_email,
+            "image_data": image_data or "",
+            "prompt": (prompt or "").strip(),
+            "final_answer": (final_answer or "").strip(),
+            "detailed_solution": (detailed_solution or "").strip(),
+            "execution_time_sec": float(execution_time_sec or 0.0),
+            "created_at": now_iso
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO lecturescribe_quick_solves
+                        (solve_id, course_name, course_slug, user_email, image_data, prompt, final_answer, detailed_solution, execution_time_sec, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (
+                            sid,
+                            clean_course,
+                            clean_slug,
+                            clean_email,
+                            image_data or "",
+                            (prompt or "").strip(),
+                            (final_answer or "").strip(),
+                            (detailed_solution or "").strip(),
+                            float(execution_time_sec or 0.0),
+                            now_iso
+                        )
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        self._quick_solves_memory.insert(0, record)
+        return record
+
+    def get_quick_solves(
+        self,
+        course_name: Optional[str] = None,
+        user_email: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Retrieve recent quick solve records for a course and/or user."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course) if clean_course else ""
+        clean_email = (user_email or "").strip().lower()
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = "SELECT solve_id, course_name, course_slug, user_email, image_data, prompt, final_answer, detailed_solution, execution_time_sec, created_at FROM lecturescribe_quick_solves WHERE 1=1"
+                    params = []
+                    if clean_slug and clean_slug != "all":
+                        query += " AND (course_slug = %s OR LOWER(course_name) = LOWER(%s))"
+                        params.extend([clean_slug, clean_course])
+                    if clean_email and clean_email != "anonymous":
+                        query += " AND user_email = %s"
+                        params.append(clean_email)
+                    query += " ORDER BY created_at DESC LIMIT %s;"
+                    params.append(limit)
+
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall()
+                    result = []
+                    for row in rows:
+                        created = row[9]
+                        if hasattr(created, "isoformat"):
+                            created = created.isoformat()
+                        result.append({
+                            "solve_id": row[0],
+                            "course_name": row[1],
+                            "course_slug": row[2],
+                            "user_email": row[3],
+                            "image_data": row[4],
+                            "prompt": row[5],
+                            "final_answer": row[6],
+                            "detailed_solution": row[7],
+                            "execution_time_sec": float(row[8] or 0),
+                            "created_at": created
+                        })
+                    return result
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        filtered = []
+        for s in self._quick_solves_memory:
+            if clean_slug and clean_slug != "all":
+                if s.get("course_slug") != clean_slug and s.get("course_name", "").lower() != clean_course.lower():
+                    continue
+            if clean_email and clean_email != "anonymous":
+                if s.get("user_email") != clean_email:
+                    continue
+            filtered.append(dict(s))
+        return filtered[:limit]
+
+    def delete_quick_solve(self, solve_id: str, user_email: Optional[str] = None) -> bool:
+        """Delete a single quick solve record."""
+        clean_sid = (solve_id or "").strip()
+        clean_email = (user_email or "").strip().lower()
+
+        deleted = False
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email and clean_email != "anonymous":
+                        cursor.execute("DELETE FROM lecturescribe_quick_solves WHERE solve_id = %s AND user_email = %s;", (clean_sid, clean_email))
+                    else:
+                        cursor.execute("DELETE FROM lecturescribe_quick_solves WHERE solve_id = %s;", (clean_sid,))
+                    if cursor.rowcount > 0:
+                        deleted = True
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        new_cache = []
+        for s in self._quick_solves_memory:
+            if s.get("solve_id") == clean_sid:
+                if not clean_email or clean_email == "anonymous" or s.get("user_email") == clean_email:
+                    deleted = True
+                    continue
+            new_cache.append(s)
+        self._quick_solves_memory = new_cache
+        return deleted
+
+    def clear_quick_solves(self, course_name: Optional[str] = None, user_email: Optional[str] = None) -> int:
+        """Clear quick solves for a specific course or user."""
+        clean_course = (course_name or "").strip()
+        clean_slug = to_course_slug(clean_course) if clean_course else ""
+        clean_email = (user_email or "").strip().lower()
+
+        cleared_count = 0
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    query = "DELETE FROM lecturescribe_quick_solves WHERE 1=1"
+                    params = []
+                    if clean_slug and clean_slug != "all":
+                        query += " AND (course_slug = %s OR LOWER(course_name) = LOWER(%s))"
+                        params.extend([clean_slug, clean_course])
+                    if clean_email and clean_email != "anonymous":
+                        query += " AND user_email = %s"
+                        params.append(clean_email)
+                    cursor.execute(query, tuple(params))
+                    cleared_count = cursor.rowcount
+                    conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+        surviving = []
+        for s in self._quick_solves_memory:
+            match_course = not clean_slug or clean_slug == "all" or s.get("course_slug") == clean_slug or s.get("course_name", "").lower() == clean_course.lower()
+            match_user = not clean_email or clean_email == "anonymous" or s.get("user_email") == clean_email
+            if match_course and match_user:
+                cleared_count += 1
+            else:
+                surviving.append(s)
+        self._quick_solves_memory = surviving
+        return cleared_count
 
 
 # Export singleton instance

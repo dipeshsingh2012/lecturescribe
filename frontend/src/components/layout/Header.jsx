@@ -285,35 +285,37 @@ export default function Header({
           </Tooltip>
         )}
 
-        {/* Quick Snap & Solve Shortcut Button */}
-        <Tooltip title="Quick Snap & Solve (Handwritten questions & MCQs)" arrow>
-          <button
-            type="button"
-            onClick={() => window.dispatchEvent(new CustomEvent('open-quick-solver'))}
-            aria-label="Quick Snap & Solve"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '5px',
-              background: 'linear-gradient(135deg, rgba(255, 215, 0, 0.25) 0%, rgba(255, 180, 0, 0.15) 100%)',
-              color: '#ffd700',
-              border: '1px solid rgba(255, 215, 0, 0.45)',
-              padding: '4px 9px',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontWeight: 700,
-              fontSize: '0.8rem',
-              height: '32px',
-              transition: 'all 0.2s ease'
-            }}
-          >
-            <Zap size={15} style={{ fill: '#ffd700', stroke: '#ffd700' }} />
-            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-              Quick Solve
-            </Box>
-          </button>
-        </Tooltip>
+        {/* Quick Snap & Solve Shortcut Button (Mobile view only; hidden in desktop view) */}
+        <Box sx={{ display: { xs: 'inline-flex', md: 'none' } }}>
+          <Tooltip title="Quick Snap & Solve (Handwritten questions & MCQs)" arrow>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-quick-solver'))}
+              aria-label="Quick Snap & Solve"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                background: 'linear-gradient(135deg, rgba(255, 215, 0, 0.25) 0%, rgba(255, 180, 0, 0.15) 100%)',
+                color: '#ffd700',
+                border: '1px solid rgba(255, 215, 0, 0.45)',
+                padding: '4px 9px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: '0.8rem',
+                height: '32px',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <Zap size={15} style={{ fill: '#ffd700', stroke: '#ffd700' }} />
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                Quick Solve
+              </Box>
+            </button>
+          </Tooltip>
+        </Box>
 
         {/* LMS Theme Selector from Proton (only for signed-in users) */}
         {googleUser && (

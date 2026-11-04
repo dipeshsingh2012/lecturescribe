@@ -516,8 +516,10 @@ export default function App() {
         />
 
         <QuickSnapModal
-          courseContext={selectedCourse || activeData?.course_name || ''}
+          courseContext={effectiveCourse || ''}
+          userEmail={auth.googleUser?.email || ''}
           currentTheme={currentTheme}
+          hideFloatingButton={resources.courseViewTab === 'solves' || resources.courseViewTab === 'quick-solves'}
         />
 
         {/* Global Mobile Bottom Navigation Bar (Hidden when watching lecture) */}

@@ -60,6 +60,23 @@ def parse_image_data(image_data: str) -> Tuple[str, bytes]:
             raise ValueError(f"Invalid base64 image data: {e}")
 
 
+def generate_thumbnail_b64(image_bytes: bytes, max_size: Tuple[int, int] = (300, 300)) -> str:
+    """Generate a lightweight JPEG base64 data URL thumbnail from image bytes."""
+    import io
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img = img.convert("RGB")
+            img.thumbnail(max_size)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=65)
+            b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
+            return f"data:image/jpeg;base64,{b64_str}"
+    except Exception as e:
+        logger.warning(f"Could not generate thumbnail: {e}")
+        return ""
+
+
 def quick_solve_handwritten_image(
     image_bytes: bytes,
     mime_type: str = "image/jpeg",

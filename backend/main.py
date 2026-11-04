@@ -248,10 +248,15 @@ class CourseTutorChatRequest(BaseModel):
 
 
 class QuickSolveRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     image_data: str = Field(..., description="Base64 data URL or raw base64 string of the handwritten question or diagram")
     prompt: Optional[str] = Field(default="", max_length=2000, description="Optional student instruction or question clarification")
     course_context: Optional[str] = Field(default="", max_length=200, description="Optional course title or subject hint")
+    course_name: Optional[str] = Field(default="", max_length=255, description="Course name to map the quick solve to", validation_alias=AliasChoices("course_name", "courseName"))
+    user_email: Optional[str] = Field(default="anonymous", max_length=320, description="User email to associate the solve with", validation_alias=AliasChoices("user_email", "userEmail"))
     detailed: bool = Field(default=False, description="Whether to include step-by-step derivation")
+    save_to_history: bool = Field(default=True, description="Whether to store to cloud/db history", validation_alias=AliasChoices("save_to_history", "saveToHistory"))
 
 
 class UpdateCueRequest(BaseModel):
@@ -4232,8 +4237,9 @@ def quick_solve_endpoint(req: QuickSolveRequest):
     """
     Ultra-fast vision solver for handwritten exam/homework questions, math, and MCQs.
     Bypasses heavy vector RAG to achieve sub-second TTFT and immediate final answer output.
+    Optionally persists solve history to cloud DB.
     """
-    from backend.quick_solver_service import quick_solve_handwritten_image, parse_image_data
+    from backend.quick_solver_service import quick_solve_handwritten_image, parse_image_data, generate_thumbnail_b64
 
     try:
         mime_type, image_bytes = parse_image_data(req.image_data)
@@ -4243,18 +4249,64 @@ def quick_solve_endpoint(req: QuickSolveRequest):
     if len(image_bytes) > 8 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image size exceeds 8MB limit.")
 
+    effective_course = (req.course_name or req.course_context or "").strip()
+
     try:
         res = quick_solve_handwritten_image(
             image_bytes=image_bytes,
             mime_type=mime_type,
             prompt=req.prompt or "",
-            course_context=req.course_context or "",
+            course_context=effective_course,
             detailed=req.detailed
         )
+
+        # Store in DB / Cloud history if requested
+        if req.save_to_history:
+            try:
+                thumb_data = generate_thumbnail_b64(image_bytes)
+                saved_record = db_manager.save_quick_solve(
+                    course_name=effective_course or "General",
+                    user_email=req.user_email or "anonymous",
+                    final_answer=res.get("final_answer", ""),
+                    image_data=thumb_data,
+                    prompt=req.prompt or "",
+                    detailed_solution=res.get("detailed_solution") if req.detailed else "",
+                    execution_time_sec=res.get("execution_time_sec", 0.0)
+                )
+                res["solve_id"] = saved_record.get("solve_id")
+                res["course_name"] = saved_record.get("course_name")
+                res["created_at"] = saved_record.get("created_at")
+            except Exception as save_err:
+                logger.warning(f"[QuickSolver History Warning] Failed to save to history: {save_err}")
+
         return res
     except Exception as e:
         logger.error(f"[QuickSolver Error] {e}")
         raise HTTPException(status_code=500, detail=f"Quick solve error: {e}")
+
+
+@app.get("/api/quick-solve/history")
+def get_quick_solve_history(
+    course_name: Optional[str] = None,
+    user_email: Optional[str] = None,
+    limit: int = 50
+):
+    """Retrieve solved handwritten problem history from DB / cloud."""
+    return db_manager.get_quick_solves(course_name=course_name, user_email=user_email, limit=limit)
+
+
+@app.delete("/api/quick-solve/history/{solve_id}")
+def delete_quick_solve_history_item(solve_id: str, user_email: Optional[str] = None):
+    """Delete an individual solved problem from history."""
+    deleted = db_manager.delete_quick_solve(solve_id, user_email=user_email)
+    return {"status": "success" if deleted else "failed", "deleted": deleted}
+
+
+@app.delete("/api/quick-solve/history")
+def clear_quick_solve_history(course_name: Optional[str] = None, user_email: Optional[str] = None):
+    """Clear quick solve history for a course or user."""
+    count = db_manager.clear_quick_solves(course_name=course_name, user_email=user_email)
+    return {"status": "success", "cleared_count": count}
 
 
 @app.post("/api/user/library/record")

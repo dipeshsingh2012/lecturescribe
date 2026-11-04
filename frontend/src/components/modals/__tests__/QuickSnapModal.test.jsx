@@ -73,4 +73,40 @@ describe('QuickSnapModal Component', () => {
     expect(document.body.style.position).toBe('');
     expect(document.documentElement.style.overflow).toBe('');
   });
+
+  it('displays mapped course badge and switches to history tab', async () => {
+    // Mock fetch for history
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          solve_id: 'solve_123',
+          course_name: 'Calculus I',
+          user_email: 'test@example.com',
+          final_answer: '**Answer: Option (A)**',
+          created_at: new Date().toISOString()
+        }
+      ]
+    });
+
+    render(<QuickSnapModal courseContext="Calculus I" userEmail="test@example.com" />);
+    fireEvent.click(screen.getByRole('button', { name: /Quick Snap & Solve/i }));
+
+    // Check course mapped badge
+    expect(screen.getByText('Mapped')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Calculus I')).toBeInTheDocument();
+
+    // Click History tab
+    const historyTabBtn = screen.getByRole('button', { name: /history/i });
+    fireEvent.click(historyTabBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Final Solution|Answer: Option/i)).toBeInTheDocument();
+    });
+  });
+
+  it('hides the floating quick solver button when hideFloatingButton is true', () => {
+    render(<QuickSnapModal courseContext="Calculus I" hideFloatingButton={true} />);
+    expect(screen.queryByRole('button', { name: /Quick Snap & Solve/i })).toBeNull();
+  });
 });

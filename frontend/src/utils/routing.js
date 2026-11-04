@@ -183,6 +183,11 @@ export const coursesMatch = (courseA, courseB) => {
   const baseB = toBaseCourseSlug(slugB || nameB);
   if (baseA && baseB && baseA === baseB) return true;
 
+  const aliasesA = (typeof courseA === 'object' && Array.isArray(courseA.aliases)) ? courseA.aliases : [];
+  const aliasesB = (typeof courseB === 'object' && Array.isArray(courseB.aliases)) ? courseB.aliases : [];
+  if (aliasesA.some(al => al === normB || al === slugB || al === baseB)) return true;
+  if (aliasesB.some(al => al === normA || al === slugA || al === baseA)) return true;
+
   return false;
 };
 

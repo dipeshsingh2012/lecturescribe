@@ -1288,6 +1288,8 @@ class RelationalDBManager:
                             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                         );
                         CREATE INDEX IF NOT EXISTS idx_pg_courses_slug ON lecturescribe_courses(slug);
+                        ALTER TABLE lecturescribe_courses ADD COLUMN IF NOT EXISTS aliases TEXT[] DEFAULT '{}';
+                        CREATE INDEX IF NOT EXISTS idx_pg_courses_aliases ON lecturescribe_courses USING GIN(aliases);
 
                         ALTER TABLE lecturescribe_videos ADD COLUMN IF NOT EXISTS course_id UUID;
                         ALTER TABLE lecturescribe_videos ADD COLUMN IF NOT EXISTS course_slug VARCHAR(255);
@@ -3734,6 +3736,92 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
+    def rename_video(
+        self,
+        video_id: str,
+        new_title: str,
+        user_email: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Rename an existing video/lecture across lecturescribe_videos,
+        lecturescribe_user_library, and in-memory caches.
+        """
+        clean_vid = str(video_id or "").strip()
+        if not clean_vid:
+            raise ValueError("video_id is required.")
+
+        raw_title = (new_title or "").strip()
+        clean_title = re.sub(r'<[^>]*>', '', raw_title).strip()
+        clean_title = re.sub(r'\s+', ' ', clean_title)
+        if not clean_title:
+            raise ValueError("Lecture title cannot be empty.")
+        if len(clean_title) < 2:
+            raise ValueError("Lecture title must be at least 2 characters long.")
+        if len(clean_title) > 500:
+            clean_title = clean_title[:500].strip()
+
+        old_title = ""
+        course_name = ""
+
+        # Update in PostgreSQL
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        # Fetch current title & course
+                        cursor.execute("SELECT title, course_name FROM lecturescribe_videos WHERE video_id = %s LIMIT 1;", (clean_vid,))
+                        row = cursor.fetchone()
+                        if row:
+                            old_title = row.get("title") or ""
+                            course_name = row.get("course_name") or ""
+
+                        # Update lecturescribe_videos
+                        cursor.execute("""
+                            UPDATE lecturescribe_videos
+                            SET title = %s
+                            WHERE video_id = %s;
+                        """, (clean_title, clean_vid))
+
+                        # Update lecturescribe_user_library
+                        cursor.execute("""
+                            UPDATE lecturescribe_user_library
+                            SET title = %s
+                            WHERE video_id = %s;
+                        """, (clean_title, clean_vid))
+
+                        # Update lecturescribe_transcription_jobs if exists
+                        cursor.execute("""
+                            UPDATE lecturescribe_transcription_jobs
+                            SET title = %s
+                            WHERE video_id = %s;
+                        """, (clean_title, clean_vid))
+
+                        conn.commit()
+            except Exception as e:
+                print(f"[PostgreSQL Notice] rename_video fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # Update in-memory caches
+        if clean_vid in self._memory_cache:
+            if not old_title:
+                old_title = self._memory_cache[clean_vid].get("title") or ""
+            self._memory_cache[clean_vid]["title"] = clean_title
+            if not course_name:
+                course_name = self._memory_cache[clean_vid].get("course_name") or ""
+
+        return {
+            "status": "success",
+            "video_id": clean_vid,
+            "title": clean_title,
+            "old_title": old_title,
+            "course_name": course_name,
+            "message": f"Lecture title updated successfully to '{clean_title}'."
+        }
+
     def get_video_id_by_source_url(self, source_url: str) -> Optional[str]:
         """
         Find video_id matching a given source_url (e.g. Moodle LMS page link)
@@ -4362,38 +4450,44 @@ class RelationalDBManager:
         """
         Resolve canonical course display name strictly in memory (zero SQL queries),
         leveraging CANONICAL_COURSE_MAPPINGS, joined lecturescribe_courses row, and L1 caches.
+        Dynamic database names and joined names take precedence over hardcoded mappings.
         """
         clean = (course_identifier or "").strip()
         if not clean:
             return ""
 
-        if clean in CANONICAL_COURSE_MAPPINGS:
-            return CANONICAL_COURSE_MAPPINGS[clean]
-
-        slug_norm = to_course_slug(clean)
-        if slug_norm in CANONICAL_COURSE_MAPPINGS:
-            return CANONICAL_COURSE_MAPPINGS[slug_norm]
-
-        try:
-            base_slug = to_gcs_course_slug(clean)
-        except Exception:
-            base_slug = re.sub(r'^\s*\d+[\s.\-_]+\d+[\s.\-_:]*', '', slug_norm).strip('-')
-        if base_slug in CANONICAL_COURSE_MAPPINGS:
-            return CANONICAL_COURSE_MAPPINGS[base_slug]
+        if clean in self._canonical_course_name_cache:
+            return self._canonical_course_name_cache[clean]
 
         if joined_course_name and isinstance(joined_course_name, str):
             jc_clean = joined_course_name.strip()
             if jc_clean and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', jc_clean):
                 return jc_clean
 
-        if clean in self._canonical_course_name_cache:
-            return self._canonical_course_name_cache[clean]
+        slug_norm = to_course_slug(clean)
+        try:
+            base_slug = to_gcs_course_slug(clean)
+        except Exception:
+            base_slug = re.sub(r'^\s*\d+[\s.\-_]+\d+[\s.\-_:]*', '', slug_norm).strip('-')
 
-        cached_ent = self._courses_memory_cache.get(slug_norm) or self._courses_memory_cache.get(base_slug)
+        cached_ent = (
+            self._courses_memory_cache.get(clean)
+            or self._courses_memory_cache.get(slug_norm)
+            or self._courses_memory_cache.get(base_slug)
+        )
         if isinstance(cached_ent, dict) and isinstance(cached_ent.get("name"), str):
             ent_name = cached_ent["name"].strip()
             if ent_name and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', ent_name):
                 return ent_name
+
+        if clean in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[clean]
+
+        if slug_norm in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[slug_norm]
+
+        if base_slug in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[base_slug]
 
         if re.match(r'^[a-z0-9]+(-[a-z0-9]+)+$', clean):
             m = re.match(r'^(\d+)-(\d+)-(.+)$', clean)
@@ -4894,20 +4988,21 @@ class RelationalDBManager:
                         # 1. Lookup existing course by slug, id, or exact name
                         if is_uuid:
                             cursor.execute("""
-                                SELECT id::text, slug, name, created_at, updated_at
+                                SELECT id::text, slug, name, COALESCE(aliases, ARRAY[]::text[]) as aliases, created_at, updated_at
                                 FROM lecturescribe_courses
                                 WHERE id::text = %s
                                 LIMIT 1;
                             """, (clean_id,))
                         else:
                             cursor.execute("""
-                                SELECT id::text, slug, name, created_at, updated_at
+                                SELECT id::text, slug, name, COALESCE(aliases, ARRAY[]::text[]) as aliases, created_at, updated_at
                                 FROM lecturescribe_courses
                                 WHERE slug = %s OR LOWER(name) = LOWER(%s)
+                                   OR %s = ANY(COALESCE(aliases, ARRAY[]::text[]))
                                    OR slug = %s OR LOWER(name) = LOWER(%s)
                                 ORDER BY CASE WHEN name ~ '^[0-9]+\\.[0-9]+\\s+' THEN 0 ELSE 1 END
                                 LIMIT 1;
-                            """, (derived_slug, display_name, to_course_slug(clean_id), clean_id))
+                            """, (derived_slug, display_name, derived_slug, to_course_slug(clean_id), clean_id))
                         row = cursor.fetchone()
                         if row:
                             course_dict = dict(row)
@@ -4917,15 +5012,18 @@ class RelationalDBManager:
                                 course_dict["updated_at"] = course_dict["updated_at"].isoformat()
                             self._courses_memory_cache[course_dict["slug"]] = course_dict
                             self._courses_memory_cache[course_dict["id"]] = course_dict
+                            for al in course_dict.get("aliases") or []:
+                                if al:
+                                    self._courses_memory_cache[al] = course_dict
                             return course_dict
 
                         # 2. Not found: create new course record
                         new_course_id = clean_id if is_uuid else str(uuid.uuid4())
                         cursor.execute("""
-                            INSERT INTO lecturescribe_courses (id, slug, name, created_at, updated_at)
-                            VALUES (%s::uuid, %s, %s, NOW(), NOW())
+                            INSERT INTO lecturescribe_courses (id, slug, name, aliases, created_at, updated_at)
+                            VALUES (%s::uuid, %s, %s, '{}', NOW(), NOW())
                             ON CONFLICT (slug) DO UPDATE SET updated_at = NOW()
-                            RETURNING id::text, slug, name, created_at, updated_at;
+                            RETURNING id::text, slug, name, COALESCE(aliases, ARRAY[]::text[]) as aliases, created_at, updated_at;
                         """, (new_course_id, derived_slug, display_name))
                         inserted = cursor.fetchone()
                         if inserted:
@@ -4935,6 +5033,13 @@ class RelationalDBManager:
                             if hasattr(course_dict.get("updated_at"), "isoformat"):
                                 course_dict["updated_at"] = course_dict["updated_at"].isoformat()
                             self._courses_memory_cache[course_dict["slug"]] = course_dict
+                            self._courses_memory_cache[course_dict["id"]] = course_dict
+                            for al in course_dict.get("aliases") or []:
+                                if al:
+                                    self._courses_memory_cache[al] = course_dict
+                            self._canonical_course_name_cache.clear()
+                            conn.commit()
+                            return course_dict
                             self._courses_memory_cache[course_dict["id"]] = course_dict
                             self._canonical_course_name_cache.clear()
                             conn.commit()
@@ -5006,20 +5111,21 @@ class RelationalDBManager:
                 with conn.cursor() as cursor:
                     if is_uuid:
                         cursor.execute("""
-                            SELECT id::text, slug, name, created_at, updated_at
+                            SELECT id::text, slug, name, COALESCE(aliases, ARRAY[]::text[]) as aliases, created_at, updated_at
                             FROM lecturescribe_courses
                             WHERE id::text = %s
                             LIMIT 1;
                         """, (clean_id,))
                     else:
                         cursor.execute("""
-                            SELECT id::text, slug, name, created_at, updated_at
+                            SELECT id::text, slug, name, COALESCE(aliases, ARRAY[]::text[]) as aliases, created_at, updated_at
                             FROM lecturescribe_courses
                             WHERE slug = %s OR LOWER(name) = LOWER(%s)
-                               OR (%s IS NOT NULL AND (slug = %s OR LOWER(name) = LOWER(%s)))
+                               OR %s = ANY(COALESCE(aliases, ARRAY[]::text[]))
+                               OR (%s IS NOT NULL AND (slug = %s OR LOWER(name) = LOWER(%s) OR %s = ANY(COALESCE(aliases, ARRAY[]::text[]))))
                             ORDER BY CASE WHEN name ~ '^[0-9]+\\.[0-9]+\\s+' THEN 0 ELSE 1 END
                             LIMIT 1;
-                        """, (derived_slug, clean_id, canon_slug, canon_slug or "", canon_name or ""))
+                        """, (derived_slug, clean_id, derived_slug, canon_slug, canon_slug or "", canon_name or "", canon_slug or ""))
                     row = cursor.fetchone()
                     if row and isinstance(row, dict) and "slug" in row and "id" in row and isinstance(row.get("slug"), str):
                         c_dict = dict(row)
@@ -5029,6 +5135,9 @@ class RelationalDBManager:
                             c_dict["updated_at"] = c_dict["updated_at"].isoformat()
                         self._courses_memory_cache[c_dict["slug"]] = c_dict
                         self._courses_memory_cache[c_dict["id"]] = c_dict
+                        for al in c_dict.get("aliases") or []:
+                            if al:
+                                self._courses_memory_cache[al] = c_dict
                         return c_dict
             except Exception as e:
                 print(f"[PostgreSQL Notice] get_course lookup notice: {e}")
@@ -5101,17 +5210,11 @@ class RelationalDBManager:
             base_slug = re.sub(r'^\s*\d+[\s.\-_]+\d+[\s.\-_:]*', '', slug_norm).strip('-')
         base_title = base_slug.replace("-", " ")
 
-        # 0. Check direct dictionary mapping & L1 canonical cache
-        if clean in CANONICAL_COURSE_MAPPINGS:
-            return CANONICAL_COURSE_MAPPINGS[clean]
-        if slug_norm in CANONICAL_COURSE_MAPPINGS:
-            return CANONICAL_COURSE_MAPPINGS[slug_norm]
-        if base_slug in CANONICAL_COURSE_MAPPINGS:
-            return CANONICAL_COURSE_MAPPINGS[base_slug]
+        # 0. Check L1 canonical cache
         if clean in self._canonical_course_name_cache:
             return self._canonical_course_name_cache[clean]
 
-        # 1. Check first-class lecturescribe_courses entity (single lookup, reused below)
+        # 1. Check first-class lecturescribe_courses entity (dynamic DB entity & aliases take top priority)
         existing_c = None
         try:
             existing_c = self.get_course(clean)
@@ -5127,6 +5230,14 @@ class RelationalDBManager:
                     return resolved_name
         except Exception:
             pass
+
+        # 2. Check direct dictionary mapping fallback
+        if clean in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[clean]
+        if slug_norm in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[slug_norm]
+        if base_slug in CANONICAL_COURSE_MAPPINGS:
+            return CANONICAL_COURSE_MAPPINGS[base_slug]
 
         conn = None
         try:
@@ -5601,6 +5712,429 @@ class RelationalDBManager:
             return True
         finally:
             conn.close()
+
+    def rename_course(
+        self,
+        course_identifier: str,
+        new_name: str,
+        user_email: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Rename an existing course across lecturescribe_courses and all dependent tables
+        (videos, user library, resources, readings, quizzes, summaries, notes, assignments,
+        calendar, forums, announcements, rubrics, etc.).
+
+        Preserves all GCS blobs without copying, appends old slug to aliases array so
+        existing bookmarks/links continue to work, and updates L1 in-memory caches.
+        """
+        clean_id = (course_identifier or "").strip()
+        if not clean_id:
+            raise ValueError("course_identifier is required.")
+
+        raw_new_name = (new_name or "").strip()
+        # Strip any HTML tags and collapse whitespace
+        clean_new_name = re.sub(r'<[^>]*>', '', raw_new_name).strip()
+        clean_new_name = re.sub(r'\s+', ' ', clean_new_name)
+        if not clean_new_name:
+            raise ValueError("Course name cannot be empty.")
+        if len(clean_new_name) < 2:
+            raise ValueError("Course name must be at least 2 characters long.")
+        if len(clean_new_name) > 255:
+            clean_new_name = clean_new_name[:255].strip()
+
+        # 1. Resolve existing course entity
+        existing = self.get_course(clean_id)
+        if not existing:
+            canon = self.resolve_course_canonical_name(clean_id)
+            if canon and canon != clean_id:
+                existing = self.get_course(canon)
+        if not existing:
+            existing = self.get_or_create_course(clean_id)
+        if not existing or not existing.get("id"):
+            raise ValueError(f"Course '{clean_id}' not found.")
+
+        course_id = str(existing.get("id"))
+        old_name = str(existing.get("name") or clean_id).strip()
+        old_slug = str(existing.get("slug") or to_course_slug(clean_id)).strip()
+        existing_aliases = existing.get("aliases") or []
+        if not isinstance(existing_aliases, list):
+            existing_aliases = list(existing_aliases)
+
+        # 2. Check no-op
+        if old_name == clean_new_name:
+            return {
+                "status": "no_change",
+                "course_id": course_id,
+                "course_name": old_name,
+                "course_slug": old_slug,
+                "old_name": old_name,
+                "new_name": clean_new_name,
+                "old_slug": old_slug,
+                "new_slug": old_slug,
+                "aliases": existing_aliases,
+                "message": "Course name is unchanged."
+            }
+
+        new_slug = to_course_slug(clean_new_name)
+        if not new_slug:
+            new_slug = "course"
+
+        # 3. Collision check against other courses
+        conn = None
+        if HAS_PSYCOPG2 and self.postgres_url:
+            try:
+                conn = self._get_connection()
+                self._enable_readonly_autocommit(conn)
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id::text, name, slug FROM lecturescribe_courses
+                        WHERE (slug = %s OR LOWER(name) = LOWER(%s) OR %s = ANY(COALESCE(aliases, ARRAY[]::text[])))
+                          AND id::text != %s
+                        LIMIT 1;
+                    """, (new_slug, clean_new_name, new_slug, course_id))
+                    collision = cursor.fetchone()
+                    if collision:
+                        coll_name = collision.get("name", clean_new_name)
+                        raise ValueError(f"A course named '{coll_name}' already exists.")
+            except ValueError:
+                raise
+            except Exception as e:
+                print(f"[PostgreSQL Notice] rename_course collision check fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # In-Memory collision check
+        for k, v in list(self._courses_memory_cache.items()):
+            if isinstance(v, dict):
+                v_id = str(v.get("id") or "")
+                if v_id and v_id != course_id:
+                    if (
+                        v.get("slug") == new_slug
+                        or (v.get("name") or "").lower() == clean_new_name.lower()
+                        or new_slug in (v.get("aliases") or [])
+                    ):
+                        coll_name = v.get("name", clean_new_name)
+                        raise ValueError(f"A course named '{coll_name}' already exists.")
+
+        # 4. Compute updated aliases
+        new_aliases = list(existing_aliases)
+        if old_slug != new_slug and old_slug not in new_aliases:
+            new_aliases.append(old_slug)
+
+        slug_candidates = list({s for s in (old_slug, to_course_slug(old_name), to_course_slug(clean_id)) if s})
+        name_candidates = list({n.lower() for n in (old_name, clean_id) if n})
+
+        # 5. Atomic PostgreSQL update
+        updated_videos_count = 0
+        if HAS_PSYCOPG2 and self.postgres_url:
+            conn = None
+            try:
+                conn = self._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        # 1. Update lecturescribe_courses
+                        cursor.execute("""
+                            UPDATE lecturescribe_courses
+                            SET name = %s, slug = %s, aliases = %s, updated_at = NOW()
+                            WHERE id::text = %s;
+                        """, (clean_new_name, new_slug, new_aliases, course_id))
+
+                        # 2. Update lecturescribe_videos
+                        cursor.execute("""
+                            UPDATE lecturescribe_videos
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+                        updated_videos_count = max(0, cursor.rowcount)
+
+                        # 3. Update lecturescribe_user_library
+                        cursor.execute("""
+                            UPDATE lecturescribe_user_library
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 4. Update lecturescribe_resources
+                        cursor.execute("""
+                            UPDATE lecturescribe_resources
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 5. Update lecturescribe_course_readings
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_readings
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 6. Update lecturescribe_course_quizzes
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_quizzes
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 7. Update lecturescribe_course_summaries
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_summaries
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 8. Update lecturescribe_course_quiz_history
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_quiz_history
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 9. Update lecturescribe_course_quiz_explanations
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_quiz_explanations
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 10. Update lecturescribe_course_chat_logs
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_chat_logs
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 11. Update lecturescribe_course_notes
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_notes
+                            SET course_name = %s, course_slug = %s, course_id = %s::uuid
+                            WHERE (course_id IS NOT NULL AND course_id::text = %s)
+                               OR (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, course_id, course_id, slug_candidates, name_candidates))
+
+                        # 12. Update lecturescribe_user_course_pins
+                        cursor.execute("""
+                            UPDATE lecturescribe_user_course_pins
+                            SET course_slug = %s
+                            WHERE course_slug = ANY(%s);
+                        """, (new_slug, slug_candidates))
+
+                        # 13. Update lecturescribe_course_assignments
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_assignments
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 14. Update lecturescribe_course_memberships
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_memberships
+                            SET course_identifier = %s
+                            WHERE course_identifier = ANY(%s) OR course_identifier = ANY(%s);
+                        """, (new_slug, slug_candidates, name_candidates))
+
+                        # 15. Update lecturescribe_calendar_events
+                        cursor.execute("""
+                            UPDATE lecturescribe_calendar_events
+                            SET course_name = %s, course_slug = %s
+                            WHERE (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, slug_candidates, name_candidates))
+
+                        # 16. Update lecturescribe_assignment_submissions
+                        cursor.execute("""
+                            UPDATE lecturescribe_assignment_submissions
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 17. Update lecturescribe_gradebook_overrides
+                        cursor.execute("""
+                            UPDATE lecturescribe_gradebook_overrides
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 18. Update lecturescribe_course_enrollment_keys
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_enrollment_keys
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 19. Update lecturescribe_forum_threads
+                        cursor.execute("""
+                            UPDATE lecturescribe_forum_threads
+                            SET course_name = %s, course_slug = %s
+                            WHERE (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, slug_candidates, name_candidates))
+
+                        # 20. Update lecturescribe_module_completions
+                        cursor.execute("""
+                            UPDATE lecturescribe_module_completions
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 21. Update lecturescribe_access_rules
+                        cursor.execute("""
+                            UPDATE lecturescribe_access_rules
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 22. Update lecturescribe_question_bank
+                        cursor.execute("""
+                            UPDATE lecturescribe_question_bank
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 23. Update lecturescribe_course_sections
+                        cursor.execute("""
+                            UPDATE lecturescribe_course_sections
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 24. Update lecturescribe_rubrics
+                        cursor.execute("""
+                            UPDATE lecturescribe_rubrics
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 25. Update lecturescribe_competencies
+                        cursor.execute("""
+                            UPDATE lecturescribe_competencies
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 26. Update lecturescribe_workshops
+                        cursor.execute("""
+                            UPDATE lecturescribe_workshops
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 27. Update lecturescribe_announcements
+                        cursor.execute("""
+                            UPDATE lecturescribe_announcements
+                            SET course_name = %s
+                            WHERE LOWER(COALESCE(course_name, '')) = ANY(%s);
+                        """, (clean_new_name, name_candidates))
+
+                        # 28. Update lecturescribe_predicted_quizzes
+                        cursor.execute("""
+                            UPDATE lecturescribe_predicted_quizzes
+                            SET course_name = %s, course_slug = %s
+                            WHERE (course_slug IS NOT NULL AND course_slug = ANY(%s))
+                               OR (LOWER(COALESCE(course_name, '')) = ANY(%s));
+                        """, (clean_new_name, new_slug, slug_candidates, name_candidates))
+
+                        # 29. Insert audit log
+                        cursor.execute("""
+                            INSERT INTO lecturescribe_audit_logs (
+                                log_id, course_slug, actor_email, verb, object_type, object_id, summary, created_at
+                            ) VALUES (
+                                %s, %s, %s, 'course.rename', 'course', %s, %s, NOW()
+                            );
+                        """, (
+                            uuid.uuid4().hex[:16],
+                            new_slug,
+                            user_email or "",
+                            course_id,
+                            f"Course renamed from '{old_name}' to '{clean_new_name}'"
+                        ))
+                        conn.commit()
+            except Exception as e:
+                print(f"[PostgreSQL Notice] rename_course update fallback: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        # 6. Update in-memory L1 caches
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        updated_course_dict = {
+            "id": course_id,
+            "slug": new_slug,
+            "name": clean_new_name,
+            "aliases": new_aliases,
+            "updated_at": now_iso
+        }
+        self._courses_memory_cache.pop(old_slug, None)
+        self._courses_memory_cache[new_slug] = updated_course_dict
+        self._courses_memory_cache[course_id] = updated_course_dict
+        for al in new_aliases:
+            if al:
+                self._courses_memory_cache[al] = updated_course_dict
+
+        self._canonical_course_name_cache.clear()
+
+        # Update cached video objects in memory
+        for vid, v in list(self._memory_cache.items()):
+            if isinstance(v, dict):
+                v_course = (v.get("course_name") or "").strip().lower()
+                v_slug = to_course_slug(v.get("course_name") or "")
+                if v_course in name_candidates or v_slug in slug_candidates or v.get("course_slug") in slug_candidates:
+                    v["course_name"] = clean_new_name
+                    v["course_slug"] = new_slug
+
+        # Update in-memory resources, notes, readings
+        for r in self._resources_memory_cache:
+            if (r.get("course_name") or "").strip().lower() in name_candidates or to_course_slug(r.get("course_name") or "") in slug_candidates:
+                r["course_name"] = clean_new_name
+                r["course_slug"] = new_slug
+
+        for n in self._notes_memory_cache:
+            if (n.get("course_name") or "").strip().lower() in name_candidates or to_course_slug(n.get("course_name") or "") in slug_candidates:
+                n["course_name"] = clean_new_name
+                n["course_slug"] = new_slug
+
+        for rd in self._readings_memory_cache:
+            if (rd.get("course_name") or "").strip().lower() in name_candidates or to_course_slug(rd.get("course_name") or "") in slug_candidates:
+                rd["course_name"] = clean_new_name
+                rd["course_slug"] = new_slug
+
+        for h in self._course_quiz_history_memory:
+            if (h.get("course_slug") or "") in slug_candidates or (h.get("course_name") or "").strip().lower() in name_candidates:
+                h["course_name"] = clean_new_name
+                h["course_slug"] = new_slug
+
+        return {
+            "status": "success",
+            "course_id": course_id,
+            "course_name": clean_new_name,
+            "course_slug": new_slug,
+            "old_name": old_name,
+            "new_name": clean_new_name,
+            "old_slug": old_slug,
+            "new_slug": new_slug,
+            "aliases": new_aliases,
+            "updated_videos_count": updated_videos_count,
+            "message": f"Course successfully renamed to '{clean_new_name}'."
+        }
 
     def delete_course(self, course_identifier: str, user_email: str) -> Dict[str, Any]:
         """

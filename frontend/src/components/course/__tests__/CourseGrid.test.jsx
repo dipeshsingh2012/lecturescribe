@@ -162,5 +162,39 @@ describe('CourseGrid', () => {
     const unpinBtn = screen.getByRole('button', { name: /Unpin Quantum Physics/i });
     expect(unpinBtn).toBeInTheDocument();
   });
+
+  it('renders edit button and opens rename dialog when clicked', () => {
+    const handleSelectCourse = vi.fn();
+    const handleRenameCourse = vi.fn();
+    const courses = [
+      {
+        course_name: 'Machine Learning',
+        course_slug: 'machine-learning',
+        lecture_count: 2,
+        lectures: [{ video_id: '101', title: 'Intro' }]
+      }
+    ];
+
+    render(
+      <CourseGrid
+        filteredCourses={courses}
+        handleSelectCourse={handleSelectCourse}
+        handleRenameCourse={handleRenameCourse}
+        librarySearch=""
+        currentTheme={mockTheme}
+      />
+    );
+
+    const editBtn = screen.getByRole('button', { name: /Edit Machine Learning/i });
+    expect(editBtn).toBeInTheDocument();
+
+    fireEvent.click(editBtn);
+    // Should not trigger course selection navigation
+    expect(handleSelectCourse).not.toHaveBeenCalled();
+
+    // Rename dialog should open
+    expect(screen.getByText('Edit Course Name')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /course name/i })).toHaveValue('Machine Learning');
+  });
 });
 

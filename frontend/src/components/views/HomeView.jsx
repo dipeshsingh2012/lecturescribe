@@ -33,12 +33,14 @@ import {
   Activity,
   Target,
   Megaphone,
-  X
+  X,
+  Edit3
 } from 'lucide-react';
 
 import HeroBanner from '../home/HeroBanner';
 import QuickAddBar from '../home/QuickAddBar';
 import CourseGrid from '../course/CourseGrid';
+import CourseRenameDialog from '../course/CourseRenameDialog';
 import CourseLibrary from '../course/CourseLibrary';
 import CourseNotesTab from '../course/CourseNotesTab';
 import CourseLectures from '../course/CourseLectures';
@@ -128,6 +130,8 @@ export default function HomeView({
   courseLoading,
   handleDeleteFromLibrary,
   handleDeleteCourse,
+  handleRenameCourse,
+  handleRenameLecture,
   handleTogglePin,
   courseNotes = [],
   courseNotesLoading = false,
@@ -137,6 +141,24 @@ export default function HomeView({
   onOpenFullCalendar,
   currentTheme
 }) {
+  const [isHeaderRenameOpen, setIsHeaderRenameOpen] = React.useState(false);
+
+  const handleHeaderRename = async (courseId, newName) => {
+    if (typeof handleRenameCourse === 'function') {
+      const res = await handleRenameCourse(courseId, newName);
+      if (res && res.course_name) {
+        if (typeof handleSelectCourse === 'function') {
+          handleSelectCourse(res.course_name);
+        }
+        if (typeof setCacheNotice === 'function') {
+          setCacheNotice(`Course renamed to "${res.course_name}" successfully.`);
+          setTimeout(() => setCacheNotice(''), 4000);
+        }
+        return res;
+      }
+    }
+  };
+
   const effectiveRole = isTutorProp !== undefined
     ? (isTutorProp ? 'tutor' : 'student')
     : (userRole || (googleUser ? 'student' : 'tutor'));
@@ -331,6 +353,26 @@ export default function HomeView({
               <Typography variant="h6" sx={{ fontWeight: 800, color: currentTheme.palette.textPrimary }}>
                 {activeCourseData?.course_name || toCanonicalCourseName(selectedCourse)}
               </Typography>
+              {isTutor && typeof handleRenameCourse === 'function' && (
+                <Tooltip title="Edit Course Name">
+                  <IconButton
+                    size="small"
+                    aria-label="Edit Course Name"
+                    onClick={() => setIsHeaderRenameOpen(true)}
+                    sx={{
+                      color: currentTheme.palette.textSecondary,
+                      p: 0.6,
+                      borderRadius: 1.5,
+                      '&:hover': {
+                        color: currentTheme.palette.primary,
+                        bgcolor: 'var(--highlight-bg)'
+                      }
+                    }}
+                  >
+                    <Edit3 size={16} />
+                  </IconButton>
+                </Tooltip>
+              )}
               <Chip
                 label={`${filteredCourseLectures.length} ${filteredCourseLectures.length === 1 ? 'lecture' : 'lectures'}`}
                 size="small"
@@ -881,6 +923,7 @@ export default function HomeView({
             filteredCourses={filteredCourses}
             handleSelectCourse={handleSelectCourse}
             handleDeleteCourse={isTutor ? handleDeleteCourse : null}
+            handleRenameCourse={isTutor ? handleRenameCourse : null}
             handleTogglePin={handleTogglePin}
             librarySearch={librarySearch}
             currentTheme={currentTheme}
@@ -1172,6 +1215,7 @@ export default function HomeView({
           filteredCourseLectures={filteredCourseLectures}
           handleTranscribe={handleTranscribe}
           handleDeleteFromLibrary={isTutor ? handleDeleteFromLibrary : null}
+          handleRenameLecture={isTutor ? handleRenameLecture : null}
           handleClearCourse={handleClearCourse}
           selectedCourse={selectedCourse}
           librarySearch={librarySearch}
@@ -1187,6 +1231,15 @@ export default function HomeView({
       )}
         </>
       )}
+
+      {/* Header Course Rename Dialog */}
+      <CourseRenameDialog
+        open={isHeaderRenameOpen}
+        onClose={() => setIsHeaderRenameOpen(false)}
+        course={activeCourseData || selectedCourse}
+        onRename={handleHeaderRename}
+        currentTheme={currentTheme}
+      />
     </Box>
   );
 }

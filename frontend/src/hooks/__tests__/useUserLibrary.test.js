@@ -164,5 +164,103 @@ describe('useUserLibrary hook functionality', () => {
     expect(result.current.userLibrary).toEqual([mockLecture]);
     expect(result.current.pinnedCourses).toEqual(['deep-learning']);
   });
+
+  it('handleRenameCourse updates userCourses, userLibrary, and pinnedCourses', async () => {
+    const mockLecture = { video_id: 'v300', course_name: 'ML Intro', title: 'Session 1' };
+    const mockCourses = [
+      { course_name: 'ML Intro', course_slug: 'ml-intro', lecture_count: 1, lectures: [mockLecture] }
+    ];
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (opts?.method === 'PATCH') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            course_name: 'Machine Learning',
+            course_slug: 'machine-learning',
+            old_name: 'ML Intro',
+            old_slug: 'ml-intro',
+            aliases: ['ml-intro']
+          })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          courses: mockCourses,
+          library: [mockLecture],
+          pinned_courses: ['ml-intro']
+        })
+      });
+    });
+
+    const { result } = renderHook(() => useUserLibrary('user@example.com'));
+    await act(async () => {});
+
+    expect(result.current.filteredCourses[0].course_name).toBe('ML Intro');
+    expect(result.current.pinnedCourses).toEqual(['ml-intro']);
+
+    await act(async () => {
+      await result.current.handleRenameCourse('ml-intro', 'Machine Learning');
+    });
+
+    expect(result.current.userCourses[0].course_name).toBe('Machine Learning');
+    expect(result.current.userCourses[0].course_slug).toBe('machine-learning');
+    expect(result.current.userLibrary[0].course_name).toBe('Machine Learning');
+    expect(result.current.pinnedCourses).toEqual(['machine-learning']);
+  });
+
+  it('handleRenameLecture updates lecture titles in userLibrary and userCourses', async () => {
+    const mockLecture = {
+      video_id: 'vid-99',
+      course_name: 'CS101',
+      title: 'Old Lecture Title',
+      video_title: 'Old Lecture Title'
+    };
+    const mockCourses = [
+      {
+        course_name: 'CS101',
+        course_slug: 'cs101',
+        lecture_count: 1,
+        lectures: [mockLecture]
+      }
+    ];
+
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (opts?.method === 'PATCH' && url.includes('/api/videos/vid-99')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            video_id: 'vid-99',
+            title: 'New Improved Title'
+          })
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          courses: mockCourses,
+          library: [mockLecture]
+        })
+      });
+    });
+
+    const { result } = renderHook(() => useUserLibrary('user@example.com'));
+    await act(async () => {});
+
+    expect(result.current.userLibrary[0].title).toBe('Old Lecture Title');
+
+    await act(async () => {
+      await result.current.handleRenameLecture('vid-99', 'New Improved Title');
+    });
+
+    expect(result.current.userLibrary[0].title).toBe('New Improved Title');
+    expect(result.current.userLibrary[0].video_title).toBe('New Improved Title');
+    expect(result.current.userCourses[0].lectures[0].title).toBe('New Improved Title');
+  });
 });
 

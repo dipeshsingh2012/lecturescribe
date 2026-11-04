@@ -540,4 +540,36 @@ describe('CourseLectures', () => {
     fireEvent.click(screen.getByText('K-Means'));
     expect(handleTranscribe).toHaveBeenCalledWith('lec-1', true, '1.2 Machine Learning Paradigms');
   });
+
+  it('renders rename button when handleRenameLecture is provided and opens rename dialog', () => {
+    const handleRenameLecture = vi.fn();
+    const lectures = [
+      {
+        video_id: 'vid-rename-1',
+        video_title: 'Introductory Mechanics',
+        total_duration_seconds: 1800,
+        cue_count: 20
+      }
+    ];
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={lectures}
+        handleTranscribe={vi.fn()}
+        handleDeleteFromLibrary={vi.fn()}
+        handleRenameLecture={handleRenameLecture}
+        selectedCourse="Physics 101"
+        currentTheme={mockTheme}
+      />
+    );
+
+    const renameBtn = screen.getByRole('button', { name: /rename lecture/i });
+    expect(renameBtn).toBeInTheDocument();
+
+    fireEvent.click(renameBtn);
+
+    expect(screen.getByRole('heading', { name: /edit lecture title/i })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /lecture title/i })).toHaveValue('Introductory Mechanics');
+  });
 });

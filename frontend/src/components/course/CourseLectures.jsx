@@ -30,9 +30,11 @@ import {
   CheckCircle2,
   Calendar as CalendarIcon,
   Clock,
-  Sparkles
+  Sparkles,
+  Edit2
 } from 'lucide-react';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
+import LectureRenameDialog from '../lecture/LectureRenameDialog';
 import { API_BASE } from '../../utils/constants';
 import { extractVideoId } from '../../utils/formatters';
 import { filterCourseUpcomingEvents, getEventBadgeDate } from '../calendar/CalendarAlertCard';
@@ -118,6 +120,7 @@ export default function CourseLectures({
   filteredCourseLectures = [],
   handleTranscribe,
   handleDeleteFromLibrary,
+  handleRenameLecture,
   handleClearCourse,
   selectedCourse,
   librarySearch = '',
@@ -130,6 +133,7 @@ export default function CourseLectures({
   googleUser,
   courseSummaryData = null
 }) {
+  const [lectureToRename, setLectureToRename] = React.useState(null);
   const [slmTopicsByVideo, setSlmTopicsByVideo] = React.useState({});
   const requestedTopicVidsRef = React.useRef(new Set());
 
@@ -918,6 +922,30 @@ export default function CourseLectures({
                       <Video size={16} color={currentTheme.palette.primary} />
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {typeof handleRenameLecture === 'function' && (
+                        <Tooltip title="Rename Lecture">
+                          <IconButton
+                            size="small"
+                            aria-label="Rename Lecture"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLectureToRename(item);
+                            }}
+                            sx={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: '6px',
+                              color: '#64748b',
+                              '&:hover': {
+                                color: currentTheme.palette.primary,
+                                bgcolor: 'var(--highlight-bg)'
+                              }
+                            }}
+                          >
+                            <Edit2 size={14} />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       {driveUrl && (
                         <Tooltip title="Open in Google Drive">
                           <IconButton
@@ -1074,6 +1102,16 @@ export default function CourseLectures({
             );
           })}
         </Box>
+      )}
+
+      {lectureToRename && (
+        <LectureRenameDialog
+          open={Boolean(lectureToRename)}
+          onClose={() => setLectureToRename(null)}
+          lecture={lectureToRename}
+          onRename={handleRenameLecture}
+          currentTheme={currentTheme}
+        />
       )}
     </Box>
   );

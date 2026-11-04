@@ -33,7 +33,8 @@ import {
   Loader2,
   AlertCircle,
   Copy,
-  Search
+  Search,
+  Edit3
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
@@ -42,6 +43,7 @@ import { sortLectures, getLectureTitle } from '../../utils/lectureSort';
 import { getVideoSourceInfo } from '../../utils/publisherDetect';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
+import LectureRenameDialog from './LectureRenameDialog';
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
@@ -64,6 +66,7 @@ export default function LecturePlayer({
   lectureResources = [],
   lectureResourcesLoading,
   handleDeleteResource,
+  handleRenameLecture,
   currentTheme,
   handleGenerateTranscript,
   transcriptionLoading = false,
@@ -89,6 +92,7 @@ export default function LecturePlayer({
   const [videoCollapsed, setVideoCollapsed] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [copiedTitle, setCopiedTitle] = useState(false);
+  const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
 
   useEffect(() => {
     setVideoError(false);
@@ -158,6 +162,15 @@ export default function LecturePlayer({
   const prevLecture = currentIndex > 0 ? courseLectures[currentIndex - 1] : null;
   const nextLecture = (currentIndex >= 0 && currentIndex < courseLectures.length - 1) ? courseLectures[currentIndex + 1] : null;
   const totalLectures = courseLectures.length;
+
+  const onLectureRename = async (videoId, newTitle) => {
+    if (typeof handleRenameLecture === 'function') {
+      await handleRenameLecture(videoId || activeVid, newTitle);
+    }
+    if (typeof setActiveData === 'function') {
+      setActiveData(prev => (prev ? { ...prev, title: newTitle } : prev));
+    }
+  };
 
   const handleNavigateLecture = (targetLecture) => {
     if (!targetLecture) return;
@@ -838,6 +851,25 @@ export default function LecturePlayer({
               {activeData.title}
             </Typography>
           </Tooltip>
+
+          {typeof handleRenameLecture === 'function' && (
+            <Tooltip title="Rename lecture" arrow placement="bottom">
+              <IconButton
+                size="small"
+                aria-label="Rename lecture"
+                onClick={() => setIsRenameDialogOpen(true)}
+                sx={{
+                  p: '2px',
+                  color: currentTheme?.palette?.textSecondary || 'text.secondary',
+                  '&:hover': {
+                    color: currentTheme?.palette?.primary || '#0075ed'
+                  }
+                }}
+              >
+                <Edit3 size={13} />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
 
         {/* Previous & Next Lecture Navigation */}
@@ -1685,9 +1717,29 @@ export default function LecturePlayer({
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-        <h1 className="lecture-title">
-          {activeData.title}
-        </h1>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flex: '1 1 auto' }}>
+          <h1 className="lecture-title" style={{ margin: 0 }}>
+            {activeData.title}
+          </h1>
+          {typeof handleRenameLecture === 'function' && (
+            <Tooltip title="Rename lecture">
+              <IconButton
+                size="small"
+                aria-label="Rename lecture"
+                onClick={() => setIsRenameDialogOpen(true)}
+                sx={{
+                  color: currentTheme?.palette?.textSecondary || 'text.secondary',
+                  '&:hover': {
+                    color: currentTheme?.palette?.primary || '#0075ed',
+                    bgcolor: 'var(--highlight-bg, rgba(0, 117, 237, 0.08))'
+                  }
+                }}
+              >
+                <Edit3 size={18} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           <Button
             size="small"
@@ -1855,6 +1907,19 @@ export default function LecturePlayer({
           openUploadModal={openUploadModal}
         />
       </div>
+
+      {isRenameDialogOpen && (
+        <LectureRenameDialog
+          open={isRenameDialogOpen}
+          onClose={() => setIsRenameDialogOpen(false)}
+          lecture={{
+            video_id: activeVid,
+            title: activeData.title
+          }}
+          onRename={onLectureRename}
+          currentTheme={currentTheme}
+        />
+      )}
     </div>
   );
 }

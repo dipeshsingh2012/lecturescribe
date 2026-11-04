@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import LecturePlayer from '../LecturePlayer';
 import { LMS_THEMES } from '../../../store/themeStore';
 
@@ -695,6 +695,52 @@ describe('LecturePlayer', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  it('renders rename button when handleRenameLecture is provided and opens rename dialog', async () => {
+    const handleRenameLecture = vi.fn().mockResolvedValue({ status: 'success' });
+    const setActiveData = vi.fn();
+    const activeData = {
+      videoId: '556677',
+      title: 'Deep Learning Foundations',
+      course_name: 'CS229',
+      duration: '45:00',
+      total_cues: 120
+    };
+
+    render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCourseData={{ course_name: 'CS229' }}
+        selectedCourse="CS229"
+        setSelectedCourse={vi.fn()}
+        userLibrary={[]}
+        effectiveCourses={[]}
+        setActiveData={setActiveData}
+        navigateTo={vi.fn()}
+        iframeRef={{ current: null }}
+        handleRenameLecture={handleRenameLecture}
+        currentTheme={mockTheme}
+      />
+    );
+
+    const renameBtns = screen.getAllByRole('button', { name: /rename lecture/i });
+    expect(renameBtns.length).toBeGreaterThan(0);
+
+    fireEvent.click(renameBtns[0]);
+
+    expect(screen.getByRole('heading', { name: /edit lecture title/i })).toBeInTheDocument();
+    const input = screen.getByRole('textbox', { name: /lecture title/i });
+    expect(input).toHaveValue('Deep Learning Foundations');
+
+    fireEvent.change(input, { target: { value: 'Deep Learning & Neural Networks' } });
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(handleRenameLecture).toHaveBeenCalledWith('556677', 'Deep Learning & Neural Networks');
+      expect(setActiveData).toHaveBeenCalled();
+    });
   });
 });
 

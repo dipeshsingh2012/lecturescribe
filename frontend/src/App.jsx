@@ -414,6 +414,8 @@ export default function App() {
             courseLoading={course.courseLoading}
             handleDeleteFromLibrary={library.handleDeleteFromLibrary}
             handleDeleteCourse={library.handleDeleteCourse}
+            handleRenameCourse={library.handleRenameCourse}
+            handleRenameLecture={library.handleRenameLecture}
             handleTogglePin={library.handleTogglePin}
             courseNotes={courseNotes.notes}
             courseNotesLoading={courseNotes.notesLoading}
@@ -452,6 +454,7 @@ export default function App() {
             lectureResourcesLoading={resources.lectureResourcesLoading}
             handleDeleteResource={resources.handleDeleteResource}
             handleRenameResource={resources.handleRenameResource}
+            handleRenameLecture={auth.isTutor ? library.handleRenameLecture : null}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             displayCues={player.displayCues}

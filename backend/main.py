@@ -3291,6 +3291,16 @@ class CoursePinRequest(BaseModel):
     course_name: Optional[str] = None
 
 
+class CourseRenameRequest(BaseModel):
+    new_name: str
+    email: Optional[str] = None
+
+
+class VideoRenameRequest(BaseModel):
+    title: str
+    email: Optional[str] = None
+
+
 @app.get("/api/user/library")
 def get_user_library(email: str = Query(..., description="User Google email")):
     """Fetch user's saved LMS library of lectures."""
@@ -3428,6 +3438,59 @@ def get_course_details(
     if not course:
         raise HTTPException(status_code=404, detail=f"Course '{clean_name}' not found.")
     return {"status": "success", "course": course}
+
+
+@app.patch("/api/course/{course_identifier}")
+@app.put("/api/course/{course_identifier}")
+def rename_course_endpoint(
+    course_identifier: str,
+    req: CourseRenameRequest
+):
+    """
+    Rename an existing course entity and update all associated lectures, notes,
+    assignments, and quizzes across the database.
+    """
+    clean_id = (course_identifier or "").strip()
+    clean_new_name = (req.new_name or "").strip()
+    clean_email = (req.email or "").strip().lower()
+
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="course_identifier parameter is required.")
+    if not clean_new_name:
+        raise HTTPException(status_code=400, detail="new_name is required in request body.")
+
+    if clean_email:
+        require_tutor_role(clean_email, clean_id, action_label="rename courses")
+
+    try:
+        result = db_manager.rename_course(clean_id, clean_new_name, user_email=clean_email)
+    except ValueError as e:
+        err_msg = str(e)
+        if "already exists" in err_msg.lower():
+            raise HTTPException(status_code=409, detail=err_msg)
+        elif "not found" in err_msg.lower():
+            raise HTTPException(status_code=404, detail=err_msg)
+        else:
+            raise HTTPException(status_code=400, detail=err_msg)
+
+    # Invalidate Redis user cache & course caches
+    if redis_cache:
+        if clean_email:
+            try:
+                redis_cache.invalidate_user(clean_email)
+            except Exception:
+                pass
+        try:
+            old_slug = result.get("old_slug")
+            new_slug = result.get("new_slug")
+            for s in (old_slug, new_slug):
+                if s and hasattr(redis_cache, "client") and redis_cache.client:
+                    redis_cache.client.delete(f"course_quiz:{s}")
+                    redis_cache.client.delete(f"course_summary:{s}")
+        except Exception:
+            pass
+
+    return result
 
 
 @app.delete("/api/course/{course_name}")
@@ -5737,6 +5800,42 @@ def get_single_video_status(video_id: str):
         "course_name": course_name,
         "tracking_status": (active_upload.get("status") if is_uploading else None) or tracking_info.get("status") or ("ALREADY_CACHED" if is_gcs_synced else "UNKNOWN")
     }
+
+
+@app.patch("/api/videos/{video_id}")
+@app.put("/api/videos/{video_id}")
+def rename_video_endpoint(
+    video_id: str,
+    req: VideoRenameRequest
+):
+    """Update lecture/video title in database and user library."""
+    clean_vid = str(video_id or "").strip()
+    clean_title = (req.title or "").strip()
+    clean_email = (req.email or "").strip().lower()
+
+    if not clean_vid:
+        raise HTTPException(status_code=400, detail="video_id parameter is required.")
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="title is required in request body.")
+
+    try:
+        result = db_manager.rename_video(clean_vid, clean_title, user_email=clean_email)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Invalidate Redis caches
+    if redis_cache:
+        try:
+            redis_cache.invalidate_video(clean_vid)
+        except Exception:
+            pass
+        if clean_email:
+            try:
+                redis_cache.invalidate_user(clean_email)
+            except Exception:
+                pass
+
+    return result
 
 
 @app.post("/api/videos/{video_id}/sync-gcs")

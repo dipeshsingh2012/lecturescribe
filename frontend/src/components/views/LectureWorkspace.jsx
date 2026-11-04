@@ -33,6 +33,7 @@ export default function LectureWorkspace({
   lectureResourcesLoading,
   handleDeleteResource,
   handleRenameResource,
+  handleRenameLecture,
   activeTab,
   setActiveTab = () => {},
   displayCues,
@@ -273,6 +274,7 @@ export default function LectureWorkspace({
         lectureResourcesLoading={lectureResourcesLoading}
         handleDeleteResource={handleDeleteResource}
         handleRenameResource={handleRenameResource}
+        handleRenameLecture={handleRenameLecture}
         currentTheme={currentTheme}
       />
 

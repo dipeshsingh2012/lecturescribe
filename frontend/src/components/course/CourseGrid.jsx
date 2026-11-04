@@ -20,19 +20,23 @@ import {
   Play,
   Trash2,
   AlertTriangle,
-  Pin
+  Pin,
+  Edit3
 } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/formatters';
+import CourseRenameDialog from './CourseRenameDialog';
 
 export default function CourseGrid({
   filteredCourses = [],
   handleSelectCourse,
   handleDeleteCourse,
+  handleRenameCourse,
   handleTogglePin,
   librarySearch = '',
   currentTheme
 }) {
   const [courseToDelete, setCourseToDelete] = useState(null);
+  const [courseToRename, setCourseToRename] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleConfirmDelete = async () => {
@@ -190,6 +194,29 @@ export default function CourseGrid({
                     </IconButton>
                   </Tooltip>
                 )}
+                {typeof handleRenameCourse === 'function' && (
+                  <Tooltip title={`Edit ${course.course_name}`} arrow>
+                    <IconButton
+                      size="small"
+                      aria-label={`Edit ${course.course_name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCourseToRename(course);
+                      }}
+                      sx={{
+                        color: currentTheme.palette.textSecondary,
+                        p: 0.6,
+                        borderRadius: 1.5,
+                        '&:hover': {
+                          color: currentTheme.palette.primary,
+                          bgcolor: 'var(--highlight-bg)'
+                        }
+                      }}
+                    >
+                      <Edit3 size={15} />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 {typeof handleDeleteCourse === 'function' && (
                   <Tooltip title="Delete Course" arrow>
                     <IconButton
@@ -319,6 +346,15 @@ export default function CourseGrid({
           </Card>
         ))}
       </Box>
+
+      {/* Course Rename Dialog */}
+      <CourseRenameDialog
+        open={Boolean(courseToRename)}
+        onClose={() => setCourseToRename(null)}
+        course={courseToRename}
+        onRename={handleRenameCourse}
+        currentTheme={currentTheme}
+      />
 
       <Dialog
         open={Boolean(courseToDelete)}

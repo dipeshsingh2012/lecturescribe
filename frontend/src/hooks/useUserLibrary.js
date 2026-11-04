@@ -126,6 +126,139 @@ export function useUserLibrary(userEmail) {
     return false;
   };
 
+  const handleRenameCourse = async (courseIdentifier, newName) => {
+    if (!courseIdentifier || !newName) return false;
+    const trimmedNewName = newName.trim();
+    if (!trimmedNewName) return false;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseIdentifier)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          new_name: trimmedNewName,
+          email: userEmail || undefined
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const updatedName = data.course_name || trimmedNewName;
+        const updatedSlug = data.course_slug || normalizeCourseSlug(updatedName);
+        const oldSlug = data.old_slug || normalizeCourseSlug(courseIdentifier);
+
+        // Update userCourses state
+        setUserCourses(prev =>
+          prev.map(c => {
+            const cSlug = normalizeCourseSlug(c.course_slug || c.course_name || '');
+            if (c.course_name === courseIdentifier || cSlug === oldSlug || c.course_slug === courseIdentifier) {
+              return {
+                ...c,
+                course_name: updatedName,
+                course_slug: updatedSlug,
+                lectures: (c.lectures || []).map(lec => ({
+                  ...lec,
+                  course_name: updatedName,
+                  course_slug: updatedSlug
+                }))
+              };
+            }
+            return c;
+          })
+        );
+
+        // Update userLibrary state
+        setUserLibrary(prev =>
+          prev.map(item => {
+            const itemSlug = normalizeCourseSlug(item.course_slug || item.course_name || '');
+            if (item.course_name === courseIdentifier || itemSlug === oldSlug) {
+              return {
+                ...item,
+                course_name: updatedName,
+                course_slug: updatedSlug
+              };
+            }
+            return item;
+          })
+        );
+
+        // Update pinned courses if the old slug was pinned
+        setPinnedCourses(prev =>
+          prev.map(slug => (slug === oldSlug ? updatedSlug : slug))
+        );
+
+        return data;
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to rename course");
+      }
+    } catch (err) {
+      console.warn("Failed to rename course:", err);
+      throw err;
+    }
+  };
+
+  const handleRenameLecture = async (videoId, newTitle) => {
+    if (!videoId || !newTitle) return false;
+    const trimmedNewTitle = newTitle.trim();
+    if (!trimmedNewTitle) return false;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/videos/${encodeURIComponent(videoId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: trimmedNewTitle,
+          email: userEmail || undefined
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const updatedTitle = data.title || trimmedNewTitle;
+
+        // Update userLibrary
+        setUserLibrary(prev =>
+          prev.map(item => {
+            if (String(item.video_id) === String(videoId) || String(item.id) === String(videoId)) {
+              return {
+                ...item,
+                title: updatedTitle,
+                video_title: updatedTitle
+              };
+            }
+            return item;
+          })
+        );
+
+        // Update userCourses
+        setUserCourses(prev =>
+          prev.map(c => ({
+            ...c,
+            lectures: (c.lectures || []).map(lec => {
+              if (String(lec.video_id) === String(videoId) || String(lec.id) === String(videoId)) {
+                return {
+                  ...lec,
+                  title: updatedTitle,
+                  video_title: updatedTitle
+                };
+              }
+              return lec;
+            })
+          }))
+        );
+
+        return data;
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to rename lecture");
+      }
+    } catch (err) {
+      console.warn("Failed to rename lecture:", err);
+      throw err;
+    }
+  };
+
   const handleTogglePin = async (courseIdentifier) => {
     if (!courseIdentifier) return false;
     const targetSlug = normalizeCourseSlug(courseIdentifier);
@@ -292,6 +425,8 @@ export function useUserLibrary(userEmail) {
     fetchUserLibrary,
     handleDeleteFromLibrary,
     handleDeleteCourse,
+    handleRenameCourse,
+    handleRenameLecture,
     effectiveCourses,
     filteredCourses,
     filteredLibrary

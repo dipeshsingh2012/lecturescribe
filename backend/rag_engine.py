@@ -417,6 +417,36 @@ class Llama3PineconeRAGStore:
         {
             "type": "function",
             "function": {
+                "name": "search_course_summaries",
+                "description": "Search across lecture summaries, executive overviews, key takeaways, and syllabus outlines in this course.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Topic or concept to search within course summaries"},
+                        "top_k": {"type": "integer", "description": "Maximum number of summary sections to retrieve (default 6)"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_course_slides_and_materials",
+                "description": "Search across professor slide decks, presentation bullet points, and uploaded course materials.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Topic or keyword to find within slide decks"},
+                        "top_k": {"type": "integer", "description": "Maximum number of slide excerpts to retrieve (default 6)"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "get_course_outline_and_lectures",
                 "description": "Get the complete list of lectures in this course, their sequence, titles, and IDs.",
                 "parameters": {
@@ -842,6 +872,37 @@ class Llama3PineconeRAGStore:
                 except Exception as pg_err:
                     print(f"⚠️ [Course Tutor PostgreSQL Cues Search Notice]: {pg_err}")
 
+            # 3. Memory cache fallback
+            stop_words = {"analyze", "explain", "describe", "discuss", "what", "with", "from", "this", "that", "marks", "about", "your", "have", "does", "please", "compare", "contrast", "between", "versus"}
+            keywords = [w.lower() for w in re.findall(r'[a-zA-Z0-9_-]{3,}', query) if w.lower() not in stop_words]
+
+            if len(course_matches) < top_k:
+                for vid, mem_item in getattr(db_manager, "_memory_cache", {}).items():
+                    if isinstance(mem_item, dict):
+                        v_course = mem_item.get("course_name") or ""
+                        v_title = mem_item.get("title") or title_map.get(vid) or "Lecture"
+                        is_match = (
+                            (cname.lower() in v_course.lower() or v_course.lower() in cname.lower() or vid in video_ids or not video_ids)
+                        )
+                        if is_match:
+                            for c in mem_item.get("cues") or []:
+                                c_text = c.get("text") or ""
+                                c_lower = c_text.lower()
+                                matches_query = (query.lower() in c_lower) or any(kw in c_lower for kw in keywords[:5])
+                                if matches_query:
+                                    ts = c.get("timestamp") or "00:00"
+                                    chunk_key = (vid, ts)
+                                    if chunk_key not in seen_chunks:
+                                        seen_chunks.add(chunk_key)
+                                        course_matches.append({
+                                            "video_id": vid,
+                                            "video_title": v_title,
+                                            "timestamp": ts,
+                                            "text": c_text
+                                        })
+                                        if len(course_matches) >= top_k:
+                                            break
+
             # Format results and generate citations
             out = []
             for item in course_matches[:top_k]:
@@ -861,6 +922,171 @@ class Llama3PineconeRAGStore:
                     "video_id": vid_item,
                     "lecture_title": title_item,
                     "timestamp": f"[{st}]",
+                    "text": txt
+                })
+            return json.dumps(out), citations
+
+        elif tool_name == "search_course_summaries":
+            query = str(arguments.get("query", "")).strip().lower()
+            top_k = int(arguments.get("top_k", 6))
+            from backend.database import db_manager, extract_course_name, to_course_slug
+            course_details = db_manager.get_course_details(cname, user_email=user_email)
+            lectures = course_details.get("lectures", []) if course_details else []
+            video_ids = [str(l["video_id"]).strip() for l in lectures if l.get("video_id")]
+            title_map = {str(l["video_id"]).strip(): l.get("title", "Lecture") for l in lectures if l.get("video_id")}
+
+            summary_matches = []
+            seen_summaries = set()
+
+            # 1. Search PostgreSQL lecturescribe_lecture_summaries
+            try:
+                conn = db_manager._get_connection()
+                with conn:
+                    with conn.cursor() as cursor:
+                        if video_ids:
+                            cursor.execute("""
+                                SELECT s.video_id, v.title as video_title, s.summary_type, s.markdown_text, s.sections_json
+                                FROM lecturescribe_lecture_summaries s
+                                JOIN lecturescribe_videos v ON s.video_id = v.video_id
+                                WHERE s.video_id = ANY(%s)
+                                  AND (s.markdown_text ILIKE %s OR s.sections_json::text ILIKE %s)
+                                LIMIT %s;
+                            """, (video_ids, f"%{query}%", f"%{query}%", top_k * 2))
+                        else:
+                            cursor.execute("""
+                                SELECT s.video_id, v.title as video_title, s.summary_type, s.markdown_text, s.sections_json
+                                FROM lecturescribe_lecture_summaries s
+                                JOIN lecturescribe_videos v ON s.video_id = v.video_id
+                                WHERE (LOWER(v.course_name) ILIKE %s OR v.title ILIKE %s)
+                                  AND (s.markdown_text ILIKE %s OR s.sections_json::text ILIKE %s)
+                                LIMIT %s;
+                            """, (f"%{cname.lower()}%", f"%{cname}%", f"%{query}%", f"%{query}%", top_k * 2))
+                        rows = cursor.fetchall() or []
+                        for r in rows:
+                            vid = str(r["video_id"]).strip()
+                            vtitle = r.get("video_title") or title_map.get(vid) or "Lecture"
+                            md = r.get("markdown_text") or ""
+                            paragraphs = [p.strip() for p in md.split("\n\n") if p.strip()]
+                            matched_p = [p for p in paragraphs if query in p.lower()]
+                            text_snippet = "\n\n".join(matched_p[:2]) if matched_p else md[:600]
+                            if (vid, "summary") not in seen_summaries:
+                                seen_summaries.add((vid, "summary"))
+                                summary_matches.append({
+                                    "video_id": vid,
+                                    "lecture_title": vtitle,
+                                    "source": "Lecture Summary",
+                                    "text": text_snippet
+                                })
+            except Exception as e_sum:
+                print(f"⚠️ [Course Tutor Summary Search Notice]: {e_sum}")
+
+            # 2. Check memory cache summaries
+            if len(summary_matches) < top_k:
+                stop_words = {"analyze", "explain", "describe", "discuss", "what", "with", "from", "this", "that", "marks", "about", "your", "have", "does", "please", "compare", "contrast", "between", "versus"}
+                keywords = [w.lower() for w in re.findall(r'[a-zA-Z0-9_-]{3,}', query) if w.lower() not in stop_words]
+                for vid, mem_item in getattr(db_manager, "_memory_cache", {}).items():
+                    if isinstance(mem_item, dict):
+                        v_course = mem_item.get("course_name") or ""
+                        if cname.lower() in v_course.lower() or v_course.lower() in cname.lower() or vid in video_ids or not video_ids:
+                            vtitle = mem_item.get("title") or title_map.get(vid) or "Lecture"
+                            md = mem_item.get("summaryMarkdown") or ""
+                            md_lower = md.lower()
+                            matches_sum = (query in md_lower or not query) or any(kw in md_lower for kw in keywords[:5])
+                            if matches_sum and (vid, "summary") not in seen_summaries:
+                                seen_summaries.add((vid, "summary"))
+                                summary_matches.append({
+                                    "video_id": vid,
+                                    "lecture_title": vtitle,
+                                    "source": "Lecture Summary",
+                                    "text": md[:600]
+                                })
+
+            # Format citations
+            out = []
+            for item in summary_matches[:top_k]:
+                vid_item = item["video_id"]
+                title_item = item["lecture_title"]
+                txt = item["text"]
+                citations.append({
+                    "video_id": vid_item,
+                    "video_title": title_item,
+                    "timestamp": "Summary",
+                    "text": f"[{title_item} · Summary] {txt[:120]}...",
+                    "cross_lecture": True
+                })
+                out.append({
+                    "video_id": vid_item,
+                    "lecture_title": title_item,
+                    "section": "Summary / Key Takeaways",
+                    "text": txt
+                })
+            return json.dumps(out), citations
+
+        elif tool_name == "search_course_slides_and_materials":
+            query = str(arguments.get("query", "")).strip().lower()
+            top_k = int(arguments.get("top_k", 6))
+            from backend.database import db_manager
+            from backend.slide_parser import parse_slide_document
+            from backend.gcs_storage import gcs_storage_service
+
+            resources = db_manager.get_course_resources(cname) or []
+            slide_matches = []
+
+            for res in resources:
+                ftype = (res.get("file_type") or "").lower()
+                fname = res.get("filename") or ""
+                blob_name = res.get("blob_name") or ""
+                title_res = res.get("title") or fname
+
+                # If resource title or filename matches directly
+                if query in title_res.lower() or query in fname.lower():
+                    slide_matches.append({
+                        "resource_id": res.get("id"),
+                        "title": title_res,
+                        "slide_number": 1,
+                        "text": f"Course Resource: {title_res} ({ftype})"
+                    })
+
+                # If slide/doc format and blob exists, inspect slides
+                if blob_name and ftype in ["pdf", "pptx", "ppt"]:
+                    try:
+                        slide_bytes = gcs_storage_service.get_blob_bytes(blob_name)
+                        if slide_bytes:
+                            parsed_slides = parse_slide_document(slide_bytes, filename=fname)
+                            for s in parsed_slides:
+                                s_text = s.get("text", "")
+                                s_title = s.get("title", "")
+                                s_notes = s.get("notes", "")
+                                if query in s_text.lower() or query in s_title.lower() or query in s_notes.lower():
+                                    slide_matches.append({
+                                        "resource_id": res.get("id"),
+                                        "title": title_res,
+                                        "slide_number": s.get("slide_number", 1),
+                                        "text": f"Slide {s.get('slide_number')}: {s_title}\n{s_text[:400]}"
+                                    })
+                                    if len(slide_matches) >= top_k:
+                                        break
+                    except Exception as e_slide:
+                        print(f"⚠️ [Course Tutor Slide Search Notice]: {e_slide}")
+
+                if len(slide_matches) >= top_k:
+                    break
+
+            out = []
+            for item in slide_matches[:top_k]:
+                t_item = item["title"]
+                sl_num = item.get("slide_number", 1)
+                txt = item["text"]
+                citations.append({
+                    "video_id": f"slide-{item.get('resource_id')}",
+                    "video_title": f"{t_item} (Slide {sl_num})",
+                    "timestamp": f"Slide {sl_num}",
+                    "text": f"[{t_item} · Slide {sl_num}] {txt[:120]}...",
+                    "cross_lecture": True
+                })
+                out.append({
+                    "deck_title": t_item,
+                    "slide_number": sl_num,
                     "text": txt
                 })
             return json.dumps(out), citations
@@ -1355,6 +1581,18 @@ class Llama3PineconeRAGStore:
             user_email=user_email
         )
 
+        # Pre-fetch course lecture summaries and core concepts
+        sum_res, sum_cit = "", []
+        try:
+            sum_res, sum_cit = self.execute_course_tool(
+                "search_course_summaries",
+                {"query": query, "top_k": 4},
+                cname,
+                user_email=user_email
+            )
+        except Exception as e_sum:
+            print(f"⚠️ [Course Tutor Pre-fetch Summaries Notice] {e_sum}")
+
         is_course_holistic = self.is_holistic_query(query)
         course_outline_res = ""
         course_outline_cit = []
@@ -1374,17 +1612,19 @@ class Llama3PineconeRAGStore:
             "Your mission is to help students synthesize knowledge across all lectures in the course, "
             "master core concepts, compare topics across lectures, and prepare thoroughly for academic exams.\n\n"
             "Strict Instructions:\n"
-            "1. Ground your answers strictly and directly in the course lecture transcripts and materials. "
-            "When referencing or explaining a concept from a lecture, cite the lecture title and timestamp: "
-            "e.g. `[Lecture Title · MM:SS]` or in **[Lecture Title]** at `[MM:SS]`.\n"
-            "2. Always format mathematical formulas and equations using standard LaTeX notation: "
+            "1. Ground your answers strictly and directly in the course lecture transcripts, lecture summaries, and professor slides. "
+            "When referencing or explaining a concept from a lecture, cite the source: "
+            "e.g. `[Lecture Title · MM:SS]`, `[Lecture Title · Summary]`, or `[Deck Name · Slide X]`.\n"
+            "2. When answering subjective, descriptive, or 10-mark exam questions, provide a comprehensive, academically structured answer with clear headings: "
+            "Conceptual Definition & Foundations, Methodological Procedure / Design, Real-World Research Examples, and Threats to Validity / Limitations.\n"
+            "3. Always format mathematical formulas and equations using standard LaTeX notation: "
             "single dollar signs for inline math ($...$) and double dollar signs ($$...$$) for standalone block equations. "
             "Always use `_` for subscripts (for example, $\\hat{\\beta}_{1}$), never `*`; wrap every equation in the appropriate dollar-sign delimiters and do not put display equations inside square brackets. "
             "When using math expressions inside markdown tables, never use raw unescaped pipe `|` characters (e.g. use `\\mid` or `\\vert` in set-builder notation like `\\{ x \\mid P(x) \\}`).\n"
-            "3. If a student asks to compare topics, synthesize the similarities and differences across the lectures.\n"
-            "4. If a concept was NOT covered in any lecture or material in this course, explicitly state that it was not covered in the course syllabus or lecture recordings. Do not generate or substitute external unverified information.\n"
-            "5. Maintain an encouraging, academically rigorous, clear, and structured tone (use markdown sections and bullet points).\n"
-            "6. NEVER output raw bracketed function tokens like '【search_course_transcripts】' or JSON objects."
+            "4. If a student asks to compare topics, synthesize the similarities and differences across the lectures.\n"
+            "5. If a concept was NOT covered in any lecture or material in this course, explicitly state that it was not covered in the course syllabus or lecture recordings. Do not generate or substitute external unverified information.\n"
+            "6. Maintain an encouraging, academically rigorous, clear, and structured tone (use markdown sections and bullet points).\n"
+            "7. NEVER output raw bracketed function tokens like '【search_course_transcripts】' or JSON objects."
         )
 
         active_tools = self.COURSE_AGENT_TOOLS
@@ -1411,6 +1651,12 @@ class Llama3PineconeRAGStore:
                     "content": f"Relevant course lecture excerpts retrieved for this query:\n{pre_res}"
                 })
 
+            if sum_res and sum_res != "[]":
+                messages.append({
+                    "role": "system",
+                    "content": f"Relevant course lecture summaries and core concepts:\n{sum_res}"
+                })
+
             # Append recent chat history if available
             if chat_history:
                 for h in chat_history[-6:]:
@@ -1422,6 +1668,8 @@ class Llama3PineconeRAGStore:
             messages.append({"role": "user", "content": query})
 
             all_citations = list(pre_cit)
+            if sum_cit:
+                all_citations.extend(sum_cit)
             if course_outline_cit:
                 all_citations.extend(course_outline_cit)
             max_steps = 3

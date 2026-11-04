@@ -1,5 +1,5 @@
 // LearnScribe LMS Service Worker
-const CACHE_NAME = 'learnscribe-lms-v1';
+const CACHE_NAME = 'learnscribe-lms-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -8,9 +8,6 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
-  );
   self.skipWaiting();
 });
 
@@ -29,9 +26,27 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
+  if (!req || !req.url) return;
   const url = new URL(req.url);
 
-  // Stale-While-Revalidate for read-only GET API endpoints
+  // 1. Navigation / Document requests: ALWAYS Network-First with cache fallback
+  // This prevents stale index.html from requesting non-existent hashed bundles
+  if (req.mode === 'navigate' || req.destination === 'document' || url.pathname === '/' || url.pathname === '/index.html') {
+    event.respondWith(
+      fetch(req)
+        .then((networkRes) => {
+          if (networkRes && networkRes.status === 200) {
+            const resClone = networkRes.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone));
+          }
+          return networkRes;
+        })
+        .catch(() => caches.match(req).then((cached) => cached || caches.match('/index.html') || caches.match('/')))
+    );
+    return;
+  }
+
+  // 2. Stale-While-Revalidate for read-only GET API endpoints
   if (
     req.method === 'GET' &&
     (url.pathname.startsWith('/api/course/') ||
@@ -55,11 +70,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache first for local static assets (scripts, styles, images)
-  if (req.method === 'GET' && (url.origin === self.location.origin)) {
+  // 3. Static hashed assets (scripts, styles) under /assets/
+  if (req.method === 'GET' && url.origin === self.location.origin) {
+    if (url.pathname.startsWith('/assets/')) {
+      event.respondWith(
+        caches.match(req).then((cached) => {
+          if (cached) return cached;
+          return fetch(req).then((networkRes) => {
+            if (networkRes && networkRes.status === 200) {
+              const resClone = networkRes.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone));
+            }
+            return networkRes;
+          });
+        })
+      );
+      return;
+    }
+
+    // Default network-first for other origin requests
     event.respondWith(
-      caches.match(req).then((cached) => cached || fetch(req))
+      fetch(req).catch(() => caches.match(req))
     );
   }
 });
-

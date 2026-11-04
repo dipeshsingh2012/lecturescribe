@@ -121,6 +121,7 @@ export default function CourseLectures({
   handleTranscribe,
   handleDeleteFromLibrary,
   handleRenameLecture,
+  handleToggleLectureCompletion,
   handleClearCourse,
   selectedCourse,
   librarySearch = '',
@@ -399,10 +400,30 @@ export default function CourseLectures({
             />
           </Box>
 
-          <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, fontSize: '0.74rem' }}>
-            {completedLectures} of {totalLectures} {totalLectures === 1 ? 'lecture' : 'lectures'} completed
-            {inProgressLectures > 0 ? ` • ${inProgressLectures} in progress` : ''}
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+            <Typography variant="caption" sx={{ color: currentTheme.palette.textSecondary, fontSize: '0.74rem' }}>
+              {completedLectures} of {totalLectures} {totalLectures === 1 ? 'lecture' : 'lectures'} completed
+              {inProgressLectures > 0 ? ` • ${inProgressLectures} in progress` : ''}
+            </Typography>
+            {completedLectures === totalLectures && totalLectures > 0 && (
+              <Chip
+                size="small"
+                icon={<CheckCircle2 size={13} color="#10b981" />}
+                label="Course Completed"
+                data-testid="course-completed-badge"
+                sx={{
+                  height: 20,
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  bgcolor: 'rgba(16, 185, 129, 0.12)',
+                  color: '#10b981',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  '& .MuiChip-label': { px: 0.8 },
+                  '& .MuiChip-icon': { ml: 0.5, mr: -0.2 }
+                }}
+              />
+            )}
+          </Box>
         </Box>
 
         {/* Section 2: Key Dates & Next Deadline */}
@@ -893,35 +914,82 @@ export default function CourseLectures({
                   minWidth: 0,
                   boxSizing: 'border-box',
                   bgcolor: currentTheme.palette.cardBg,
-                  border: `1px solid ${currentTheme.palette.cardBorder}`,
+                  border: isCompleted
+                    ? '1.5px solid rgba(16, 185, 129, 0.4)'
+                    : `1px solid ${currentTheme.palette.cardBorder}`,
                   borderRadius: 3,
-                  boxShadow: currentTheme.palette.cardShadow,
+                  boxShadow: isCompleted
+                    ? '0 2px 10px rgba(16, 185, 129, 0.08)'
+                    : currentTheme.palette.cardShadow,
                   transition: 'all 0.2s ease-in-out',
                   display: 'flex',
                   flexDirection: 'column',
                   cursor: 'pointer',
                   '&:hover': {
                     transform: 'translateY(-4px)',
-                    borderColor: currentTheme.palette.primary,
+                    borderColor: isCompleted ? '#10b981' : currentTheme.palette.primary,
                     boxShadow: currentTheme.palette.cardHoverShadow
                   }
                 }}
               >
                 <CardContent sx={{ flex: 1, p: 2.5, display: 'flex', flexDirection: 'column' }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-                    <Box sx={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: '8px',
-                      bgcolor: 'var(--highlight-bg)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      border: '1px solid var(--badge-border)'
-                    }}>
-                      <Video size={16} color={currentTheme.palette.primary} />
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: '8px',
+                        bgcolor: isCompleted ? 'rgba(16, 185, 129, 0.12)' : 'var(--highlight-bg)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: isCompleted ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid var(--badge-border)'
+                      }}>
+                        {isCompleted ? <CheckCircle2 size={16} color="#10b981" /> : <Video size={16} color={currentTheme.palette.primary} />}
+                      </Box>
+                      {isCompleted && (
+                        <Chip
+                          size="small"
+                          label="Completed"
+                          sx={{
+                            height: 20,
+                            fontSize: '0.66rem',
+                            fontWeight: 700,
+                            bgcolor: 'rgba(16, 185, 129, 0.12)',
+                            color: '#10b981',
+                            border: '1px solid rgba(16, 185, 129, 0.25)',
+                            '& .MuiChip-label': { px: 0.8 }
+                          }}
+                        />
+                      )}
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {typeof handleToggleLectureCompletion === 'function' && (
+                        <Tooltip title={isCompleted ? "Mark as Incomplete" : "Mark as Completed"}>
+                          <IconButton
+                            size="small"
+                            aria-label={isCompleted ? "Mark as Incomplete" : "Mark as Completed"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleLectureCompletion(item.video_id, isCompleted);
+                            }}
+                            sx={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: '6px',
+                              color: isCompleted ? '#10b981' : '#64748b',
+                              bgcolor: isCompleted ? 'rgba(16, 185, 129, 0.1)' : 'transparent',
+                              border: isCompleted ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid transparent',
+                              '&:hover': {
+                                color: isCompleted ? '#059669' : '#10b981',
+                                bgcolor: 'rgba(16, 185, 129, 0.15)'
+                              }
+                            }}
+                          >
+                            <CheckCircle2 size={15} />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       {typeof handleRenameLecture === 'function' && (
                         <Tooltip title="Rename Lecture">
                           <IconButton

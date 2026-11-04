@@ -42,9 +42,19 @@ export const getLectureDate = (item) => {
 
 export const getLectureProgress = (item) => {
   if (!item) return 0;
+  if (isLectureCompleted(item)) return 100;
   const prog = item.progress;
-  const rawPct = prog?.progress_percent;
-  if (typeof rawPct === 'number' && !isNaN(rawPct)) return rawPct;
+  if (typeof prog === 'number' && !isNaN(prog)) return Math.min(100, Math.max(0, prog));
+  const rawPct = prog?.progress_percent ?? item.progress_percent ?? item.progressPercent;
+  if (typeof rawPct === 'number' && !isNaN(rawPct)) return Math.min(100, Math.max(0, rawPct));
+
+  // Try calculating from seconds
+  const lastSec = prog?.last_seconds ?? item.last_seconds;
+  const durSec = prog?.duration_seconds || item.total_duration_seconds || item.duration_seconds || (typeof item.duration === 'string' ? parseTimestampToSeconds(item.duration) : 0);
+  if (typeof lastSec === 'number' && typeof durSec === 'number' && durSec > 0) {
+    return Math.min(100, Math.max(0, Math.round((lastSec / durSec) * 100)));
+  }
+
   if (typeof prog?.last_seconds === 'number' && prog.last_seconds > 2) return 5;
   if (prog?.last_timestamp && prog.last_timestamp !== '00:00' && prog.last_timestamp !== '0:00') return 5;
   return 0;
@@ -62,8 +72,25 @@ export const getLectureDuration = (item) => {
 };
 
 export const isLectureCompleted = (item) => {
-  const rawPct = item?.progress?.progress_percent;
-  return typeof rawPct === 'number' && !isNaN(rawPct) && rawPct >= 90;
+  if (!item) return false;
+  if (item.is_completed === true || item.completed === true) return true;
+  const prog = item.progress;
+  if (prog === true) return true;
+  if (typeof prog === 'number' && !isNaN(prog) && prog >= 85) return true;
+  if (prog?.is_completed === true || prog?.completed === true) return true;
+
+  const rawPct = prog?.progress_percent ?? item.progress_percent ?? item.progressPercent;
+  if (typeof rawPct === 'number' && !isNaN(rawPct) && rawPct >= 85) return true;
+
+  // Check last_seconds vs duration
+  const lastSec = prog?.last_seconds ?? item.last_seconds;
+  const durSec = prog?.duration_seconds || item.total_duration_seconds || item.duration_seconds || (typeof item.duration === 'string' ? parseTimestampToSeconds(item.duration) : 0);
+  if (typeof lastSec === 'number' && typeof durSec === 'number' && durSec > 0) {
+    if (lastSec >= durSec * 0.85 || (durSec - lastSec <= 30 && durSec > 60)) {
+      return true;
+    }
+  }
+  return false;
 };
 
 export const isLectureInProgress = (item) => {

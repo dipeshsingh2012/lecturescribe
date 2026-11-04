@@ -291,6 +291,11 @@ export function useLecturePlayer(activeData, userEmail = null) {
       durationRef.current = dur;
     }
 
+    const calculatedPct = dur > 0
+      ? (safeSec >= dur * 0.85 ? 100 : Math.min(100, Math.max(0, Math.round((safeSec / dur) * 100))))
+      : (force ? 100 : 0);
+    const isDone = calculatedPct >= 85 || force;
+
     try {
       const p = fetch(`${API_BASE}/api/progress/lecture`, {
         method: 'POST',
@@ -300,7 +305,7 @@ export function useLecturePlayer(activeData, userEmail = null) {
           video_id: activeData.videoId,
           user_email: effectiveUserEmail || 'anonymous',
           last_timestamp: timestampStr,
-          last_seconds: safeSec,
+          last_seconds: isDone && dur > 0 ? dur : safeSec,
           duration_seconds: dur,
           active_cue_idx: safeIdx
         })
@@ -315,9 +320,12 @@ export function useLecturePlayer(activeData, userEmail = null) {
             video_id: activeData.videoId,
             progress: {
               last_timestamp: timestampStr,
-              last_seconds: safeSec,
+              last_seconds: isDone && dur > 0 ? dur : safeSec,
               duration_seconds: dur,
-              active_cue_idx: safeIdx
+              progress_percent: isDone ? 100 : calculatedPct,
+              active_cue_idx: safeIdx,
+              is_completed: isDone,
+              completed: isDone
             }
           }
         }));
@@ -523,11 +531,22 @@ export function useLecturePlayer(activeData, userEmail = null) {
           }
         };
 
+        const handleEnded = () => {
+          const dur = durationRef.current || (currentMediaEl?.duration > 0 ? currentMediaEl.duration : currentSecRef.current);
+          if (dur > 0) {
+            currentSecRef.current = dur;
+            updateCueFromSeconds(dur);
+            persistProgressToDb(dur, activeCueIdxRef.current, true);
+          }
+          setIsPlaying(false);
+        };
+
         player.on('timeupdate', handleTimeChange);
         player.on('seeking', handleTimeChange);
         player.on('seeked', handlePauseOrSeeked);
         player.on('play', handleTimeChange);
         player.on('pause', handlePauseOrSeeked);
+        player.on('ended', handleEnded);
 
         // Instantly re-sync cue with current video playback time when window regains focus or tab becomes visible,
         // and instantly persist progress when tab is hidden or page is about to unload
@@ -664,14 +683,22 @@ export function useLecturePlayer(activeData, userEmail = null) {
     if (!el || el.tagName !== 'VIDEO') return;
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
+    const onEnded = () => {
+      setIsPlaying(false);
+      const dur = el.duration && !isNaN(el.duration) && el.duration > 0 ? el.duration : currentSecRef.current;
+      if (dur > 0) {
+        currentSecRef.current = dur;
+        persistProgressToDb(dur, activeCueIdxRef.current, true);
+      }
+    };
     el.addEventListener('play', onPlay);
     el.addEventListener('pause', onPause);
-    el.addEventListener('ended', onPause);
+    el.addEventListener('ended', onEnded);
     setIsPlaying(!el.paused);
     return () => {
       el.removeEventListener('play', onPlay);
       el.removeEventListener('pause', onPause);
-      el.removeEventListener('ended', onPause);
+      el.removeEventListener('ended', onEnded);
     };
   }, [activeData?.videoId, mediaMounted]);
 

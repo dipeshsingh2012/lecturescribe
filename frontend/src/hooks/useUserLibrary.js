@@ -305,6 +305,109 @@ export function useUserLibrary(userEmail) {
     }
   }, [userEmail]);
 
+  // Synchronize local library and course card progress with player events
+  useEffect(() => {
+    const handleProgressUpdated = (e) => {
+      const vid = e.detail?.video_id;
+      const newProg = e.detail?.progress;
+      if (!vid || !newProg) return;
+
+      setUserLibrary((prev) =>
+        prev.map((item) => {
+          if (String(item.video_id) === String(vid) || String(item.videoId) === String(vid)) {
+            return {
+              ...item,
+              progress: { ...(item.progress || {}), ...newProg }
+            };
+          }
+          return item;
+        })
+      );
+
+      setUserCourses((prev) =>
+        prev.map((course) => ({
+          ...course,
+          lectures: (course.lectures || []).map((lec) => {
+            if (String(lec.video_id) === String(vid) || String(lec.videoId) === String(vid)) {
+              return {
+                ...lec,
+                progress: { ...(lec.progress || {}), ...newProg }
+              };
+            }
+            return lec;
+          })
+        }))
+      );
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('lecturescribe:progressupdated', handleProgressUpdated);
+      return () => {
+        window.removeEventListener('lecturescribe:progressupdated', handleProgressUpdated);
+      };
+    }
+  }, []);
+
+  const handleToggleLectureCompletion = async (videoId, currentCompleted) => {
+    if (!videoId) return false;
+    const nextCompleted = !currentCompleted;
+
+    const optProg = {
+      progress_percent: nextCompleted ? 100 : 0,
+      last_timestamp: nextCompleted ? 'Completed' : '00:00',
+      last_seconds: nextCompleted ? 3600 : 0,
+      duration_seconds: 3600,
+      is_completed: nextCompleted,
+      completed: nextCompleted
+    };
+
+    setUserLibrary((prev) =>
+      prev.map((item) => {
+        if (String(item.video_id) === String(videoId) || String(item.videoId) === String(videoId)) {
+          return { ...item, progress: optProg };
+        }
+        return item;
+      })
+    );
+
+    setUserCourses((prev) =>
+      prev.map((course) => ({
+        ...course,
+        lectures: (course.lectures || []).map((lec) => {
+          if (String(lec.video_id) === String(videoId) || String(lec.videoId) === String(videoId)) {
+            return { ...lec, progress: optProg };
+          }
+          return lec;
+        })
+      }))
+    );
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('lecturescribe:progressupdated', {
+        detail: { video_id: videoId, progress: optProg }
+      }));
+    }
+
+    try {
+      await fetch(`${API_BASE}/api/progress/lecture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: videoId,
+          user_email: userEmail || 'anonymous',
+          last_timestamp: nextCompleted ? 'Completed' : '00:00',
+          last_seconds: nextCompleted ? 3600 : 0,
+          duration_seconds: 3600,
+          active_cue_idx: 0
+        })
+      });
+      return true;
+    } catch (err) {
+      console.warn("Failed to persist lecture completion toggle:", err);
+      return false;
+    }
+  };
+
   const effectiveCourses = useMemo(() => {
     // Build lookup of lecture progress from userLibrary
     const libProgressMap = {};
@@ -322,7 +425,11 @@ export function useUserLibrary(userEmail) {
           ...course,
           lectures: course.lectures.map(lec => {
             const vid = String(lec.video_id || lec.videoId || '');
-            const prog = lec.progress || libProgressMap[vid];
+            const libProg = libProgressMap[vid];
+            const lecProg = lec.progress;
+            const prog = (libProg && (libProg.progress_percent || 0) >= (lecProg?.progress_percent || 0))
+              ? libProg
+              : (lecProg || libProg);
             return prog ? { ...lec, progress: prog } : lec;
           })
         };
@@ -427,6 +534,7 @@ export function useUserLibrary(userEmail) {
     handleDeleteCourse,
     handleRenameCourse,
     handleRenameLecture,
+    handleToggleLectureCompletion,
     effectiveCourses,
     filteredCourses,
     filteredLibrary

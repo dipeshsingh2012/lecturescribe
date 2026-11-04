@@ -275,17 +275,18 @@ export default function MarkdownWithTimestamps({
       // In markdown tables, unescaped | acts as a column delimiter before math is parsed,
       // which tears equations apart across table cells. In LaTeX / KaTeX, {\vert} renders
       // as | without colliding with markdown table syntax.
+      // Uses lookbehind-free regex for full Safari iOS < 16.4 and mobile compatibility.
       .replace(/\\([(\[])([\s\S]*?)\\([)\]])/g, (_match, open, math, close) => {
-        const fixedMath = math.replace(/(?<!\\)\|/g, '{\\vert}');
+        const fixedMath = math.replace(/(\\*)(\|)/g, (m, slashes) => (slashes.length % 2 === 1 ? m : `${slashes}{\\vert}`));
         return `\\${open}${fixedMath}\\${close}`;
       })
       .replace(/\$\$([\s\S]*?)\$\$/g, (_match, math) => {
-        const fixedMath = math.replace(/(?<!\\)\|/g, '{\\vert}');
+        const fixedMath = math.replace(/(\\*)(\|)/g, (m, slashes) => (slashes.length % 2 === 1 ? m : `${slashes}{\\vert}`));
         return `$$${fixedMath}$$`;
       })
       // Also protect set-builder pipes \{ ... | ... \} or \left\{ ... | ... \right\} inside inline $...$
       .replace(/\$([^\n$]*?\\(?:\{|left\\{)[\s\S]*?\\(?:\}|right\\\})[^\n$]*?)\$/g, (_match, math) => {
-        const fixedMath = math.replace(/(?<!\\)\|/g, '{\\vert}');
+        const fixedMath = math.replace(/(\\*)(\|)/g, (m, slashes) => (slashes.length % 2 === 1 ? m : `${slashes}{\\vert}`));
         return `$${fixedMath}$`;
       })
       // Normalize LaTeX display math \[ ... \] to $$ ... $$

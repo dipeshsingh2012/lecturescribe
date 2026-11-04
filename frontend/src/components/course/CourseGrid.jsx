@@ -21,9 +21,11 @@ import {
   Trash2,
   AlertTriangle,
   Pin,
-  Edit3
+  Edit3,
+  CheckCircle2
 } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/formatters';
+import { isLectureCompleted, getLectureProgress } from '../../utils/lectureSort';
 import CourseRenameDialog from './CourseRenameDialog';
 
 export default function CourseGrid({
@@ -94,7 +96,13 @@ export default function CourseGrid({
           alignItems: 'stretch'
         }}
       >
-        {filteredCourses.map((course) => (
+        {filteredCourses.map((course) => {
+          const totalLecs = course.lecture_count || (course.lectures || []).length || 0;
+          const completedLecs = (course.lectures || []).filter(isLectureCompleted).length;
+          const isCourseCompleted = totalLecs > 0 && completedLecs >= totalLecs;
+          const courseProgressPct = totalLecs > 0 ? Math.round((completedLecs / totalLecs) * 100) : 0;
+
+          return (
           <Card
             key={course.course_name}
             onClick={() => handleSelectCourse(course.course_name)}
@@ -105,9 +113,11 @@ export default function CourseGrid({
               boxSizing: 'border-box',
               cursor: 'pointer',
               bgcolor: currentTheme.palette.cardBg,
-              border: course.is_pinned
-                ? `1.5px solid ${currentTheme.palette.primary}`
-                : `1px solid ${currentTheme.palette.cardBorder}`,
+              border: isCourseCompleted
+                ? '1.5px solid #10b981'
+                : (course.is_pinned
+                  ? `1.5px solid ${currentTheme.palette.primary}`
+                  : `1px solid ${currentTheme.palette.cardBorder}`),
               borderRadius: 3,
               boxShadow: currentTheme.palette.cardShadow,
               transition: 'all 0.2s ease-in-out',
@@ -116,7 +126,7 @@ export default function CourseGrid({
               p: 2.5,
               '&:hover': {
                 transform: 'translateY(-4px)',
-                borderColor: currentTheme.palette.primary,
+                borderColor: isCourseCompleted ? '#10b981' : currentTheme.palette.primary,
                 boxShadow: currentTheme.palette.cardHoverShadow
               }
             }}
@@ -126,15 +136,47 @@ export default function CourseGrid({
                 width: 44,
                 height: 44,
                 borderRadius: '12px',
-                bgcolor: 'var(--highlight-bg)',
+                bgcolor: isCourseCompleted ? 'rgba(16, 185, 129, 0.12)' : 'var(--highlight-bg)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                border: '1px solid rgba(0, 117, 237, 0.2)'
+                border: isCourseCompleted ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(0, 117, 237, 0.2)'
               }}>
-                <BookOpen size={22} color={currentTheme.palette.primary} />
+                {isCourseCompleted ? (
+                  <CheckCircle2 size={22} color="#10b981" />
+                ) : (
+                  <BookOpen size={22} color={currentTheme.palette.primary} />
+                )}
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                {isCourseCompleted ? (
+                  <Chip
+                    icon={<CheckCircle2 size={13} color="#10b981" />}
+                    label="Completed"
+                    size="small"
+                    sx={{
+                      fontWeight: 800,
+                      fontSize: '0.72rem',
+                      height: 24,
+                      bgcolor: 'rgba(16, 185, 129, 0.12)',
+                      color: '#10b981',
+                      border: '1px solid rgba(16, 185, 129, 0.3)'
+                    }}
+                  />
+                ) : completedLecs > 0 ? (
+                  <Chip
+                    label={`${completedLecs}/${totalLecs} Done (${courseProgressPct}%)`}
+                    size="small"
+                    sx={{
+                      fontWeight: 700,
+                      fontSize: '0.72rem',
+                      height: 24,
+                      bgcolor: 'var(--highlight-bg)',
+                      color: currentTheme.palette.primary,
+                      border: `1px solid ${currentTheme.palette.badgeBorder}`
+                    }}
+                  />
+                ) : null}
                 {course.is_pinned && (
                   <Chip
                     label="Pinned"
@@ -150,7 +192,7 @@ export default function CourseGrid({
                   />
                 )}
                 <Chip
-                  label={`${course.lecture_count} ${course.lecture_count === 1 ? 'lecture' : 'lectures'}`}
+                  label={`${totalLecs} ${totalLecs === 1 ? 'lecture' : 'lectures'}`}
                   size="small"
                   sx={{
                     fontWeight: 700,
@@ -260,9 +302,53 @@ export default function CourseGrid({
               {course.course_name}
             </Typography>
 
-            <Typography variant="caption" sx={{ color: '#64748b', mb: 2, display: 'flex', alignItems: 'center', gap: 0.6 }}>
+            <Typography variant="caption" sx={{ color: '#64748b', mb: 1.5, display: 'flex', alignItems: 'center', gap: 0.6 }}>
               <Clock size={12} /> Last active: {formatRelativeTime(course.latest_viewed_at)}
             </Typography>
+
+            {/* Course Progress Bar */}
+            {totalLecs > 0 && (
+              <Box sx={{ mb: 2 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: isCourseCompleted ? '#10b981' : currentTheme.palette.textSecondary,
+                      fontWeight: 700,
+                      fontSize: '0.72rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.4
+                    }}
+                  >
+                    {isCourseCompleted && <CheckCircle2 size={12} color="#10b981" />}
+                    {isCourseCompleted
+                      ? 'Course 100% Completed'
+                      : (completedLecs > 0 ? `${completedLecs} of ${totalLecs} completed` : 'Not started')}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: isCourseCompleted ? '#10b981' : currentTheme.palette.primary,
+                      fontWeight: 800,
+                      fontSize: '0.72rem'
+                    }}
+                  >
+                    {courseProgressPct}%
+                  </Typography>
+                </Box>
+                <Box sx={{ width: '100%', height: 5, borderRadius: 2, bgcolor: 'var(--border-color)', overflow: 'hidden' }}>
+                  <Box
+                    sx={{
+                      width: `${courseProgressPct}%`,
+                      height: '100%',
+                      bgcolor: isCourseCompleted ? '#10b981' : currentTheme.palette.primary,
+                      transition: 'width 0.3s ease'
+                    }}
+                  />
+                </Box>
+              </Box>
+            )}
 
             {/* Recent Sessions Preview */}
             <Box sx={{
@@ -276,20 +362,21 @@ export default function CourseGrid({
               gap: 0.8
             }}>
               {(course.lectures || []).slice(0, 2).map((l, i) => {
+                const lCompleted = isLectureCompleted(l);
+                const lProgPct = Math.round(getLectureProgress(l));
                 const lProg = l.progress;
-                const lHasProg = Boolean(lProg && (
-                  (typeof lProg.progress_percent === 'number' && lProg.progress_percent > 0) ||
+                const lHasProg = lCompleted || (lProgPct > 0) || Boolean(lProg && (
                   (typeof lProg.last_seconds === 'number' && lProg.last_seconds > 2) ||
                   (lProg.last_timestamp && lProg.last_timestamp !== '00:00' && lProg.last_timestamp !== '0:00')
                 ));
-                const lCompleted = lProg?.progress_percent >= 90;
-                const lPct = typeof lProg?.progress_percent === 'number' && lProg.progress_percent > 0
-                  ? Math.round(lProg.progress_percent)
-                  : null;
 
                 return (
                   <Box key={l.video_id || i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Play size={11} color="var(--theme-primary)" style={{ flexShrink: 0 }} />
+                    {lCompleted ? (
+                      <CheckCircle2 size={12} color="#10b981" style={{ flexShrink: 0 }} />
+                    ) : (
+                      <Play size={11} color="var(--theme-primary)" style={{ flexShrink: 0 }} />
+                    )}
                     <Typography variant="caption" sx={{
                       color: 'var(--text-primary)',
                       fontWeight: 500,
@@ -313,7 +400,7 @@ export default function CourseGrid({
                         py: 0.2,
                         borderRadius: 1
                       }}>
-                        {lCompleted ? 'Done' : (lPct ? `${lPct}%` : (lProg.last_timestamp || 'In progress'))}
+                        {lCompleted ? 'Done' : (lProgPct > 0 ? `${lProgPct}%` : (lProg?.last_timestamp || 'In progress'))}
                       </Typography>
                     )}
                   </Box>
@@ -332,19 +419,20 @@ export default function CourseGrid({
               endIcon={<Play size={14} />}
               sx={{
                 mt: 'auto',
-                bgcolor: currentTheme.palette.primary,
+                bgcolor: isCourseCompleted ? '#10b981' : currentTheme.palette.primary,
                 color: '#ffffff',
                 fontWeight: 700,
                 textTransform: 'none',
                 py: 1,
                 borderRadius: 2,
-                '&:hover': { bgcolor: currentTheme.palette.primaryHover }
+                '&:hover': { bgcolor: isCourseCompleted ? '#059669' : currentTheme.palette.primaryHover }
               }}
             >
-              View Lectures ({course.lecture_count}) →
+              {isCourseCompleted ? `Review Course (${totalLecs}) →` : `View Lectures (${totalLecs}) →`}
             </Button>
           </Card>
-        ))}
+        );
+      })}
       </Box>
 
       {/* Course Rename Dialog */}

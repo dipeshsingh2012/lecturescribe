@@ -416,6 +416,7 @@ export default function App() {
             handleDeleteCourse={library.handleDeleteCourse}
             handleRenameCourse={library.handleRenameCourse}
             handleRenameLecture={library.handleRenameLecture}
+            handleToggleLectureCompletion={library.handleToggleLectureCompletion}
             handleTogglePin={library.handleTogglePin}
             courseNotes={courseNotes.notes}
             courseNotesLoading={courseNotes.notesLoading}

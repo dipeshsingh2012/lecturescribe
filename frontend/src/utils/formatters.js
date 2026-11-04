@@ -239,11 +239,11 @@ const CTRL_T_LATEX_RE = /\x09(woheadleftarrow|woheadrightarrow|rianglerighteq|ri
 const MATH_CTRL_T_RE = /\x09(op|ag|an|o)(?![a-zA-Z])/g;
 const MATH_CTRL_N_RE = /\x0a(parallel|exists|less|e|i|u)(?![a-zA-Z])/g;
 
-const BARE_BRACE_MACRO_RE = /(?<![\\a-zA-Z])(operatorname|textnormal|widetilde|underline|overline|widehat|textbf|textit|textrm|texttt|textsf|textup|textmd|textsc|textsl|mathcal|mathbb|mathbf|mathrm|mathit|mathsf|mathtt|dfrac|tfrac|binom|boxed|tilde|frac|sqrt|text|hat|bar|vec|dot|ddot)(?=\s*\{)/g;
+const BARE_BRACE_MACRO_RE = /(^|[^\\a-zA-Z])(operatorname|textnormal|widetilde|underline|overline|widehat|textbf|textit|textrm|texttt|textsf|textup|textmd|textsc|textsl|mathcal|mathbb|mathbf|mathrm|mathit|mathsf|mathtt|dfrac|tfrac|binom|boxed|tilde|frac|sqrt|text|hat|bar|vec|dot|ddot)(?=\s*\{)/g;
 const PROTECTED_TEXT_MACRO_RE = /(\\(?:textnormal|operatorname|textbf|textit|textrm|texttt|textsf|textup|textmd|textsc|textsl|text|mathrm|mathit|mathsf|mathtt)\s*\{[^{}]*\})/g;
-const BARE_MATH_SYMBOL_RE = /(?<![\\a-zA-Z])(varepsilon|rightarrow|Rightarrow|leftarrow|Leftarrow|vartheta|varrho|varsigma|upsilon|Upsilon|epsilon|Lambda|lambda|partial|subseteq|supseteq|approx|propto|forall|exists|implies|sigma|Sigma|theta|Theta|alpha|gamma|Gamma|delta|Delta|kappa|omega|Omega|nabla|infty|equiv|simeq|cdots|ldots|times|beta|zeta|iota|phi|Phi|chi|psi|Psi|rho|tau|eta|mu|nu|xi|Xi|pi|Pi|cdot|leq|geq|neq|iff)(?![a-zA-Z])/g;
+const BARE_MATH_SYMBOL_RE = /(^|[^\\a-zA-Z])(varepsilon|rightarrow|Rightarrow|leftarrow|Leftarrow|vartheta|varrho|varsigma|upsilon|Upsilon|epsilon|Lambda|lambda|partial|subseteq|supseteq|approx|propto|forall|exists|implies|sigma|Sigma|theta|Theta|alpha|gamma|Gamma|delta|Delta|kappa|omega|Omega|nabla|infty|equiv|simeq|cdots|ldots|times|beta|zeta|iota|phi|Phi|chi|psi|Psi|rho|tau|eta|mu|nu|xi|Xi|pi|Pi|cdot|leq|geq|neq|iff)(?![a-zA-Z])/g;
 
-const UNIFIED_MATH_SPAN_RE = /(\$\$([\s\S]+?)\$\$|(?<!\\|\$)\$(?!\$)((?:\\.|(?:\x0a(?:parallel|exists|less|e|i|u)(?![a-zA-Z]))|[^\n$])+?)(?<!\\)\$(?!\$|\d)|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\))/g;
+const UNIFIED_MATH_SPAN_RE = /(\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|(^|[^\\$])\$((?:\\.|(?:\x0a(?:parallel|exists|less|e|i|u)(?![a-zA-Z]))|[^\n$\\])+?)\$)(?!\$|\d)/g;
 
 const repairMathInner = (mathBody) => {
   if (!mathBody) return mathBody;
@@ -254,13 +254,13 @@ const repairMathInner = (mathBody) => {
   // Restore missing backslashes on brace-taking macros outside already-escaped \text{...}
   fixed = fixed
     .split(PROTECTED_TEXT_MACRO_RE)
-    .map((part, idx) => (idx % 2 === 1 ? part : part.replace(BARE_BRACE_MACRO_RE, (_m, cmd) => `\\${cmd}`)))
+    .map((part, idx) => (idx % 2 === 1 ? part : part.replace(BARE_BRACE_MACRO_RE, (_m, prefix, cmd) => `${prefix}\\${cmd}`)))
     .join('');
 
   // Re-split so newly restored \text{...} blocks are also protected from bare Greek symbol replacement
   return fixed
     .split(PROTECTED_TEXT_MACRO_RE)
-    .map((part, idx) => (idx % 2 === 1 ? part : part.replace(BARE_MATH_SYMBOL_RE, (_m, sym) => `\\${sym}`)))
+    .map((part, idx) => (idx % 2 === 1 ? part : part.replace(BARE_MATH_SYMBOL_RE, (_m, prefix, sym) => `${prefix}\\${sym}`)))
     .join('');
 };
 
@@ -275,19 +275,20 @@ export const repairCorruptedLatex = (text) => {
     .replace(CTRL_T_LATEX_RE, (_m, s) => `\\t${s}`);
 
   if (repaired.includes('$') || repaired.includes('\\(') || repaired.includes('\\[')) {
-    repaired = repaired.replace(UNIFIED_MATH_SPAN_RE, (full, _outer, displayDollar, inlineDollar, displayBracket, inlineParen) => {
+    repaired = repaired.replace(UNIFIED_MATH_SPAN_RE, (full, _outer, displayDollar, displayBracket, inlineParen, dollarPrefix, inlineDollar) => {
       if (displayDollar !== undefined) {
         return `$$${repairMathInner(displayDollar)}$$`;
-      }
-      if (inlineDollar !== undefined) {
-        const inner = repairMathInner(inlineDollar).replace(/^[ \t]+/, '').replace(/(?<!\\)[ \t]+$/, '');
-        return `$${inner}$`;
       }
       if (displayBracket !== undefined) {
         return `\\[${repairMathInner(displayBracket)}\\]`;
       }
       if (inlineParen !== undefined) {
         return `\\(${repairMathInner(inlineParen)}\\)`;
+      }
+      if (inlineDollar !== undefined) {
+        const p = dollarPrefix || '';
+        const inner = repairMathInner(inlineDollar).trim();
+        return `${p}$${inner}$`;
       }
       return full;
     });

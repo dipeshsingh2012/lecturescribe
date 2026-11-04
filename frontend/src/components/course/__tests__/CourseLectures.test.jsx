@@ -572,4 +572,45 @@ describe('CourseLectures', () => {
     expect(screen.getByRole('heading', { name: /edit lecture title/i })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: /lecture title/i })).toHaveValue('Introductory Mechanics');
   });
+
+  it('renders Course Completed badge when all lectures are finished and supports completion toggle', () => {
+    const handleToggleLectureCompletion = vi.fn();
+    const lectures = [
+      {
+        video_id: 'lec-comp-1',
+        video_title: 'Lecture 1: Intro',
+        is_completed: true,
+        progress: { progress_percent: 100 }
+      },
+      {
+        video_id: 'lec-comp-2',
+        video_title: 'Lecture 2: Advanced',
+        completed: true,
+        progress: { progress_percent: 100 }
+      }
+    ];
+
+    render(
+      <CourseLectures
+        courseLoading={false}
+        filteredCourseLectures={lectures}
+        handleTranscribe={vi.fn()}
+        handleDeleteFromLibrary={vi.fn()}
+        handleToggleLectureCompletion={handleToggleLectureCompletion}
+        selectedCourse="Introduction to Research"
+        currentTheme={mockTheme}
+      />
+    );
+
+    // Header badge
+    expect(screen.getByTestId('course-completed-badge')).toBeInTheDocument();
+    expect(screen.getByText('2 of 2 lectures completed')).toBeInTheDocument();
+
+    // Toggle completion button on first sorted lecture (Lecture 2 due to title_desc default)
+    const toggleBtns = screen.getAllByRole('button', { name: /mark as incomplete/i });
+    expect(toggleBtns.length).toBe(2);
+
+    fireEvent.click(toggleBtns[0]);
+    expect(handleToggleLectureCompletion).toHaveBeenCalledWith('lec-comp-2', true);
+  });
 });

@@ -132,6 +132,7 @@ export default function HomeView({
   handleDeleteCourse,
   handleRenameCourse,
   handleRenameLecture,
+  handleToggleLectureCompletion,
   handleTogglePin,
   courseNotes = [],
   courseNotesLoading = false,
@@ -1216,6 +1217,7 @@ export default function HomeView({
           handleTranscribe={handleTranscribe}
           handleDeleteFromLibrary={isTutor ? handleDeleteFromLibrary : null}
           handleRenameLecture={isTutor ? handleRenameLecture : null}
+          handleToggleLectureCompletion={handleToggleLectureCompletion}
           handleClearCourse={handleClearCourse}
           selectedCourse={selectedCourse}
           librarySearch={librarySearch}

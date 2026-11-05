@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import LectureWorkspace from '../LectureWorkspace';
 import { LMS_THEMES } from '../../../store/themeStore';
 
@@ -158,18 +158,22 @@ describe('LectureWorkspace', () => {
     expect(mobileNav).toBeInTheDocument();
 
     const tutorTab = screen.getByRole('tab', { name: /AI Tutor/i });
+    const summaryTab = screen.getByRole('tab', { name: /Summary/i });
     const quizTab = screen.getByRole('tab', { name: /Quiz/i });
-    const transcriptTab = screen.getByRole('tab', { name: /Transcript/i });
     const resourcesTab = screen.getByRole('tab', { name: /Resources/i });
+
+    // The search / transcript tab is hidden in mobile view
+    expect(screen.queryByRole('tab', { name: /Transcript/i })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /Search/i })).toBeNull();
 
     tutorTab.click();
     expect(setActiveTab).toHaveBeenCalledWith('tutor');
 
+    summaryTab.click();
+    expect(setActiveTab).toHaveBeenCalledWith('summary');
+
     quizTab.click();
     expect(setActiveTab).toHaveBeenCalledWith('quiz');
-
-    transcriptTab.click();
-    expect(setActiveTab).toHaveBeenCalledWith('transcript');
 
     resourcesTab.click();
     expect(setActiveTab).toHaveBeenCalledWith('resources');
@@ -271,6 +275,34 @@ describe('LectureWorkspace', () => {
 
     fireEvent.mouseUp(window);
     expect(layout).not.toHaveClass('is-resizing');
+  });
+
+  it('hides Search / Transcript tab on mobile and displays AI Tutor when activeTab is transcript', () => {
+    const origWidth = window.innerWidth;
+    try {
+      act(() => {
+        window.innerWidth = 600;
+        window.dispatchEvent(new Event('resize'));
+      });
+
+      render(<LectureWorkspace {...baseProps} activeTab="transcript" />);
+
+      // Search / Transcript tab should be completely absent on mobile
+      expect(screen.queryByRole('tab', { name: /Transcript/i })).toBeNull();
+      expect(screen.queryByRole('tab', { name: /Search/i })).toBeNull();
+
+      // Mobile active tab should be AI Tutor
+      const tutorTab = screen.getByRole('tab', { name: /AI Tutor/i });
+      expect(tutorTab).toHaveAttribute('aria-selected', 'true');
+
+      // AI Tutor should render in tool panel instead of TranscriptSearch
+      expect(screen.getByPlaceholderText(/Ask AI tutor/i)).toBeInTheDocument();
+    } finally {
+      act(() => {
+        window.innerWidth = origWidth;
+        window.dispatchEvent(new Event('resize'));
+      });
+    }
   });
 });
 

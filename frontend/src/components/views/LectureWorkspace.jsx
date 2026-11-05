@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Bot, FileText, HelpCircle, Search, Paperclip } from 'lucide-react';
+import { Bot, FileText, HelpCircle, Paperclip } from 'lucide-react';
 import LecturePlayer from '../lecture/LecturePlayer';
 import TranscriptSearch from '../lecture/TranscriptSearch';
 import AITutor from '../lecture/AITutor';
@@ -86,6 +86,24 @@ export default function LectureWorkspace({
   fetchDetailedExplanation = quiz?.fetchDetailedExplanation
 }) {
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 900;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 900);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // In mobile view (< 900px), the Search/Transcript tab is hidden because cues are enabled
+  // directly on top of the video player. If activeTab is 'transcript' while in mobile view, fallback to 'tutor'.
+  const effectiveTab = (isMobile && activeTab === 'transcript') ? 'tutor' : activeTab;
 
   // VS Code-style resizable panels
   const DEFAULT_SPLIT_RATIO = 55;
@@ -304,8 +322,8 @@ export default function LectureWorkspace({
           type="button"
           role="tab"
           aria-label="AI Tutor"
-          aria-selected={activeTab === 'tutor' || !['summary', 'transcript', 'quiz'].includes(activeTab)}
-          className={`lecture-mobile-tab-btn ${activeTab === 'tutor' || !['summary', 'transcript', 'quiz'].includes(activeTab) ? 'active' : ''}`}
+          aria-selected={effectiveTab === 'tutor' || !['summary', 'quiz', 'resources'].includes(effectiveTab)}
+          className={`lecture-mobile-tab-btn ${effectiveTab === 'tutor' || !['summary', 'quiz', 'resources'].includes(effectiveTab) ? 'active' : ''}`}
           onClick={() => typeof setActiveTab === 'function' && setActiveTab('tutor')}
         >
           <Bot size={15} />
@@ -315,8 +333,8 @@ export default function LectureWorkspace({
           type="button"
           role="tab"
           aria-label="Summary"
-          aria-selected={activeTab === 'summary'}
-          className={`lecture-mobile-tab-btn ${activeTab === 'summary' ? 'active' : ''}`}
+          aria-selected={effectiveTab === 'summary'}
+          className={`lecture-mobile-tab-btn ${effectiveTab === 'summary' ? 'active' : ''}`}
           onClick={() => typeof setActiveTab === 'function' && setActiveTab('summary')}
         >
           <FileText size={15} />
@@ -336,8 +354,8 @@ export default function LectureWorkspace({
           type="button"
           role="tab"
           aria-label="Quiz"
-          aria-selected={activeTab === 'quiz'}
-          className={`lecture-mobile-tab-btn ${activeTab === 'quiz' ? 'active' : ''}`}
+          aria-selected={effectiveTab === 'quiz'}
+          className={`lecture-mobile-tab-btn ${effectiveTab === 'quiz' ? 'active' : ''}`}
           onClick={() => typeof setActiveTab === 'function' && setActiveTab('quiz')}
         >
           <HelpCircle size={15} />
@@ -346,20 +364,9 @@ export default function LectureWorkspace({
         <button
           type="button"
           role="tab"
-          aria-label="Transcript"
-          aria-selected={activeTab === 'transcript'}
-          className={`lecture-mobile-tab-btn ${activeTab === 'transcript' ? 'active' : ''}`}
-          onClick={() => typeof setActiveTab === 'function' && setActiveTab('transcript')}
-        >
-          <Search size={14} />
-          <span>Transcript</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
           aria-label="Resources"
-          aria-selected={activeTab === 'resources'}
-          className={`lecture-mobile-tab-btn ${activeTab === 'resources' ? 'active' : ''}`}
+          aria-selected={effectiveTab === 'resources'}
+          className={`lecture-mobile-tab-btn ${effectiveTab === 'resources' ? 'active' : ''}`}
           onClick={() => typeof setActiveTab === 'function' && setActiveTab('resources')}
         >
           <Paperclip size={14} />
@@ -370,7 +377,7 @@ export default function LectureWorkspace({
       {/* Right / Tool Panel: Summary, Instant Search Drawer, Practice Quiz, Resources, or AI Tutor */}
       <div className="lecture-tool-panel">
         <ErrorBoundary title="Workspace Panel Error">
-        {activeTab === 'summary' ? (
+        {effectiveTab === 'summary' ? (
           <LectureSummary
             summaryHook={summaryHook}
             activeData={activeData}
@@ -379,7 +386,7 @@ export default function LectureWorkspace({
             isExpanded={isPanelExpanded}
             onToggleExpand={() => setIsPanelExpanded((prev) => !prev)}
           />
-        ) : activeTab === 'transcript' ? (
+        ) : effectiveTab === 'transcript' ? (
           <TranscriptSearch
             displayCues={displayCues}
             searchQuery={searchQuery}
@@ -400,7 +407,7 @@ export default function LectureWorkspace({
             handlePauseVideo={handlePauseVideo}
             onDiscussInTutor={handleDiscussInTutor}
           />
-        ) : activeTab === 'quiz' ? (
+        ) : effectiveTab === 'quiz' ? (
           <LectureQuiz
             quizData={quizData}
             quizLoading={quizLoading}
@@ -423,7 +430,7 @@ export default function LectureWorkspace({
             transcriptAvailable={transcriptAvailable}
             userEmail={googleUser?.email || 'anonymous'}
           />
-        ) : activeTab === 'resources' ? (
+        ) : effectiveTab === 'resources' ? (
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px', background: 'var(--panel-bg)', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
             <LectureResourcesShelf
               lectureResources={lectureResources}

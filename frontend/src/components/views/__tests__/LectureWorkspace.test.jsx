@@ -58,7 +58,7 @@ describe('LectureWorkspace', () => {
 
     expect(screen.getAllByText('Operating Systems').length).toBeGreaterThan(0);
     expect(screen.getByPlaceholderText(/Search transcript/i)).toBeInTheDocument();
-    expect(screen.getByText('Kernel architecture.')).toBeInTheDocument();
+    expect(screen.getAllByText('Kernel architecture.').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole('button', { name: /Copy Transcript/i })).toBeInTheDocument();
   });
 

@@ -44,6 +44,7 @@ import { getVideoSourceInfo } from '../../utils/publisherDetect';
 import GoogleDriveIcon from '../common/GoogleDriveIcon';
 import LectureResourcesShelf from './LectureResourcesShelf';
 import LectureRenameDialog from './LectureRenameDialog';
+import VideoCueOverlay from './VideoCueOverlay';
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
@@ -71,7 +72,9 @@ export default function LecturePlayer({
   handleGenerateTranscript,
   transcriptionLoading = false,
   transcriptionError = null,
-  transcriptionStage = null
+  transcriptionStage = null,
+  activeCueIdx = null,
+  handleCueClick = null
 }) {
   if (!activeData) return null;
 
@@ -379,7 +382,17 @@ export default function LecturePlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [isScrubbing, setIsScrubbing] = useState(false);
-  const [showSubtitles, setShowSubtitles] = useState(true);
+  const [showSubtitles, setShowSubtitles] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('lecturescribe_video_cues_enabled');
+        if (saved !== null) {
+          return saved === 'true';
+        }
+      } catch (_) {}
+    }
+    return true;
+  });
   const [speedMenuAnchor, setSpeedMenuAnchor] = useState(null);
   const hideControlsTimerRef = useRef(null);
 
@@ -609,13 +622,16 @@ export default function LecturePlayer({
   };
 
   const toggleSubtitles = () => {
-    const video = iframeRef?.current;
-    if (!video) return;
     const nextVal = !showSubtitles;
     setShowSubtitles(nextVal);
-    if (video.textTracks && video.textTracks.length > 0) {
+    try {
+      localStorage.setItem('lecturescribe_video_cues_enabled', String(nextVal));
+    } catch (_) {}
+    const video = iframeRef?.current;
+    if (video?.textTracks && video.textTracks.length > 0) {
       for (let i = 0; i < video.textTracks.length; i++) {
-        video.textTracks[i].mode = nextVal ? 'showing' : 'hidden';
+        // If hasTranscript is active, VideoCueOverlay handles display; otherwise show native track
+        video.textTracks[i].mode = (!hasTranscript && nextVal) ? 'showing' : 'hidden';
       }
     }
   };
@@ -681,6 +697,9 @@ export default function LecturePlayer({
     } else if (key === 'f') {
       e.preventDefault();
       toggleFullscreen();
+    } else if (key === 'c') {
+      e.preventDefault();
+      toggleSubtitles();
     } else if (key === 'arrowup') {
       e.preventDefault();
       handleVolumeChange(Math.min(1, volume + 0.1));
@@ -967,6 +986,7 @@ export default function LecturePlayer({
       {/* Video Player Container with Custom Controls */}
       <Box
         ref={containerRef}
+        data-testid="lecture-video-container"
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onMouseMove={triggerUserActivity}
@@ -1403,6 +1423,17 @@ export default function LecturePlayer({
                 </Box>
               )}
 
+              {/* Synchronized On-Video Cues Overlay (Prime Video / YouTube / Udemy Style) */}
+              <VideoCueOverlay
+                cues={activeData.cues}
+                currentTime={currentTime}
+                activeCueIdx={activeCueIdx}
+                showControls={showControls}
+                isPlaying={isPlaying}
+                visible={showSubtitles}
+                onCueClick={handleCueClick}
+              />
+
               {/* Custom Player Controls Bar (Docked at bottom) */}
               <Box
                 sx={{
@@ -1638,16 +1669,18 @@ export default function LecturePlayer({
                     </Menu>
 
                     {/* Subtitles (CC) Toggle */}
-                    {(activeData.captions_vtt_url || activeData.captionsUrl) && (
-                      <Tooltip title={showSubtitles ? "Disable Subtitles" : "Enable Subtitles"} arrow placement="top">
+                    {(hasTranscript || activeData.captions_vtt_url || activeData.captionsUrl) && (
+                      <Tooltip title={showSubtitles ? "Disable Subtitles (c)" : "Enable Subtitles (c)"} arrow placement="top">
                         <IconButton
                           size="small"
                           onClick={toggleSubtitles}
                           aria-label={showSubtitles ? "Disable Subtitles" : "Enable Subtitles"}
                           sx={{
                             color: showSubtitles ? (currentTheme.palette.primary || '#0075ed') : 'rgba(255, 255, 255, 0.7)',
+                            bgcolor: showSubtitles ? 'rgba(0, 117, 237, 0.2)' : 'transparent',
+                            borderRadius: '6px',
                             p: 0.75,
-                            '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.15)' }
+                            '&:hover': { bgcolor: showSubtitles ? 'rgba(0, 117, 237, 0.3)' : 'rgba(255, 255, 255, 0.15)' }
                           }}
                         >
                           <Subtitles size={17} />

@@ -276,6 +276,8 @@ export default function LectureWorkspace({
         handleRenameResource={handleRenameResource}
         handleRenameLecture={handleRenameLecture}
         currentTheme={currentTheme}
+        activeCueIdx={activeCueIdx}
+        handleCueClick={handleCueClick}
       />
 
       {/* VS Code Style Horizontal Split Resizer */}

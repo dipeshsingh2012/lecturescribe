@@ -742,5 +742,59 @@ describe('LecturePlayer', () => {
       expect(setActiveData).toHaveBeenCalled();
     });
   });
+
+  it('renders on-video cue overlay and allows toggling subtitles via CC button and "c" keyboard shortcut', () => {
+    localStorage.clear();
+    const handleCueClick = vi.fn();
+    const activeData = {
+      videoId: '556677',
+      title: 'Neural Networks 101',
+      course_name: 'CS229',
+      duration: '45:00',
+      total_cues: 2,
+      cues: [
+        { time: '00:00', text: 'Welcome to Neural Networks 101.' },
+        { time: '00:15', text: 'Backpropagation is the core algorithm.' }
+      ],
+      gcs_video_url: 'https://storage.googleapis.com/lecturescribe-resources/video.mp4'
+    };
+
+    const { container } = render(
+      <LecturePlayer
+        activeData={activeData}
+        activeCueIdx={0}
+        handleCueClick={handleCueClick}
+        currentTheme={mockTheme}
+        iframeRef={{ current: document.createElement('video') }}
+      />
+    );
+
+    // CC button is rendered because cues exist
+    const ccBtn = screen.getByRole('button', { name: /Disable Subtitles/i });
+    expect(ccBtn).toBeInTheDocument();
+
+    // VideoCueOverlay is rendered with initial cue text
+    expect(screen.getByTestId('video-cue-overlay')).toBeInTheDocument();
+    expect(screen.getByText(/Welcome to Neural Networks 101/i)).toBeInTheDocument();
+
+    // Clicking cue overlay triggers handleCueClick
+    fireEvent.click(screen.getByTestId('video-cue-overlay'));
+    expect(handleCueClick).toHaveBeenCalledWith('00:00');
+
+    // Click CC button to toggle OFF
+    fireEvent.click(ccBtn);
+    expect(screen.queryByTestId('video-cue-overlay')).toBeNull();
+    expect(localStorage.getItem('lecturescribe_video_cues_enabled')).toBe('false');
+
+    // Now button should say "Enable Subtitles"
+    const enableCcBtn = screen.getByRole('button', { name: /Enable Subtitles/i });
+    expect(enableCcBtn).toBeInTheDocument();
+
+    // Press 'c' key on container to toggle back ON
+    const videoContainer = screen.getByTestId('lecture-video-container');
+    fireEvent.keyDown(videoContainer, { key: 'c' });
+    expect(screen.getByTestId('video-cue-overlay')).toBeInTheDocument();
+    expect(localStorage.getItem('lecturescribe_video_cues_enabled')).toBe('true');
+  });
 });
 

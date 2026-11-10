@@ -51,7 +51,7 @@ self.addEventListener('fetch', (event) => {
     req.method === 'GET' &&
     (url.pathname.startsWith('/api/course/') ||
       url.pathname.startsWith('/api/calendar/events') ||
-      url.pathname.startsWith('/api/videos/'))
+      (url.pathname.startsWith('/api/videos/') && !url.pathname.endsWith('/stream')))
   ) {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {

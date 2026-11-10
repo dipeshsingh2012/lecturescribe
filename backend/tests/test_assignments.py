@@ -339,3 +339,167 @@ def test_pause_and_prompt_missing_dataset_flow(tmp_path, monkeypatch):
     assert final_record["notebook_blob_name"] is not None
     assert final_record["pdf_blob_name"] is not None
 
+
+def test_copilot_pipeline_awaits_approval_and_executes(monkeypatch):
+    from backend.assignment_service import process_assignment_pipeline, approve_and_execute_assignment
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    aid = "asgn_copilot_test_101"
+    course = "Machine Learning 202"
+
+    pdf_text = (
+        "Problem 1: Implement Linear Regression with Gradient Descent.\n"
+        "Problem 2: Plot the cost function over 50 iterations."
+    )
+
+    monkeypatch.setattr("backend.assignment_service.extract_text_from_pdf", lambda b: pdf_text)
+    monkeypatch.setattr(
+        "backend.assignment_service.enrich_questions_with_course_rag",
+        lambda c, qs: [
+            {
+                "question_number": i + 1,
+                "title": f"Problem {i + 1}",
+                "question_text": q.get("question_text", f"Question {i + 1}"),
+                "course_references": [{"lecture_title": "Lecture 3: Gradient Descent", "timestamp": "12:45"}]
+            }
+            for i, q in enumerate(qs or [{"question_text": "P1"}, {"question_text": "P2"}])
+        ]
+    )
+
+    db_manager.create_assignment(
+        assignment_id=aid,
+        course_name=course,
+        user_email="tutor@uni.edu",
+        title="Optimization Lab",
+        source_filename="opt_lab.pdf",
+        source_blob_name="courses/opt_lab.pdf",
+        status="pending"
+    )
+
+    # 1. Run pipeline with require_approval=True (Co-Pilot mode)
+    paused = process_assignment_pipeline(
+        assignment_id=aid,
+        course_name=course,
+        user_email="tutor@uni.edu",
+        pdf_bytes=b"%PDF-1.4 dummy",
+        filename="opt_lab.pdf",
+        require_approval=True
+    )
+
+    assert paused["status"] == "awaiting_approval"
+    record = db_manager.get_assignment_by_id(aid)
+    assert record["status"] == "awaiting_approval"
+    assert record["raw_extracted_text"] == pdf_text
+    assert len(record["questions_summary"]) >= 1
+    assert len(record["citations"]) >= 1
+
+    # 2. Test analysis endpoint
+    client = TestClient(app)
+    analysis_resp = client.get(f"/api/course/{course}/assignments/{aid}/analysis")
+    assert analysis_resp.status_code == 200
+    data = analysis_resp.json()
+    assert data["status"] == "success"
+    assert data["assignment_status"] == "awaiting_approval"
+    assert data["raw_extracted_text"] == pdf_text
+    assert data["word_count"] > 0
+
+    # 3. Approve and execute
+    finished = approve_and_execute_assignment(aid, course)
+    assert finished["status"] == "completed"
+
+    final_record = db_manager.get_assignment_by_id(aid)
+    assert final_record["status"] == "completed"
+    assert final_record["notebook_blob_name"] is not None
+    assert final_record["pdf_blob_name"] is not None
+
+    # 4. Test notebook json preview endpoint
+    nb_resp = client.get(f"/api/course/{course}/assignments/{aid}/notebook")
+    assert nb_resp.status_code == 200
+    nb_data = nb_resp.json()
+    assert nb_data["status"] == "success"
+    assert "notebook" in nb_data
+    assert "cells" in nb_data["notebook"]
+
+
+def test_matplotlib_and_seaborn_plot_capture_and_pdf_rendering():
+    """Verify that matplotlib/seaborn plots are captured as display_data and rendered to HTML/PDF."""
+    cells = [
+        {
+            "cell_type": "code",
+            "source": (
+                "import matplotlib.pyplot as plt\n"
+                "import seaborn as sns\n"
+                "tips = sns.load_dataset('tips')\n"
+                "print(f'Tips loaded: {len(tips)} rows')\n"
+                "plt.figure(figsize=(4, 3))\n"
+                "sns.scatterplot(data=tips, x='total_bill', y='tip')\n"
+                "plt.title('Total Bill vs Tip')\n"
+            )
+        }
+    ]
+
+    executed = execute_code_cells(cells)
+    assert len(executed) == 1
+    outputs = executed[0]["outputs"]
+
+    # Must contain stdout
+    stdout_outs = [o for o in outputs if o.get("output_type") == "stream"]
+    assert len(stdout_outs) >= 1
+    assert "Tips loaded: 10 rows" in "".join(stdout_outs[0]["text"])
+
+    # Must contain display_data with image/png
+    img_outs = [o for o in outputs if o.get("output_type") == "display_data"]
+    assert len(img_outs) >= 1
+    assert "image/png" in img_outs[0].get("data", {})
+    assert len(img_outs[0]["data"]["image/png"]) > 50
+
+    # HTML rendering must contain img tag with base64 data
+    nb = {"cells": executed}
+    html_out = render_notebook_to_html(nb, "Data Science 101", "Lab 5")
+    assert "<img src=\"data:image/png;base64," in html_out
+    assert "Tips loaded: 10 rows" in html_out
+
+    # PDF conversion must succeed
+    pdf_bytes = convert_html_to_pdf(html_out, "Data Science 101", "Lab 5", nb)
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 200
+    assert pdf_bytes.startswith(b"%PDF")
+
+
+def test_self_healing_code_execution_with_llm(monkeypatch):
+    """Verify that code errors trigger LLM self-healing repair and successfully re-execute."""
+    failing_cells = [
+        {
+            "cell_type": "code",
+            "source": "import nonexistent_broken_lib\nprint('Should fail')"
+        }
+    ]
+
+    repaired_code = (
+        "import math\n"
+        "result = math.sqrt(144)\n"
+        "print(f'Repaired Math Result: {result}')"
+    )
+
+    repair_invoked = []
+
+    def mock_repair(source, err):
+        repair_invoked.append((source, err))
+        return repaired_code
+
+    monkeypatch.setattr("backend.assignment_service.repair_code_cell_with_llm", mock_repair)
+
+    executed = execute_code_cells(failing_cells)
+    assert len(repair_invoked) == 1
+    assert "nonexistent_broken_lib" in repair_invoked[0][0]
+
+    assert len(executed) == 1
+    outputs = executed[0]["outputs"]
+    assert len(outputs) >= 1
+    assert outputs[0]["output_type"] == "stream"
+    stdout_text = "".join(outputs[0]["text"])
+    assert "Repaired Math Result: 12.0" in stdout_text
+
+
+

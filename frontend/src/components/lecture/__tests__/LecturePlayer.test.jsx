@@ -796,5 +796,91 @@ describe('LecturePlayer', () => {
     expect(screen.getByTestId('video-cue-overlay')).toBeInTheDocument();
     expect(localStorage.getItem('lecturescribe_video_cues_enabled')).toBe('true');
   });
+
+  it('does not enter an infinite loop when gcs_video_url fails and setActiveData is provided', async () => {
+    let activeDataState = {
+      videoId: '1245152886',
+      title: 'Machine Learning Paradigms Live session -3',
+      course_name: 'Machine Learning Paradigms',
+      source_url: 'https://learning.iiitdwd.ac.in/mod/page/view.php?id=3111',
+      gcs_video_url: 'https://storage.googleapis.com/lecturescribe-resources/courses/ml/1245152886.mp4',
+      duration: '1:00:00',
+      cues: [{ time: '00:00', text: 'Welcome' }]
+    };
+
+    const setActiveData = vi.fn((updater) => {
+      if (typeof updater === 'function') {
+        activeDataState = updater(activeDataState);
+      } else {
+        activeDataState = updater;
+      }
+    });
+
+    let statusCallCount = 0;
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.endsWith('/api/videos/1245152886/status')) {
+        statusCallCount += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            videoId: '1245152886',
+            synced_to_gcs: true,
+            is_uploading: false,
+            view_url: 'https://storage.googleapis.com/lecturescribe-resources/courses/ml/1245152886.mp4'
+          })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    try {
+      const { rerender } = render(
+        <LecturePlayer
+          activeData={activeDataState}
+          activeCourseData={{ course_name: 'Machine Learning Paradigms' }}
+          selectedCourse="Machine Learning Paradigms"
+          currentTheme={mockTheme}
+          iframeRef={{ current: null }}
+          setActiveData={setActiveData}
+        />
+      );
+
+      const videoEl = screen.getByTitle('Machine Learning Paradigms Live session -3');
+      expect(videoEl).toBeInTheDocument();
+
+      // First error on direct GCS stream URL
+      fireEvent.error(videoEl);
+
+      // It should clear gcs_video_url to try fallback to /stream
+      expect(setActiveData).toHaveBeenCalled();
+      rerender(
+        <LecturePlayer
+          activeData={activeDataState}
+          activeCourseData={{ course_name: 'Machine Learning Paradigms' }}
+          selectedCourse="Machine Learning Paradigms"
+          currentTheme={mockTheme}
+          iframeRef={{ current: null }}
+          setActiveData={setActiveData}
+        />
+      );
+
+      // Now on fallback /stream, trigger second error
+      const fallbackVideoEl = screen.queryByTitle('Machine Learning Paradigms Live session -3');
+      if (fallbackVideoEl) {
+        fireEvent.error(fallbackVideoEl);
+      }
+
+      // Should show fallback card, not loop
+      const fallback = await screen.findByTestId('broken-video-moodle-fallback');
+      expect(fallback).toBeInTheDocument();
+
+      // Status endpoint must NOT be hammered repeatedly
+      expect(statusCallCount).toBeLessThanOrEqual(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
 

@@ -12,7 +12,13 @@ import {
   IconButton,
   Tooltip,
   TextField,
-  Collapse
+  Collapse,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Tabs,
+  Tab
 } from '@mui/material';
 import {
   Upload,
@@ -35,7 +41,11 @@ import {
   Calendar,
   Send,
   Award,
-  Users
+  Users,
+  Play,
+  Eye,
+  Copy,
+  Check
 } from 'lucide-react';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
@@ -53,6 +63,8 @@ export default function CourseAssignments({
   onUploadAssignment,
   onProvideDataset,
   onSkipDataset,
+  onApproveAssignment,
+  onFetchAnalysis,
   onRegenerateAssignment,
   onDeleteAssignment,
   onRefreshAssignments,
@@ -67,6 +79,15 @@ export default function CourseAssignments({
   const [expandedDetails, setExpandedDetails] = useState({});
   const [pendingDatasetFiles, setPendingDatasetFiles] = useState({});
   const [uploadingDataset, setUploadingDataset] = useState({});
+  const [approvingAsgnId, setApprovingAsgnId] = useState(null);
+  const [customGuidance, setCustomGuidance] = useState({});
+  const [showGuidanceInput, setShowGuidanceInput] = useState({});
+  const [activeAnalysisModal, setActiveAnalysisModal] = useState(null);
+  const [analysisModalTab, setAnalysisModalTab] = useState(0);
+  const [copiedRawText, setCopiedRawText] = useState(false);
+  const [loadingAnalysis, setLoadingAnalysis] = useState(false);
+  const [activeNotebookModal, setActiveNotebookModal] = useState(null);
+  const [loadingNotebook, setLoadingNotebook] = useState(false);
   const courseSlug = normalizeCourseSlug(courseName);
 
   const [activeStudioSessionId, setActiveStudioSessionId] = useState(() => {
@@ -114,6 +135,99 @@ export default function CourseAssignments({
         localStorage.setItem(`lecturescribe_active_studio_session_${courseSlug}`, newSessionId);
       }
     } catch (e) {}
+  };
+
+  const handleApproveSubmit = async (assignmentId) => {
+    if (!assignmentId) return;
+    setApprovingAsgnId(assignmentId);
+    try {
+      const guidance = customGuidance[assignmentId] || '';
+      if (onApproveAssignment) {
+        await onApproveAssignment(assignmentId, guidance);
+      } else {
+        await fetch(
+          `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/approve`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_email: userEmail || undefined,
+              custom_instructions: guidance || undefined
+            })
+          }
+        );
+        onRefreshAssignments?.();
+      }
+      if (activeAnalysisModal?.assignment_id === assignmentId) {
+        setActiveAnalysisModal(null);
+      }
+    } catch (err) {
+      console.error('Approval execution error:', err);
+    } finally {
+      setApprovingAsgnId(null);
+    }
+  };
+
+  const handleOpenAnalysisModal = async (asgn) => {
+    if (!asgn) return;
+    setActiveAnalysisModal({
+      ...asgn,
+      raw_extracted_text: asgn.raw_extracted_text || ''
+    });
+    setAnalysisModalTab(0);
+    setCopiedRawText(false);
+
+    if (!asgn.raw_extracted_text && onFetchAnalysis) {
+      setLoadingAnalysis(true);
+      try {
+        const fullData = await onFetchAnalysis(asgn.assignment_id);
+        if (fullData) {
+          setActiveAnalysisModal((prev) => (prev ? { ...prev, ...fullData } : null));
+        }
+      } catch (e) {
+        console.warn('Could not fetch full analysis:', e);
+      } finally {
+        setLoadingAnalysis(false);
+      }
+    }
+  };
+
+  const handleCopyRawText = (text) => {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedRawText(true);
+      setTimeout(() => setCopiedRawText(false), 2000);
+    } catch (e) {}
+  };
+
+  const handleOpenNotebookPreview = async (asgn) => {
+    if (!asgn || !asgn.assignment_id) return;
+    setActiveNotebookModal({
+      assignment_id: asgn.assignment_id,
+      title: asgn.title || 'Solution Notebook',
+      source_filename: asgn.source_filename,
+      notebook: null,
+      error: null
+    });
+    setLoadingNotebook(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(asgn.assignment_id)}/notebook`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setActiveNotebookModal((prev) => (prev ? { ...prev, notebook: data.notebook } : null));
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setActiveNotebookModal((prev) => (prev ? { ...prev, error: errData.detail || 'Could not load notebook deliverable.' } : null));
+      }
+    } catch (err) {
+      console.warn('Could not fetch notebook:', err);
+      setActiveNotebookModal((prev) => (prev ? { ...prev, error: err.message } : null));
+    } finally {
+      setLoadingNotebook(false);
+    }
   };
 
   // Option 1: Deadline Publishing, Student Submissions & AI SpeedGrader state
@@ -666,6 +780,7 @@ export default function CourseAssignments({
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           {assignments.map((asgn) => {
+            const isAwaitingApproval = asgn.status === 'awaiting_approval';
             const isProcessing = asgn.status === 'pending' || asgn.status === 'processing' || asgn.status === 'generating';
             const isNeedsInput = asgn.status === 'needs_input';
             const isCompleted = asgn.status === 'completed';
@@ -691,7 +806,7 @@ export default function CourseAssignments({
               >
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
                   <Box sx={{ flex: 1, minWidth: 280 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.8 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.8, flexWrap: 'wrap' }}>
                       <Typography variant="h6" sx={{ fontWeight: 800, color: palette.textPrimary, fontSize: '1.05rem' }}>
                         {asgn.title || 'Assignment Solution'}
                       </Typography>
@@ -701,6 +816,14 @@ export default function CourseAssignments({
                           label="Studio Co-Pilot"
                           size="small"
                           sx={{ bgcolor: 'rgba(147, 51, 234, 0.1)', color: '#7e22ce', fontWeight: 700, fontSize: '0.72rem' }}
+                        />
+                      )}
+                      {isAwaitingApproval && (
+                        <Chip
+                          icon={<Sparkles size={13} color="#d97706" />}
+                          label="Analysis Ready • Awaiting Your Go-Ahead"
+                          size="small"
+                          sx={{ bgcolor: '#fffbeb', color: '#92400e', fontWeight: 800, fontSize: '0.72rem', border: '1px solid #fde68a' }}
                         />
                       )}
                       {isCompleted && (
@@ -750,6 +873,161 @@ export default function CourseAssignments({
                         <Typography variant="caption" sx={{ color: '#2563eb', fontWeight: 600, mt: 0.5, display: 'block' }}>
                           Parsing PDF problems → Aligning with lecture citations → Running Python verification cells...
                         </Typography>
+                      </Box>
+                    )}
+
+                    {/* CO-PILOT AWAITING APPROVAL / TRANSPARENT ANALYSIS BANNER */}
+                    {isAwaitingApproval && (
+                      <Box
+                        sx={{
+                          mt: 1.5,
+                          mb: 2,
+                          p: 2.2,
+                          borderRadius: 2.5,
+                          bgcolor: '#fffbeb',
+                          border: '1px solid #fde68a'
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, flexWrap: 'wrap', mb: 1 }}>
+                          <Typography
+                            variant="subtitle2"
+                            sx={{ color: '#92400e', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}
+                          >
+                            <Sparkles size={16} color="#d97706" /> Co-Pilot Analysis & Plan Ready
+                          </Typography>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<Eye size={14} />}
+                            onClick={() => handleOpenAnalysisModal(asgn)}
+                            sx={{
+                              textTransform: 'none',
+                              fontWeight: 700,
+                              borderRadius: 2,
+                              fontSize: '0.78rem',
+                              borderColor: '#f59e0b',
+                              color: '#92400e',
+                              bgcolor: '#ffffff',
+                              '&:hover': { bgcolor: '#fef3c7' }
+                            }}
+                          >
+                            Inspect Raw Text & Analysis
+                          </Button>
+                        </Box>
+
+                        <Typography variant="body2" sx={{ color: '#78350f', fontSize: '0.82rem', mb: 1.5 }}>
+                          Verbatim text extracted with <code>pypdf</code>. The AI parsed the problems and mapped lecture citations. Review below and give your go-ahead to execute verification code in the sandbox.
+                        </Typography>
+
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+                          <Chip
+                            icon={<FileText size={12} color="#92400e" />}
+                            label={`${asgn.raw_extracted_text ? asgn.raw_extracted_text.split(/\s+/).filter(Boolean).length : 'Verbatim'} Words`}
+                            size="small"
+                            sx={{ bgcolor: '#fef3c7', color: '#92400e', fontWeight: 600, fontSize: '0.74rem' }}
+                          />
+                          <Chip
+                            icon={<Code2 size={12} color="#92400e" />}
+                            label={`${questions.length} Problems Extracted`}
+                            size="small"
+                            sx={{ bgcolor: '#fef3c7', color: '#92400e', fontWeight: 600, fontSize: '0.74rem' }}
+                          />
+                          {asgn.citations?.length > 0 && (
+                            <Chip
+                              icon={<BookOpen size={12} color="#92400e" />}
+                              label={`${asgn.citations.length} Lecture References`}
+                              size="small"
+                              sx={{ bgcolor: '#fef3c7', color: '#92400e', fontWeight: 600, fontSize: '0.74rem' }}
+                            />
+                          )}
+                        </Box>
+
+                        {showGuidanceInput[asgn.assignment_id] && (
+                          <Box sx={{ mb: 1.5 }}>
+                            <TextField
+                              fullWidth
+                              size="small"
+                              placeholder="Add guidance (e.g. 'Use PyTorch', 'Skip question 3', 'Include detailed derivations')..."
+                              value={customGuidance[asgn.assignment_id] || ''}
+                              onChange={(e) => setCustomGuidance((prev) => ({ ...prev, [asgn.assignment_id]: e.target.value }))}
+                              sx={{ bgcolor: '#ffffff', borderRadius: 1.5 }}
+                            />
+                          </Box>
+                        )}
+
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                          <Button
+                            variant="contained"
+                            size="small"
+                            disabled={approvingAsgnId === asgn.assignment_id}
+                            onClick={() => handleApproveSubmit(asgn.assignment_id)}
+                            startIcon={
+                              approvingAsgnId === asgn.assignment_id ? (
+                                <CircularProgress size={14} color="inherit" />
+                              ) : (
+                                <Play size={14} />
+                              )
+                            }
+                            sx={{
+                              textTransform: 'none',
+                              fontWeight: 800,
+                              borderRadius: 2,
+                              bgcolor: '#d97706',
+                              color: '#ffffff',
+                              boxShadow: '0 2px 6px rgba(217,119,6,0.3)',
+                              '&:hover': { bgcolor: '#b45309' }
+                            }}
+                          >
+                            {approvingAsgnId === asgn.assignment_id ? 'Starting Sandbox Runner...' : 'Approve & Execute Lab Notebook'}
+                          </Button>
+
+                          {asgn.assignment_type === 'studio' ? (
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Sparkles size={14} color="#7e22ce" />}
+                              onClick={() => handleOpenStudio(asgn.assignment_id)}
+                              sx={{
+                                textTransform: 'none',
+                                fontWeight: 700,
+                                borderRadius: 2,
+                                borderColor: '#d8b4fe',
+                                color: '#7e22ce',
+                                bgcolor: 'rgba(147, 51, 234, 0.05)',
+                                '&:hover': { bgcolor: 'rgba(147, 51, 234, 0.12)' }
+                              }}
+                            >
+                              Open in Studio Co-Pilot
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Eye size={14} color="#0284c7" />}
+                              onClick={() => handleOpenAnalysisModal(asgn)}
+                              sx={{
+                                textTransform: 'none',
+                                fontWeight: 700,
+                                borderRadius: 2,
+                                borderColor: '#bae6fd',
+                                color: '#0284c7',
+                                bgcolor: 'rgba(2, 132, 199, 0.05)',
+                                '&:hover': { bgcolor: 'rgba(2, 132, 199, 0.12)' }
+                              }}
+                            >
+                              Inspect Extraction & Plan
+                            </Button>
+                          )}
+
+                          <Button
+                            variant="text"
+                            size="small"
+                            onClick={() => setShowGuidanceInput((prev) => ({ ...prev, [asgn.assignment_id]: !prev[asgn.assignment_id] }))}
+                            sx={{ textTransform: 'none', fontWeight: 600, color: '#92400e', fontSize: '0.8rem' }}
+                          >
+                            {showGuidanceInput[asgn.assignment_id] ? 'Hide Guidance' : '+ Add Guidance'}
+                          </Button>
+                        </Box>
                       </Box>
                     )}
 
@@ -880,23 +1158,42 @@ export default function CourseAssignments({
                     {isCompleted && (
                       <>
                         {asgn.assignment_type !== 'studio' && (
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            startIcon={<Terminal size={14} />}
-                            href={ipynbUrl}
-                            download
-                            sx={{
-                              textTransform: 'none',
-                              fontWeight: 700,
-                              borderRadius: 2,
-                              borderColor: '#cbd5e1',
-                              color: '#0f172a',
-                              '&:hover': { bgcolor: 'rgba(0,0,0,0.03)' }
-                            }}
-                          >
-                            Download .ipynb
-                          </Button>
+                          <>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Eye size={14} color="#2563eb" />}
+                              onClick={() => handleOpenNotebookPreview(asgn)}
+                              sx={{
+                                textTransform: 'none',
+                                fontWeight: 700,
+                                borderRadius: 2,
+                                borderColor: '#93c5fd',
+                                color: '#2563eb',
+                                bgcolor: 'rgba(37, 99, 235, 0.05)',
+                                '&:hover': { bgcolor: 'rgba(37, 99, 235, 0.12)' }
+                              }}
+                            >
+                              Preview Executed Notebook
+                            </Button>
+                            <Button
+                              variant="outlined"
+                              size="small"
+                              startIcon={<Terminal size={14} />}
+                              href={ipynbUrl}
+                              download
+                              sx={{
+                                textTransform: 'none',
+                                fontWeight: 700,
+                                borderRadius: 2,
+                                borderColor: '#cbd5e1',
+                                color: '#0f172a',
+                                '&:hover': { bgcolor: 'rgba(0,0,0,0.03)' }
+                              }}
+                            >
+                              Download .ipynb
+                            </Button>
+                          </>
                         )}
                         <Button
                           variant="contained"
@@ -917,6 +1214,43 @@ export default function CourseAssignments({
                         </Button>
                       </>
                     )}
+
+                    {isAwaitingApproval && (
+                      <Button
+                        variant="contained"
+                        size="small"
+                        disabled={approvingAsgnId === asgn.assignment_id}
+                        onClick={() => handleApproveSubmit(asgn.assignment_id)}
+                        startIcon={
+                          approvingAsgnId === asgn.assignment_id ? (
+                            <CircularProgress size={14} color="inherit" />
+                          ) : (
+                            <Play size={14} />
+                          )
+                        }
+                        sx={{
+                          textTransform: 'none',
+                          fontWeight: 800,
+                          borderRadius: 2,
+                          bgcolor: '#d97706',
+                          color: '#ffffff',
+                          boxShadow: '0 2px 6px rgba(217,119,6,0.3)',
+                          '&:hover': { bgcolor: '#b45309' }
+                        }}
+                      >
+                        {approvingAsgnId === asgn.assignment_id ? 'Starting...' : 'Approve & Execute'}
+                      </Button>
+                    )}
+
+                    <Tooltip title="Inspect verbatim text (pypdf) & AI problem breakdown">
+                      <IconButton
+                        size="small"
+                        onClick={() => handleOpenAnalysisModal(asgn)}
+                        sx={{ border: `1px solid ${palette.cardBorder}`, borderRadius: 2, color: '#0284c7' }}
+                      >
+                        <Eye size={15} />
+                      </IconButton>
+                    </Tooltip>
 
                     {questions.length > 0 && (
                       <IconButton
@@ -1325,6 +1659,500 @@ export default function CourseAssignments({
           })}
         </Box>
       )}
+
+      {/* RAW PDF TEXT & CO-PILOT ANALYSIS INSPECTOR MODAL */}
+      <Dialog
+        open={!!activeAnalysisModal}
+        onClose={() => setActiveAnalysisModal(null)}
+        maxWidth="md"
+        fullWidth
+        slotProps={{
+          paper: {
+            sx: { borderRadius: 3, p: 0, bgcolor: palette.cardBg }
+          }
+        }}
+      >
+        <DialogTitle sx={{ pb: 1, borderBottom: `1px solid ${palette.cardBorder}` }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 800, color: palette.textPrimary, fontSize: '1.1rem' }}>
+                Assignment Analysis & Extraction Inspector
+              </Typography>
+              <Typography variant="caption" sx={{ color: palette.textSecondary }}>
+                {activeAnalysisModal?.title} • {activeAnalysisModal?.source_filename}
+              </Typography>
+            </Box>
+            {activeAnalysisModal?.status === 'awaiting_approval' && (
+              <Chip
+                icon={<Sparkles size={12} color="#92400e" />}
+                label="Awaiting Approval"
+                size="small"
+                sx={{ bgcolor: '#fef3c7', color: '#92400e', fontWeight: 700 }}
+              />
+            )}
+          </Box>
+        </DialogTitle>
+
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 3, pt: 1 }}>
+          <Tabs
+            value={analysisModalTab}
+            onChange={(e, val) => setAnalysisModalTab(val)}
+            textColor="primary"
+            indicatorColor="primary"
+          >
+            <Tab label="1. Raw Text (pypdf)" icon={<FileText size={15} />} iconPosition="start" sx={{ textTransform: 'none', fontWeight: 700 }} />
+            <Tab label={`2. Parsed Problems (${activeAnalysisModal?.questions_summary?.length || 0})`} icon={<Code2 size={15} />} iconPosition="start" sx={{ textTransform: 'none', fontWeight: 700 }} />
+            <Tab label={`3. Lecture Citations (${activeAnalysisModal?.citations?.length || 0})`} icon={<BookOpen size={15} />} iconPosition="start" sx={{ textTransform: 'none', fontWeight: 700 }} />
+          </Tabs>
+        </Box>
+
+        <DialogContent sx={{ p: 3, maxHeight: '65vh' }}>
+          {loadingAnalysis ? (
+            <Box sx={{ py: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+              <CircularProgress size={30} />
+              <Typography variant="body2" sx={{ color: palette.textSecondary }}>
+                Fetching raw text extraction & citations...
+              </Typography>
+            </Box>
+          ) : analysisModalTab === 0 ? (
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5, flexWrap: 'wrap', gap: 1 }}>
+                <Typography variant="caption" sx={{ color: palette.textSecondary }}>
+                  Extracted via <code>pypdf</code> with layout preservation. Inspect text, equations, or tabular records:
+                </Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={copiedRawText ? <Check size={13} color="#047857" /> : <Copy size={13} />}
+                  onClick={() => handleCopyRawText(activeAnalysisModal?.raw_extracted_text)}
+                  sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.75rem', borderRadius: 1.5 }}
+                >
+                  {copiedRawText ? 'Copied to Clipboard' : 'Copy Raw Text'}
+                </Button>
+              </Box>
+
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 2,
+                  bgcolor: '#0f172a',
+                  color: '#f8fafc',
+                  borderRadius: 2,
+                  fontFamily: 'monospace',
+                  fontSize: '0.8rem',
+                  lineHeight: 1.6,
+                  maxHeight: '48vh',
+                  overflowY: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  border: '1px solid #334155'
+                }}
+              >
+                {activeAnalysisModal?.raw_extracted_text || 'No raw text stored or file is empty.'}
+              </Paper>
+            </Box>
+          ) : analysisModalTab === 1 ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {(!activeAnalysisModal?.questions_summary || activeAnalysisModal.questions_summary.length === 0) ? (
+                <Typography variant="body2" sx={{ color: palette.textSecondary, py: 4, textAlign: 'center' }}>
+                  No discrete problems parsed.
+                </Typography>
+              ) : (
+                activeAnalysisModal.questions_summary.map((q, qIdx) => (
+                  <Paper
+                    key={qIdx}
+                    elevation={0}
+                    sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      border: `1px solid ${palette.cardBorder}`,
+                      bgcolor: 'rgba(0,0,0,0.01)'
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800, color: palette.textPrimary }}>
+                        Problem {q.question_number || qIdx + 1}: {q.title || 'Question'}
+                      </Typography>
+                      {q.estimated_difficulty && (
+                        <Chip
+                          label={q.estimated_difficulty}
+                          size="small"
+                          sx={{ textTransform: 'capitalize', fontSize: '0.7rem', fontWeight: 700 }}
+                        />
+                      )}
+                    </Box>
+                    <Typography variant="body2" sx={{ color: palette.textSecondary, fontSize: '0.84rem', mb: 1, whiteSpace: 'pre-wrap' }}>
+                      {q.question_text || 'No question details.'}
+                    </Typography>
+                    {q.topics?.length > 0 && (
+                      <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mt: 1 }}>
+                        {q.topics.map((t, tIdx) => (
+                          <Chip key={tIdx} label={t} size="small" variant="outlined" sx={{ fontSize: '0.68rem' }} />
+                        ))}
+                      </Box>
+                    )}
+                  </Paper>
+                ))
+              )}
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              {(!activeAnalysisModal?.citations || activeAnalysisModal.citations.length === 0) ? (
+                <Typography variant="body2" sx={{ color: palette.textSecondary, py: 4, textAlign: 'center' }}>
+                  No lecture citations retrieved yet.
+                </Typography>
+              ) : (
+                activeAnalysisModal.citations.map((c, cIdx) => (
+                  <Paper
+                    key={cIdx}
+                    elevation={0}
+                    sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      border: `1px solid ${palette.cardBorder}`,
+                      bgcolor: '#f8fafc'
+                    }}
+                  >
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1d4ed8', mb: 0.5, display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                      <BookOpen size={14} /> {c.lecture_title || 'Course Lecture'} {c.timestamp ? `at ${c.timestamp}` : ''}
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: '#475569', fontSize: '0.8rem', fontStyle: 'italic' }}>
+                      "{c.snippet || 'Referenced lecture context'}"
+                    </Typography>
+                  </Paper>
+                ))
+              )}
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ p: 2, px: 3, borderTop: `1px solid ${palette.cardBorder}`, justifyContent: 'space-between' }}>
+          <Box>
+            {activeAnalysisModal?.status === 'awaiting_approval' && (
+              <Button
+                variant="contained"
+                size="small"
+                disabled={approvingAsgnId === activeAnalysisModal.assignment_id}
+                onClick={() => handleApproveSubmit(activeAnalysisModal.assignment_id)}
+                startIcon={<Play size={14} />}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 800,
+                  bgcolor: '#d97706',
+                  color: '#ffffff',
+                  '&:hover': { bgcolor: '#b45309' }
+                }}
+              >
+                {approvingAsgnId === activeAnalysisModal.assignment_id ? 'Starting Sandbox...' : 'Approve & Execute Now'}
+              </Button>
+            )}
+          </Box>
+          <Button
+            onClick={() => setActiveAnalysisModal(null)}
+            variant="outlined"
+            size="small"
+            sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
+          >
+            Close Inspector
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* EXECUTED NOTEBOOK PREVIEW MODAL */}
+      <Dialog
+        open={!!activeNotebookModal}
+        onClose={() => setActiveNotebookModal(null)}
+        maxWidth="lg"
+        fullWidth
+        slotProps={{
+          paper: {
+            sx: {
+              borderRadius: 3,
+              boxShadow: '0 20px 45px rgba(0,0,0,0.2)',
+              overflow: 'hidden'
+            }
+          }
+        }}
+      >
+        <DialogTitle sx={{ p: 2.5, px: 3, borderBottom: `1px solid ${palette.cardBorder}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#f8fafc' }}>
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Code2 size={20} color="#2563eb" />
+              <Typography variant="h6" sx={{ fontWeight: 800, color: palette.textPrimary, fontSize: '1.1rem' }}>
+                Executed Notebook Solution & Output Trace
+              </Typography>
+            </Box>
+            <Typography variant="caption" sx={{ color: palette.textSecondary }}>
+              {activeNotebookModal?.title} • {activeNotebookModal?.source_filename || 'notebook.ipynb'}
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Chip
+              icon={<CheckCircle2 size={13} color="#047857" />}
+              label="Python 3 (ipykernel)"
+              size="small"
+              sx={{ bgcolor: '#ecfdf5', color: '#047857', fontWeight: 700 }}
+            />
+            {activeNotebookModal?.notebook?.cells && (
+              <Chip
+                label={`${activeNotebookModal.notebook.cells.length} Cells`}
+                size="small"
+                sx={{ bgcolor: '#eff6ff', color: '#1d4ed8', fontWeight: 700 }}
+              />
+            )}
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ p: 3, maxHeight: '72vh', bgcolor: '#f8fafc' }}>
+          {loadingNotebook ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 8, gap: 2 }}>
+              <CircularProgress size={36} />
+              <Typography variant="body2" sx={{ color: palette.textSecondary }}>
+                Loading executed notebook cells, stdout logs, and rendered figures...
+              </Typography>
+            </Box>
+          ) : activeNotebookModal?.error ? (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {activeNotebookModal.error}
+            </Alert>
+          ) : !activeNotebookModal?.notebook?.cells || activeNotebookModal.notebook.cells.length === 0 ? (
+            <Box sx={{ textAlign: 'center', py: 6 }}>
+              <Typography variant="body2" sx={{ color: palette.textSecondary }}>
+                No cells found in this notebook.
+              </Typography>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+              {activeNotebookModal.notebook.cells.map((cell, cIdx) => {
+                const isCode = cell.cell_type === 'code';
+                const sourceText = Array.isArray(cell.source) ? cell.source.join('') : String(cell.source || '');
+                const outputs = cell.outputs || [];
+
+                if (!isCode) {
+                  return (
+                    <Paper
+                      key={cIdx}
+                      elevation={0}
+                      sx={{
+                        p: 2.5,
+                        borderRadius: 2,
+                        bgcolor: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        borderLeft: '4px solid #3b82f6'
+                      }}
+                    >
+                      <Typography variant="caption" sx={{ color: '#2563eb', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', mb: 1 }}>
+                        Markdown / Problem Statement
+                      </Typography>
+                      <Typography variant="body2" sx={{ color: '#1e293b', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                        {sourceText}
+                      </Typography>
+                    </Paper>
+                  );
+                }
+
+                return (
+                  <Paper
+                    key={cIdx}
+                    elevation={0}
+                    sx={{
+                      p: 2.5,
+                      borderRadius: 2,
+                      bgcolor: '#ffffff',
+                      border: '1px solid #cbd5e1'
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Chip
+                        label={`In [${cell.execution_count ?? cIdx + 1}]`}
+                        size="small"
+                        sx={{ bgcolor: '#e2e8f0', color: '#334155', fontWeight: 800, fontFamily: 'monospace', fontSize: '0.75rem' }}
+                      />
+                      <Typography variant="caption" sx={{ color: '#64748b' }}>
+                        Code Cell
+                      </Typography>
+                    </Box>
+
+                    {/* CODE SOURCE */}
+                    <Box
+                      component="pre"
+                      sx={{
+                        m: 0,
+                        p: 2,
+                        bgcolor: '#0f172a',
+                        color: '#f8fafc',
+                        borderRadius: 1.5,
+                        fontFamily: 'monospace',
+                        fontSize: '0.82rem',
+                        lineHeight: 1.5,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        overflowX: 'auto'
+                      }}
+                    >
+                      {sourceText}
+                    </Box>
+
+                    {/* OUTPUTS */}
+                    {outputs.length > 0 && (
+                      <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                        <Typography variant="caption" sx={{ color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                          Execution Outputs & Visualizations
+                        </Typography>
+
+                        {outputs.map((out, oIdx) => {
+                          const oType = out.output_type;
+
+                          if (oType === 'stream') {
+                            const streamText = Array.isArray(out.text) ? out.text.join('') : String(out.text || '');
+                            return (
+                              <Box
+                                key={oIdx}
+                                component="pre"
+                                sx={{
+                                  m: 0,
+                                  p: 2,
+                                  bgcolor: '#f1f5f9',
+                                  color: '#0f172a',
+                                  borderRadius: 1.5,
+                                  border: '1px solid #e2e8f0',
+                                  borderLeft: '4px solid #10b981',
+                                  fontFamily: 'monospace',
+                                  fontSize: '0.8rem',
+                                  lineHeight: 1.45,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  maxHeight: 280,
+                                  overflowY: 'auto'
+                                }}
+                              >
+                                {streamText}
+                              </Box>
+                            );
+                          }
+
+                          if (oType === 'display_data' || oType === 'execute_result') {
+                            const imgB64 = out.data?.['image/png'];
+                            const plainText = out.data?.['text/plain'];
+
+                            if (imgB64) {
+                              return (
+                                <Box
+                                  key={oIdx}
+                                  sx={{
+                                    textAlign: 'center',
+                                    p: 2,
+                                    bgcolor: '#ffffff',
+                                    border: '1px solid #cbd5e1',
+                                    borderRadius: 2,
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
+                                  }}
+                                >
+                                  <img
+                                    src={`data:image/png;base64,${imgB64}`}
+                                    alt="Matplotlib / Seaborn Output"
+                                    style={{ maxWidth: '100%', height: 'auto', borderRadius: 4 }}
+                                  />
+                                </Box>
+                              );
+                            }
+
+                            if (plainText) {
+                              const textStr = Array.isArray(plainText) ? plainText.join('') : String(plainText);
+                              return (
+                                <Box
+                                  key={oIdx}
+                                  component="pre"
+                                  sx={{
+                                    m: 0,
+                                    p: 1.5,
+                                    bgcolor: '#f8fafc',
+                                    color: '#0f172a',
+                                    borderRadius: 1.5,
+                                    border: '1px solid #e2e8f0',
+                                    fontFamily: 'monospace',
+                                    fontSize: '0.8rem',
+                                    whiteSpace: 'pre-wrap'
+                                  }}
+                                >
+                                  {textStr}
+                                </Box>
+                              );
+                            }
+                          }
+
+                          if (oType === 'error') {
+                            const tb = Array.isArray(out.traceback) ? out.traceback.join('') : String(out.evalue || 'Error');
+                            return (
+                              <Box
+                                key={oIdx}
+                                component="pre"
+                                sx={{
+                                  m: 0,
+                                  p: 2,
+                                  bgcolor: '#fef2f2',
+                                  color: '#b91c1c',
+                                  borderRadius: 1.5,
+                                  border: '1px solid #fecaca',
+                                  fontFamily: 'monospace',
+                                  fontSize: '0.8rem',
+                                  whiteSpace: 'pre-wrap',
+                                  overflowX: 'auto'
+                                }}
+                              >
+                                {tb}
+                              </Box>
+                            );
+                          }
+
+                          return null;
+                        })}
+                      </Box>
+                    )}
+                  </Paper>
+                );
+              })}
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ p: 2, px: 3, borderTop: `1px solid ${palette.cardBorder}`, justifyContent: 'space-between', bgcolor: '#f8fafc' }}>
+          <Box sx={{ display: 'flex', gap: 1.5 }}>
+            {activeNotebookModal?.assignment_id && (
+              <>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<Terminal size={14} />}
+                  href={`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(activeNotebookModal.assignment_id)}/download?file_type=ipynb`}
+                  download
+                  sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2 }}
+                >
+                  Download .ipynb
+                </Button>
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<Download size={14} />}
+                  href={`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(activeNotebookModal.assignment_id)}/download?file_type=pdf`}
+                  download
+                  sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, bgcolor: '#2563eb' }}
+                >
+                  Download Solution PDF
+                </Button>
+              </>
+            )}
+          </Box>
+          <Button
+            onClick={() => setActiveNotebookModal(null)}
+            variant="outlined"
+            size="small"
+            sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
+          >
+            Close Preview
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

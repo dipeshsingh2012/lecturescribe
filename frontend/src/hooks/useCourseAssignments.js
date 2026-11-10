@@ -153,6 +153,54 @@ export function useCourseAssignments(courseName, userEmail = null) {
     }
   }, [courseSlug, fetchAssignments]);
 
+  // Approve assignment execution after reviewing extracted problems and analysis (Co-Pilot Acknowledgement)
+  const approveAssignment = useCallback(async (assignmentId, customInstructions = '') => {
+    if (!assignmentId || !courseSlug) return null;
+    setAssignments((prev) =>
+      prev.map((a) => (a.assignment_id === assignmentId ? { ...a, status: 'generating', error_message: null } : a))
+    );
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/approve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_email: userEmail || undefined,
+            custom_instructions: customInstructions || undefined
+          })
+        }
+      );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Approval failed (${res.status})`);
+      }
+      const data = await res.json();
+      await fetchAssignments();
+      return data;
+    } catch (err) {
+      console.error('[useCourseAssignments] approveAssignment error:', err);
+      await fetchAssignments();
+      throw err;
+    }
+  }, [courseSlug, userEmail, fetchAssignments]);
+
+  // Fetch detailed analysis transparency (raw extracted text, problem breakdown, citations)
+  const fetchAssignmentAnalysis = useCallback(async (assignmentId) => {
+    if (!assignmentId || !courseSlug) return null;
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/analysis`
+      );
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error('[useCourseAssignments] fetchAssignmentAnalysis error:', err);
+    }
+    return null;
+  }, [courseSlug]);
+
   // Delete Assignment
   const deleteAssignment = useCallback(async (assignmentId) => {
     if (!assignmentId || !courseSlug) return;
@@ -218,6 +266,8 @@ export function useCourseAssignments(courseName, userEmail = null) {
     uploadAssignment,
     provideDataset,
     skipDataset,
+    approveAssignment,
+    fetchAssignmentAnalysis,
     regenerateAssignment,
     deleteAssignment,
     refetchAssignments: fetchAssignments

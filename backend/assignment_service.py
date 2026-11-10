@@ -19,6 +19,7 @@ import sys
 import json
 import uuid
 import time
+import base64
 import logging
 import datetime
 import traceback
@@ -163,6 +164,96 @@ def _call_llm_json(system_prompt: str, user_prompt: str) -> Optional[Any]:
                 llm_router.record_error(model_name, 500, str(e))
                 logger.warning(f"[Assignment Groq Notice] ({model_name}) error: {e}")
 
+    return None
+
+
+def _call_llm_text(system_prompt: str, user_prompt: str) -> Optional[str]:
+    """Call candidate LLM models from router with free-form text output expectation."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    groq_key = os.getenv("GROQ_API_KEY")
+    est_tokens = (len(system_prompt) + len(user_prompt)) // 4
+
+    candidates = llm_router.get_candidate_models(TaskType.ASSIGNMENT, est_tokens=est_tokens)
+
+    for model_spec in candidates:
+        model_name = model_spec.name
+
+        # 1. Google Gemini via REST
+        if model_spec.provider == "gemini" and gemini_key:
+            try:
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "maxOutputTokens": 4096
+                    }
+                }
+                resp = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+                if resp.status_code == 200:
+                    cand = (resp.json().get("candidates") or [{}])[0]
+                    parts = (cand.get("content") or {}).get("parts") or []
+                    raw = "".join(p.get("text", "") for p in parts).strip()
+                    llm_router.record_success(model_name)
+                    return raw
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
+            except Exception as e:
+                llm_router.record_error(model_name, 500, str(e))
+                logger.warning(f"[Assignment Gemini Text Notice] ({model_name}) error: {e}")
+
+        # 2. Groq
+        elif model_spec.provider == "groq" and groq_key:
+            try:
+                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 4096
+                }
+                resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=50)
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"]["content"].strip()
+                    llm_router.record_success(model_name)
+                    return raw
+                llm_router.record_error(model_name, resp.status_code, resp.text[:150])
+            except Exception as e:
+                llm_router.record_error(model_name, 500, str(e))
+                logger.warning(f"[Assignment Groq Text Notice] ({model_name}) error: {e}")
+
+    return None
+
+
+def repair_code_cell_with_llm(cell_source: str, error_traceback: str) -> Optional[str]:
+    """Call LLM router to self-heal a broken code cell given its runtime error/traceback."""
+    system_prompt = (
+        "You are an expert Python debugging assistant for undergraduate data science and programming labs.\n"
+        "A code cell failed during execution with an error.\n"
+        "Your task is to fix the code so it runs successfully without crashing, while producing complete, verifiable outputs.\n"
+        "Rules:\n"
+        "1. Fix the exact runtime error (e.g. missing import, module name error, missing column, wrong method call, plotting display issue).\n"
+        "2. If an external dataset or network resource was not found, provide in-memory fallback data (e.g. using pandas DataFrame) so calculations and plots complete cleanly.\n"
+        "3. Ensure the code prints informative results to stdout using print() and displays tables/metrics.\n"
+        "4. Return ONLY valid Python code inside a single ```python ``` block or as plain text. Do NOT explain or include conversational filler."
+    )
+    user_prompt = (
+        f"Failing Python Code:\n```python\n{cell_source}\n```\n\n"
+        f"Runtime Error Traceback:\n```\n{error_traceback[:1500]}\n```\n\n"
+        "Please provide the corrected Python code that will run without errors."
+    )
+    try:
+        reply = _call_llm_text(system_prompt, user_prompt)
+        if reply:
+            match = re.search(r"```(?:python)?\s*([\s\S]*?)\s*```", reply)
+            if match:
+                return match.group(1).strip()
+            return reply.strip()
+    except Exception as e:
+        logger.warning(f"[Code Self-Heal Notice] Repair call failed: {e}")
     return None
 
 
@@ -608,6 +699,12 @@ import sys
 import os
 import io
 
+os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
+try:
+    os.makedirs('/tmp/matplotlib', exist_ok=True)
+except Exception:
+    pass
+
 # Mock google.colab environment for Colab-specific calls
 class _ColabFilesMock:
     def upload(self):
@@ -625,6 +722,22 @@ def display(*args, **kwargs):
             print(a.to_string())
         else:
             print(a)
+
+# Configure headless matplotlib and avoid GUI blocking
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as _plt
+    _plt.show = lambda *args, **kwargs: None
+except Exception:
+    pass
+
+# Mock plotly Figure.show to prevent browser opens
+try:
+    import plotly.graph_objects as _go
+    _go.Figure.show = lambda self, *args, **kwargs: None
+except Exception:
+    pass
 
 try:
     import pandas as _pd
@@ -670,6 +783,57 @@ try:
     _pd.read_csv = _resilient_read_csv
 except Exception:
     pass
+
+# Resilient seaborn load_dataset with in-memory offline fallbacks
+try:
+    import seaborn as _sns
+    _orig_sns_load = getattr(_sns, '_lecturescribe_orig_load_dataset', _sns.load_dataset)
+    _sns._lecturescribe_orig_load_dataset = _orig_sns_load
+
+    def _resilient_sns_load(name, *args, **kwargs):
+        try:
+            return _orig_sns_load(name, *args, **kwargs)
+        except Exception:
+            import pandas as _pd
+            n_lower = str(name).lower()
+            if n_lower == 'tips':
+                return _pd.DataFrame({
+                    'total_bill': [16.99, 10.34, 21.01, 23.68, 24.59, 25.29, 8.77, 26.88, 15.04, 14.78],
+                    'tip': [1.01, 1.66, 3.50, 3.31, 3.61, 4.71, 2.00, 3.12, 1.96, 3.23],
+                    'sex': ['Female', 'Male', 'Male', 'Male', 'Female', 'Male', 'Male', 'Male', 'Male', 'Male'],
+                    'smoker': ['No', 'No', 'No', 'No', 'No', 'No', 'No', 'No', 'No', 'No'],
+                    'day': ['Sun', 'Sun', 'Sun', 'Sun', 'Sun', 'Sun', 'Sun', 'Sun', 'Sun', 'Sun'],
+                    'time': ['Dinner', 'Dinner', 'Dinner', 'Dinner', 'Dinner', 'Dinner', 'Dinner', 'Dinner', 'Dinner', 'Dinner'],
+                    'size': [2, 3, 3, 2, 4, 4, 2, 4, 2, 2]
+                })
+            elif n_lower == 'iris':
+                return _pd.DataFrame({
+                    'sepal_length': [5.1, 4.9, 4.7, 4.6, 5.0, 7.0, 6.4, 6.9, 5.5, 6.5],
+                    'sepal_width': [3.5, 3.0, 3.2, 3.1, 3.6, 3.2, 3.2, 3.1, 2.3, 2.8],
+                    'petal_length': [1.4, 1.4, 1.3, 1.5, 1.4, 4.7, 4.5, 4.9, 4.0, 4.6],
+                    'petal_width': [0.2, 0.2, 0.2, 0.2, 0.2, 1.4, 1.5, 1.5, 1.3, 1.5],
+                    'species': ['setosa', 'setosa', 'setosa', 'setosa', 'setosa', 'versicolor', 'versicolor', 'versicolor', 'versicolor', 'versicolor']
+                })
+            elif n_lower == 'titanic':
+                return _pd.DataFrame({
+                    'survived': [0, 1, 1, 1, 0, 0, 0, 0, 1, 1],
+                    'pclass': [3, 1, 3, 1, 3, 3, 1, 3, 3, 2],
+                    'sex': ['male', 'female', 'female', 'female', 'male', 'male', 'male', 'male', 'female', 'female'],
+                    'age': [22.0, 38.0, 26.0, 35.0, 35.0, 28.0, 54.0, 2.0, 27.0, 14.0],
+                    'fare': [7.25, 71.28, 7.92, 53.1, 8.05, 8.46, 51.86, 21.07, 11.13, 30.07],
+                    'embarked': ['S', 'C', 'S', 'S', 'S', 'Q', 'S', 'S', 'S', 'C']
+                })
+            elif n_lower == 'flights':
+                return _pd.DataFrame({
+                    'year': [1949, 1949, 1949, 1949, 1950, 1950, 1950, 1950],
+                    'month': ['Jan', 'Feb', 'Mar', 'Apr', 'Jan', 'Feb', 'Mar', 'Apr'],
+                    'passengers': [112, 118, 132, 129, 115, 126, 141, 135]
+                })
+            return _pd.DataFrame({'x': list(range(10)), 'y': [i**2 for i in range(10)]})
+
+    _sns.load_dataset = _resilient_sns_load
+except Exception:
+    pass
 """
 
 
@@ -702,6 +866,18 @@ def sync_assignment_datasets(course_slug: str, assignment_id: str, workspace_dir
 
 def execute_code_cells(cells: List[Dict[str, Any]], work_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """Execute Python code cells in order within a persistent namespace and work directory."""
+    os.environ['MPLCONFIGDIR'] = '/tmp/matplotlib'
+    try:
+        os.makedirs('/tmp/matplotlib', exist_ok=True)
+    except Exception:
+        pass
+
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+    except Exception:
+        pass
+
     executed_cells = []
     execution_counter = 1
 
@@ -751,6 +927,36 @@ def execute_code_cells(cells: List[Dict[str, Any]], work_dir: Optional[str] = No
             stdout_text = captured_stdout.getvalue()
             stderr_text = captured_stderr.getvalue()
 
+            # Self-healing retry with LLM if execution produced errors without output
+            if stderr_text and not stdout_text:
+                logger.info("[Self-Healing Execution] Code cell produced error. Requesting LLM repair...")
+                try:
+                    repaired_source = repair_code_cell_with_llm(source_str, stderr_text)
+                    if repaired_source and repaired_source.strip() != source_str.strip():
+                        re_captured_stdout = io.StringIO()
+                        re_captured_stderr = io.StringIO()
+                        try:
+                            sys.stdout = re_captured_stdout
+                            sys.stderr = re_captured_stderr
+                            exec(repaired_source, shared_namespace)
+                        except Exception as re_ex:
+                            re_captured_stderr.write(f"{type(re_ex).__name__}: {re_ex}\n")
+                        finally:
+                            sys.stdout = old_stdout
+                            sys.stderr = old_stderr
+
+                        re_stdout = re_captured_stdout.getvalue()
+                        re_stderr = re_captured_stderr.getvalue()
+
+                        # If repaired run produced output or cleared the error, adopt it
+                        if re_stdout or not re_stderr:
+                            source_str = repaired_source
+                            stdout_text = re_stdout
+                            stderr_text = re_stderr
+                            logger.info("[Self-Healing Execution] Code cell successfully repaired by LLM!")
+                except Exception as repair_err:
+                    logger.warning(f"[Self-Healing Notice] Repair attempt failed: {repair_err}")
+
             # Capture stdout print statements
             if stdout_text:
                 outputs.append({
@@ -759,8 +965,30 @@ def execute_code_cells(cells: List[Dict[str, Any]], work_dir: Optional[str] = No
                     "text": [line + "\n" for line in stdout_text.splitlines()]
                 })
 
+            # Capture Matplotlib Figures/Plots if generated
+            try:
+                import matplotlib.pyplot as _plt
+                fig_nums = _plt.get_fignums()
+                for num in fig_nums:
+                    fig = _plt.figure(num)
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+                    buf.seek(0)
+                    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+                    outputs.append({
+                        "output_type": "display_data",
+                        "data": {
+                            "image/png": img_b64,
+                            "text/plain": "<Figure size ...>"
+                        },
+                        "metadata": {}
+                    })
+                _plt.close('all')
+            except Exception as fig_err:
+                logger.warning(f"[Figure Capture Notice]: {fig_err}")
+
             # Capture runtime errors
-            if stderr_text:
+            if stderr_text and not stdout_text:
                 outputs.append({
                     "output_type": "error",
                     "ename": "RuntimeError",
@@ -850,6 +1078,22 @@ def render_notebook_to_html(notebook: Dict[str, Any], course_name: str, title: s
                         <pre class="colab-stdout">{html.escape(txt)}</pre>
                     </div>
                     """)
+                elif out_type in ("display_data", "execute_result"):
+                    data = out.get("data", {})
+                    if "image/png" in data:
+                        png_b64 = data["image/png"]
+                        outputs_html.append(f"""
+                        <div class="colab-output colab-plot" style="margin: 12px 0; text-align: center;">
+                            <img src="data:image/png;base64,{png_b64}" style="max-width: 100%; height: auto; border: 1px solid #dadce0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);" alt="Plot output" />
+                        </div>
+                        """)
+                    elif "text/plain" in data:
+                        txt_val = "".join(data["text/plain"]) if isinstance(data["text/plain"], list) else str(data["text/plain"])
+                        outputs_html.append(f"""
+                        <div class="colab-output">
+                            <pre class="colab-stdout">{html.escape(txt_val)}</pre>
+                        </div>
+                        """)
                 elif out_type == "error":
                     tb = "".join(out.get("traceback", []))
                     outputs_html.append(f"""
@@ -1018,10 +1262,30 @@ def convert_html_to_pdf(html_content: str, course_name: str, title: str, noteboo
                 story.append(Preformatted(source, code_style))
                 story.append(Spacer(1, 4))
                 for out in c.get("outputs", []):
-                    if out.get("output_type") == "stream":
+                    o_type = out.get("output_type")
+                    if o_type == "stream":
                         out_text = "".join(out.get("text", []))
                         story.append(Paragraph("<b>Stdout Print Output:</b>", body_style))
                         story.append(Preformatted(out_text, stdout_style))
+                    elif o_type in ("display_data", "execute_result"):
+                        data = out.get("data", {})
+                        if "image/png" in data:
+                            try:
+                                from reportlab.platypus import Image as RLImage
+                                img_bytes = base64.b64decode(data["image/png"])
+                                img_io = io.BytesIO(img_bytes)
+                                story.append(Paragraph("<b>Generated Plot:</b>", body_style))
+                                story.append(RLImage(img_io, width=420, height=250))
+                                story.append(Spacer(1, 6))
+                            except Exception as img_err:
+                                logger.warning(f"[ReportLab Image Notice]: {img_err}")
+                        elif "text/plain" in data:
+                            plain_txt = "".join(data["text/plain"]) if isinstance(data["text/plain"], list) else str(data["text/plain"])
+                            story.append(Preformatted(plain_txt, stdout_style))
+                    elif o_type == "error":
+                        err_text = "".join(out.get("traceback", []))
+                        story.append(Paragraph("<b>Execution Error:</b>", body_style))
+                        story.append(Preformatted(err_text, stdout_style))
                 story.append(Spacer(1, 8))
 
         doc.build(story)
@@ -1058,6 +1322,13 @@ def _synthesize_multipage_pdf(course_name: str, title: str, notebook: Dict[str, 
                     tb = "".join(out.get("traceback", []))
                     for el in tb.splitlines()[-4:]:
                         lines.append(f"  {el[:88]}")
+                elif out.get("output_type") in ("display_data", "execute_result"):
+                    if "image/png" in out.get("data", {}):
+                        lines.append("  [Figure / Plot Output Rendered]")
+                    elif "text/plain" in out.get("data", {}):
+                        txt = out["data"]["text/plain"]
+                        for tl in (txt if isinstance(txt, list) else [str(txt)]):
+                            lines.append(f"  {tl[:88]}")
             lines.append("")
 
     page_size = 50
@@ -1180,12 +1451,13 @@ def process_assignment_pipeline(
     course_name: str,
     user_email: Optional[str],
     pdf_bytes: bytes,
-    filename: str
+    filename: str,
+    require_approval: bool = False
 ) -> Dict[str, Any]:
-    """Execute complete assignment planning and generation pipeline with interactive pause-and-prompt."""
+    """Execute complete assignment planning and generation pipeline with interactive pause-and-prompt / co-pilot approval."""
     t_start = time.perf_counter()
     slug = to_course_slug(course_name)
-    logger.info(f"[Assignment Pipeline] Starting for ID={assignment_id}, Course={course_name}, File={filename}")
+    logger.info(f"[Assignment Pipeline] Starting for ID={assignment_id}, Course={course_name}, File={filename}, require_approval={require_approval}")
 
     try:
         # Step 1: Update status to processing
@@ -1204,8 +1476,22 @@ def process_assignment_pipeline(
         # Step 4: Enrich with Course RAG
         enriched_questions = enrich_questions_with_course_rag(course_name, questions)
 
+        # Gather citations across questions
+        all_citations: List[Dict[str, Any]] = []
+        for q in enriched_questions:
+            if isinstance(q, dict):
+                for ref in (q.get("course_references") or []):
+                    if isinstance(ref, dict):
+                        all_citations.append(ref)
+
         # Step 5: Setup assignment workspace, materialize any datasets embedded in PDF, & sync uploaded datasets
         ws = get_assignment_workspace(assignment_id)
+        try:
+            with open(os.path.join(ws, "raw_extracted_text.txt"), "w", encoding="utf-8") as f:
+                f.write(extracted_text)
+        except Exception as write_err:
+            logger.warning(f"[Assignment Pipeline Notice] Could not save raw extracted text to workspace: {write_err}")
+
         embedded_written = materialize_embedded_datasets(ws, parsed, extracted_text)
         record = db_manager.get_assignment_by_id(assignment_id) or {}
         already_uploaded = list(set((record.get("dataset_files") or []) + embedded_written))
@@ -1229,16 +1515,59 @@ def process_assignment_pipeline(
                 status="needs_input",
                 questions_summary=enriched_questions,
                 required_files=required_files,
+                problem_statement=overview,
+                citations=all_citations,
+                raw_extracted_text=extracted_text,
                 error_message=f"Missing required dataset: '{missing_str}'. Please upload the required file to run and verify code execution."
             )
             return updated or {
                 "status": "needs_input",
                 "assignment_id": assignment_id,
                 "required_files": required_files,
-                "missing_files": missing_files
+                "missing_files": missing_files,
+                "raw_extracted_text": extracted_text,
+                "citations": all_citations
             }
 
-        # Step 7: All requirements met -> Execute and finish
+        # Step 7: Co-Pilot Approval Gate (Wait for User Acknowledgement)
+        if require_approval:
+            problem_titles = [f"Problem {q.get('question_number', i+1)}: {q.get('title', 'Question')}" for i, q in enumerate(enriched_questions)]
+            copilot_greeting = (
+                f"I have analyzed **{len(enriched_questions)} problems** from `{filename}` using layout-preserving extraction and course RAG.\n\n"
+                f"**Extracted Problems:**\n" + "\n".join(f"- {pt}" for pt in problem_titles) + "\n\n"
+                f"**Found Course References:** {len(all_citations)} lecture alignment points detected.\n\n"
+                "I am ready to generate the solution notebook and execute verification code in the sandbox. "
+                "Please review the extracted questions and give your go-ahead to begin execution!"
+            )
+            initial_chat = [
+                {
+                    "role": "assistant",
+                    "content": copilot_greeting,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                }
+            ]
+            updated = db_manager.update_assignment(
+                assignment_id=assignment_id,
+                status="awaiting_approval",
+                questions_summary=enriched_questions,
+                required_files=required_files,
+                problem_statement=overview or f"Assignment Analysis for {title}",
+                citations=all_citations,
+                chat_history=initial_chat,
+                raw_extracted_text=extracted_text,
+                error_message=None
+            )
+            logger.info(f"[Assignment Pipeline] Analysis complete for ID={assignment_id}. Pausing in 'awaiting_approval' for user acknowledgement.")
+            return updated or {
+                "status": "awaiting_approval",
+                "assignment_id": assignment_id,
+                "questions_summary": enriched_questions,
+                "required_files": required_files,
+                "raw_extracted_text": extracted_text,
+                "citations": all_citations
+            }
+
+        # Step 8: Immediate Execution (Direct Mode)
         return execute_and_finish_assignment(
             assignment_id=assignment_id,
             course_name=course_name,
@@ -1259,6 +1588,69 @@ def process_assignment_pipeline(
             error_message=str(e)
         )
         raise e
+
+
+def approve_and_execute_assignment(
+    assignment_id: str,
+    course_name: str,
+    custom_instructions: Optional[str] = None
+) -> Dict[str, Any]:
+    """Execute assignment solution generation and verification after explicit user approval/go-ahead."""
+    t_start = time.perf_counter()
+    slug = to_course_slug(course_name)
+    logger.info(f"[Assignment Approval] Received user go-ahead for ID={assignment_id}, Course={course_name}")
+
+    record = db_manager.get_assignment_by_id(assignment_id)
+    if not record:
+        raise ValueError(f"Assignment record '{assignment_id}' not found.")
+
+    ws = get_assignment_workspace(assignment_id)
+
+    # Recover extracted text from record or disk
+    extracted_text = record.get("raw_extracted_text") or ""
+    if not extracted_text and os.path.exists(os.path.join(ws, "raw_extracted_text.txt")):
+        try:
+            with open(os.path.join(ws, "raw_extracted_text.txt"), "r", encoding="utf-8") as f:
+                extracted_text = f.read()
+        except Exception:
+            pass
+
+    if not extracted_text:
+        source_blob = record.get("source_blob_name")
+        if source_blob:
+            try:
+                pdf_bytes = gcs_storage_service.get_blob_bytes(source_blob)
+                if pdf_bytes:
+                    extracted_text = extract_text_from_pdf(pdf_bytes)
+            except Exception as e:
+                logger.warning(f"[Assignment Approval Notice] Could not read source PDF: {e}")
+
+    enriched_questions = record.get("questions_summary") or []
+    if not enriched_questions and extracted_text:
+        parsed = parse_assignment_problems(extracted_text, course_name)
+        enriched_questions = enrich_questions_with_course_rag(course_name, parsed.get("questions") or [])
+
+    title = record.get("title") or f"{course_name} Assignment"
+    overview = record.get("problem_statement") or ""
+    if custom_instructions and custom_instructions.strip():
+        overview = f"{overview}\n\nUser Guidance: {custom_instructions.strip()}".strip()
+
+    db_manager.update_assignment(
+        assignment_id=assignment_id,
+        status="generating",
+        error_message=None
+    )
+
+    return execute_and_finish_assignment(
+        assignment_id=assignment_id,
+        course_name=course_name,
+        enriched_questions=enriched_questions,
+        title=title,
+        overview=overview,
+        work_dir=ws,
+        assignment_text=extracted_text,
+        t_start=t_start
+    )
 
 
 def resume_assignment_pipeline(assignment_id: str, course_name: str, skip_missing: bool = False) -> Dict[str, Any]:

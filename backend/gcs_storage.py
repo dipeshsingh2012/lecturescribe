@@ -85,7 +85,14 @@ class GCSStorageService:
             return None
         if self._client is not None:
             return self._client
+        if getattr(self, "_init_attempted", False):
+            return None
+        self._init_attempted = True
         try:
+            cred_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            if cred_file and not os.path.exists(cred_file):
+                print(f"[GCS Notice] Credentials file '{cred_file}' not found. Falling back to gcloud default credentials.")
+                os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
             project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT")
             self._client = storage.Client(project=project)
             self._initialized = True
@@ -289,14 +296,16 @@ class GCSStorageService:
         if cached and time.monotonic() - cached[2] < 1800:
             return _build(cached[0], cached[1])
 
-        # 0b. Fast-path: check if gcs_video_blob is already persisted in PostgreSQL (0 network round-trips to GCS)
+        # 0b. Fast-path: check if gcs_video_blob is already persisted in PostgreSQL and exists in bucket
         try:
             from backend.database import db_manager
             v_record = db_manager.get_saved_video(video_id)
             if v_record and v_record.get("gcs_video_blob"):
                 blob_name = v_record["gcs_video_blob"]
-                found_cache[cache_key] = (blob_name, None, time.monotonic())
-                return _build(blob_name, None)
+                blob = bucket.blob(blob_name)
+                if blob.exists():
+                    found_cache[cache_key] = (blob.name, blob.size, time.monotonic())
+                    return _build(blob.name, blob.size)
         except Exception:
             pass
 

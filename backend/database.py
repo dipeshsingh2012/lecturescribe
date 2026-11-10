@@ -1063,6 +1063,7 @@ class RelationalDBManager:
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS chat_history JSONB DEFAULT '[]'::jsonb;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS citations JSONB DEFAULT '[]'::jsonb;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS selected_model VARCHAR(128) DEFAULT NULL;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS raw_extracted_text TEXT DEFAULT '';
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_assignment_submissions (
                             submission_id VARCHAR(64) PRIMARY KEY,
@@ -8543,9 +8544,13 @@ class RelationalDBManager:
         required_files: Optional[List[str]] = None,
         dataset_files: Optional[List[str]] = None,
         error_message: Optional[str] = None,
-        response_time_ms: Optional[int] = None
+        response_time_ms: Optional[int] = None,
+        problem_statement: Optional[str] = None,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        raw_extracted_text: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Update assignment status, output blob paths, questions summary, required files, datasets, or error messages."""
+        """Update assignment status, output blob paths, questions summary, required files, datasets, raw text, citations, or error messages."""
         clean_id = (assignment_id or "").strip()
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         updated_record = None
@@ -8565,11 +8570,23 @@ class RelationalDBManager:
                             dataset_files = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE dataset_files END,
                             error_message = %s,
                             response_time_ms = COALESCE(%s, response_time_ms),
+                            problem_statement = COALESCE(%s, problem_statement),
+                            citations = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE citations END,
+                            chat_history = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE chat_history END,
+                            raw_extracted_text = COALESCE(%s, raw_extracted_text),
                             updated_at = NOW()
                         WHERE assignment_id = %s
                         RETURNING id, assignment_id, course_name, user_email, title, source_filename,
                                   source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                  questions_summary, required_files, dataset_files, error_message, response_time_ms, created_at, updated_at;
+                                  questions_summary, required_files, dataset_files,
+                                  COALESCE(assignment_type, 'notebook') AS assignment_type,
+                                  COALESCE(problem_statement, '') AS problem_statement,
+                                  COALESCE(draft_markdown, '') AS draft_markdown,
+                                  COALESCE(chat_history, '[]'::jsonb) AS chat_history,
+                                  COALESCE(citations, '[]'::jsonb) AS citations,
+                                  COALESCE(selected_model, '') AS selected_model,
+                                  COALESCE(raw_extracted_text, '') AS raw_extracted_text,
+                                  error_message, response_time_ms, created_at, updated_at;
                     """, (
                         status,
                         notebook_blob_name,
@@ -8582,6 +8599,12 @@ class RelationalDBManager:
                         json.dumps(dataset_files) if dataset_files is not None else None,
                         error_message,
                         int(response_time_ms) if response_time_ms is not None else None,
+                        problem_statement,
+                        json.dumps(citations) if citations is not None else None,
+                        json.dumps(citations) if citations is not None else None,
+                        json.dumps(chat_history) if chat_history is not None else None,
+                        json.dumps(chat_history) if chat_history is not None else None,
+                        raw_extracted_text,
                         clean_id
                     ))
                     row = cursor.fetchone()
@@ -8613,6 +8636,14 @@ class RelationalDBManager:
                     item["required_files"] = required_files
                 if dataset_files is not None:
                     item["dataset_files"] = dataset_files
+                if problem_statement is not None:
+                    item["problem_statement"] = problem_statement
+                if citations is not None:
+                    item["citations"] = citations
+                if chat_history is not None:
+                    item["chat_history"] = chat_history
+                if raw_extracted_text is not None:
+                    item["raw_extracted_text"] = raw_extracted_text
                 if error_message is not None:
                     item["error_message"] = error_message
                 if response_time_ms is not None:
@@ -8646,6 +8677,7 @@ class RelationalDBManager:
                                    COALESCE(chat_history, '[]'::jsonb) AS chat_history,
                                    COALESCE(citations, '[]'::jsonb) AS citations,
                                    COALESCE(selected_model, '') AS selected_model,
+                                   COALESCE(raw_extracted_text, '') AS raw_extracted_text,
                                    response_time_ms, error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (user_email = %s OR user_email IS NULL) AND (
@@ -8665,6 +8697,7 @@ class RelationalDBManager:
                                    COALESCE(chat_history, '[]'::jsonb) AS chat_history,
                                    COALESCE(citations, '[]'::jsonb) AS citations,
                                    COALESCE(selected_model, '') AS selected_model,
+                                   COALESCE(raw_extracted_text, '') AS raw_extracted_text,
                                    response_time_ms, error_message, created_at, updated_at
                             FROM lecturescribe_course_assignments
                             WHERE (
@@ -8716,6 +8749,7 @@ class RelationalDBManager:
                                COALESCE(chat_history, '[]'::jsonb) AS chat_history,
                                COALESCE(citations, '[]'::jsonb) AS citations,
                                COALESCE(selected_model, '') AS selected_model,
+                               COALESCE(raw_extracted_text, '') AS raw_extracted_text,
                                response_time_ms, error_message, created_at, updated_at
                         FROM lecturescribe_course_assignments
                         WHERE assignment_id = %s;

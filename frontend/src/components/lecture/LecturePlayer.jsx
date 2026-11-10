@@ -96,10 +96,13 @@ export default function LecturePlayer({
   const [videoError, setVideoError] = useState(false);
   const [copiedTitle, setCopiedTitle] = useState(false);
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
+  const failedUrlsRef = useRef(new Set());
+  const fallbackAttemptedRef = useRef({});
 
   useEffect(() => {
     setVideoError(false);
     setCopiedTitle(false);
+    failedUrlsRef.current.clear();
   }, [activeData?.videoId]);
 
   const courseName = (
@@ -236,6 +239,9 @@ export default function LecturePlayer({
         if (!isMounted) return;
 
         if (data.synced_to_gcs && data.view_url) {
+          if (failedUrlsRef.current.has(data.view_url)) {
+            return;
+          }
           setVideoError(false);
           setGcsUploadState({
             isUploading: false,
@@ -284,7 +290,7 @@ export default function LecturePlayer({
       isMounted = false;
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [activeData?.videoId, freshGcsVideoUrl, setActiveData, syncPollGeneration]);
+  }, [activeData?.videoId, setActiveData, syncPollGeneration]);
 
   const [triggeringSync, setTriggeringSync] = useState(false);
 
@@ -293,6 +299,8 @@ export default function LecturePlayer({
     if (!vid || triggeringSync) return;
 
     setTriggeringSync(true);
+    failedUrlsRef.current.clear();
+    delete fallbackAttemptedRef.current[vid];
     setGcsUploadState(prev => ({
       ...prev,
       isUploading: true,
@@ -1076,7 +1084,7 @@ export default function LecturePlayer({
             );
           }
 
-          if (videoError && !freshGcsVideoUrl && !gcsUploadState.isUploading) {
+          if (videoError && !gcsUploadState.isUploading) {
             const rawSource = activeData.source_url || activeData.sourceUrl || activeData.moodle_url || activeData.moodleUrl || '';
             const sourceInfo = getVideoSourceInfo(rawSource, courseName);
             const sourceDirectUrl = (sourceInfo && sourceInfo.url && !sourceInfo.url.includes('video.lecturescribe.local')) ? sourceInfo.url : null;
@@ -1233,6 +1241,11 @@ export default function LecturePlayer({
                     variant="text"
                     size="small"
                     onClick={() => {
+                      const vid = activeData?.videoId;
+                      if (vid) {
+                        delete fallbackAttemptedRef.current[vid];
+                      }
+                      failedUrlsRef.current.clear();
                       setVideoError(false);
                       const v = iframeRef?.current;
                       if (v) v.load();
@@ -1287,7 +1300,13 @@ export default function LecturePlayer({
                   }
                 }}
                 onError={() => {
-                  if (freshGcsVideoUrl && typeof setActiveData === 'function') {
+                  const currentSrc = iframeRef?.current?.src || streamUrl;
+                  if (currentSrc) failedUrlsRef.current.add(currentSrc);
+                  if (freshGcsVideoUrl) failedUrlsRef.current.add(freshGcsVideoUrl);
+
+                  const vid = activeData?.videoId;
+                  if (freshGcsVideoUrl && typeof setActiveData === 'function' && !fallbackAttemptedRef.current[vid]) {
+                    fallbackAttemptedRef.current[vid] = true;
                     setActiveData(prev => prev ? {
                       ...prev,
                       gcs_video_url: null,

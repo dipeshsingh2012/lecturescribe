@@ -1150,6 +1150,8 @@ export default function HomeView({
           onUploadAssignment={courseAssignments.uploadAssignment}
           onProvideDataset={courseAssignments.provideDataset}
           onSkipDataset={courseAssignments.skipDataset}
+          onApproveAssignment={courseAssignments.approveAssignment}
+          onFetchAnalysis={courseAssignments.fetchAssignmentAnalysis}
           onRegenerateAssignment={courseAssignments.regenerateAssignment}
           onDeleteAssignment={courseAssignments.deleteAssignment}
           onRefreshAssignments={courseAssignments.fetchAssignments}

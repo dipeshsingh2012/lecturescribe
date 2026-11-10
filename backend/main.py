@@ -39,7 +39,7 @@ else:
 
 import datetime
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header, File, UploadFile, Form
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header, File, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
@@ -5911,32 +5911,34 @@ def get_single_video_status(video_id: str):
 
     # 4. Check GCS storage with resolved course name
     gcs_video = gcs_storage_service.find_lecture_video(video_id=vid, course_name=effective_course)
+    has_gcs_bucket = gcs_storage_service._get_bucket() is not None
 
     is_upload_success = bool(active_upload and active_upload.get("status") == "SUCCESS")
     is_uploading = bool(active_upload and active_upload.get("status") == "UPLOADING")
     is_gcs_synced = bool(
         gcs_video
         or is_upload_success
-        or bool(saved and saved.get("gcs_video_blob"))
-        or tracking_info.get("status") in ("SUCCESS", "ALREADY_CACHED")
     )
 
     blob_name = (
         (gcs_video.get("blob_name") if gcs_video else None)
         or (active_upload.get("blob_name") if active_upload else None)
-        or (saved.get("gcs_video_blob") if saved else None)
-        or tracking_info.get("blob_name")
     )
 
     view_url = (
         (gcs_video.get("view_url") if gcs_video else None)
         or (active_upload.get("view_url") if active_upload else None)
     )
-    if not view_url and blob_name:
+    if not view_url and blob_name and has_gcs_bucket:
         try:
             view_url = gcs_storage_service.generate_download_signed_url(blob_name, expires_minutes=180, disposition="inline")
         except Exception:
             pass
+
+    # If view_url is an unsigned storage.googleapis.com URL (signing not supported by user ADC credentials),
+    # route playback through the backend /api/videos/{vid}/stream proxy which has full authenticated GCS read access.
+    if is_gcs_synced and (not view_url or "X-Goog-" not in str(view_url)):
+        view_url = f"/api/videos/{vid}/stream"
 
     size_mb = None
     if gcs_video and gcs_video.get("size_bytes"):
@@ -6069,9 +6071,8 @@ def trigger_video_gcs_sync(
 
 
 @app.get("/api/videos/{video_id}/stream")
-def stream_video_direct(video_id: str):
+def stream_video_direct(video_id: str, request: Request):
     """Directly stream or redirect to the GCS signed URL for a lecture video."""
-    from fastapi.responses import RedirectResponse
     vid = str(video_id).strip()
     saved = db_manager.get_saved_video(vid)
 
@@ -6085,16 +6086,57 @@ def stream_video_direct(video_id: str):
     )
 
     gcs_video = gcs_storage_service.find_lecture_video(video_id=vid, course_name=effective_course)
-    if gcs_video and gcs_video.get("view_url"):
-        return RedirectResponse(url=gcs_video["view_url"], status_code=307)
-    if active_upload and active_upload.get("view_url"):
-        return RedirectResponse(url=active_upload["view_url"], status_code=307)
+    view_url = (
+        (gcs_video.get("view_url") if gcs_video else None)
+        or (active_upload.get("view_url") if active_upload else None)
+    )
+    if view_url and "X-Goog-" in str(view_url):
+        return RedirectResponse(url=view_url, status_code=307)
 
-    blob_name = (saved.get("gcs_video_blob") if saved else None) or (active_upload.get("blob_name") if active_upload else None)
-    if blob_name:
-        url = gcs_storage_service.generate_download_signed_url(blob_name, expires_minutes=180, disposition="inline")
-        if url:
-            return RedirectResponse(url=url, status_code=307)
+    blob_name = (
+        (gcs_video.get("blob_name") if gcs_video else None)
+        or (active_upload.get("blob_name") if active_upload else None)
+        or (saved.get("gcs_video_blob") if saved else None)
+    )
+
+    bucket = gcs_storage_service._get_bucket()
+    if blob_name and bucket is not None:
+        blob = bucket.blob(blob_name)
+        if blob.exists():
+            blob.reload()
+            total_size = blob.size or 0
+            range_header = request.headers.get("range")
+            if range_header:
+                try:
+                    bytes_unit, byte_range = range_header.strip().split("=")
+                    if bytes_unit == "bytes":
+                        parts = byte_range.split("-")
+                        start = int(parts[0]) if parts[0] else 0
+                        end = int(parts[1]) if len(parts) > 1 and parts[1] else total_size - 1
+                        end = min(end, total_size - 1)
+                        chunk_size = min(end - start + 1, 1024 * 1024 * 8)
+                        actual_end = start + chunk_size - 1
+                        data = blob.download_as_bytes(start=start, end=actual_end)
+                        headers = {
+                            "Content-Range": f"bytes {start}-{actual_end}/{total_size}",
+                            "Accept-Ranges": "bytes",
+                            "Content-Length": str(len(data)),
+                            "Content-Type": "video/mp4",
+                        }
+                        return Response(content=data, status_code=206, headers=headers)
+                except Exception as e:
+                    logger.warning(f"Error handling video range request: {e}")
+
+            headers = {
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(total_size),
+                "Content-Type": "video/mp4",
+            }
+            def iterfile():
+                with blob.open("rb") as f:
+                    while chunk := f.read(1024 * 1024 * 4):
+                        yield chunk
+            return StreamingResponse(iterfile(), headers=headers, media_type="video/mp4")
 
     # If not found immediately, raise 404
     raise HTTPException(status_code=404, detail=f"GCS video stream for '{vid}' not yet available.")
@@ -6104,6 +6146,11 @@ def stream_video_direct(video_id: str):
 # Course Assignment Planner & Solution Generator Endpoints
 # ==============================================================================
 
+class AssignmentApproveRequest(BaseModel):
+    user_email: Optional[str] = None
+    custom_instructions: Optional[str] = None
+
+
 @app.post("/api/course/{course_name}/assignments/upload")
 def upload_course_assignment(
     course_name: str,
@@ -6111,9 +6158,10 @@ def upload_course_assignment(
     dataset_file: Optional[UploadFile] = File(None),
     user_email: Optional[str] = Form(None),
     title: Optional[str] = Form(None),
+    require_approval: bool = Form(True),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
-    """Upload assignment PDF, extract problems, enrich with Course RAG, and generate executed notebook & PDF."""
+    """Upload assignment PDF, extract problems with pypdf, enrich with Course RAG, and pause for user acknowledgement (Co-Pilot)."""
     from backend.assignment_service import process_assignment_pipeline, get_assignment_workspace
 
     clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
@@ -6178,7 +6226,8 @@ def upload_course_assignment(
         course_name=clean_course,
         user_email=clean_email,
         pdf_bytes=pdf_bytes,
-        filename=fname
+        filename=fname,
+        require_approval=require_approval
     )
 
     return {
@@ -6186,7 +6235,7 @@ def upload_course_assignment(
         "assignment_id": assignment_id,
         "course_name": clean_course,
         "title": display_title,
-        "message": "Assignment uploaded. Generation pipeline is running in background.",
+        "message": "Assignment uploaded. Analysis is running in background.",
         "record": record
     }
 
@@ -6302,6 +6351,89 @@ def skip_assignment_dataset(
         "status": "success",
         "message": "Proceeding with assignment solution generation without external dataset.",
         "assignment_id": clean_id
+    }
+
+
+@app.post("/api/course/{course_name}/assignments/{assignment_id}/approve")
+def approve_course_assignment_endpoint(
+    course_name: str,
+    assignment_id: str,
+    payload: AssignmentApproveRequest = AssignmentApproveRequest(),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """Receive user acknowledgement/go-ahead to execute solution generation and code verification in sandbox."""
+    from backend.assignment_service import approve_and_execute_assignment
+
+    clean_id = assignment_id.strip()
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    if record.get("status") == "completed":
+        return {
+            "status": "completed",
+            "message": "Assignment is already executed and completed.",
+            "assignment_id": clean_id
+        }
+
+    # Mark status as generating
+    db_manager.update_assignment(clean_id, status="generating", error_message=None)
+
+    background_tasks.add_task(
+        approve_and_execute_assignment,
+        assignment_id=clean_id,
+        course_name=record.get("course_name") or clean_course,
+        custom_instructions=payload.custom_instructions
+    )
+
+    return {
+        "status": "success",
+        "message": "User approval acknowledged. Generating notebook and executing code verification in sandbox.",
+        "assignment_id": clean_id
+    }
+
+
+@app.get("/api/course/{course_name}/assignments/{assignment_id}/analysis")
+def get_assignment_analysis_endpoint(course_name: str, assignment_id: str):
+    """Retrieve full analysis transparency details (raw extracted text, problem breakdown, citations, word counts)."""
+    from backend.assignment_service import get_assignment_workspace
+
+    clean_id = assignment_id.strip()
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+
+    raw_text = record.get("raw_extracted_text") or ""
+    if not raw_text:
+        ws = get_assignment_workspace(clean_id)
+        raw_path = os.path.join(ws, "raw_extracted_text.txt")
+        if os.path.exists(raw_path):
+            try:
+                with open(raw_path, "r", encoding="utf-8") as f:
+                    raw_text = f.read()
+            except Exception:
+                pass
+
+    words = len(raw_text.split()) if raw_text else 0
+    chars = len(raw_text) if raw_text else 0
+
+    return {
+        "status": "success",
+        "assignment_id": clean_id,
+        "course_name": clean_course,
+        "assignment_status": record.get("status"),
+        "title": record.get("title"),
+        "source_filename": record.get("source_filename"),
+        "raw_extracted_text": raw_text,
+        "word_count": words,
+        "char_count": chars,
+        "questions_summary": record.get("questions_summary") or [],
+        "citations": record.get("citations") or [],
+        "required_files": record.get("required_files") or [],
+        "dataset_files": record.get("dataset_files") or [],
+        "chat_history": record.get("chat_history") or []
     }
 
 
@@ -6421,6 +6553,34 @@ def download_assignment_file(assignment_id: str, file_type: str):
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
+
+
+@app.get("/api/course/{course_name}/assignments/{assignment_id}/notebook")
+def get_assignment_notebook_json(course_name: str, assignment_id: str):
+    """Retrieve executed notebook JSON for in-browser inspection and preview."""
+    clean_id = assignment_id.strip()
+    record = db_manager.get_assignment_by_id(clean_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
+    blob_name = record.get("notebook_blob_name")
+    if not blob_name:
+        raise HTTPException(status_code=404, detail="Notebook deliverable is not available yet.")
+    text_content = gcs_storage_service.get_blob_text(blob_name)
+    if not text_content:
+        raw = gcs_storage_service.get_blob_bytes(blob_name)
+        text_content = raw.decode("utf-8", errors="replace") if raw else ""
+    if not text_content:
+        raise HTTPException(status_code=404, detail="Notebook content could not be retrieved.")
+    try:
+        nb_json = json.loads(text_content)
+    except Exception:
+        nb_json = {"raw": text_content}
+    return {
+        "status": "success",
+        "assignment_id": clean_id,
+        "title": record.get("title"),
+        "notebook": nb_json
+    }
 
 
 @app.post("/api/course/{course_name}/assignments/{assignment_id}/regenerate")

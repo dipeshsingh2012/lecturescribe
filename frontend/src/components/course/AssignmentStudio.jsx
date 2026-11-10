@@ -33,7 +33,8 @@ import {
   RefreshCw,
   Copy,
   Check,
-  Cpu
+  Cpu,
+  Play
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
@@ -89,6 +90,7 @@ export default function AssignmentStudio({
   const [sendingMessage, setSendingMessage] = useState(false);
   const [messageInput, setMessageInput] = useState('');
   const [compilingPdf, setCompilingPdf] = useState(false);
+  const [isExecutingApproved, setIsExecutingApproved] = useState(false);
   const [pdfDownloadUrl, setPdfDownloadUrl] = useState(null);
   const [editorMode, setEditorMode] = useState(() => {
     try {
@@ -240,6 +242,29 @@ export default function AssignmentStudio({
       });
     } catch (err) {
       console.warn('Flush draft save error:', err);
+    }
+  };
+
+  const handleApproveAndExecute = async () => {
+    if (!sessionId || !courseSlug) return;
+    setIsExecutingApproved(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(sessionId)}/approve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_email: userEmail || undefined })
+        }
+      );
+      if (res.ok) {
+        setStudioStatus('generating');
+        if (onAssignmentUpdated) onAssignmentUpdated();
+      }
+    } catch (e) {
+      console.error('Approve and execute error:', e);
+    } finally {
+      setIsExecutingApproved(false);
     }
   };
 
@@ -982,6 +1007,28 @@ export default function AssignmentStudio({
 
           {/* Chat message thread */}
           <Box sx={{ flex: 1, overflowY: 'auto', p: 2.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {studioStatus === 'awaiting_approval' && (
+              <Alert
+                severity="warning"
+                icon={<Sparkles size={16} />}
+                action={
+                  <Button
+                    variant="contained"
+                    size="small"
+                    color="warning"
+                    onClick={() => handleApproveAndExecute()}
+                    disabled={isExecutingApproved}
+                    startIcon={isExecutingApproved ? <CircularProgress size={14} color="inherit" /> : <Play size={14} />}
+                    sx={{ textTransform: 'none', fontWeight: 800, borderRadius: 1.5 }}
+                  >
+                    {isExecutingApproved ? 'Executing...' : 'Approve & Execute Now'}
+                  </Button>
+                }
+                sx={{ mb: 1, borderRadius: 2 }}
+              >
+                <strong>Awaiting Your Go-Ahead:</strong> The AI parsed this assignment and mapped lecture references. Review the extracted questions below or click <strong>Approve & Execute Now</strong> to run the code in the sandbox.
+              </Alert>
+            )}
             {chatHistory.map((msg, idx) => {
               const isUser = msg.role === 'user';
               return (

@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": "2026-11-01T21:25:07.972506+00:00",
+  "last_updated": "2026-11-14T04:47:59.909920+00:00",
   "summary": {
-    "total_tracked": 37,
-    "success": 12,
+    "total_tracked": 38,
+    "success": 13,
     "already_cached": 25,
     "failed": 0,
     "pending": 0,
-    "total_size_mb": 10922.01
+    "total_size_mb": 11265.39
   },
   "videos": {
     "1225764089": {
@@ -663,6 +663,24 @@
       "cues_count": 1061,
       "error": null,
       "error_category": null
+    },
+    "1245643302": {
+      "video_id": "1245643302",
+      "title": "Introduction to Research Live session -7 ( 10/ 11 / 2026)",
+      "course_name": "1.8 Introduction to Research",
+      "course_slug": "introduction-to-research",
+      "status": "SUCCESS",
+      "attempts": 2,
+      "last_attempt_at": "2026-11-14T04:41:56.340891+00:00",
+      "error": null,
+      "error_category": null,
+      "blob_name": "courses/introduction-to-research/lectures/1245643302/Introduction_to_Research_Live_session_-7___10__11___2026_.mp4",
+      "gcs_uri": "gs://lecturescribe-resources/courses/introduction-to-research/lectures/1245643302/",
+      "size_mb": 343.38,
+      "duration_seconds": 348.2,
+      "has_video": true,
+      "has_captions": true,
+      "cues_count": 1600
     }
   }
 }

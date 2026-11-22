@@ -153,6 +153,248 @@ def test_detect_required_datasets():
     assert not any(f.endswith(".py") for f in detected)
 
 
+def test_notebook_generation_receives_uploaded_dataset_context(monkeypatch, tmp_path):
+    from backend import assignment_service
+
+    dataset_path = tmp_path / "Assignment_6.csv"
+    dataset_path.write_text(
+        "GRE Score,TOEFL Score,CGPA,Chance of Admit\n"
+        "337,118,9.65,0.92\n"
+        "324,107,8.87,0.76\n",
+        encoding="utf-8"
+    )
+    captured_prompt = {}
+
+    def capture_prompt(system_prompt, user_prompt):
+        captured_prompt["system"] = system_prompt
+        captured_prompt["user"] = user_prompt
+        return {"cells": []}
+
+    monkeypatch.setattr(assignment_service, "_call_llm_json", capture_prompt)
+
+    assignment_service.generate_notebook_solution(
+        course_name="Data Science Lab",
+        title="Assignment 6",
+        overview="Predict admission chance.",
+        enriched_questions=[],
+        assignment_text="Use the supplied dataset.",
+        work_dir=str(tmp_path),
+        dataset_files=["Assignment_6.csv"]
+    )
+
+    assert '"filename": "Assignment_6.csv"' in captured_prompt["user"]
+    assert '"GRE Score"' in captured_prompt["user"]
+    assert '"sample_rows"' not in captured_prompt["user"]
+    assert "NEVER replace an uploaded dataset" in captured_prompt["system"]
+
+
+def test_gradient_descent_generation_prompt_requires_scaling_and_loss_history(monkeypatch):
+    from backend import assignment_service
+
+    captured_prompt = {}
+
+    def capture_prompt(system_prompt, user_prompt):
+        captured_prompt["system"] = system_prompt
+        return {"cells": []}
+
+    monkeypatch.setattr(assignment_service, "_call_llm_json", capture_prompt)
+    assignment_service.generate_notebook_solution(
+        course_name="Data Science Lab",
+        title="Assignment 6",
+        overview="",
+        enriched_questions=[{
+            "question_text": "Implement linear regression using gradient descent."
+        }]
+    )
+
+    assert "Standardize non-intercept features using training-set statistics only" in captured_prompt["system"]
+    assert "LECTURESCRIBE_OPTIMIZATION_METRICS=" in captured_prompt["system"]
+    assert "after every update" in captured_prompt["system"]
+
+
+def test_gradient_descent_validation_rejects_missing_nonfinite_or_increasing_loss():
+    from backend.assignment_service import (
+        _OPTIMIZATION_METRICS_PREFIX,
+        _validate_gradient_descent_execution
+    )
+
+    def executed_cell(losses):
+        payload = json.dumps({"training_loss": losses}, allow_nan=True)
+        return [{
+            "cell_type": "code",
+            "outputs": [{
+                "output_type": "stream",
+                "text": [_OPTIMIZATION_METRICS_PREFIX + payload]
+            }]
+        }]
+
+    assert _validate_gradient_descent_execution(executed_cell([10.0, 4.0, 1.0])) == 2
+    with pytest.raises(ValueError, match="found 0"):
+        _validate_gradient_descent_execution([{"cell_type": "code", "outputs": []}])
+    with pytest.raises(ValueError, match="not finite"):
+        _validate_gradient_descent_execution(executed_cell([10.0, float("inf")]))
+    with pytest.raises(ValueError, match="increased"):
+        _validate_gradient_descent_execution(executed_cell([10.0, 11.0]))
+
+
+def test_gradient_descent_pipeline_fails_before_rendering_unstable_solution(monkeypatch, tmp_path):
+    from backend import assignment_service
+
+    updates = []
+    monkeypatch.setattr(assignment_service.db_manager, "get_assignment_by_id", lambda _: {"dataset_files": []})
+    monkeypatch.setattr(
+        assignment_service.db_manager,
+        "update_assignment",
+        lambda *args, **kwargs: updates.append((args, kwargs))
+    )
+    monkeypatch.setattr(assignment_service, "_log_assignment_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        assignment_service,
+        "generate_notebook_solution",
+        lambda *args, **kwargs: {"cells": [{"cell_type": "code", "source": "pass"}]}
+    )
+
+    def execute_with_increasing_loss(cells, work_dir=None):
+        payload = json.dumps({"training_loss": [10.0, 12.0]})
+        return [{
+            "cell_type": "code",
+            "outputs": [{
+                "output_type": "stream",
+                "text": [assignment_service._OPTIMIZATION_METRICS_PREFIX + payload]
+            }]
+        }]
+
+    monkeypatch.setattr(assignment_service, "execute_code_cells", execute_with_increasing_loss)
+    monkeypatch.setattr(
+        assignment_service,
+        "render_notebook_to_html",
+        lambda *args, **kwargs: pytest.fail("Unstable notebook must not be rendered.")
+    )
+
+    with pytest.raises(ValueError, match="increased"):
+        assignment_service._execute_with_failure_logging(
+            assignment_id="asgn_unstable_gradient_descent",
+            course_name="Data Science Lab",
+            enriched_questions=[],
+            title="Assignment 6",
+            overview="",
+            assignment_text="Use gradient descent to fit the model.",
+            work_dir=str(tmp_path)
+        )
+
+    assert updates[-1][1]["status"] == "failed"
+
+
+def test_approval_resyncs_uploaded_datasets_before_execution(monkeypatch, tmp_path):
+    from backend import assignment_service
+
+    record = {
+        "assignment_id": "asgn_approval_dataset",
+        "dataset_files": ["Assignment_6.csv"],
+        "raw_extracted_text": "Use the supplied dataset.",
+        "questions_summary": [],
+        "title": "Assignment 6",
+        "problem_statement": "Predict admission chance."
+    }
+    sync_calls = []
+    monkeypatch.setattr(assignment_service.db_manager, "get_assignment_by_id", lambda _: record)
+    monkeypatch.setattr(assignment_service.db_manager, "update_assignment", lambda *args, **kwargs: None)
+    monkeypatch.setattr(assignment_service.db_manager, "append_assignment_progress", lambda *args: None)
+    monkeypatch.setattr(assignment_service, "get_assignment_workspace", lambda _: str(tmp_path))
+
+    def fake_sync(course, assignment_id, workspace, files):
+        sync_calls.append((course, assignment_id, workspace, files))
+        return files
+
+    monkeypatch.setattr(
+        assignment_service,
+        "sync_assignment_datasets",
+        fake_sync
+    )
+    monkeypatch.setattr(
+        assignment_service,
+        "execute_and_finish_assignment",
+        lambda **kwargs: kwargs
+    )
+
+    assignment_service.approve_and_execute_assignment(
+        "asgn_approval_dataset",
+        "Data Science Lab"
+    )
+
+    assert len(sync_calls) == 1
+    assert sync_calls[0][1:] == (
+        "asgn_approval_dataset",
+        str(tmp_path),
+        ["Assignment_6.csv"]
+    )
+
+
+def test_regenerate_uses_saved_text_when_source_pdf_is_unavailable(monkeypatch, tmp_path):
+    from fastapi import BackgroundTasks
+    from backend import assignment_service
+    from backend.main import regenerate_course_assignment_endpoint
+
+    record = {
+        "assignment_id": "asgn_missing_source_pdf",
+        "course_name": "Data Science Lab",
+        "user_email": "tutor@uni.edu",
+        "source_filename": "Assignment_6.pdf",
+        "source_blob_name": "courses/missing/Assignment_6.pdf",
+        "raw_extracted_text": "Use the supplied data to predict admission chance.",
+        "questions_summary": [{"question_number": 1, "question_text": "Fit linear regression."}]
+    }
+    monkeypatch.setattr(assignment_service.db_manager, "get_assignment_by_id", lambda _: record)
+    monkeypatch.setattr(assignment_service.db_manager, "update_assignment", lambda *args, **kwargs: None)
+    monkeypatch.setattr(assignment_service.db_manager, "append_assignment_progress", lambda *args: None)
+    monkeypatch.setattr(assignment_service.gcs_storage_service, "get_blob_bytes", lambda _: None)
+    monkeypatch.setattr(assignment_service, "get_assignment_workspace", lambda _: str(tmp_path))
+
+    background_tasks = BackgroundTasks()
+    response = regenerate_course_assignment_endpoint(
+        "data-science-lab",
+        "asgn_missing_source_pdf",
+        background_tasks=background_tasks
+    )
+
+    assert response["status"] == "success"
+    assert "saved assignment analysis" in response["message"]
+    assert background_tasks.tasks[0].func is assignment_service.approve_and_execute_assignment
+    assert background_tasks.tasks[0].kwargs["assignment_id"] == "asgn_missing_source_pdf"
+
+
+def test_regenerate_without_pdf_or_saved_text_does_not_mark_assignment_pending(monkeypatch, tmp_path):
+    from fastapi import BackgroundTasks, HTTPException
+    from backend import assignment_service
+    from backend.main import regenerate_course_assignment_endpoint
+
+    record = {
+        "assignment_id": "asgn_no_source_or_text",
+        "source_filename": "Assignment.pdf",
+        "source_blob_name": "courses/missing/Assignment.pdf",
+        "raw_extracted_text": ""
+    }
+    updates = []
+    monkeypatch.setattr(assignment_service.db_manager, "get_assignment_by_id", lambda _: record)
+    monkeypatch.setattr(
+        assignment_service.db_manager,
+        "update_assignment",
+        lambda *args, **kwargs: updates.append((args, kwargs))
+    )
+    monkeypatch.setattr(assignment_service.gcs_storage_service, "get_blob_bytes", lambda _: None)
+    monkeypatch.setattr(assignment_service, "get_assignment_workspace", lambda _: str(tmp_path))
+
+    with pytest.raises(HTTPException) as error:
+        regenerate_course_assignment_endpoint(
+            "data-science-lab",
+            "asgn_no_source_or_text",
+            background_tasks=BackgroundTasks()
+        )
+
+    assert error.value.status_code == 404
+    assert updates == []
+
+
 def test_cleaned_output_dataset_does_not_pause_pipeline(monkeypatch):
     from backend.assignment_service import process_assignment_pipeline
 

@@ -35,7 +35,14 @@ except ImportError:
     storage = None
     DefaultCredentialsError = Exception
 
+try:
+    from google.cloud.storage.retry import DEFAULT_RETRY as GCS_DEFAULT_RETRY
+except ImportError:
+    GCS_DEFAULT_RETRY = None
+
 DEFAULT_BUCKET_NAME = os.getenv("GCS_RESOURCES_BUCKET", "lecturescribe-resources")
+GCS_VIDEO_UPLOAD_RETRY_DEADLINE_SECONDS = 600
+GCS_VIDEO_UPLOAD_TIMEOUT = (30, 180)
 
 
 def to_gcs_course_slug(course_name: Optional[str]) -> str:
@@ -642,13 +649,21 @@ class GCSStorageService:
 
             bucket = client.bucket(target_bucket_name)
             blob = bucket.blob(blob_name)
-            blob.chunk_size = 1024 * 1024 * 8  # 8MB chunked uploads
+            blob.chunk_size = 1024 * 1024 * 4
 
             print(f"☁️ [GCS Video Upload Starting] Uploading {total_mb:.2f} MB to gs://{target_bucket_name}/{blob_name}...")
             if progress_callback:
                 progress_callback(f"Uploading {total_mb:.1f} MB to Cloud Storage (in progress)...")
             up_start = time.time()
-            blob.upload_from_filename(actual_mp4, content_type="video/mp4")
+            upload_options = {
+                "content_type": "video/mp4",
+                "timeout": GCS_VIDEO_UPLOAD_TIMEOUT,
+            }
+            if GCS_DEFAULT_RETRY is not None:
+                upload_options["retry"] = GCS_DEFAULT_RETRY.with_deadline(
+                    GCS_VIDEO_UPLOAD_RETRY_DEADLINE_SECONDS
+                )
+            blob.upload_from_filename(actual_mp4, **upload_options)
             up_duration = time.time() - up_start
             total_duration = time.time() - start_time
 
@@ -812,19 +827,29 @@ class GCSStorageService:
 
         console_url = f"https://console.cloud.google.com/storage/browser/{target_bucket}/{folder_base}"
 
-        print(f"\n🎉 [GCS Bundle Upload Complete]")
-        print(f"   Total Items:     {len(uploaded)} files in gs://{target_bucket}/{folder_base}/")
+        video_status = (video_result or {}).get("status") or (
+            "skipped" if not upload_video else "not attempted"
+        )
+        video_succeeded = video_status in ("success", "emulated")
+        video_uploaded = video_status == "success"
+        bundle_status = "Complete" if not upload_video or video_succeeded else "Partial"
+
+        print(f"\n🎉 [GCS Bundle Upload {bundle_status}]")
+        print(f"   Supporting Files: {len(files)} in gs://{target_bucket}/{folder_base}/")
+        print(f"   Video Upload:     {video_status}")
+        if video_result and video_result.get("error"):
+            print(f"   Video Error:      {video_result['error']}")
         print(f"   Console URL:     {console_url}")
         print(f"==================================================================\n")
 
         return {
-            "status": "success",
+            "status": "success" if bundle_status == "Complete" else "partial_success",
             "bucket": target_bucket,
             "folder": folder_base,
             "gcs_uri": f"gs://{target_bucket}/{folder_base}/",
             "console_url": console_url,
             "files": uploaded,
-            "video_uploaded": bool(video_result and video_result.get("status") == "success"),
+            "video_uploaded": video_uploaded,
             "video_details": video_result,
             "title": title,
             "video_id": video_id

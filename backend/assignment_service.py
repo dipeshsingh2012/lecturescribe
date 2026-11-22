@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import os
 import io
+import csv
+import math
 import re
 import sys
 import json
@@ -42,6 +44,18 @@ from backend.gcs_storage import gcs_storage_service, GCSStorageService
 from backend.llm_router import llm_router, TaskType
 
 logger = logging.getLogger("lecturescribe.assignment_service")
+
+
+def _log_assignment_progress(
+    assignment_id: str,
+    phase: str,
+    message: str,
+    level: str = "info"
+) -> None:
+    """Write an assignment milestone to server logs and its persisted progress feed."""
+    log_method = getattr(logger, level, logger.info)
+    log_method(f"[Assignment {assignment_id}] {phase}: {message}")
+    db_manager.append_assignment_progress(assignment_id, phase, message, level)
 
 
 # =====================================================================
@@ -597,14 +611,137 @@ def enrich_questions_with_course_rag(course_name: str, questions: List[Dict[str,
 # 4. LLM GENERATION OF JUPYTER NOTEBOOK CELLS (COLAB STUDENT STYLE)
 # =====================================================================
 
+def _uploaded_dataset_context(work_dir: str, dataset_files: List[str]) -> str:
+    """Describe uploaded datasets to the notebook generator without sending full files."""
+    descriptions = []
+    for filename in dict.fromkeys(dataset_files or []):
+        filename = str(filename).strip()
+        if not filename:
+            continue
+
+        dataset_info: Dict[str, Any] = {"filename": filename}
+        dataset_path = os.path.join(work_dir, filename)
+        if os.path.isfile(dataset_path):
+            dataset_info["size_bytes"] = os.path.getsize(dataset_path)
+            extension = os.path.splitext(filename)[1].lower()
+            if extension in (".csv", ".tsv"):
+                try:
+                    delimiter = "\t" if extension == ".tsv" else ","
+                    with open(dataset_path, "r", newline="", encoding="utf-8-sig") as file:
+                        reader = csv.reader(file, delimiter=delimiter)
+                        dataset_info["columns"] = next(reader, [])
+                except (OSError, UnicodeError, csv.Error) as err:
+                    logger.warning(
+                        f"[Assignment Dataset Notice] Could not preview {filename}: {err}"
+                    )
+        descriptions.append(dataset_info)
+
+    if not descriptions:
+        return ""
+    return (
+        "User-uploaded dataset files available in the notebook execution directory "
+        "(these are the actual assignment inputs):\n"
+        f"{json.dumps(descriptions, ensure_ascii=False, indent=2)}\n\n"
+    )
+
+
+_OPTIMIZATION_METRICS_PREFIX = "LECTURESCRIBE_OPTIMIZATION_METRICS="
+
+
+def _requires_gradient_descent_validation(
+    assignment_text: str,
+    enriched_questions: List[Dict[str, Any]],
+    additional_context: str = ""
+) -> bool:
+    question_text = " ".join(
+        str(question.get("question_text") or "")
+        for question in enriched_questions
+    )
+    combined_text = " ".join((assignment_text or "", question_text, additional_context or ""))
+    return bool(re.search(r"\bgradient[\s-]+descent\b", combined_text, re.IGNORECASE))
+
+
+def _validate_gradient_descent_execution(executed_cells: List[Dict[str, Any]]) -> int:
+    """Require a finite, non-increasing training-loss history from gradient-descent notebooks."""
+    reported_histories = []
+    for cell in executed_cells:
+        for output in cell.get("outputs", []):
+            if output.get("output_type") != "stream":
+                continue
+            text = output.get("text", [])
+            if isinstance(text, list):
+                text = "".join(text)
+            for line in str(text).splitlines():
+                if line.startswith(_OPTIMIZATION_METRICS_PREFIX):
+                    reported_histories.append(line[len(_OPTIMIZATION_METRICS_PREFIX):])
+
+    if len(reported_histories) != 1:
+        raise ValueError(
+            "Expected exactly one machine-readable gradient-descent loss history, "
+            f"found {len(reported_histories)}."
+        )
+
+    try:
+        metrics = json.loads(reported_histories[0])
+    except json.JSONDecodeError as err:
+        raise ValueError("Gradient-descent loss history is not valid JSON.") from err
+
+    history = metrics.get("training_loss") if isinstance(metrics, dict) else None
+    if not isinstance(history, list) or len(history) < 2:
+        raise ValueError("Gradient-descent loss history must include initial and updated losses.")
+
+    finite_history = []
+    for index, value in enumerate(history):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"Training loss at step {index} is not numeric.")
+        try:
+            numeric_value = float(value)
+        except (OverflowError, ValueError):
+            numeric_value = float("inf")
+        if not math.isfinite(numeric_value):
+            raise ValueError(f"Training loss at step {index} is not finite.")
+        finite_history.append(numeric_value)
+
+    for index, (previous, current) in enumerate(zip(finite_history, finite_history[1:]), start=1):
+        tolerance = 1e-10 * max(1.0, abs(previous))
+        if current > previous + tolerance:
+            raise ValueError(
+                f"Training loss increased at step {index} "
+                f"({previous:.6g} to {current:.6g}); gradient descent appears unstable."
+            )
+
+    return len(finite_history) - 1
+
+
 def generate_notebook_solution(
     course_name: str,
     title: str,
     overview: str,
     enriched_questions: List[Dict[str, Any]],
-    assignment_text: str = ""
+    assignment_text: str = "",
+    work_dir: str = "",
+    dataset_files: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Generate authentic, practical student-style solution cells matching Google Colab submissions."""
+    requires_gradient_descent_validation = _requires_gradient_descent_validation(
+        assignment_text,
+        enriched_questions,
+        f"{title}\n{overview}"
+    )
+    optimization_instructions = ""
+    if requires_gradient_descent_validation:
+        optimization_instructions = (
+            "Gradient-descent requirement for this assignment: Standardize non-intercept features using "
+            "training-set statistics only, apply the same transformation to test data, and choose a "
+            "stable learning rate. Track the training loss before the first update and after every "
+            "update. Check that every loss and parameter is finite and that loss does not increase "
+            "beyond a small floating-point tolerance; if it does, reduce the learning rate or improve "
+            "scaling before reporting results. Print exactly one plain-text line with this prefix and "
+            "a JSON object containing the complete numeric loss history as Python floats: "
+            f"{_OPTIMIZATION_METRICS_PREFIX}{{\"training_loss\": [...]}}. "
+            "Include the initial loss and one value per update.\n"
+        )
+
     system_prompt = (
         "You are an undergraduate university student completing a data science/programming lab assignment in Google Colab.\n"
         "Generate a genuine, working Jupyter Notebook (.ipynb) solution matching real student Colab submissions.\n"
@@ -620,8 +757,10 @@ def generate_notebook_solution(
         "   - Section print delimiters like: print('==============First 5 rows===========')\n"
         "   - Calls to display(df.head()), display(df.tail()), print(f'Total Rows:', df.shape[0]), display(df.dtypes), display(df.isna().sum())\n"
         "   - CRITICAL: If the uploaded Assignment Document Text contains the dataset inline (as a table, rows, CSV lines, or dictionary), you MUST construct the DataFrame using those EXACT rows, column names, and values from the PDF document (and save it to any referenced CSV filename such as 'cleaned_student_data.csv' via to_csv(index=False)). NEVER invent unrelated dummy data when the data is provided in the PDF!\n"
+        "   - CRITICAL: User-uploaded dataset files listed in the prompt are real assignment inputs available in the notebook's working directory. Load the relevant uploaded file by its exact filename and use its actual columns and records. NEVER replace an uploaded dataset with generated, random, synthetic, or sample data; do not overwrite the uploaded source file. If an uploaded file cannot be read, report the error instead of fabricating data.\n"
         "   - If a question creates, cleans, or transforms a DataFrame and a subsequent question references an output CSV (such as 'cleaned_student_data.csv'), explicitly save it via df.to_csv('cleaned_student_data.csv', index=False) so later cells can load it cleanly.\n"
         "4. DO NOT add robotic AI commentary, promotional disclaimers, textbook lectures, or 'Generated by AI' labels. Keep it 100% focused, practical, and authentic to a student assignment.\n"
+        f"{optimization_instructions}"
         "5. Output a valid JSON object matching:\n"
         "{\n"
         '  "cells": [\n'
@@ -647,11 +786,13 @@ def generate_notebook_solution(
         if assignment_text
         else ""
     )
+    dataset_context_section = _uploaded_dataset_context(work_dir, dataset_files or [])
 
     user_prompt = (
         f"Course: {course_name}\n"
         f"Assignment: {title}\n\n"
         f"{pdf_context_section}"
+        f"{dataset_context_section}"
         f"Assignment Questions:\n{json.dumps(questions_payload, indent=2)}\n\n"
         "Write the Google Colab Python notebook code cells for all questions."
     )
@@ -1398,6 +1539,7 @@ def execute_and_finish_assignment(
     t_exec_start = t_start if t_start is not None else time.perf_counter()
     slug = to_course_slug(course_name)
     logger.info(f"[Assignment Execution] Starting solution generation and runner for ID={assignment_id} in {work_dir}")
+    _log_assignment_progress(assignment_id, "generation", "Starting solution notebook generation.")
 
     db_manager.update_assignment(
         assignment_id,
@@ -1405,26 +1547,81 @@ def execute_and_finish_assignment(
         questions_summary=enriched_questions
     )
 
+    record = db_manager.get_assignment_by_id(assignment_id) or {}
+    dataset_files = record.get("dataset_files") or []
+    missing_dataset_files = [
+        filename for filename in dataset_files
+        if not os.path.isfile(os.path.join(work_dir, filename))
+    ]
+    if missing_dataset_files:
+        error_message = (
+            "Uploaded assignment dataset file(s) are missing from the execution workspace: "
+            + ", ".join(missing_dataset_files)
+        )
+        raise FileNotFoundError(error_message)
+
     # 1. LLM Solution Generation (Notebook Cells)
     raw_notebook = generate_notebook_solution(
         course_name,
         title,
         overview,
         enriched_questions,
-        assignment_text=assignment_text
+        assignment_text=assignment_text,
+        work_dir=work_dir,
+        dataset_files=dataset_files
     )
     cells = raw_notebook.get("cells", [])
+    code_cell_count = sum(1 for cell in cells if cell.get("cell_type") == "code")
+    _log_assignment_progress(
+        assignment_id,
+        "generation",
+        f"Generated {len(cells)} notebook cells ({code_cell_count} code cells)."
+    )
 
     # 2. Real Code Execution in work_dir with stdout / outputs capture
+    _log_assignment_progress(assignment_id, "execution", "Running notebook code cells.")
     executed_cells = execute_code_cells(cells, work_dir=work_dir)
     final_notebook = build_ipynb_structure(executed_cells)
     notebook_json_str = json.dumps(final_notebook, indent=2)
+    execution_errors = sum(
+        1
+        for cell in executed_cells
+        if any(output.get("output_type") == "error" for output in cell.get("outputs", []))
+    )
+    _log_assignment_progress(
+        assignment_id,
+        "execution",
+        f"Executed {code_cell_count} code cells; {execution_errors} cell errors captured."
+    )
+
+    if _requires_gradient_descent_validation(
+        assignment_text,
+        enriched_questions,
+        f"{title}\n{overview}"
+    ):
+        try:
+            optimization_steps = _validate_gradient_descent_execution(executed_cells)
+        except ValueError as validation_error:
+            _log_assignment_progress(
+                assignment_id,
+                "validation",
+                f"Gradient-descent numerical validation failed: {validation_error}",
+                "error"
+            )
+            raise
+        _log_assignment_progress(
+            assignment_id,
+            "validation",
+            f"Gradient-descent loss history passed finite/non-increasing checks for {optimization_steps} updates."
+        )
 
     # 3. Render Executed Notebook to PDF
+    _log_assignment_progress(assignment_id, "render", "Rendering solution PDF.")
     html_content = render_notebook_to_html(final_notebook, course_name, title)
     pdf_bytes_out = convert_html_to_pdf(html_content, course_name, title, final_notebook)
 
     # 4. Upload Deliverables to GCS
+    _log_assignment_progress(assignment_id, "storage", "Saving notebook and PDF deliverables.")
     ipynb_blob = GCSStorageService.get_assignment_blob_path(slug, assignment_id, "solution.ipynb")
     pdf_blob = GCSStorageService.get_assignment_blob_path(slug, assignment_id, "solution.pdf")
 
@@ -1433,6 +1630,7 @@ def execute_and_finish_assignment(
 
     # 5. Mark Completed
     elapsed_ms = max(1, int(round((time.perf_counter() - t_exec_start) * 1000)))
+    _log_assignment_progress(assignment_id, "completed", f"Solution files saved in {elapsed_ms} ms.")
     updated = db_manager.update_assignment(
         assignment_id=assignment_id,
         status="completed",
@@ -1444,6 +1642,20 @@ def execute_and_finish_assignment(
     )
     logger.info(f"[Assignment Execution] Successfully completed ID={assignment_id} in {elapsed_ms}ms")
     return updated or {}
+
+
+def _execute_with_failure_logging(**kwargs) -> Dict[str, Any]:
+    assignment_id = kwargs["assignment_id"]
+    try:
+        return execute_and_finish_assignment(**kwargs)
+    except Exception as err:
+        _log_assignment_progress(assignment_id, "failed", str(err), "error")
+        db_manager.update_assignment(
+            assignment_id,
+            status="failed",
+            error_message=str(err)
+        )
+        raise
 
 
 def process_assignment_pipeline(
@@ -1458,6 +1670,7 @@ def process_assignment_pipeline(
     t_start = time.perf_counter()
     slug = to_course_slug(course_name)
     logger.info(f"[Assignment Pipeline] Starting for ID={assignment_id}, Course={course_name}, File={filename}, require_approval={require_approval}")
+    _log_assignment_progress(assignment_id, "upload", f"Processing uploaded assignment PDF '{filename}'.")
 
     try:
         # Step 1: Update status to processing
@@ -1465,6 +1678,11 @@ def process_assignment_pipeline(
 
         # Step 2: Extract text from assignment PDF
         extracted_text = extract_text_from_pdf(pdf_bytes)
+        _log_assignment_progress(
+            assignment_id,
+            "pdf",
+            f"Extracted {len(extracted_text)} characters of assignment text."
+        )
 
         # Step 3: Segment into questions and detect required datasets
         parsed = parse_assignment_problems(extracted_text, course_name)
@@ -1472,6 +1690,11 @@ def process_assignment_pipeline(
         overview = parsed.get("overview") or ""
         questions = parsed.get("questions") or []
         required_files = parsed.get("required_files") or []
+        _log_assignment_progress(
+            assignment_id,
+            "analysis",
+            f"Parsed {len(questions)} questions; detected {len(required_files)} required dataset files."
+        )
 
         # Step 4: Enrich with Course RAG
         enriched_questions = enrich_questions_with_course_rag(course_name, questions)
@@ -1496,6 +1719,12 @@ def process_assignment_pipeline(
         record = db_manager.get_assignment_by_id(assignment_id) or {}
         already_uploaded = list(set((record.get("dataset_files") or []) + embedded_written))
         available_files = sync_assignment_datasets(slug, assignment_id, ws, already_uploaded)
+        available_files_message = ", ".join(available_files) if available_files else "none"
+        _log_assignment_progress(
+            assignment_id,
+            "dataset",
+            f"Found {len(available_files)} file(s) in the assignment workspace: {available_files_message}."
+        )
 
         # Step 6: Missing Dataset Detection (exclude output/cleaned files or datasets already in PDF)
         required_files = [
@@ -1510,6 +1739,12 @@ def process_assignment_pipeline(
         if missing_files:
             missing_str = ", ".join(missing_files)
             logger.info(f"[Assignment Pipeline] Missing required datasets: {missing_files}. Pausing ID={assignment_id} for user input.")
+            _log_assignment_progress(
+                assignment_id,
+                "dataset",
+                f"Waiting for required dataset file(s): {missing_str}.",
+                "warning"
+            )
             updated = db_manager.update_assignment(
                 assignment_id=assignment_id,
                 status="needs_input",
@@ -1531,6 +1766,11 @@ def process_assignment_pipeline(
 
         # Step 7: Co-Pilot Approval Gate (Wait for User Acknowledgement)
         if require_approval:
+            _log_assignment_progress(
+                assignment_id,
+                "approval",
+                f"Analysis ready; waiting for approval to execute {len(enriched_questions)} question(s)."
+            )
             problem_titles = [f"Problem {q.get('question_number', i+1)}: {q.get('title', 'Question')}" for i, q in enumerate(enriched_questions)]
             copilot_greeting = (
                 f"I have analyzed **{len(enriched_questions)} problems** from `{filename}` using layout-preserving extraction and course RAG.\n\n"
@@ -1582,6 +1822,7 @@ def process_assignment_pipeline(
     except Exception as e:
         err_msg = f"{e}\n{traceback.format_exc()}"
         logger.error(f"[Assignment Pipeline Error] Failed ID={assignment_id}: {err_msg}")
+        _log_assignment_progress(assignment_id, "failed", str(e), "error")
         db_manager.update_assignment(
             assignment_id=assignment_id,
             status="failed",
@@ -1599,12 +1840,21 @@ def approve_and_execute_assignment(
     t_start = time.perf_counter()
     slug = to_course_slug(course_name)
     logger.info(f"[Assignment Approval] Received user go-ahead for ID={assignment_id}, Course={course_name}")
+    _log_assignment_progress(assignment_id, "approval", "Approval received; preparing execution.")
 
     record = db_manager.get_assignment_by_id(assignment_id)
     if not record:
         raise ValueError(f"Assignment record '{assignment_id}' not found.")
 
     ws = get_assignment_workspace(assignment_id)
+    dataset_files = record.get("dataset_files") or []
+    available_files = sync_assignment_datasets(slug, assignment_id, ws, dataset_files)
+    restored_files_message = ", ".join(available_files) if available_files else "none"
+    _log_assignment_progress(
+        assignment_id,
+        "dataset",
+        f"Restored {len(available_files)} file(s) in the execution workspace: {restored_files_message}."
+    )
 
     # Recover extracted text from record or disk
     extracted_text = record.get("raw_extracted_text") or ""
@@ -1641,7 +1891,7 @@ def approve_and_execute_assignment(
         error_message=None
     )
 
-    return execute_and_finish_assignment(
+    return _execute_with_failure_logging(
         assignment_id=assignment_id,
         course_name=course_name,
         enriched_questions=enriched_questions,
@@ -1657,6 +1907,7 @@ def resume_assignment_pipeline(assignment_id: str, course_name: str, skip_missin
     """Resume an assignment pipeline that was paused in 'needs_input' once datasets are uploaded or skipped."""
     slug = to_course_slug(course_name)
     logger.info(f"[Assignment Pipeline] Resuming execution for ID={assignment_id}, Course={course_name}, skip_missing={skip_missing}")
+    _log_assignment_progress(assignment_id, "resume", "Resuming assignment processing.")
 
     record = db_manager.get_assignment_by_id(assignment_id)
     if not record:
@@ -1681,6 +1932,12 @@ def resume_assignment_pipeline(assignment_id: str, course_name: str, skip_missin
 
     dataset_files = record.get("dataset_files") or []
     available_files = sync_assignment_datasets(slug, assignment_id, ws, dataset_files)
+    restored_files_message = ", ".join(available_files) if available_files else "none"
+    _log_assignment_progress(
+        assignment_id,
+        "dataset",
+        f"Restored {len(available_files)} file(s) in the execution workspace: {restored_files_message}."
+    )
 
     enriched_questions = record.get("questions_summary") or parsed_resume.get("questions") or []
     raw_required_files = record.get("required_files") or []
@@ -1699,6 +1956,12 @@ def resume_assignment_pipeline(assignment_id: str, course_name: str, skip_missin
     if missing_files:
         missing_str = ", ".join(missing_files)
         logger.warning(f"[Assignment Pipeline] Still missing datasets for ID={assignment_id}: {missing_files}")
+        _log_assignment_progress(
+            assignment_id,
+            "dataset",
+            f"Still waiting for required dataset file(s): {missing_str}.",
+            "warning"
+        )
         db_manager.update_assignment(
             assignment_id=assignment_id,
             status="needs_input",
@@ -1716,7 +1979,7 @@ def resume_assignment_pipeline(assignment_id: str, course_name: str, skip_missin
     )
     title = record.get("title") or f"{course_name} Assignment"
 
-    return execute_and_finish_assignment(
+    return _execute_with_failure_logging(
         assignment_id=assignment_id,
         course_name=course_name,
         enriched_questions=enriched_questions,

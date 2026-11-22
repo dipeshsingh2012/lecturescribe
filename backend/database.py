@@ -993,6 +993,7 @@ class RelationalDBManager:
                             questions_summary JSONB DEFAULT '[]'::jsonb,
                             required_files JSONB DEFAULT '[]'::jsonb,
                             dataset_files JSONB DEFAULT '[]'::jsonb,
+                            progress_logs JSONB DEFAULT '[]'::jsonb,
                             error_message TEXT,
                             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -1001,6 +1002,7 @@ class RelationalDBManager:
                         CREATE INDEX IF NOT EXISTS idx_assignments_id ON lecturescribe_course_assignments(assignment_id);
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS required_files JSONB DEFAULT '[]'::jsonb;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS dataset_files JSONB DEFAULT '[]'::jsonb;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS progress_logs JSONB DEFAULT '[]'::jsonb;
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_users (
                             id SERIAL PRIMARY KEY,
@@ -8496,6 +8498,7 @@ class RelationalDBManager:
             "questions_summary": questions_summary or [],
             "required_files": required_files or [],
             "dataset_files": dataset_files or [],
+            "progress_logs": [],
             "due_date": None,
             "max_marks": 100.0,
             "is_published": True,
@@ -8515,7 +8518,8 @@ class RelationalDBManager:
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NOW(), NOW())
                         RETURNING id, assignment_id, course_name, user_email, title, source_filename,
                                   source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                  questions_summary, required_files, dataset_files, due_date, max_marks, is_published, error_message, created_at, updated_at;
+                                  questions_summary, required_files, dataset_files, progress_logs,
+                                  due_date, max_marks, is_published, error_message, created_at, updated_at;
                     """, (clean_id, clean_course, clean_email, clean_title, source_filename, source_blob_name, status, questions_json, req_files_json, data_files_json))
                     row = cursor.fetchone()
                     if row:
@@ -8579,6 +8583,7 @@ class RelationalDBManager:
                         RETURNING id, assignment_id, course_name, user_email, title, source_filename,
                                   source_blob_name, notebook_blob_name, pdf_blob_name, status,
                                   questions_summary, required_files, dataset_files,
+                                  COALESCE(progress_logs, '[]'::jsonb) AS progress_logs,
                                   COALESCE(assignment_type, 'notebook') AS assignment_type,
                                   COALESCE(problem_statement, '') AS problem_statement,
                                   COALESCE(draft_markdown, '') AS draft_markdown,
@@ -8655,6 +8660,45 @@ class RelationalDBManager:
 
         return updated_record
 
+    def append_assignment_progress(
+        self,
+        assignment_id: str,
+        phase: str,
+        message: str,
+        level: str = "info"
+    ) -> None:
+        """Append a timestamped progress event to an assignment record."""
+        clean_id = (assignment_id or "").strip()
+        event = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "phase": phase,
+            "message": message,
+            "level": level
+        }
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE lecturescribe_course_assignments
+                        SET progress_logs = COALESCE(progress_logs, '[]'::jsonb) || %s::jsonb,
+                            updated_at = NOW()
+                        WHERE assignment_id = %s;
+                    """, (json.dumps([event]), clean_id))
+        except Exception as e:
+            print(f"[PostgreSQL Assignment Notice] Could not append progress log ({e}).")
+        finally:
+            if conn:
+                conn.close()
+
+        for item in self._assignments_memory_cache:
+            if item.get("assignment_id") == clean_id:
+                item.setdefault("progress_logs", []).append(event)
+                item["updated_at"] = event["timestamp"]
+                break
+
     def get_course_assignments(self, course_name: str, user_email: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieve all assignments for a course, optionally filtered by user email."""
         clean_course = (course_name or "").strip()
@@ -8670,7 +8714,9 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                    source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                                   questions_summary, required_files, dataset_files,
+                                   COALESCE(progress_logs, '[]'::jsonb) AS progress_logs,
+                                   due_date, max_marks, is_published,
                                    COALESCE(assignment_type, 'notebook') AS assignment_type,
                                    COALESCE(problem_statement, '') AS problem_statement,
                                    COALESCE(draft_markdown, '') AS draft_markdown,
@@ -8690,7 +8736,9 @@ class RelationalDBManager:
                         cursor.execute("""
                             SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                    source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                                   questions_summary, required_files, dataset_files,
+                                   COALESCE(progress_logs, '[]'::jsonb) AS progress_logs,
+                                   due_date, max_marks, is_published,
                                    COALESCE(assignment_type, 'notebook') AS assignment_type,
                                    COALESCE(problem_statement, '') AS problem_statement,
                                    COALESCE(draft_markdown, '') AS draft_markdown,
@@ -8742,7 +8790,9 @@ class RelationalDBManager:
                     cursor.execute("""
                         SELECT id, assignment_id, course_name, user_email, title, source_filename,
                                source_blob_name, notebook_blob_name, pdf_blob_name, status,
-                               questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
+                               questions_summary, required_files, dataset_files,
+                               COALESCE(progress_logs, '[]'::jsonb) AS progress_logs,
+                               due_date, max_marks, is_published,
                                COALESCE(assignment_type, 'notebook') AS assignment_type,
                                COALESCE(problem_statement, '') AS problem_statement,
                                COALESCE(draft_markdown, '') AS draft_markdown,

@@ -25,6 +25,7 @@ __pycache__/
 env/
 venv/
 .venv/
+.venv312/
 ENV/
 build/
 develop-eggs/
@@ -74,3 +75,4 @@ lecturescribe-509611-d1d6aec440e7.json:Zone.Identifier
 tests_bundle.txt
 lecturescribe-509611-0f9387e34924.json:Zone.Identifier
 lecturescribe-509611-0f9387e34924.json
+lecturescribe-509611-cfd8a8d61f31.json

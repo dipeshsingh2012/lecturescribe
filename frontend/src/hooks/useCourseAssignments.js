@@ -243,17 +243,25 @@ export function useCourseAssignments(courseName, userEmail = null) {
   // Regenerate Assignment
   const regenerateAssignment = useCallback(async (assignmentId) => {
     if (!assignmentId || !courseSlug) return;
+    setError(null);
     try {
       const res = await fetch(`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(assignmentId)}/regenerate`, {
         method: 'POST'
       });
-      if (res.ok) {
-        setAssignments((prev) =>
-          prev.map((a) => (a.assignment_id === assignmentId ? { ...a, status: 'pending', error_message: null } : a))
-        );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const message = errData.detail || `Regeneration failed (${res.status})`;
+        setError(message);
+        console.error('[useCourseAssignments] regenerate request failed:', message);
+        return;
       }
+
+      setAssignments((prev) =>
+        prev.map((a) => (a.assignment_id === assignmentId ? { ...a, status: 'pending', error_message: null } : a))
+      );
     } catch (err) {
       console.error('[useCourseAssignments] regenerate error:', err);
+      setError(err.message || 'Could not regenerate assignment.');
     }
   }, [courseSlug]);
 

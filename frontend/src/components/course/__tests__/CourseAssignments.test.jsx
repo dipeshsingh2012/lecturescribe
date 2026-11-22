@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import CourseAssignments from '../CourseAssignments';
 
@@ -54,6 +54,22 @@ describe('CourseAssignments Component', () => {
 
     expect(screen.getByText(/No assignments added yet/i)).toBeInTheDocument();
     expect(screen.getByText(/CS 101 • Assignment Planner/i)).toBeInTheDocument();
+  });
+
+  it('surfaces assignment request errors in the UI', () => {
+    render(
+      <CourseAssignments
+        courseName="CS 101"
+        assignments={[]}
+        error="Could not read original assignment PDF from cloud storage."
+        onUploadAssignment={mockUpload}
+        onDeleteAssignment={mockDelete}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText(/Could not read original assignment PDF from cloud storage/i))
+      .toBeInTheDocument();
   });
 
   it('renders completed assignments with download buttons', () => {
@@ -155,6 +171,58 @@ describe('CourseAssignments Component', () => {
     expect(screen.getByText(/Preview Executed Notebook/i)).toBeInTheDocument();
     expect(screen.getByText(/Download \.ipynb/i)).toBeInTheDocument();
     expect(screen.getByText(/Download Solution PDF/i)).toBeInTheDocument();
+  });
+
+  it('renders persisted backend progress logs on the assignment card', () => {
+    render(
+      <CourseAssignments
+        courseName="CS 101"
+        assignments={[{
+          assignment_id: 'asgn_progress_111',
+          title: 'Data Science Lab 1',
+          source_filename: 'lab1.pdf',
+          status: 'processing',
+          progress_logs: [{
+            timestamp: '2026-11-20T10:00:00Z',
+            phase: 'dataset',
+            message: 'Found 1 file in the assignment workspace.',
+            level: 'info'
+          }]
+        }]}
+        currentTheme={mockTheme}
+      />
+    );
+
+    expect(screen.getByText('Assignment progress')).toBeInTheDocument();
+    expect(screen.getByText(/Found 1 file in the assignment workspace/i)).toBeInTheDocument();
+  });
+
+  it('uses the backend download routes in the notebook preview', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ notebook: { cells: [] } })
+    }));
+
+    render(
+      <CourseAssignments
+        courseName="CS 101"
+        assignments={[{
+          assignment_id: 'asgn_completed_111',
+          title: 'Data Science Lab 1',
+          status: 'completed'
+        }]}
+        currentTheme={mockTheme}
+      />
+    );
+
+    fireEvent.click(screen.getByText(/Preview Executed Notebook/i));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('link', { name: /Download \.ipynb/i }))
+      .toHaveAttribute('href', expect.stringContaining('/api/course/assignment/asgn_completed_111/download/ipynb'));
+    expect(within(dialog).getByRole('link', { name: /Download Solution PDF/i }))
+      .toHaveAttribute('href', expect.stringContaining('/api/course/assignment/asgn_completed_111/download/pdf'));
+
+    vi.unstubAllGlobals();
   });
 });
 

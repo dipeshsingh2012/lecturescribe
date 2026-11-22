@@ -6172,7 +6172,7 @@ def upload_course_assignment(
     require_tutor_role(clean_email, clean_course, action_label="upload and solve assignments")
 
     # Validate filename and PDF extension
-    fname = file.filename or "assignment.pdf"
+    fname = os.path.basename(file.filename or "assignment.pdf")
     if not fname.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF assignment documents (.pdf) are supported.")
 
@@ -6183,6 +6183,16 @@ def upload_course_assignment(
     # Generate assignment tracking ID
     assignment_id = f"asgn_{uuid.uuid4().hex[:12]}"
     display_title = (title or "").strip() or fname.rsplit(".", 1)[0].replace("_", " ").title()
+
+    # Keep a local source copy so regeneration can work when cloud storage is unavailable.
+    workspace = get_assignment_workspace(assignment_id)
+    try:
+        with open(os.path.join(workspace, fname), "wb") as source_file:
+            source_file.write(pdf_bytes)
+    except OSError as source_err:
+        logger.warning(
+            f"[Assignment Upload Notice] Could not retain local source PDF for ID={assignment_id}: {source_err}"
+        )
 
     # Upload original assignment PDF to GCS
     source_blob = gcs_storage_service.get_assignment_blob_path(course_slug, assignment_id, fname)
@@ -6217,6 +6227,12 @@ def upload_course_assignment(
         source_blob_name=source_blob,
         status="pending",
         dataset_files=dataset_files_list
+    )
+    db_manager.append_assignment_progress(
+        assignment_id,
+        "upload",
+        "Received assignment PDF; attached dataset file(s): "
+        + (", ".join(dataset_files_list) if dataset_files_list else "none")
     )
 
     # Launch pipeline in background task so UI receives instant response
@@ -6590,36 +6606,69 @@ def regenerate_course_assignment_endpoint(
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """Re-run generation and code execution for an existing assignment."""
-    from backend.assignment_service import process_assignment_pipeline
+    from backend.assignment_service import (
+        approve_and_execute_assignment,
+        get_assignment_workspace,
+        process_assignment_pipeline
+    )
 
     clean_id = assignment_id.strip()
     record = db_manager.get_assignment_by_id(clean_id)
     if not record:
+        logger.warning(f"[Assignment Regeneration] Assignment record not found for ID={clean_id}.")
         raise HTTPException(status_code=404, detail=f"Assignment '{clean_id}' not found.")
 
+    source_filename = os.path.basename(record.get("source_filename") or "assignment.pdf")
     source_blob = record.get("source_blob_name")
-    if not source_blob:
-        raise HTTPException(status_code=400, detail="Original assignment PDF source blob not found.")
-
-    pdf_bytes = gcs_storage_service.get_blob_bytes(source_blob)
+    pdf_bytes = gcs_storage_service.get_blob_bytes(source_blob) if source_blob else None
     if not pdf_bytes:
-        raise HTTPException(status_code=404, detail="Could not read original assignment PDF from cloud storage.")
+        local_source_path = os.path.join(get_assignment_workspace(clean_id), source_filename)
+        if os.path.isfile(local_source_path):
+            try:
+                with open(local_source_path, "rb") as source_file:
+                    pdf_bytes = source_file.read()
+            except OSError as source_err:
+                logger.warning(
+                    f"[Assignment Regeneration] Could not read local source PDF for ID={clean_id}: {source_err}"
+                )
 
-    # Update DB to pending
-    db_manager.update_assignment(clean_id, status="pending", error_message=None)
-
-    background_tasks.add_task(
-        process_assignment_pipeline,
-        assignment_id=clean_id,
-        course_name=record.get("course_name") or course_name,
-        user_email=record.get("user_email"),
-        pdf_bytes=pdf_bytes,
-        filename=record.get("source_filename") or "assignment.pdf"
-    )
+    if pdf_bytes:
+        db_manager.update_assignment(clean_id, status="pending", error_message=None)
+        background_tasks.add_task(
+            process_assignment_pipeline,
+            assignment_id=clean_id,
+            course_name=record.get("course_name") or course_name,
+            user_email=record.get("user_email"),
+            pdf_bytes=pdf_bytes,
+            filename=source_filename
+        )
+        message = "Assignment regeneration started in background."
+    elif (record.get("raw_extracted_text") or "").strip():
+        logger.warning(
+            f"[Assignment Regeneration] Source PDF unavailable for ID={clean_id}; "
+            "reusing persisted extracted assignment text."
+        )
+        db_manager.update_assignment(clean_id, status="pending", error_message=None)
+        db_manager.append_assignment_progress(
+            clean_id,
+            "regeneration",
+            "Original PDF unavailable; reusing saved extracted assignment text.",
+            "warning"
+        )
+        background_tasks.add_task(
+            approve_and_execute_assignment,
+            assignment_id=clean_id,
+            course_name=record.get("course_name") or course_name
+        )
+        message = "Source PDF unavailable; regenerating from saved assignment analysis."
+    else:
+        detail = "Original assignment PDF and saved extracted assignment text are unavailable."
+        logger.error(f"[Assignment Regeneration] {detail} ID={clean_id}.")
+        raise HTTPException(status_code=404, detail=detail)
 
     return {
         "status": "success",
-        "message": "Assignment regeneration started in background.",
+        "message": message,
         "assignment_id": clean_id
     }
 

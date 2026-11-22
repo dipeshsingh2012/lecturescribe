@@ -718,6 +718,12 @@ export default function CourseAssignments({
         )}
       </Paper>
 
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+          {error}
+        </Alert>
+      )}
+
       {/* ASSIGNMENTS LIST */}
       <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Typography variant="h6" sx={{ fontWeight: 800, color: palette.textPrimary, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -787,6 +793,7 @@ export default function CourseAssignments({
             const isFailed = asgn.status === 'failed';
             const isExpanded = !!expandedDetails[asgn.assignment_id];
             const questions = asgn.questions_summary || [];
+            const progressLogs = Array.isArray(asgn.progress_logs) ? asgn.progress_logs : [];
 
             const ipynbUrl = `${API_BASE}/api/course/assignment/${asgn.assignment_id}/download/ipynb`;
             const pdfUrl = `${API_BASE}/api/course/assignment/${asgn.assignment_id}/download/pdf`;
@@ -873,6 +880,54 @@ export default function CourseAssignments({
                         <Typography variant="caption" sx={{ color: '#2563eb', fontWeight: 600, mt: 0.5, display: 'block' }}>
                           Parsing PDF problems → Aligning with lecture citations → Running Python verification cells...
                         </Typography>
+                      </Box>
+                    )}
+
+                    {progressLogs.length > 0 && (
+                      <Box
+                        sx={{
+                          mt: 1.5,
+                          mb: 1.5,
+                          p: 1.5,
+                          maxWidth: 640,
+                          borderRadius: 2,
+                          border: `1px solid ${palette.cardBorder}`,
+                          bgcolor: 'rgba(248, 250, 252, 0.8)'
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          sx={{ display: 'block', fontWeight: 800, color: palette.textPrimary, mb: 0.75 }}
+                        >
+                          Assignment progress
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 150, overflowY: 'auto' }}>
+                          {progressLogs.slice(-8).map((entry, index) => {
+                            const color = entry.level === 'error'
+                              ? '#b91c1c'
+                              : entry.level === 'warning'
+                                ? '#b45309'
+                                : palette.textSecondary;
+                            const time = entry.timestamp
+                              ? new Date(entry.timestamp).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit'
+                              })
+                              : '';
+                            return (
+                              <Typography
+                                key={`${entry.timestamp || 'log'}-${index}`}
+                                variant="caption"
+                                sx={{ color, lineHeight: 1.5, overflowWrap: 'anywhere' }}
+                              >
+                                {time && <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums', mr: 0.75 }}>{time}</Box>}
+                                {entry.phase && <Box component="span" sx={{ fontWeight: 700, mr: 0.5 }}>[{entry.phase}]</Box>}
+                                {entry.message}
+                              </Typography>
+                            );
+                          })}
+                        </Box>
                       </Box>
                     )}
 
@@ -2124,7 +2179,7 @@ export default function CourseAssignments({
                   variant="outlined"
                   size="small"
                   startIcon={<Terminal size={14} />}
-                  href={`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(activeNotebookModal.assignment_id)}/download?file_type=ipynb`}
+                  href={`${API_BASE}/api/course/assignment/${encodeURIComponent(activeNotebookModal.assignment_id)}/download/ipynb`}
                   download
                   sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2 }}
                 >
@@ -2134,7 +2189,7 @@ export default function CourseAssignments({
                   variant="contained"
                   size="small"
                   startIcon={<Download size={14} />}
-                  href={`${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/${encodeURIComponent(activeNotebookModal.assignment_id)}/download?file_type=pdf`}
+                  href={`${API_BASE}/api/course/assignment/${encodeURIComponent(activeNotebookModal.assignment_id)}/download/pdf`}
                   download
                   sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, bgcolor: '#2563eb' }}
                 >

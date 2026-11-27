@@ -1010,6 +1010,7 @@ class RelationalDBManager:
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS required_files JSONB DEFAULT '[]'::jsonb;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS dataset_files JSONB DEFAULT '[]'::jsonb;
                         ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS progress_logs JSONB DEFAULT '[]'::jsonb;
+                        ALTER TABLE lecturescribe_course_assignments ADD COLUMN IF NOT EXISTS notebook_json JSONB;
 
                         CREATE TABLE IF NOT EXISTS lecturescribe_users (
                             id SERIAL PRIMARY KEY,
@@ -8450,6 +8451,7 @@ class RelationalDBManager:
         status: Optional[str] = None,
         pdf_blob_name: Optional[str] = None,
         notebook_blob_name: Optional[str] = None,
+        notebook_json: Optional[Dict[str, Any]] = None,
         title: Optional[str] = None,
         error_message: Optional[str] = None,
         selected_model: Optional[str] = None
@@ -8473,13 +8475,14 @@ class RelationalDBManager:
                             status = COALESCE(%s, status),
                             pdf_blob_name = COALESCE(%s, pdf_blob_name),
                             notebook_blob_name = COALESCE(%s, notebook_blob_name),
+                            notebook_json = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE notebook_json END,
                             title = COALESCE(%s, title),
                             selected_model = COALESCE(%s, selected_model),
                             error_message = %s,
                             updated_at = NOW()
                         WHERE assignment_id = %s
                         RETURNING id, assignment_id, course_name, user_email, title, source_filename,
-                                  source_blob_name, notebook_blob_name, pdf_blob_name, status,
+                                  source_blob_name, notebook_blob_name, pdf_blob_name, notebook_json, status,
                                   questions_summary, required_files, dataset_files, due_date, max_marks, is_published,
                                   assignment_type, problem_statement, draft_markdown, chat_history, citations,
                                   selected_model, error_message, created_at, updated_at;
@@ -8492,6 +8495,8 @@ class RelationalDBManager:
                         status,
                         pdf_blob_name,
                         notebook_blob_name,
+                        json.dumps(notebook_json) if notebook_json is not None else None,
+                        json.dumps(notebook_json) if notebook_json is not None else None,
                         title,
                         clean_model,
                         error_message,
@@ -8525,6 +8530,8 @@ class RelationalDBManager:
                     item["pdf_blob_name"] = pdf_blob_name
                 if notebook_blob_name is not None:
                     item["notebook_blob_name"] = notebook_blob_name
+                if notebook_json is not None:
+                    item["notebook_json"] = notebook_json
                 if title is not None:
                     item["title"] = title
                 if selected_model is not None:
@@ -8710,8 +8717,6 @@ class RelationalDBManager:
                     item["notebook_blob_name"] = notebook_blob_name
                 if pdf_blob_name is not None:
                     item["pdf_blob_name"] = pdf_blob_name
-                if notebook_blob_name is not None:
-                    item["notebook_blob_name"] = notebook_blob_name
                 if questions_summary is not None:
                     item["questions_summary"] = questions_summary
                 if required_files is not None:

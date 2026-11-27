@@ -51,6 +51,7 @@ import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import { getUserDisplayName } from '../../utils/formatters';
 import AssignmentStudio from './AssignmentStudio';
+import LectureScribeNotebook from './LectureScribeNotebook';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function CourseAssignments({
@@ -89,6 +90,8 @@ export default function CourseAssignments({
   const [activeNotebookModal, setActiveNotebookModal] = useState(null);
   const [loadingNotebook, setLoadingNotebook] = useState(false);
   const courseSlug = normalizeCourseSlug(courseName);
+
+  const [activeNotebookSessionId, setActiveNotebookSessionId] = useState(null);
 
   const [activeStudioSessionId, setActiveStudioSessionId] = useState(() => {
     try {
@@ -492,6 +495,22 @@ export default function CourseAssignments({
     textSecondary: '#64748b'
   };
 
+  if (activeNotebookSessionId) {
+    return (
+      <LectureScribeNotebook
+        courseName={courseName}
+        initialSessionId={activeNotebookSessionId === 'new' ? null : activeNotebookSessionId}
+        onClose={() => setActiveNotebookSessionId(null)}
+        onAssignmentUpdated={() => {
+          if (onRefreshAssignments) onRefreshAssignments();
+        }}
+        currentTheme={currentTheme}
+        userEmail={userEmail}
+        userName={userName}
+      />
+    );
+  }
+
   if (activeStudioSessionId) {
     return (
       <AssignmentStudio
@@ -554,25 +573,44 @@ export default function CourseAssignments({
           <Typography variant="body2" sx={{ color: palette.textSecondary, maxWidth: 680, lineHeight: 1.6 }}>
             Upload assignment questions in PDF format for automated Jupyter execution, or launch the <strong>Interactive Studio</strong> to paste free-text problems, discuss scope with the Co-Pilot, and co-create course-grounded solutions.
           </Typography>
-          <Button
-            variant="contained"
-            startIcon={<Sparkles size={16} />}
-            onClick={() => handleOpenStudio('new')}
-            sx={{
-              textTransform: 'none',
-              fontWeight: 800,
-              bgcolor: '#7e22ce',
-              color: '#ffffff',
-              borderRadius: 2.5,
-              px: 2.5,
-              py: 1,
-              flexShrink: 0,
-              boxShadow: '0 4px 14px rgba(126, 34, 206, 0.25)',
-              '&:hover': { bgcolor: '#6b21a8' }
-            }}
-          >
-            Launch Free-Text Studio
-          </Button>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, flexShrink: 0, alignItems: { xs: 'stretch', md: 'flex-end' } }}>
+            <Button
+              variant="contained"
+              startIcon={<Code2 size={16} />}
+              onClick={() => setActiveNotebookSessionId('new')}
+              sx={{
+                textTransform: 'none',
+                fontWeight: 800,
+                bgcolor: '#e37400',
+                color: '#ffffff',
+                borderRadius: 2.5,
+                px: 2.5,
+                py: 1,
+                boxShadow: '0 4px 14px rgba(227, 116, 0, 0.25)',
+                '&:hover': { bgcolor: '#c26100' }
+              }}
+            >
+              LectureScribe Notebook
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<Sparkles size={16} />}
+              onClick={() => handleOpenStudio('new')}
+              sx={{
+                textTransform: 'none',
+                fontWeight: 800,
+                bgcolor: '#7e22ce',
+                color: '#ffffff',
+                borderRadius: 2.5,
+                px: 2.5,
+                py: 1,
+                boxShadow: '0 4px 14px rgba(126, 34, 206, 0.25)',
+                '&:hover': { bgcolor: '#6b21a8' }
+              }}
+            >
+              Launch Free-Text Studio
+            </Button>
+          </Box>
         </Box>
       </Paper>
 

@@ -6929,6 +6929,197 @@ def compile_studio_ipynb_endpoint(course_name: str, session_id: str, payload: St
     return res
 
 
+class ColabExecuteCellRequest(BaseModel):
+    cell_index: int = 0
+    code: str = ""
+    notebook_json: Optional[Dict[str, Any]] = None
+    timeout_sec: int = 45
+
+
+class ColabExecuteAllRequest(BaseModel):
+    cells: Optional[List[Dict[str, Any]]] = None
+    draft_markdown: Optional[str] = None
+    restart_first: bool = False
+    timeout_sec: int = 45
+
+
+class ColabStateSaveRequest(BaseModel):
+    notebook_json: Dict[str, Any]
+    draft_markdown: Optional[str] = None
+
+
+class ColabCellAssistRequest(BaseModel):
+    cell_source: str
+    action: str = "fix"
+    error_traceback: Optional[str] = ""
+    surrounding_cells: Optional[List[Dict[str, Any]]] = None
+    model_name: Optional[str] = None
+
+
+class ColabSubmitLmsRequest(BaseModel):
+    student_email: str
+    student_name: Optional[str] = ""
+    title: Optional[str] = None
+    draft_markdown: Optional[str] = None
+    notebook_json: Optional[Dict[str, Any]] = None
+
+
+class BlankNotebookRequest(BaseModel):
+    user_email: Optional[str] = None
+    title: Optional[str] = None
+
+
+@app.post("/api/course/{course_name}/assignments/studio/notebook/new")
+def create_blank_notebook_endpoint(course_name: str, payload: BlankNotebookRequest):
+    """Instantly create a clean, blank standalone LectureScribe Notebook (Colab) session."""
+    from backend.assignment_studio_service import create_blank_notebook_session
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    return create_blank_notebook_session(
+        course_name=clean_course,
+        user_email=payload.user_email,
+        title=payload.title,
+    )
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/notebook/execute-cell")
+def colab_execute_cell_endpoint(course_name: str, session_id: str, payload: ColabExecuteCellRequest):
+    from backend.assignment_studio_service import execute_studio_notebook_cell
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    return execute_studio_notebook_cell(
+        session_id=session_id.strip(),
+        course_name=clean_course,
+        cell_index=payload.cell_index,
+        code=payload.code,
+        notebook_json=payload.notebook_json,
+        timeout_sec=max(5, min(payload.timeout_sec, 120)),
+    )
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/notebook/execute-all")
+def colab_execute_all_endpoint(course_name: str, session_id: str, payload: ColabExecuteAllRequest):
+    from backend.assignment_studio_service import execute_studio_notebook_all
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    return execute_studio_notebook_all(
+        session_id=session_id.strip(),
+        course_name=clean_course,
+        cells=payload.cells,
+        draft_markdown=payload.draft_markdown,
+        restart_first=payload.restart_first,
+        timeout_sec=max(5, min(payload.timeout_sec, 120)),
+    )
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/notebook/kernel/restart")
+def colab_kernel_restart_endpoint(course_name: str, session_id: str):
+    from backend.colab_kernel_service import colab_kernel_manager
+    return {"status": "restarted", "kernel": colab_kernel_manager.restart_kernel(session_id.strip())}
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/notebook/kernel/interrupt")
+def colab_kernel_interrupt_endpoint(course_name: str, session_id: str):
+    from backend.colab_kernel_service import colab_kernel_manager
+    return colab_kernel_manager.interrupt_kernel(session_id.strip())
+
+
+@app.get("/api/course/{course_name}/assignments/studio/{session_id}/notebook/kernel/status")
+def colab_kernel_status_endpoint(course_name: str, session_id: str):
+    from backend.colab_kernel_service import colab_kernel_manager
+    return {"status": "success", "kernel": colab_kernel_manager.get_status(session_id.strip())}
+
+
+@app.put("/api/course/{course_name}/assignments/studio/{session_id}/notebook/state")
+def colab_save_state_endpoint(course_name: str, session_id: str, payload: ColabStateSaveRequest):
+    from backend.assignment_studio_service import notebook_json_to_markdown
+    synced_md = payload.draft_markdown if payload.draft_markdown is not None else notebook_json_to_markdown(payload.notebook_json)
+    updated = db_manager.update_studio_session(
+        assignment_id=session_id.strip(),
+        notebook_json=payload.notebook_json,
+        draft_markdown=synced_md,
+    )
+    return {"status": "success", "session_id": session_id.strip(), "draft_markdown": synced_md, "record": updated}
+
+
+@app.get("/api/course/{course_name}/assignments/studio/{session_id}/notebook/files")
+def colab_list_files_endpoint(course_name: str, session_id: str):
+    from backend.colab_kernel_service import list_session_files
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    return {"status": "success", "files": list_session_files(session_id.strip(), clean_course)}
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/notebook/files")
+async def colab_upload_file_endpoint(course_name: str, session_id: str, file: UploadFile = File(...)):
+    from backend.colab_kernel_service import upload_session_file, list_session_files
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    content = await file.read()
+    try:
+        uploaded = upload_session_file(session_id.strip(), clean_course, file.filename or "dataset.csv", content)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return {"status": "success", "file": uploaded, "files": list_session_files(session_id.strip(), clean_course)}
+
+
+@app.get("/api/course/{course_name}/assignments/studio/{session_id}/notebook/files/{filename}")
+def colab_download_file_endpoint(course_name: str, session_id: str, filename: str):
+    from backend.colab_kernel_service import get_session_file_bytes
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    try:
+        data = get_session_file_bytes(session_id.strip(), clean_course, filename)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"File '{filename}' not found.")
+    safe_name = re.sub(r"[^a-zA-Z0-9._\-]", "_", os.path.basename(filename))
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'}
+    )
+
+
+@app.delete("/api/course/{course_name}/assignments/studio/{session_id}/notebook/files/{filename}")
+def colab_delete_file_endpoint(course_name: str, session_id: str, filename: str):
+    from backend.colab_kernel_service import delete_session_file, list_session_files
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    try:
+        deleted = delete_session_file(session_id.strip(), clean_course, filename)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return {"status": "success", "deleted": deleted, "files": list_session_files(session_id.strip(), clean_course)}
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/notebook/cell-assist")
+def colab_cell_assist_endpoint(course_name: str, session_id: str, payload: ColabCellAssistRequest):
+    from backend.assignment_studio_service import colab_cell_assist
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    return colab_cell_assist(
+        session_id=session_id.strip(),
+        course_name=clean_course,
+        cell_source=payload.cell_source,
+        action=payload.action,
+        error_traceback=payload.error_traceback or "",
+        surrounding_cells=payload.surrounding_cells,
+        model_name=payload.model_name,
+    )
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/notebook/submit-lms")
+def colab_submit_lms_endpoint(course_name: str, session_id: str, payload: ColabSubmitLmsRequest):
+    from backend.assignment_studio_service import submit_studio_notebook_to_lms
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    try:
+        return submit_studio_notebook_to_lms(
+            session_id=session_id.strip(),
+            course_name=clean_course,
+            student_email=payload.student_email,
+            student_name=payload.student_name or "",
+            title=payload.title,
+            draft_markdown=payload.draft_markdown,
+            notebook_json=payload.notebook_json,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+
 @app.get("/api/course/{course_name}/assignments/studio/{session_id}")
 def get_studio_session_endpoint(course_name: str, session_id: str):
     """Retrieve existing studio session state (for resuming co-creation)."""
@@ -6967,6 +7158,7 @@ def get_studio_session_endpoint(course_name: str, session_id: str):
         "pdf_blob_name": record.get("pdf_blob_name"),
         "download_pdf_url": f"/api/course/assignment/{clean_id}/download/pdf" if record.get("pdf_blob_name") else None,
         "notebook_blob_name": record.get("notebook_blob_name"),
+        "notebook_json": record.get("notebook_json"),
         "download_ipynb_url": f"/api/course/assignment/{clean_id}/download/ipynb" if record.get("notebook_blob_name") else None,
         "assignment": record
     }

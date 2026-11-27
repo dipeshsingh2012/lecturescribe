@@ -87,6 +87,24 @@ export function parseDraftToNotebookCells(draftMarkdown = '') {
 }
 
 /**
+ * Convert an array of notebook cells back into studio draft_markdown.
+ */
+export function notebookCellsToMarkdown(cells = []) {
+  return (cells || [])
+    .map((cell) => {
+      const src = Array.isArray(cell.source) ? cell.source.join('') : String(cell.source || '');
+      const trimmed = src.replace(/\n+$/, '');
+      if (!trimmed.trim()) return '';
+      if (cell.cell_type === 'code') {
+        return `\`\`\`python\n${trimmed}\n\`\`\``;
+      }
+      return trimmed;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/**
  * Convert a draft string into a valid Jupyter Notebook v4 (.ipynb) JSON object.
  */
 export function buildIpynbObject(draftMarkdown = '') {

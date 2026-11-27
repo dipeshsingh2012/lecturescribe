@@ -379,6 +379,64 @@ def start_studio_session(
     }
 
 
+def create_blank_notebook_session(
+    course_name: str,
+    user_email: Optional[str] = None,
+    title: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Instantly create a clean, blank LectureScribe Notebook (Colab) session with one
+    ready-to-run Python code cell and zero LLM latency.
+    """
+    from backend.assignment_service import build_ipynb_structure
+
+    clean_course = db_manager.resolve_course_canonical_name((course_name or "").strip())
+    clean_email = (user_email or "").strip().lower() if user_email else None
+    clean_title = (title or "").strip() or "Untitled_Notebook.ipynb"
+    session_id = f"asgn_studio_nb_{uuid.uuid4().hex[:12]}"
+
+    initial_nb = build_ipynb_structure([
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [""],
+        }
+    ])
+    initial_md = "```python\n\n```"
+
+    record = db_manager.create_studio_assignment(
+        assignment_id=session_id,
+        course_name=clean_course,
+        user_email=clean_email,
+        title=clean_title,
+        problem_statement=f"Standalone LectureScribe Notebook for {clean_course}",
+        chat_history=[],
+        citations=[],
+        draft_markdown=initial_md,
+        status="drafting",
+        selected_model=None,
+    )
+    updated = db_manager.update_studio_session(
+        assignment_id=session_id,
+        notebook_json=initial_nb,
+        draft_markdown=initial_md,
+        title=clean_title,
+        status="drafting",
+    ) or record
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "course_name": clean_course,
+        "title": clean_title,
+        "draft_markdown": initial_md,
+        "notebook_json": initial_nb,
+        "record": updated,
+    }
+
+
 # =====================================================================
 # 3. CHAT TURN & ITERATIVE DRAFT REFINEMENT (STEP 3 & STEP 4)
 # =====================================================================
@@ -685,6 +743,13 @@ def studio_chat_turn(
     # Refresh course knowledge if needed
     knowledge = gather_course_knowledge(cname, f"{problem_statement} {clean_msg}", user_email=user_email)
     course_context = knowledge["formatted_context"]
+    try:
+        from backend.colab_kernel_service import get_dataset_schema_context
+        ds_ctx = get_dataset_schema_context(session_id)
+        if ds_ctx:
+            course_context = f"{ds_ctx}\n\n{course_context}"
+    except Exception:
+        pass
     if knowledge["citations"]:
         citations = knowledge["citations"]
 
@@ -1198,14 +1263,25 @@ def compile_studio_pdf(
     citations = record.get("citations") or []
     author_name = author or record.get("user_email") or "Student / Researcher"
 
-    # Render academic HTML
-    html_doc = render_academic_document_to_html(
-        markdown_content=content_to_compile,
-        course_name=clean_course,
-        title=doc_title,
-        author=author_name,
-        citations=citations
-    )
+    # Render HTML: if this session is a Jupyter Notebook with code cells or notebook_json,
+    # render using the Colab-styled notebook HTML renderer so executed outputs & plots appear in PDF
+    stored_nb = record.get("notebook_json")
+    has_code_fences = bool(re.search(r"```(?:python|py)\s*\n", content_to_compile, re.IGNORECASE))
+    if isinstance(stored_nb, dict) and stored_nb.get("cells"):
+        from backend.assignment_service import render_notebook_to_html
+        html_doc = render_notebook_to_html(stored_nb, clean_course, doc_title)
+    elif has_code_fences:
+        from backend.assignment_service import render_notebook_to_html, build_ipynb_structure
+        parsed_nb = build_ipynb_structure(parse_markdown_to_notebook_cells(content_to_compile))
+        html_doc = render_notebook_to_html(parsed_nb, clean_course, doc_title)
+    else:
+        html_doc = render_academic_document_to_html(
+            markdown_content=content_to_compile,
+            course_name=clean_course,
+            title=doc_title,
+            author=author_name,
+            citations=citations
+        )
 
     # Convert to PDF bytes via WeasyPrint or ReportLab fallback
     pdf_bytes = None
@@ -1439,4 +1515,299 @@ def compile_studio_ipynb(
         "cell_count": len(final_cells),
         "code_cell_count": code_cell_count,
         "record": updated,
+    }
+
+
+# =====================================================================
+# 5. INTERACTIVE COLAB NOTEBOOK EXECUTION, CELL CO-PILOT & LMS SUBMIT
+# =====================================================================
+
+def _source_to_str(src: Any) -> str:
+    if isinstance(src, list):
+        return "".join(str(x) for x in src)
+    return str(src or "")
+
+
+def _str_to_source_lines(text: str) -> List[str]:
+    lines = (text or "").splitlines()
+    if not lines:
+        return []
+    return [ln + "\n" for ln in lines[:-1]] + [lines[-1]]
+
+
+def notebook_json_to_markdown(notebook_json: Dict[str, Any]) -> str:
+    """Convert canonical nbformat v4 cells back to studio draft_markdown for bidirectional sync."""
+    cells = notebook_json.get("cells") if isinstance(notebook_json, dict) else []
+    parts: List[str] = []
+    for c in cells or []:
+        src = _source_to_str(c.get("source")).strip("\n")
+        if not src.strip():
+            continue
+        if c.get("cell_type") == "code":
+            parts.append(f"```python\n{src}\n```")
+        else:
+            parts.append(src)
+    return "\n\n".join(parts)
+
+
+def execute_studio_notebook_cell(
+    session_id: str,
+    course_name: str,
+    cell_index: int,
+    code: str,
+    notebook_json: Optional[Dict[str, Any]] = None,
+    timeout_sec: int = 45,
+) -> Dict[str, Any]:
+    """Execute a single Python code cell in the persistent per-session kernel and persist outputs."""
+    from backend.colab_kernel_service import colab_kernel_manager, list_session_files
+    from backend.assignment_service import build_ipynb_structure
+
+    exec_res = colab_kernel_manager.execute_cell(session_id, code or "", timeout_sec=timeout_sec)
+
+    nb_obj = notebook_json
+    if not isinstance(nb_obj, dict) or not isinstance(nb_obj.get("cells"), list):
+        record = db_manager.get_assignment_by_id(session_id) or {}
+        nb_obj = record.get("notebook_json")
+        if not isinstance(nb_obj, dict) or not isinstance(nb_obj.get("cells"), list):
+            parsed = parse_markdown_to_notebook_cells(record.get("draft_markdown") or "")
+            nb_obj = build_ipynb_structure([
+                (
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": _str_to_source_lines(c["source"]),
+                    }
+                    if c["cell_type"] == "code"
+                    else {
+                        "cell_type": "markdown",
+                        "metadata": {},
+                        "source": _str_to_source_lines(c["source"]),
+                    }
+                )
+                for c in parsed
+            ])
+
+    cells = list(nb_obj.get("cells") or [])
+    if 0 <= cell_index < len(cells):
+        updated_cell = dict(cells[cell_index])
+        updated_cell["cell_type"] = "code"
+        updated_cell["source"] = _str_to_source_lines(code or "")
+        updated_cell["execution_count"] = exec_res.get("execution_count")
+        updated_cell["outputs"] = exec_res.get("outputs", [])
+        cells[cell_index] = updated_cell
+        nb_obj = {**nb_obj, "cells": cells}
+        try:
+            db_manager.update_studio_session(
+                assignment_id=session_id,
+                notebook_json=nb_obj,
+                draft_markdown=notebook_json_to_markdown(nb_obj),
+            )
+        except Exception as e:
+            logger.warning(f"[Colab Cell Persist Notice]: {e}")
+
+    return {
+        "status": exec_res.get("status", "ok"),
+        "cell_index": cell_index,
+        "execution_count": exec_res.get("execution_count"),
+        "elapsed_ms": exec_res.get("elapsed_ms", 1),
+        "outputs": exec_res.get("outputs", []),
+        "notebook_json": nb_obj,
+        "files": list_session_files(session_id, course_name),
+        "kernel": colab_kernel_manager.get_status(session_id),
+    }
+
+
+def execute_studio_notebook_all(
+    session_id: str,
+    course_name: str,
+    cells: Optional[List[Dict[str, Any]]] = None,
+    draft_markdown: Optional[str] = None,
+    restart_first: bool = False,
+    timeout_sec: int = 45,
+) -> Dict[str, Any]:
+    """Execute all code cells in sequence inside the persistent session kernel."""
+    from backend.colab_kernel_service import colab_kernel_manager, list_session_files
+    from backend.assignment_service import build_ipynb_structure
+
+    if restart_first:
+        colab_kernel_manager.restart_kernel(session_id)
+
+    record = db_manager.get_assignment_by_id(session_id) or {}
+    raw_cells = cells
+    if not raw_cells:
+        md = (draft_markdown or record.get("draft_markdown") or "").strip()
+        raw_cells = parse_markdown_to_notebook_cells(md)
+
+    final_cells: List[Dict[str, Any]] = []
+    executed_code_cells = 0
+    had_error = False
+
+    for c in raw_cells or []:
+        ctype = "code" if c.get("cell_type") == "code" else "markdown"
+        src_str = _source_to_str(c.get("source"))
+        if ctype == "code":
+            res = colab_kernel_manager.execute_cell(session_id, src_str, timeout_sec=timeout_sec)
+            executed_code_cells += 1
+            if res.get("status") != "ok":
+                had_error = True
+            final_cells.append({
+                "cell_type": "code",
+                "execution_count": res.get("execution_count"),
+                "metadata": c.get("metadata") or {},
+                "outputs": res.get("outputs", []),
+                "source": _str_to_source_lines(src_str),
+            })
+        else:
+            final_cells.append({
+                "cell_type": "markdown",
+                "metadata": c.get("metadata") or {},
+                "source": _str_to_source_lines(src_str),
+            })
+
+    nb_obj = build_ipynb_structure(final_cells)
+    synced_md = notebook_json_to_markdown(nb_obj)
+    try:
+        db_manager.update_studio_session(
+            assignment_id=session_id,
+            notebook_json=nb_obj,
+            draft_markdown=synced_md,
+        )
+    except Exception as e:
+        logger.warning(f"[Colab Run All Persist Notice]: {e}")
+
+    return {
+        "status": "completed_with_errors" if had_error else "ok",
+        "executed_code_cells": executed_code_cells,
+        "notebook_json": nb_obj,
+        "draft_markdown": synced_md,
+        "files": list_session_files(session_id, course_name),
+        "kernel": colab_kernel_manager.get_status(session_id),
+    }
+
+
+def colab_cell_assist(
+    session_id: str,
+    course_name: str,
+    cell_source: str,
+    action: str = "fix",
+    error_traceback: str = "",
+    surrounding_cells: Optional[List[Dict[str, Any]]] = None,
+    model_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Cell-aware Co-Pilot: fix tracebacks, explain code, add visualizations, or optimize a single cell."""
+    from backend.colab_kernel_service import get_dataset_schema_context
+
+    clean_action = (action or "fix").strip().lower()
+    if clean_action not in ("fix", "explain", "visualize", "optimize"):
+        clean_action = "fix"
+
+    ds_ctx = get_dataset_schema_context(session_id)
+    context_snippets = []
+    for sc in (surrounding_cells or [])[-6:]:
+        ctype = sc.get("cell_type", "code")
+        src = _source_to_str(sc.get("source"))[:600]
+        context_snippets.append(f"[{ctype.upper()} CELL]\n{src}")
+    surrounding_str = "\n\n".join(context_snippets) or "No surrounding cells."
+
+    action_instructions = {
+        "fix": "Diagnose the Python error/traceback and return the corrected, runnable Python code for this cell.",
+        "explain": "Explain clearly what this code cell does and how it connects to the underlying course concepts. Keep updated_source identical to the original code.",
+        "visualize": "Enhance this Python cell to add clean, informative Matplotlib/Seaborn visualizations with labeled axes and titles.",
+        "optimize": "Refactor and optimize this Python cell for clarity, vectorization, and clean idiomatic data-science style.",
+    }[clean_action]
+
+    system_prompt = (
+        f"You are the LectureScribe Colab Cell Co-Pilot for {course_name}. "
+        f"Your task: {action_instructions}\n\n"
+        "Respond strictly as JSON with keys:\n"
+        '- "explanation": concise 1-3 sentence explanation of the fix/change/concept.\n'
+        '- "updated_source": the complete Python code for this cell (plain Python only, no markdown fences).'
+    )
+    user_prompt = (
+        f"{ds_ctx}\n\n"
+        f"SURROUNDING NOTEBOOK CONTEXT:\n{surrounding_str}\n\n"
+        f"TARGET CELL CODE:\n{cell_source}\n\n"
+        + (f"ERROR TRACEBACK:\n{error_traceback}\n\n" if error_traceback else "")
+        + "Return valid JSON with 'explanation' and 'updated_source'."
+    )
+
+    raw = _call_studio_llm(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        task_type=TaskType.ASSIGNMENT,
+        json_mode=True,
+        max_tokens=2048,
+        preferred_model=model_name,
+    )
+
+    updated_source = cell_source
+    explanation = f"Completed '{clean_action}' assist for this cell."
+    try:
+        cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
+        cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE)
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            if parsed.get("updated_source"):
+                code_str = str(parsed["updated_source"]).strip()
+                code_str = re.sub(r"^```(?:python|py)?\s*\n?", "", code_str)
+                code_str = re.sub(r"\n?```$", "", code_str).strip()
+                updated_source = code_str
+            if parsed.get("explanation"):
+                explanation = str(parsed["explanation"]).strip()
+    except Exception:
+        explanation = raw.strip()[:600] if raw else explanation
+
+    return {
+        "status": "success",
+        "action": clean_action,
+        "explanation": explanation,
+        "updated_source": updated_source,
+    }
+
+
+def submit_studio_notebook_to_lms(
+    session_id: str,
+    course_name: str,
+    student_email: str,
+    student_name: str = "",
+    title: Optional[str] = None,
+    draft_markdown: Optional[str] = None,
+    notebook_json: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compile/persist the executed .ipynb and submit it directly as a course LMS assignment submission."""
+    clean_email = (student_email or "").strip().lower()
+    if not clean_email:
+        raise ValueError("student_email is required to submit to LMS.")
+
+    clean_course = db_manager.resolve_course_canonical_name((course_name or "").strip())
+    md_to_use = draft_markdown
+    if not md_to_use and isinstance(notebook_json, dict) and notebook_json.get("cells"):
+        md_to_use = notebook_json_to_markdown(notebook_json)
+
+    compiled = compile_studio_ipynb(
+        session_id=session_id,
+        course_name=clean_course,
+        title=title,
+        draft_markdown=md_to_use,
+        execute=True,
+    )
+
+    sub_record = db_manager.submit_assignment(
+        assignment_id=session_id,
+        course_name=clean_course,
+        student_email=clean_email,
+        student_name=student_name,
+        submission_text=(md_to_use or "")[:4000],
+        file_name=compiled["ipynb_filename"],
+        file_blob_name=compiled["notebook_blob_name"],
+    )
+
+    return {
+        "status": "submitted",
+        "session_id": session_id,
+        "ipynb_filename": compiled["ipynb_filename"],
+        "download_ipynb_url": compiled["download_ipynb_url"],
+        "submission": sub_record,
     }

@@ -44,10 +44,10 @@ import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
 import {
   isNotebookContent,
-  parseDraftToNotebookCells,
   downloadDraftAsIpynb,
   downloadIpynbObject
 } from '../../utils/notebookUtils';
+import ColabNotebookEditor from './ColabNotebookEditor';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function AssignmentStudio({
@@ -85,6 +85,7 @@ export default function AssignmentStudio({
   const [hasRestoredDraft, setHasRestoredDraft] = useState(false);
   const [chatHistory, setChatHistory] = useState([]);
   const [draftMarkdown, setDraftMarkdown] = useState('');
+  const [notebookJson, setNotebookJson] = useState(null);
   const [citations, setCitations] = useState([]);
   const [studioStatus, setStudioStatus] = useState('discussing');
   const [pdfBlobName, setPdfBlobName] = useState(null);
@@ -292,6 +293,12 @@ export default function AssignmentStudio({
       setTitle(data.title || 'Assignment Studio');
       setProblemPrompt(data.problem_statement || '');
       setChatHistory(data.chat_history || []);
+      if (data.notebook_json) {
+        setNotebookJson(data.notebook_json);
+      }
+      if (data.download_ipynb_url) {
+        setIpynbDownloadUrl(`${API_BASE}${data.download_ipynb_url}`);
+      }
 
       // Only use local cache as fallback if server draft is empty
       let draftText = data.draft_markdown || '';
@@ -592,17 +599,25 @@ export default function AssignmentStudio({
   };
 
   const [previewStyle, setPreviewStyle] = useState('auto'); // 'auto' | 'notebook' | 'paper'
-  const [copiedCellIdx, setCopiedCellIdx] = useState(null);
 
   const notebookContextText = `${title || ''} ${problemPrompt || ''} ${(chatHistory || []).map((m) => m.content || '').join(' ')}`;
   const detectedNotebook = isNotebookContent(draftMarkdown, notebookContextText);
   const showNotebookView = previewStyle === 'notebook' || (previewStyle === 'auto' && detectedNotebook);
-  const notebookCells = showNotebookView ? parseDraftToNotebookCells(draftMarkdown) : [];
 
-  const handleCopyCell = (codeText, idx) => {
-    navigator.clipboard.writeText(codeText || '');
-    setCopiedCellIdx(idx);
-    setTimeout(() => setCopiedCellIdx(null), 1800);
+  const handleColabNotebookChange = (updatedNbObj, syncedMarkdown) => {
+    setNotebookJson(updatedNbObj);
+    if (typeof syncedMarkdown === 'string') {
+      setDraftMarkdown(syncedMarkdown);
+      latestDraftRef.current = syncedMarkdown;
+      if (draftStorageKey) {
+        try {
+          localStorage.setItem(draftStorageKey, JSON.stringify({
+            content: syncedMarkdown,
+            timestamp: Date.now()
+          }));
+        } catch (e) {}
+      }
+    }
   };
 
   const handleDownloadIpynb = async () => {
@@ -649,120 +664,24 @@ export default function AssignmentStudio({
     }
   };
 
-  const renderNotebookCellsView = (compact = false) => {
-    let codeCellCounter = 0;
-    return (
-      <Box
-        data-testid="jupyter-notebook-preview"
-        sx={{
-          maxWidth: compact ? '100%' : 880,
-          mx: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: compact ? 1.5 : 2
-        }}
-      >
-        {notebookCells.map((cell, idx) => {
-          if (cell.cell_type === 'code') {
-            codeCellCounter += 1;
-            const execNum = codeCellCounter;
-            return (
-              <Paper
-                key={`code-${idx}`}
-                elevation={0}
-                data-testid="notebook-code-cell"
-                sx={{
-                  borderRadius: 2,
-                  border: '1px solid #cbd5e1',
-                  overflow: 'hidden',
-                  bgcolor: '#0f172a'
-                }}
-              >
-                <Box
-                  sx={{
-                    px: 1.5,
-                    py: 0.6,
-                    bgcolor: '#1e293b',
-                    borderBottom: '1px solid #334155',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
-                  }}
-                >
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-                      color: '#38bdf8',
-                      fontWeight: 700,
-                      fontSize: '0.74rem'
-                    }}
-                  >
-                    In [{execNum}]: &nbsp;Python
-                  </Typography>
-                  <Tooltip title="Copy code cell">
-                    <IconButton
-                      size="small"
-                      aria-label={`Copy code cell ${execNum}`}
-                      onClick={() => handleCopyCell(cell.source, idx)}
-                      sx={{ color: copiedCellIdx === idx ? '#34d399' : '#94a3b8', p: 0.4 }}
-                    >
-                      {copiedCellIdx === idx ? <Check size={13} /> : <Copy size={13} />}
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-                <Box
-                  component="pre"
-                  sx={{
-                    m: 0,
-                    p: compact ? 1.5 : 2,
-                    overflowX: 'auto',
-                    fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-                    fontSize: compact ? '0.78rem' : '0.84rem',
-                    lineHeight: 1.55,
-                    color: '#e2e8f0'
-                  }}
-                >
-                  <code>{cell.source}</code>
-                </Box>
-              </Paper>
-            );
-          }
-
-          return (
-            <Paper
-              key={`md-${idx}`}
-              elevation={0}
-              data-testid="notebook-markdown-cell"
-              sx={{
-                p: compact ? 2 : 2.5,
-                borderRadius: 2,
-                border: `1px solid ${palette.cardBorder}`,
-                borderLeft: '3px solid #3b82f6',
-                bgcolor: palette.cardBg,
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-                color: '#0f172a',
-                lineHeight: 1.65,
-                '& h1': { fontSize: compact ? '1.3rem' : '1.5rem', fontWeight: 800, mt: 0.5, mb: 1.2, color: '#0f172a' },
-                '& h2': { fontSize: compact ? '1.08rem' : '1.2rem', fontWeight: 700, mt: 1.5, mb: 0.8, color: '#1e40af' },
-                '& h3': { fontSize: '0.98rem', fontWeight: 700, mt: 1.2, mb: 0.6, color: '#0f172a' },
-                '& p': { fontSize: compact ? '0.88rem' : '0.94rem', mb: 1.2 },
-                '& ul, & ol': { pl: 2.5, mb: 1.2 },
-                '& table': { width: '100%', borderCollapse: 'collapse', my: 1.5, fontSize: '0.82rem' },
-                '& th, & td': { border: '1px solid #cbd5e1', p: '6px 10px', textAlign: 'left' },
-                '& th': { bgcolor: '#f8fafc', fontWeight: 700 },
-                '& code': { bgcolor: '#f1f5f9', px: 0.6, py: 0.2, borderRadius: 0.8, fontSize: '0.84em' }
-              }}
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                {cell.source}
-              </ReactMarkdown>
-            </Paper>
-          );
-        })}
-      </Box>
-    );
-  };
+  const renderNotebookCellsView = (compact = false) => (
+    <ColabNotebookEditor
+      courseSlug={courseSlug}
+      sessionId={sessionId}
+      title={title || 'Assignment_Notebook'}
+      draftMarkdown={draftMarkdown}
+      notebookJson={notebookJson}
+      selectedModel={selectedModel}
+      userEmail={userEmail}
+      userName={userName}
+      compact={compact}
+      palette={palette}
+      onNotebookChange={handleColabNotebookChange}
+      onSubmittedToLms={() => {
+        if (onAssignmentUpdated) onAssignmentUpdated();
+      }}
+    />
+  );
 
   // Status Chip helper
   const getStatusChip = () => {

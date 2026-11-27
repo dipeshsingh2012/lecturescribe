@@ -477,6 +477,51 @@ def test_generate_first_draft_uses_jupyter_notebook_prompt_when_requested(monkey
     assert "alternating Markdown cells and ```python code cells" in captured["user_prompt"]
 
 
+def test_compile_studio_ipynb_executes_cells_and_persists_blob(mock_llm_responses):
+    from backend.assignment_studio_service import compile_studio_ipynb
+
+    init_res = start_studio_session(
+        course_name="Data Science Lab",
+        user_email="student@iiitdwd.ac.in",
+        role="student",
+        prompt="Assignment_7_26mda017: Jupyter Notebook"
+    )
+    sid = init_res["session_id"]
+
+    nb_markdown = (
+        "# Assignment 7\n\n"
+        "Simple calculation cell:\n\n"
+        "```python\n"
+        "x = 80 / 20\n"
+        "print(f'ratio={x}')\n"
+        "```\n"
+    )
+    res = compile_studio_ipynb(
+        session_id=sid,
+        course_name="Data Science Lab",
+        title="Assignment_7_26mda017",
+        draft_markdown=nb_markdown,
+        execute=True,
+    )
+    assert res["status"] == "completed"
+    assert res["ipynb_filename"] == "Assignment_7_26mda017.ipynb"
+    assert res["download_ipynb_url"] == f"/api/course/assignment/{sid}/download/ipynb"
+    assert res["notebook_json"]["nbformat"] == 4
+    assert res["code_cell_count"] == 1
+    code_cells = [c for c in res["notebook_json"]["cells"] if c["cell_type"] == "code"]
+    assert len(code_cells) == 1
+    outputs_text = "".join("".join(o.get("text", [])) for o in code_cells[0].get("outputs", []))
+    assert "ratio=4.0" in outputs_text
+
+    # Verify API endpoint works as well
+    api_resp = client.post(
+        f"/api/course/Data%20Science%20Lab/assignments/studio/{sid}/compile-ipynb",
+        json={"title": "Assignment_7_26mda017", "draft_markdown": nb_markdown, "execute": True},
+    )
+    assert api_resp.status_code == 200
+    assert api_resp.json()["ipynb_filename"] == "Assignment_7_26mda017.ipynb"
+
+
 def test_studio_chat_refinement_preserves_dialogue_context(monkeypatch):
     from backend.assignment_studio_service import refine_existing_draft
 

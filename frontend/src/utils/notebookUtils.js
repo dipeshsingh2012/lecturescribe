@@ -130,11 +130,10 @@ export function buildIpynbObject(draftMarkdown = '') {
 }
 
 /**
- * Trigger a browser download of the draft as a .ipynb file.
+ * Trigger a browser download of an already-built Jupyter Notebook object as a .ipynb file.
  */
-export function downloadDraftAsIpynb(draftMarkdown = '', title = 'assignment_notebook') {
-  const nb = buildIpynbObject(draftMarkdown);
-  const json = JSON.stringify(nb, null, 2);
+export function downloadIpynbObject(notebookObj, title = 'assignment_notebook') {
+  const json = JSON.stringify(notebookObj, null, 2);
   const blob = new Blob([json], { type: 'application/x-ipynb+json;charset=utf-8' });
   const safeName =
     String(title || 'assignment_notebook')
@@ -151,4 +150,12 @@ export function downloadDraftAsIpynb(draftMarkdown = '', title = 'assignment_not
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Trigger a browser download of the draft as a .ipynb file.
+ */
+export function downloadDraftAsIpynb(draftMarkdown = '', title = 'assignment_notebook') {
+  const nb = buildIpynbObject(draftMarkdown);
+  downloadIpynbObject(nb, title);
 }

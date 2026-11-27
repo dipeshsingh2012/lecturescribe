@@ -45,7 +45,8 @@ import { normalizeCourseSlug } from '../../utils/routing';
 import {
   isNotebookContent,
   parseDraftToNotebookCells,
-  downloadDraftAsIpynb
+  downloadDraftAsIpynb,
+  downloadIpynbObject
 } from '../../utils/notebookUtils';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
@@ -95,8 +96,10 @@ export default function AssignmentStudio({
   const [sendingMessage, setSendingMessage] = useState(false);
   const [messageInput, setMessageInput] = useState('');
   const [compilingPdf, setCompilingPdf] = useState(false);
+  const [compilingIpynb, setCompilingIpynb] = useState(false);
   const [isExecutingApproved, setIsExecutingApproved] = useState(false);
   const [pdfDownloadUrl, setPdfDownloadUrl] = useState(null);
+  const [ipynbDownloadUrl, setIpynbDownloadUrl] = useState(null);
   const [editorMode, setEditorMode] = useState(() => {
     try {
       if (typeof window !== 'undefined' && courseSlug) {
@@ -602,9 +605,48 @@ export default function AssignmentStudio({
     setTimeout(() => setCopiedCellIdx(null), 1800);
   };
 
-  const handleDownloadIpynb = () => {
+  const handleDownloadIpynb = async () => {
     if (!draftMarkdown.trim()) return;
-    downloadDraftAsIpynb(draftMarkdown, title || 'assignment_notebook');
+    if (!sessionId || !courseSlug) {
+      downloadDraftAsIpynb(draftMarkdown, title || 'assignment_notebook');
+      return;
+    }
+
+    setCompilingIpynb(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/course/${encodeURIComponent(courseSlug)}/assignments/studio/${encodeURIComponent(sessionId)}/compile-ipynb`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: title.trim() || undefined,
+            draft_markdown: draftMarkdown,
+            execute: true
+          })
+        }
+      );
+      if (!res.ok) {
+        throw new Error(`Notebook compile failed (${res.status})`);
+      }
+      const data = await res.json();
+      setStudioStatus('completed');
+      const dlUrl = `${API_BASE}/api/course/assignment/${encodeURIComponent(sessionId)}/download/ipynb`;
+      setIpynbDownloadUrl(dlUrl);
+      if (onAssignmentUpdated) onAssignmentUpdated();
+
+      if (data.notebook_json) {
+        downloadIpynbObject(data.notebook_json, data.ipynb_filename || title || 'assignment_notebook');
+      } else {
+        downloadDraftAsIpynb(draftMarkdown, title || 'assignment_notebook');
+      }
+    } catch (err) {
+      console.warn('Backend .ipynb execution failed, falling back to local export:', err);
+      downloadDraftAsIpynb(draftMarkdown, title || 'assignment_notebook');
+    } finally {
+      setCompilingIpynb(false);
+    }
   };
 
   const renderNotebookCellsView = (compact = false) => {
@@ -1053,22 +1095,24 @@ export default function AssignmentStudio({
             </IconButton>
           </Tooltip>
 
-          {/* Download .ipynb button when notebook content is detected or notebook view is active */}
+          {/* Compile & Download .ipynb button when notebook content is detected or notebook view is active */}
           {draftMarkdown.trim() && (showNotebookView || detectedNotebook) && (
             <Button
-              variant="outlined"
+              variant="contained"
               size="small"
-              startIcon={<FileCode size={14} />}
+              disabled={compilingIpynb}
+              startIcon={compilingIpynb ? <CircularProgress size={14} color="inherit" /> : <Download size={14} />}
               onClick={handleDownloadIpynb}
               aria-label="Download Jupyter Notebook"
               sx={{
                 textTransform: 'none',
                 fontWeight: 700,
-                color: '#1d4ed8',
-                borderColor: '#3b82f6'
+                bgcolor: '#059669',
+                '&:hover': { bgcolor: '#047857' },
+                px: 2
               }}
             >
-              Download .ipynb
+              {compilingIpynb ? 'Executing & Building .ipynb...' : 'Download .ipynb'}
             </Button>
           )}
 
@@ -1094,7 +1138,7 @@ export default function AssignmentStudio({
 
           {/* Compile PDF Button */}
           <Button
-            variant="contained"
+            variant={(showNotebookView || detectedNotebook) ? 'outlined' : 'contained'}
             size="small"
             disabled={compilingPdf || !draftMarkdown.trim()}
             onClick={handleCompilePdf}
@@ -1102,7 +1146,9 @@ export default function AssignmentStudio({
             sx={{
               textTransform: 'none',
               fontWeight: 700,
-              bgcolor: palette.primary,
+              ...((showNotebookView || detectedNotebook)
+                ? { color: palette.primary, borderColor: palette.primary }
+                : { bgcolor: palette.primary }),
               px: 2
             }}
           >

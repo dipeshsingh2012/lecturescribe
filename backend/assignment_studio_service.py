@@ -1281,3 +1281,162 @@ def compile_studio_pdf(
         "pdf_url": f"/api/course/{slug}/assignments/{session_id}/download/pdf",
         "record": updated
     }
+
+
+def parse_markdown_to_notebook_cells(markdown_text: str) -> List[Dict[str, Any]]:
+    """Parse studio markdown (with fenced ```python code blocks) or raw .ipynb JSON into cell dicts."""
+    raw = (markdown_text or "").strip()
+    if not raw:
+        return []
+
+    if raw.startswith("{") and '"cells"' in raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed.get("cells"), list):
+                cells = []
+                for c in parsed["cells"]:
+                    ctype = "code" if c.get("cell_type") == "code" else "markdown"
+                    src = c.get("source", "")
+                    if isinstance(src, list):
+                        src = "".join(str(x) for x in src)
+                    else:
+                        src = str(src or "")
+                    if src.strip():
+                        cells.append({"cell_type": ctype, "source": src})
+                if cells:
+                    return cells
+        except Exception:
+            pass
+
+    cells: List[Dict[str, Any]] = []
+    fence_re = re.compile(r"```(?:python|py)\s*\n([\s\S]*?)```", re.IGNORECASE)
+    last_idx = 0
+    for m in fence_re.finditer(raw):
+        before = raw[last_idx:m.start()].strip()
+        if before:
+            cells.append({"cell_type": "markdown", "source": before})
+        code = (m.group(1) or "").rstrip("\n")
+        if code.strip():
+            cells.append({"cell_type": "code", "source": code})
+        last_idx = m.end()
+
+    tail = raw[last_idx:].strip()
+    if tail:
+        cells.append({"cell_type": "markdown", "source": tail})
+
+    return cells
+
+
+def compile_studio_ipynb(
+    session_id: str,
+    course_name: str,
+    title: Optional[str] = None,
+    draft_markdown: Optional[str] = None,
+    execute: bool = True
+) -> Dict[str, Any]:
+    """
+    Compile the current studio draft into a complete, executed Jupyter Notebook (.ipynb),
+    persist it to GCS and PostgreSQL, and return the notebook JSON + download URL.
+    """
+    from backend.assignment_service import execute_code_cells, build_ipynb_structure
+
+    clean_course = db_manager.resolve_course_canonical_name((course_name or "").strip())
+    slug = to_course_slug(clean_course)
+    record = db_manager.get_assignment_by_id(session_id) or {}
+
+    doc_title = (title or record.get("title") or "Assignment_Notebook").strip()
+    content_to_compile = (draft_markdown or record.get("draft_markdown") or "").strip()
+    if not content_to_compile:
+        content_to_compile = f"# {doc_title}\n\n*Draft in progress.*"
+
+    raw_cells = parse_markdown_to_notebook_cells(content_to_compile)
+    if not raw_cells:
+        raw_cells = [{"cell_type": "markdown", "source": content_to_compile}]
+
+    if execute:
+        try:
+            final_cells = execute_code_cells(raw_cells)
+        except Exception as exec_err:
+            logger.warning(f"[Studio IPYNB Exec Notice]: {exec_err}. Exporting unexecuted cells.")
+            final_cells = [
+                (
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": [ln + "\n" for ln in c["source"].splitlines()[:-1]] + (
+                            [c["source"].splitlines()[-1]] if c["source"].splitlines() else []
+                        ),
+                    }
+                    if c["cell_type"] == "code"
+                    else {
+                        "cell_type": "markdown",
+                        "metadata": {},
+                        "source": [ln + "\n" for ln in c["source"].splitlines()[:-1]] + (
+                            [c["source"].splitlines()[-1]] if c["source"].splitlines() else []
+                        ),
+                    }
+                )
+                for c in raw_cells
+            ]
+    else:
+        final_cells = [
+            (
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": [ln + "\n" for ln in c["source"].splitlines()[:-1]] + (
+                        [c["source"].splitlines()[-1]] if c["source"].splitlines() else []
+                    ),
+                }
+                if c["cell_type"] == "code"
+                else {
+                    "cell_type": "markdown",
+                    "metadata": {},
+                    "source": [ln + "\n" for ln in c["source"].splitlines()[:-1]] + (
+                        [c["source"].splitlines()[-1]] if c["source"].splitlines() else []
+                    ),
+                }
+            )
+            for c in raw_cells
+        ]
+
+    notebook_obj = build_ipynb_structure(final_cells)
+    notebook_json_str = json.dumps(notebook_obj, indent=2)
+
+    clean_base = re.sub(r"[^\w\-]+", "_", doc_title).strip("_") or "assignment_solution"
+    ipynb_filename = clean_base if clean_base.lower().endswith(".ipynb") else f"{clean_base}.ipynb"
+    ipynb_blob = gcs_storage_service.get_assignment_blob_path(slug, session_id, ipynb_filename)
+    try:
+        gcs_storage_service.upload_blob_bytes(
+            ipynb_blob,
+            notebook_json_str.encode("utf-8"),
+            content_type="application/x-ipynb+json",
+        )
+    except Exception as gcs_err:
+        logger.warning(f"[Studio IPYNB GCS Upload Notice]: {gcs_err}")
+
+    updated = db_manager.update_studio_session(
+        assignment_id=session_id,
+        draft_markdown=content_to_compile,
+        notebook_blob_name=ipynb_blob,
+        status="completed",
+        title=doc_title,
+    )
+
+    code_cell_count = sum(1 for c in final_cells if c.get("cell_type") == "code")
+    return {
+        "status": "completed",
+        "session_id": session_id,
+        "title": doc_title,
+        "notebook_blob_name": ipynb_blob,
+        "ipynb_filename": ipynb_filename,
+        "download_ipynb_url": f"/api/course/assignment/{session_id}/download/ipynb",
+        "notebook_json": notebook_obj,
+        "cell_count": len(final_cells),
+        "code_cell_count": code_cell_count,
+        "record": updated,
+    }

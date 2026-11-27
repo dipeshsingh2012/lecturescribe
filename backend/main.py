@@ -6908,6 +6908,27 @@ def compile_studio_pdf_endpoint(course_name: str, session_id: str, payload: Stud
     return res
 
 
+class StudioCompileIpynbRequest(BaseModel):
+    title: Optional[str] = None
+    draft_markdown: Optional[str] = None
+    execute: bool = True
+
+
+@app.post("/api/course/{course_name}/assignments/studio/{session_id}/compile-ipynb")
+def compile_studio_ipynb_endpoint(course_name: str, session_id: str, payload: StudioCompileIpynbRequest):
+    """Compile and execute the current draft into a complete .ipynb notebook, persist to GCS, and update status."""
+    from backend.assignment_studio_service import compile_studio_ipynb
+    clean_course = db_manager.resolve_course_canonical_name(course_name.strip())
+    res = compile_studio_ipynb(
+        session_id=session_id.strip(),
+        course_name=clean_course,
+        title=payload.title,
+        draft_markdown=payload.draft_markdown,
+        execute=payload.execute,
+    )
+    return res
+
+
 @app.get("/api/course/{course_name}/assignments/studio/{session_id}")
 def get_studio_session_endpoint(course_name: str, session_id: str):
     """Retrieve existing studio session state (for resuming co-creation)."""
@@ -6945,6 +6966,8 @@ def get_studio_session_endpoint(course_name: str, session_id: str):
         "studio_status": record.get("status") or "discussing",
         "pdf_blob_name": record.get("pdf_blob_name"),
         "download_pdf_url": f"/api/course/assignment/{clean_id}/download/pdf" if record.get("pdf_blob_name") else None,
+        "notebook_blob_name": record.get("notebook_blob_name"),
+        "download_ipynb_url": f"/api/course/assignment/{clean_id}/download/ipynb" if record.get("notebook_blob_name") else None,
         "assignment": record
     }
 

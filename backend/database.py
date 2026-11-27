@@ -8449,11 +8449,12 @@ class RelationalDBManager:
         citations: Optional[List[Dict[str, Any]]] = None,
         status: Optional[str] = None,
         pdf_blob_name: Optional[str] = None,
+        notebook_blob_name: Optional[str] = None,
         title: Optional[str] = None,
         error_message: Optional[str] = None,
         selected_model: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Update interactive studio session draft, chat history, citations, and compiled PDF status."""
+        """Update interactive studio session draft, chat history, citations, and compiled deliverable status."""
         clean_id = (assignment_id or "").strip()
         clean_model = (selected_model or "").strip() or None
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -8471,6 +8472,7 @@ class RelationalDBManager:
                             citations = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE citations END,
                             status = COALESCE(%s, status),
                             pdf_blob_name = COALESCE(%s, pdf_blob_name),
+                            notebook_blob_name = COALESCE(%s, notebook_blob_name),
                             title = COALESCE(%s, title),
                             selected_model = COALESCE(%s, selected_model),
                             error_message = %s,
@@ -8489,6 +8491,7 @@ class RelationalDBManager:
                         json.dumps(citations) if citations is not None else None,
                         status,
                         pdf_blob_name,
+                        notebook_blob_name,
                         title,
                         clean_model,
                         error_message,
@@ -8520,6 +8523,8 @@ class RelationalDBManager:
                     item["status"] = status
                 if pdf_blob_name is not None:
                     item["pdf_blob_name"] = pdf_blob_name
+                if notebook_blob_name is not None:
+                    item["notebook_blob_name"] = notebook_blob_name
                 if title is not None:
                     item["title"] = title
                 if selected_model is not None:
@@ -8705,6 +8710,8 @@ class RelationalDBManager:
                     item["notebook_blob_name"] = notebook_blob_name
                 if pdf_blob_name is not None:
                     item["pdf_blob_name"] = pdf_blob_name
+                if notebook_blob_name is not None:
+                    item["notebook_blob_name"] = notebook_blob_name
                 if questions_summary is not None:
                     item["questions_summary"] = questions_summary
                 if required_files is not None:

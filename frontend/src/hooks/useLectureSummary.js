@@ -11,11 +11,13 @@ export default function useLectureSummary(activeData, userEmail = null) {
   const [viewMode, setViewMode] = useState('study'); // 'study' | 'submission'
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [generatingShortSubmission, setGeneratingShortSubmission] = useState(false);
   const [error, setError] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
 
   const inFlightFetchRef = useRef(null);
   const inFlightGenerateRef = useRef(null);
+  const inFlightShortRef = useRef(null);
   const currentVideoIdRef = useRef(null);
 
   const transcriptAvailable = activeData?.transcript_available !== false &&
@@ -192,6 +194,59 @@ export default function useLectureSummary(activeData, userEmail = null) {
     }
   }, [videoId, activeData]);
 
+  const generateShortSubmission = useCallback(async (forceRefresh = false) => {
+    if (!videoId || videoId === 'active') return null;
+
+    const targetType = currentSummary?.summaryType || activeSummaryType || 'comprehensive';
+    const shortKey = `${videoId}:${targetType}`;
+    if (inFlightShortRef.current === shortKey) return null;
+    inFlightShortRef.current = shortKey;
+
+    setGeneratingShortSubmission(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/summary/submission-100`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: videoId,
+          summary_type: targetType,
+          user_email: email,
+          force_refresh: Boolean(forceRefresh)
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Failed to generate 100-word summary (status ${res.status})`);
+      }
+
+      const data = await res.json();
+      const shortText = data.submission_summary_100 || data.summary?.submissionSummary100 || '';
+      setSummaries(prev => {
+        const existing = prev[targetType] || currentSummary || {};
+        const updated = data.summary
+          ? { ...existing, ...data.summary, submissionSummary100: shortText || data.summary.submissionSummary100 || '' }
+          : { ...existing, submissionSummary100: shortText };
+        return {
+          ...prev,
+          [targetType]: updated
+        };
+      });
+      return shortText;
+    } catch (err) {
+      console.error('Error generating 100-word submission summary:', err);
+      setError(err.message || 'Failed to generate 100-word summary');
+      return null;
+    } finally {
+      if (inFlightShortRef.current === shortKey) {
+        inFlightShortRef.current = null;
+      }
+      setGeneratingShortSubmission(false);
+    }
+  }, [videoId, activeSummaryType, currentSummary, email]);
+
   const saveCustomSummary = useCallback(async ({ markdownText, submissionText, summaryType = activeSummaryType }) => {
     if (!videoId || videoId === 'active') return;
     setError(null);
@@ -245,11 +300,13 @@ export default function useLectureSummary(activeData, userEmail = null) {
     setViewMode,
     loading,
     generating,
+    generatingShortSubmission,
     error,
     copiedField,
     copyText,
     fetchSummaries,
     generateSummary,
+    generateShortSubmission,
     saveCustomSummary,
     transcriptAvailable,
     isOutdated,

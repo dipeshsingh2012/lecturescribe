@@ -41,10 +41,12 @@ export default function LectureSummary({
     setViewMode,
     loading,
     generating,
+    generatingShortSubmission = false,
     error,
     copiedField,
     copyText,
     generateSummary,
+    generateShortSubmission,
     saveCustomSummary,
     transcriptAvailable
   } = summaryHook;
@@ -53,6 +55,14 @@ export default function LectureSummary({
   const wordCount = currentSummary?.wordCount || (
     currentSubmissionText ? currentSubmissionText.trim().split(/\s+/).filter(Boolean).length : 0
   );
+  const currentShortSubmission = (
+    currentSummary?.submissionSummary100 ||
+    currentSummary?.submission_summary_100 ||
+    ''
+  ).trim();
+  const shortWordCount = currentShortSubmission
+    ? currentShortSubmission.split(/\s+/).filter(Boolean).length
+    : 0;
 
   const handleOpenEditor = () => {
     setEditMarkdownText(currentSummary?.markdownText || '');
@@ -1071,28 +1081,193 @@ export default function LectureSummary({
                 />
               </div>
             ) : (
-              <div
-                className={`summary-submission-container ${isExpanded ? 'expanded-reader' : ''}`}
-                style={{
-                  background: 'var(--card-bg)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '10px',
-                  lineHeight: '1.8',
-                  color: 'var(--text-primary)',
-                  boxShadow: isExpanded ? '0 4px 20px rgba(0, 0, 0, 0.12)' : '0 1px 3px rgba(0, 0, 0, 0.05)',
-                  transition: 'all 0.25s ease'
-                }}
-              >
-                {currentSubmissionText ? (
-                  <MarkdownWithTimestamps
-                    content={currentSubmissionText}
-                    citations={currentSummary?.citations || []}
-                    onCueClick={handleCueClick}
-                    onCrossLectureClick={handleCrossLectureClick}
-                  />
-                ) : (
-                  <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No submission prose available.</p>
-                )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* Compact 100-Word Key Concepts Summary Card */}
+                <div
+                  data-testid="short-submission-card"
+                  style={{
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    borderLeft: '3px solid var(--theme-primary)',
+                    borderRadius: '10px',
+                    padding: '16px 20px',
+                    color: 'var(--text-primary)',
+                    boxShadow: isExpanded ? '0 4px 16px rgba(0, 0, 0, 0.1)' : '0 1px 3px rgba(0, 0, 0, 0.05)'
+                  }}
+                >
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    marginBottom: currentShortSubmission || generatingShortSubmission ? '10px' : '8px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        color: 'var(--text-primary)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}>
+                        <Sparkles size={13} color="var(--theme-primary)" />
+                        100-Word Key Concepts Summary
+                      </span>
+                      {Boolean(currentShortSubmission) && (
+                        <span
+                          data-testid="short-submission-word-count"
+                          style={{
+                            fontSize: '0.72rem',
+                            color: 'var(--text-secondary)',
+                            fontWeight: 600,
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            background: 'var(--panel-bg)',
+                            border: '1px solid var(--border-color)'
+                          }}
+                        >
+                          • {shortWordCount} words
+                        </span>
+                      )}
+                    </div>
+
+                    {Boolean(currentShortSubmission) && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {typeof generateShortSubmission === 'function' && (
+                          <button
+                            type="button"
+                            onClick={() => generateShortSubmission(true)}
+                            disabled={generatingShortSubmission}
+                            aria-label="Regenerate 100-Word Summary"
+                            title="Regenerate 100-Word Summary"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '4px 7px',
+                              borderRadius: '6px',
+                              fontSize: '0.72rem',
+                              cursor: generatingShortSubmission ? 'not-allowed' : 'pointer',
+                              border: '1px solid var(--border-color)',
+                              background: 'var(--panel-bg)',
+                              color: 'var(--text-secondary)',
+                              opacity: generatingShortSubmission ? 0.6 : 1
+                            }}
+                          >
+                            <RefreshCw size={12} className={generatingShortSubmission ? 'loading-pulse' : ''} />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => copyText(currentShortSubmission, 'submission_100')}
+                          aria-label="Copy 100-Word Summary"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            fontSize: '0.73rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            border: '1px solid var(--border-color)',
+                            background: copiedField === 'submission_100' ? 'rgba(16, 185, 129, 0.15)' : 'var(--panel-bg)',
+                            color: copiedField === 'submission_100' ? '#10b981' : 'var(--text-primary)',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          {copiedField === 'submission_100' ? <Check size={12} color="#10b981" /> : <Copy size={12} />}
+                          <span>{copiedField === 'submission_100' ? 'Copied!' : 'Copy 100-Word'}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {generatingShortSubmission ? (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      fontSize: '0.82rem',
+                      color: 'var(--text-secondary)',
+                      padding: '6px 0'
+                    }}>
+                      <RefreshCw size={14} className="loading-pulse" color="var(--theme-primary)" />
+                      <span>Distilling key concepts into a ~100-word summary...</span>
+                    </div>
+                  ) : currentShortSubmission ? (
+                    <div style={{ lineHeight: '1.75', fontSize: '0.9rem' }}>
+                      <MarkdownWithTimestamps
+                        content={currentShortSubmission}
+                        citations={currentSummary?.citations || []}
+                        onCueClick={handleCueClick}
+                        onCrossLectureClick={handleCrossLectureClick}
+                      />
+                    </div>
+                  ) : (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '10px'
+                    }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        Capture the lecture&apos;s key technical concepts in a concise ~100-word plain-text paragraph.
+                      </span>
+                      {typeof generateShortSubmission === 'function' && (
+                        <button
+                          type="button"
+                          onClick={() => generateShortSubmission(false)}
+                          aria-label="Generate 100-Word Summary"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '5px 12px',
+                            borderRadius: '6px',
+                            background: 'var(--theme-primary)',
+                            color: '#ffffff',
+                            border: 'none',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Sparkles size={13} />
+                          <span>Generate 100-Word Summary</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Full Submission Prose Container */}
+                <div
+                  className={`summary-submission-container ${isExpanded ? 'expanded-reader' : ''}`}
+                  style={{
+                    background: 'var(--card-bg)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '10px',
+                    lineHeight: '1.8',
+                    color: 'var(--text-primary)',
+                    boxShadow: isExpanded ? '0 4px 20px rgba(0, 0, 0, 0.12)' : '0 1px 3px rgba(0, 0, 0, 0.05)',
+                    transition: 'all 0.25s ease'
+                  }}
+                >
+                  {currentSubmissionText ? (
+                    <MarkdownWithTimestamps
+                      content={currentSubmissionText}
+                      citations={currentSummary?.citations || []}
+                      onCueClick={handleCueClick}
+                      onCrossLectureClick={handleCrossLectureClick}
+                    />
+                  ) : (
+                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>No submission prose available.</p>
+                  )}
+                </div>
               </div>
             )}
           </div>

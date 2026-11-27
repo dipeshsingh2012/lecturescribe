@@ -534,6 +534,7 @@ class RelationalDBManager:
                             summary_type VARCHAR(64) NOT NULL,
                             markdown_text TEXT NOT NULL,
                             submission_text TEXT DEFAULT '',
+                            submission_summary_100 TEXT DEFAULT '',
                             citations_json JSONB DEFAULT '[]'::jsonb,
                             sections_json JSONB DEFAULT '[]'::jsonb,
                             word_count INT DEFAULT 0,
@@ -619,6 +620,11 @@ class RelationalDBManager:
                                 ALTER TABLE lecturescribe_lecture_summaries ADD COLUMN sections_json JSONB DEFAULT '[]'::jsonb;
                             EXCEPTION
                                 WHEN duplicate_column THEN RAISE NOTICE 'column sections_json already exists in lecturescribe_lecture_summaries.';
+                            END;
+                            BEGIN
+                                ALTER TABLE lecturescribe_lecture_summaries ADD COLUMN submission_summary_100 TEXT DEFAULT '';
+                            EXCEPTION
+                                WHEN duplicate_column THEN RAISE NOTICE 'column submission_summary_100 already exists in lecturescribe_lecture_summaries.';
                             END;
                         END $$;
 
@@ -839,6 +845,7 @@ class RelationalDBManager:
                             summary_type VARCHAR(64) NOT NULL,
                             markdown_text TEXT NOT NULL,
                             submission_text TEXT DEFAULT '',
+                            submission_summary_100 TEXT DEFAULT '',
                             citations_json JSONB DEFAULT '[]'::jsonb,
                             word_count INT DEFAULT 0,
                             model VARCHAR(128) DEFAULT '',
@@ -2007,6 +2014,7 @@ class RelationalDBManager:
         user_email: Optional[str] = None,
         response_time_ms: Optional[int] = None,
         topics: Optional[List[str]] = None,
+        submission_summary_100: Optional[str] = None,
     ) -> bool:
         """Save or update a lecture summary in lecturescribe_lecture_summaries."""
         if not video_id or not summary_type or not markdown_text:
@@ -2039,13 +2047,14 @@ class RelationalDBManager:
                     cursor.execute("""
                         INSERT INTO lecturescribe_lecture_summaries (
                             video_id, user_email, summary_type, markdown_text,
-                            submission_text, citations_json, sections_json, word_count, model,
+                            submission_text, submission_summary_100, citations_json, sections_json, word_count, model,
                             response_time_ms, is_outdated, created_at, updated_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, FALSE, NOW(), NOW())
+                        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, FALSE, NOW(), NOW())
                         ON CONFLICT (video_id, COALESCE(user_email, ''), summary_type) DO UPDATE
                         SET markdown_text = EXCLUDED.markdown_text,
                             submission_text = EXCLUDED.submission_text,
+                            submission_summary_100 = COALESCE(%s, lecturescribe_lecture_summaries.submission_summary_100),
                             citations_json = EXCLUDED.citations_json,
                             sections_json = CASE
                                 WHEN lecturescribe_lecture_summaries.sections_json IS NULL
@@ -2064,11 +2073,13 @@ class RelationalDBManager:
                         clean_type,
                         markdown_text,
                         submission_text or "",
+                        submission_summary_100 or "",
                         json.dumps(citations or []),
                         json.dumps(topic_sections_fallback),
                         calculated_word_count,
                         model or "",
-                        int(response_time_ms) if response_time_ms is not None else None
+                        int(response_time_ms) if response_time_ms is not None else None,
+                        submission_summary_100,
                     ))
                     conn.commit()
             return True
@@ -2135,6 +2146,64 @@ class RelationalDBManager:
             if conn:
                 conn.close()
 
+    def update_submission_summary_100(
+        self,
+        video_id: str,
+        submission_summary_100: str,
+        summary_type: str = "comprehensive",
+        user_email: Optional[str] = None,
+    ) -> bool:
+        """Update only the 100-word submission summary on an existing lecture summary row."""
+        if not video_id or not summary_type:
+            return False
+
+        clean_type = summary_type.strip().lower()
+        clean_email = user_email.strip().lower() if user_email and user_email.strip() else None
+        clean_text = (submission_summary_100 or "").strip()
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn:
+                with conn.cursor() as cursor:
+                    if clean_email:
+                        cursor.execute("""
+                            SELECT id
+                            FROM lecturescribe_lecture_summaries
+                            WHERE video_id = %s
+                              AND summary_type = %s
+                              AND LENGTH(TRIM(COALESCE(markdown_text, ''))) > 0
+                            ORDER BY (user_email = %s) DESC, (user_email IS NULL) DESC, updated_at DESC
+                            LIMIT 1;
+                        """, (video_id, clean_type, clean_email))
+                    else:
+                        cursor.execute("""
+                            SELECT id
+                            FROM lecturescribe_lecture_summaries
+                            WHERE video_id = %s
+                              AND summary_type = %s
+                              AND LENGTH(TRIM(COALESCE(markdown_text, ''))) > 0
+                            ORDER BY updated_at DESC
+                            LIMIT 1;
+                        """, (video_id, clean_type))
+                    row = cursor.fetchone()
+                    if not row or not row.get("id"):
+                        return False
+                    cursor.execute("""
+                        UPDATE lecturescribe_lecture_summaries
+                        SET submission_summary_100 = %s,
+                            updated_at = NOW()
+                        WHERE id = %s;
+                    """, (clean_text, row["id"]))
+                    conn.commit()
+            return True
+        except Exception as e:
+            print(f"[PostgreSQL Notice] update_submission_summary_100 error: {e}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
     def get_lecture_summaries(
         self,
         video_id: str,
@@ -2157,7 +2226,7 @@ class RelationalDBManager:
                     if clean_email:
                         cursor.execute("""
                             SELECT id, video_id, user_email, summary_type, markdown_text,
-                                   submission_text, citations_json, sections_json, word_count, model,
+                                   submission_text, submission_summary_100, citations_json, sections_json, word_count, model,
                                    response_time_ms,
                                    COALESCE(is_outdated, FALSE) as is_outdated,
                                    created_at, updated_at
@@ -2169,7 +2238,7 @@ class RelationalDBManager:
                     else:
                         cursor.execute("""
                             SELECT id, video_id, user_email, summary_type, markdown_text,
-                                   submission_text, citations_json, sections_json, word_count, model,
+                                   submission_text, submission_summary_100, citations_json, sections_json, word_count, model,
                                    response_time_ms,
                                    COALESCE(is_outdated, FALSE) as is_outdated,
                                    created_at, updated_at
@@ -2195,6 +2264,7 @@ class RelationalDBManager:
                                 "summaryType": stype,
                                 "markdownText": md_text,
                                 "submissionText": row.get("submission_text") or "",
+                                "submissionSummary100": row.get("submission_summary_100") or "",
                                 "citations": citations,
                                 "topics": topics,
                                 "wordCount": row.get("word_count") or 0,

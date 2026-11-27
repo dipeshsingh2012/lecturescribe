@@ -95,6 +95,52 @@ describe('LectureSummary component', () => {
     expect(copyText).toHaveBeenCalledWith(sampleSummary.submissionText, 'submission');
   });
 
+  it('renders 100-word key concepts summary card, word count, and copy action in submission view', () => {
+    const copyText = vi.fn();
+    const generateShortSubmission = vi.fn();
+    const shortSummaryText = 'In this session, we covered backpropagation, gradient descent, and regularization trade-offs for training deep networks.';
+    const summaryWithShort = {
+      ...sampleSummary,
+      submissionSummary100: shortSummaryText
+    };
+    const hook = createHookMock({
+      viewMode: 'submission',
+      currentSummary: summaryWithShort,
+      copyText,
+      generateShortSubmission
+    });
+    render(<LectureSummary summaryHook={hook} handleCueClick={vi.fn()} />);
+
+    expect(screen.getByTestId('short-submission-card')).toBeInTheDocument();
+    expect(screen.getByText('100-Word Key Concepts Summary')).toBeInTheDocument();
+    expect(screen.getByText(shortSummaryText)).toBeInTheDocument();
+    expect(screen.getByTestId('short-submission-word-count')).toHaveTextContent('15 words');
+
+    const shortCopyBtn = screen.getByRole('button', { name: /Copy 100-Word Summary/i });
+    fireEvent.click(shortCopyBtn);
+    expect(copyText).toHaveBeenCalledWith(shortSummaryText, 'submission_100');
+
+    const regenShortBtn = screen.getByRole('button', { name: /Regenerate 100-Word Summary/i });
+    fireEvent.click(regenShortBtn);
+    expect(generateShortSubmission).toHaveBeenCalledWith(true);
+  });
+
+  it('shows Generate 100-Word Summary button when submissionSummary100 is absent and hides card in study view', () => {
+    const generateShortSubmission = vi.fn();
+    const subHook = createHookMock({
+      viewMode: 'submission',
+      generateShortSubmission
+    });
+    const { rerender } = render(<LectureSummary summaryHook={subHook} handleCueClick={vi.fn()} />);
+
+    const genShortBtn = screen.getByRole('button', { name: /Generate 100-Word Summary/i });
+    fireEvent.click(genShortBtn);
+    expect(generateShortSubmission).toHaveBeenCalledWith(false);
+
+    rerender(<LectureSummary summaryHook={createHookMock({ viewMode: 'study' })} handleCueClick={vi.fn()} />);
+    expect(screen.queryByTestId('short-submission-card')).not.toBeInTheDocument();
+  });
+
   it('renders loading and generating states properly', () => {
     const loadingHook = createHookMock({ loading: true, currentSummary: null });
     const { rerender } = render(<LectureSummary summaryHook={loadingHook} />);

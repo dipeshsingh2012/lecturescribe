@@ -1398,6 +1398,18 @@ def generate_and_store_comprehensive_summary(
     submission_text = pinecone_rag_engine._clean_for_submission(
         submission_text or markdown_text, preserve_paragraphs=True
     )
+
+    submission_summary_100 = ""
+    try:
+        short_res = pinecone_rag_engine.generate_short_submission_summary(
+            original_text=submission_text or markdown_text,
+            video_id=video_id,
+            target_words=100,
+        )
+        submission_summary_100 = (short_res.get("submission_summary_100") or "").strip()
+    except Exception as short_err:
+        print(f"⚠️ [Short Submission Gen Notice]: {short_err}")
+
     response_time_ms = max(1, int(round((time.perf_counter() - t_sum) * 1000)))
 
     saved = db_manager.save_lecture_summary(
@@ -1405,6 +1417,7 @@ def generate_and_store_comprehensive_summary(
         summary_type="comprehensive",
         markdown_text=markdown_text,
         submission_text=submission_text,
+        submission_summary_100=submission_summary_100,
         citations=res.get("citations") or [],
         word_count=len([w for w in submission_text.split() if w]),
         model=res.get("model") or "",
@@ -2974,6 +2987,88 @@ def generate_lecture_summary_endpoint(req: GenerateLectureSummaryRequest):
         "summary": stored,
         "response_time_ms": stored.get("response_time_ms") or stored.get("responseTimeMs"),
         "cached": False
+    }
+
+
+class ShortSubmissionSummaryRequest(BaseModel):
+    video_id: str
+    summary_type: Optional[str] = "comprehensive"
+    user_email: Optional[str] = None
+    force_refresh: bool = False
+
+
+@app.post("/api/summary/submission-100")
+def generate_short_submission_summary_endpoint(req: ShortSubmissionSummaryRequest):
+    """
+    Generate or retrieve the concise ~100-word key-concepts submission summary for an existing
+    lecture summary and persist it in lecturescribe_lecture_summaries.
+    """
+    vid = str(req.video_id).strip()
+    if not vid or vid == "active":
+        raise HTTPException(status_code=400, detail="A valid video_id is required.")
+
+    summary_type = (req.summary_type or "comprehensive").strip().lower()
+    existing = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
+    if not existing and summary_type != "comprehensive":
+        summary_type = "comprehensive"
+        existing = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email)
+
+    if not existing or not (existing.get("submissionText") or existing.get("markdownText")):
+        raise HTTPException(status_code=404, detail=f"No saved lecture summary found for video {vid}.")
+
+    existing_short = (existing.get("submissionSummary100") or "").strip()
+    if existing_short and not req.force_refresh:
+        return {
+            "status": "success",
+            "video_id": vid,
+            "submission_summary_100": existing_short,
+            "word_count": len([w for w in existing_short.split() if w]),
+            "summary": existing,
+            "cached": True,
+        }
+
+    source_text = (existing.get("submissionText") or existing.get("markdownText") or "").strip()
+    try:
+        short_res = pinecone_rag_engine.generate_short_submission_summary(
+            original_text=source_text,
+            video_id=vid,
+            target_words=100,
+        )
+    except Exception as e:
+        print(f"❌ [Short Submission API] Generation failed for '{vid}': {e}")
+        raise HTTPException(status_code=502, detail=f"100-word summary generation failed: {e}")
+
+    short_text = (short_res.get("submission_summary_100") or "").strip()
+    if not short_text:
+        raise HTTPException(status_code=502, detail="100-word summary generation returned no content.")
+
+    db_manager.update_submission_summary_100(
+        video_id=vid,
+        submission_summary_100=short_text,
+        summary_type=summary_type,
+        user_email=req.user_email,
+    )
+
+    if redis_cache and req.user_email:
+        try:
+            redis_cache.invalidate_user(req.user_email)
+        except Exception:
+            pass
+
+    updated_summary = db_manager.get_lecture_summary(vid, summary_type, user_email=req.user_email) or {
+        **existing,
+        "submissionSummary100": short_text,
+    }
+    if not updated_summary.get("submissionSummary100"):
+        updated_summary = {**updated_summary, "submissionSummary100": short_text}
+
+    return {
+        "status": "success",
+        "video_id": vid,
+        "submission_summary_100": short_text,
+        "word_count": len([w for w in short_text.split() if w]),
+        "summary": updated_summary,
+        "cached": False,
     }
 
 

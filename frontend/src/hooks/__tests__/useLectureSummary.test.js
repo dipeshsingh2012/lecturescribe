@@ -123,5 +123,53 @@ describe('useLectureSummary hook', () => {
       expect.objectContaining({ method: 'POST' })
     );
   });
+
+  it('generateShortSubmission calls submission-100 endpoint and merges result into summaries', async () => {
+    const initialSummary = {
+      id: 7,
+      videoId: 'v400',
+      summaryType: 'comprehensive',
+      markdownText: '## Concepts',
+      submissionText: 'Full submission prose.',
+      submissionSummary100: ''
+    };
+    const shortText = 'In this session, we covered PCA, variance maximization, and eigenvector projections.';
+
+    global.fetch = vi.fn().mockImplementation((url) => {
+      if (url.includes('/api/summary/lecture')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ summaries: { comprehensive: initialSummary } })
+        });
+      }
+      if (url.includes('/api/summary/submission-100')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            submission_summary_100: shortText,
+            summary: { ...initialSummary, submissionSummary100: shortText }
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    const activeData = { videoId: 'v400', cues: [{ time: '00:00', text: 'PCA' }] };
+    let hookResult;
+    await act(async () => {
+      hookResult = renderHook(() => useLectureSummary(activeData, 'student@example.com'));
+    });
+
+    await act(async () => {
+      await hookResult.result.current.generateShortSubmission(false);
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/summary/submission-100'),
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(hookResult.result.current.currentSummary.submissionSummary100).toBe(shortText);
+  });
 });
 

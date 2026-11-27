@@ -2518,6 +2518,139 @@ class Llama3PineconeRAGStore:
             "model": "Local Extractor"
         }
 
+    def generate_short_submission_summary(
+        self,
+        original_text: str,
+        video_id: Optional[str] = "",
+        target_words: int = 100
+    ) -> Dict[str, Any]:
+        """Synthesize a concise ~100-word (90-110 words) plain-text key-concepts submission paragraph."""
+        if not original_text or not original_text.strip():
+            raise ValueError("original_text cannot be empty.")
+        if re.search(r"<\s*function\s*=", original_text):
+            raise ValueError("Input contains raw unexecuted function call tags.")
+
+        clean_base = self._clean_for_submission(original_text, preserve_paragraphs=True)
+        min_w = max(80, target_words - 10)
+        max_w = target_words + 10
+
+        system_prompt = (
+            "You are an enrolled graduate student writing a concise, plain-text academic assignment submission that captures the KEY CONCEPTS of a lecture session. "
+            "Write in a natural, first-person reflective student voice ('In this session, we covered...', 'We examined how...'). "
+            "Your goal is to distill and connect the core technical concepts, definitions, mechanisms, and key takeaways taught—skipping secondary anecdotes, extended code walkthroughs, and filler.\n\n"
+            "STRICT RULES & CONSTRAINTS:\n"
+            f"1. WORD COUNT: Write a SINGLE cohesive paragraph of approximately {target_words} words (strictly between {min_w} and {max_w} words).\n"
+            "2. KEY CONCEPTS FOCUS: Prioritize naming and clearly linking the central technical concepts, models, trade-offs, and core ideas covered in the lecture.\n"
+            "3. TERMINOLOGY: Always refer to the lecturer as 'the professor'. Never use 'instructor', 'speaker', or 'lecturer'.\n"
+            "4. NO AI FLUFF OR DRAMATIC ADJECTIVES: Never use words like 'lively', 'vibrant', 'fascinating', 'delve', 'pivotal', 'crucial', 'cornerstone', 'testament', or 'nuanced'. Use direct, matter-of-fact academic phrasing.\n"
+            "5. NO TITLES, HEADERS, BULLETS, OR TIMESTAMPS: Start immediately with the first sentence. Output one continuous plain-text paragraph with no markdown ('#', '*', '-'), no section labels, and no [MM:SS] timestamps.\n"
+            "6. INLINE PSEUDO-MATH ONLY (NO LATEX): Never use LaTeX delimiters ($...$, $$...$$, \\(...\\), \\[...\\]) or LaTeX markup (\\frac, \\sum, \\text). Use clean plain-text inline pseudo-math if any formula is needed.\n"
+            "7. NO COURSE LOGISTICS OR Q&A ATTRIBUTION: Exclude all administrative reminders, quizzes, exam dates, or homework instructions, and never write 'a student asked' or 'in the Q&A'."
+        )
+        user_content = (
+            f"Distill the following lecture notes into a single cohesive ~{target_words}-word ({min_w}-{max_w} words) "
+            "plain-text student submission paragraph that captures the key technical concepts covered:\n\n"
+            f"{clean_base[:10000]}"
+        )
+
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        if not (groq_key or gemini_key):
+            raise RuntimeError("No LLM keys configured for short submission summary generation.")
+
+        from backend.llm_router import llm_router, TaskType
+        import requests
+
+        est_tokens = (len(system_prompt) + len(user_content)) // 4
+        candidates = llm_router.get_candidate_models(TaskType.SUBMISSION, est_tokens=est_tokens)
+        t_start = time.time()
+
+        for model_spec in candidates:
+            m_name = model_spec.name
+            if model_spec.provider == "groq" and groq_key:
+                try:
+                    payload = {
+                        "model": m_name,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content}
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 260
+                    }
+                    headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                    print(f"🚀 [Short Submission Generator] Dispatching to Groq {m_name}...")
+                    r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=45)
+                    if r.status_code == 200:
+                        raw_output = r.json()["choices"][0]["message"]["content"].strip()
+                        final_short = self._clean_for_submission(raw_output, preserve_paragraphs=False)
+                        if final_short:
+                            elapsed = time.time() - t_start
+                            llm_router.record_success(m_name)
+                            print(f"✅ [Short Submission Generator] Completed via Groq {m_name} in {elapsed:.2f}s | Words: {len(final_short.split())}")
+                            return {
+                                "status": "success",
+                                "submission_summary_100": final_short,
+                                "word_count": len(final_short.split()),
+                                "model": f"Groq {m_name}"
+                            }
+                    else:
+                        llm_router.record_error(m_name, r.status_code, r.text[:150])
+                except Exception as ge:
+                    print(f"⚠️ [Short Submission Generator] Groq model {m_name} error ({ge}). Cascading...")
+                    llm_router.record_error(m_name, 500, str(ge))
+
+            elif model_spec.provider == "gemini" and gemini_key:
+                try:
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
+                    payload = {
+                        "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_content}"}]}],
+                        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 260}
+                    }
+                    print(f"🚀 [Short Submission Generator] Dispatching to Google {m_name}...")
+                    r = requests.post(api_url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
+                    if r.status_code == 200:
+                        cand = (r.json().get("candidates") or [{}])[0]
+                        parts = (cand.get("content") or {}).get("parts") or []
+                        raw_output = "".join(p.get("text", "") for p in parts).strip()
+                        if raw_output:
+                            final_short = self._clean_for_submission(raw_output, preserve_paragraphs=False)
+                            elapsed = time.time() - t_start
+                            llm_router.record_success(m_name)
+                            print(f"✅ [Short Submission Generator] Completed via Google {m_name} in {elapsed:.2f}s | Words: {len(final_short.split())}")
+                            return {
+                                "status": "success",
+                                "submission_summary_100": final_short,
+                                "word_count": len(final_short.split()),
+                                "model": f"Google {m_name}"
+                            }
+                    llm_router.record_error(m_name, r.status_code, r.text[:150])
+                except Exception as gme:
+                    print(f"⚠️ [Short Submission Generator] Google model {m_name} error ({gme}). Cascading...")
+                    llm_router.record_error(m_name, 500, str(gme))
+
+        # Clean local fallback truncated cleanly at a sentence boundary
+        print("⚠️ [Short Submission Generator] All LLM providers failed or rate-limited. Using clean local fallback.")
+        flat_base = self._clean_for_submission(clean_base, preserve_paragraphs=False)
+        words = flat_base.split()
+        if len(words) <= target_words:
+            final_short = flat_base
+        else:
+            candidate = " ".join(words[:target_words])
+            last_punct = max(candidate.rfind("."), candidate.rfind("!"), candidate.rfind("?"))
+            if last_punct > int(len(candidate) * 0.6):
+                final_short = candidate[:last_punct + 1]
+            else:
+                final_short = candidate.rstrip(",;:- ") + "."
+
+        return {
+            "status": "partial_fallback",
+            "submission_summary_100": final_short,
+            "word_count": len(final_short.split()),
+            "model": "Local Extractor"
+        }
+
     def _build_summary_response(self, text: str, model_name: str, title: str, video_id: str) -> Dict[str, Any]:
         """Helper to extract timestamps and format summary response."""
         citations = []

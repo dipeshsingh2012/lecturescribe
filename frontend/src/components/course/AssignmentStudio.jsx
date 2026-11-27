@@ -42,6 +42,11 @@ import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import { API_BASE } from '../../utils/constants';
 import { normalizeCourseSlug } from '../../utils/routing';
+import {
+  isNotebookContent,
+  parseDraftToNotebookCells,
+  downloadDraftAsIpynb
+} from '../../utils/notebookUtils';
 import ResponseTimeBadge from '../common/ResponseTimeBadge';
 
 export default function AssignmentStudio({
@@ -583,6 +588,140 @@ export default function AssignmentStudio({
     setTimeout(() => setCopiedDraft(false), 2000);
   };
 
+  const [previewStyle, setPreviewStyle] = useState('auto'); // 'auto' | 'notebook' | 'paper'
+  const [copiedCellIdx, setCopiedCellIdx] = useState(null);
+
+  const notebookContextText = `${title || ''} ${problemPrompt || ''} ${(chatHistory || []).map((m) => m.content || '').join(' ')}`;
+  const detectedNotebook = isNotebookContent(draftMarkdown, notebookContextText);
+  const showNotebookView = previewStyle === 'notebook' || (previewStyle === 'auto' && detectedNotebook);
+  const notebookCells = showNotebookView ? parseDraftToNotebookCells(draftMarkdown) : [];
+
+  const handleCopyCell = (codeText, idx) => {
+    navigator.clipboard.writeText(codeText || '');
+    setCopiedCellIdx(idx);
+    setTimeout(() => setCopiedCellIdx(null), 1800);
+  };
+
+  const handleDownloadIpynb = () => {
+    if (!draftMarkdown.trim()) return;
+    downloadDraftAsIpynb(draftMarkdown, title || 'assignment_notebook');
+  };
+
+  const renderNotebookCellsView = (compact = false) => {
+    let codeCellCounter = 0;
+    return (
+      <Box
+        data-testid="jupyter-notebook-preview"
+        sx={{
+          maxWidth: compact ? '100%' : 880,
+          mx: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: compact ? 1.5 : 2
+        }}
+      >
+        {notebookCells.map((cell, idx) => {
+          if (cell.cell_type === 'code') {
+            codeCellCounter += 1;
+            const execNum = codeCellCounter;
+            return (
+              <Paper
+                key={`code-${idx}`}
+                elevation={0}
+                data-testid="notebook-code-cell"
+                sx={{
+                  borderRadius: 2,
+                  border: '1px solid #cbd5e1',
+                  overflow: 'hidden',
+                  bgcolor: '#0f172a'
+                }}
+              >
+                <Box
+                  sx={{
+                    px: 1.5,
+                    py: 0.6,
+                    bgcolor: '#1e293b',
+                    borderBottom: '1px solid #334155',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                  }}
+                >
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                      color: '#38bdf8',
+                      fontWeight: 700,
+                      fontSize: '0.74rem'
+                    }}
+                  >
+                    In [{execNum}]: &nbsp;Python
+                  </Typography>
+                  <Tooltip title="Copy code cell">
+                    <IconButton
+                      size="small"
+                      aria-label={`Copy code cell ${execNum}`}
+                      onClick={() => handleCopyCell(cell.source, idx)}
+                      sx={{ color: copiedCellIdx === idx ? '#34d399' : '#94a3b8', p: 0.4 }}
+                    >
+                      {copiedCellIdx === idx ? <Check size={13} /> : <Copy size={13} />}
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                <Box
+                  component="pre"
+                  sx={{
+                    m: 0,
+                    p: compact ? 1.5 : 2,
+                    overflowX: 'auto',
+                    fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                    fontSize: compact ? '0.78rem' : '0.84rem',
+                    lineHeight: 1.55,
+                    color: '#e2e8f0'
+                  }}
+                >
+                  <code>{cell.source}</code>
+                </Box>
+              </Paper>
+            );
+          }
+
+          return (
+            <Paper
+              key={`md-${idx}`}
+              elevation={0}
+              data-testid="notebook-markdown-cell"
+              sx={{
+                p: compact ? 2 : 2.5,
+                borderRadius: 2,
+                border: `1px solid ${palette.cardBorder}`,
+                borderLeft: '3px solid #3b82f6',
+                bgcolor: palette.cardBg,
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                color: '#0f172a',
+                lineHeight: 1.65,
+                '& h1': { fontSize: compact ? '1.3rem' : '1.5rem', fontWeight: 800, mt: 0.5, mb: 1.2, color: '#0f172a' },
+                '& h2': { fontSize: compact ? '1.08rem' : '1.2rem', fontWeight: 700, mt: 1.5, mb: 0.8, color: '#1e40af' },
+                '& h3': { fontSize: '0.98rem', fontWeight: 700, mt: 1.2, mb: 0.6, color: '#0f172a' },
+                '& p': { fontSize: compact ? '0.88rem' : '0.94rem', mb: 1.2 },
+                '& ul, & ol': { pl: 2.5, mb: 1.2 },
+                '& table': { width: '100%', borderCollapse: 'collapse', my: 1.5, fontSize: '0.82rem' },
+                '& th, & td': { border: '1px solid #cbd5e1', p: '6px 10px', textAlign: 'left' },
+                '& th': { bgcolor: '#f8fafc', fontWeight: 700 },
+                '& code': { bgcolor: '#f1f5f9', px: 0.6, py: 0.2, borderRadius: 0.8, fontSize: '0.84em' }
+              }}
+            >
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                {cell.source}
+              </ReactMarkdown>
+            </Paper>
+          );
+        })}
+      </Box>
+    );
+  };
+
   // Status Chip helper
   const getStatusChip = () => {
     switch (studioStatus) {
@@ -914,6 +1053,25 @@ export default function AssignmentStudio({
             </IconButton>
           </Tooltip>
 
+          {/* Download .ipynb button when notebook content is detected or notebook view is active */}
+          {draftMarkdown.trim() && (showNotebookView || detectedNotebook) && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<FileCode size={14} />}
+              onClick={handleDownloadIpynb}
+              aria-label="Download Jupyter Notebook"
+              sx={{
+                textTransform: 'none',
+                fontWeight: 700,
+                color: '#1d4ed8',
+                borderColor: '#3b82f6'
+              }}
+            >
+              Download .ipynb
+            </Button>
+          )}
+
           {/* Download PDF button if compiled */}
           {pdfDownloadUrl && (
             <Button
@@ -1140,16 +1298,62 @@ export default function AssignmentStudio({
         {/* RIGHT PANE: LIVE ACADEMIC DRAFT (55%) */}
         <Box sx={{ width: { xs: '100%', md: '55%' }, display: 'flex', flexDirection: 'column', bgcolor: '#f8fafc', overflow: 'hidden' }}>
           {/* Draft Toolbar */}
-          <Box sx={{ p: 2, borderBottom: `1px solid ${palette.cardBorder}`, bgcolor: palette.cardBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ p: 2, borderBottom: `1px solid ${palette.cardBorder}`, bgcolor: palette.cardBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <FileCode size={16} color="#475569" />
               <Typography variant="subtitle2" sx={{ fontWeight: 800, color: palette.textPrimary }}>
-                {editorMode === 'preview' ? 'Rendered Academic Document' : editorMode === 'split' ? 'Side-by-Side Live Editor & Preview' : 'Raw Markdown Editor'}
+                {editorMode === 'preview'
+                  ? (showNotebookView ? 'Rendered Jupyter Notebook (.ipynb)' : 'Rendered Academic Document')
+                  : editorMode === 'split'
+                    ? 'Side-by-Side Live Editor & Preview'
+                    : 'Raw Markdown Editor'}
               </Typography>
             </Box>
-            <Typography variant="caption" sx={{ color: palette.textSecondary }}>
-              LaTeX Math ($...$) &bull; Markdown Tables &bull; Real-time Sync
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              {draftMarkdown.trim() && editorMode !== 'edit' && (
+                <Box sx={{ bgcolor: 'rgba(0,0,0,0.04)', borderRadius: 1.5, p: 0.3, display: 'inline-flex', gap: 0.3 }}>
+                  <Button
+                    size="small"
+                    onClick={() => setPreviewStyle('notebook')}
+                    sx={{
+                      minWidth: 0,
+                      px: 1.2,
+                      py: 0.25,
+                      textTransform: 'none',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      borderRadius: 1,
+                      bgcolor: showNotebookView ? palette.cardBg : 'transparent',
+                      color: showNotebookView ? palette.primary : palette.textSecondary,
+                      boxShadow: showNotebookView ? 1 : 0
+                    }}
+                  >
+                    Notebook
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={() => setPreviewStyle('paper')}
+                    sx={{
+                      minWidth: 0,
+                      px: 1.2,
+                      py: 0.25,
+                      textTransform: 'none',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      borderRadius: 1,
+                      bgcolor: !showNotebookView ? palette.cardBg : 'transparent',
+                      color: !showNotebookView ? palette.primary : palette.textSecondary,
+                      boxShadow: !showNotebookView ? 1 : 0
+                    }}
+                  >
+                    Paper
+                  </Button>
+                </Box>
+              )}
+              <Typography variant="caption" sx={{ color: palette.textSecondary }}>
+                {showNotebookView ? 'Markdown Cells • Python Code • .ipynb Export' : 'LaTeX Math ($...$) • Markdown Tables • Real-time Sync'}
+              </Typography>
+            </Box>
           </Box>
 
           {/* Draft Content Area */}
@@ -1239,37 +1443,46 @@ export default function AssignmentStudio({
                 </Box>
                 <Box sx={{ width: '50%' }}>
                   <Typography variant="caption" sx={{ fontWeight: 700, color: palette.textSecondary, mb: 1, display: 'block' }}>
-                    LIVE PREVIEW
+                    {showNotebookView ? 'LIVE NOTEBOOK PREVIEW' : 'LIVE PREVIEW'}
                   </Typography>
-                  <Paper
-                    elevation={0}
-                    sx={{
-                      p: 3,
-                      borderRadius: 2,
-                      border: `1px solid ${palette.cardBorder}`,
-                      bgcolor: palette.cardBg,
-                      fontFamily: '"Times New Roman", Times, Georgia, serif',
-                      color: '#0f172a',
-                      lineHeight: 1.65,
-                      maxHeight: 'calc(100vh - 240px)',
-                      overflowY: 'auto',
-                      '& h1': { fontSize: '1.45rem', fontWeight: 800, borderBottom: '2px solid #0f172a', pb: 0.5, mb: 1.5, mt: 0.5 },
-                      '& h2': { fontSize: '1.15rem', fontWeight: 700, borderBottom: '1px solid #cbd5e1', pb: 0.5, mt: 2, mb: 1, color: '#1e40af' },
-                      '& h3': { fontSize: '1rem', fontWeight: 700, mt: 1.5, mb: 0.8, color: '#0f172a' },
-                      '& p': { fontSize: '0.92rem', mb: 1.4, textAlign: 'justify' },
-                      '& table': { width: '100%', borderCollapse: 'collapse', my: 2, fontSize: '0.82rem' },
-                      '& th, & td': { border: '1px solid #cbd5e1', p: '6px 10px', textAlign: 'left' },
-                      '& th': { bgcolor: '#f8fafc', fontWeight: 700 },
-                      '& blockquote': { borderLeft: '3px solid #3b82f6', m: 0, my: 1.5, pl: 1.5, color: '#475569', fontStyle: 'italic' },
-                      '& pre': { bgcolor: '#f1f5f9', p: 1.5, borderRadius: 1.5, overflowX: 'auto', fontFamily: 'monospace', fontSize: '0.8rem' }
-                    }}
-                  >
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                      {draftMarkdown}
-                    </ReactMarkdown>
-                  </Paper>
+                  {showNotebookView ? (
+                    <Box sx={{ maxHeight: 'calc(100vh - 240px)', overflowY: 'auto', pr: 0.5 }}>
+                      {renderNotebookCellsView(true)}
+                    </Box>
+                  ) : (
+                    <Paper
+                      elevation={0}
+                      sx={{
+                        p: 3,
+                        borderRadius: 2,
+                        border: `1px solid ${palette.cardBorder}`,
+                        bgcolor: palette.cardBg,
+                        fontFamily: '"Times New Roman", Times, Georgia, serif',
+                        color: '#0f172a',
+                        lineHeight: 1.65,
+                        maxHeight: 'calc(100vh - 240px)',
+                        overflowY: 'auto',
+                        '& h1': { fontSize: '1.45rem', fontWeight: 800, borderBottom: '2px solid #0f172a', pb: 0.5, mb: 1.5, mt: 0.5 },
+                        '& h2': { fontSize: '1.15rem', fontWeight: 700, borderBottom: '1px solid #cbd5e1', pb: 0.5, mt: 2, mb: 1, color: '#1e40af' },
+                        '& h3': { fontSize: '1rem', fontWeight: 700, mt: 1.5, mb: 0.8, color: '#0f172a' },
+                        '& p': { fontSize: '0.92rem', mb: 1.4, textAlign: 'justify' },
+                        '& table': { width: '100%', borderCollapse: 'collapse', my: 2, fontSize: '0.82rem' },
+                        '& th, & td': { border: '1px solid #cbd5e1', p: '6px 10px', textAlign: 'left' },
+                        '& th': { bgcolor: '#f8fafc', fontWeight: 700 },
+                        '& blockquote': { borderLeft: '3px solid #3b82f6', m: 0, my: 1.5, pl: 1.5, color: '#475569', fontStyle: 'italic' },
+                        '& pre': { bgcolor: '#f1f5f9', p: 1.5, borderRadius: 1.5, overflowX: 'auto', fontFamily: 'monospace', fontSize: '0.8rem' }
+                      }}
+                    >
+                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {draftMarkdown}
+                      </ReactMarkdown>
+                    </Paper>
+                  )}
                 </Box>
               </Box>
+            ) : showNotebookView ? (
+              /* Rendered Jupyter Notebook Cells View */
+              renderNotebookCellsView(false)
             ) : (
               /* Rendered Academic Paper View (Full Width) */
               <Paper

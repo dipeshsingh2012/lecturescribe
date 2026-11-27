@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import AssignmentStudio from '../AssignmentStudio';
+import { buildIpynbObject, parseDraftToNotebookCells } from '../../../utils/notebookUtils';
 
 describe('AssignmentStudio Component', () => {
   const mockTheme = {
@@ -523,5 +524,70 @@ describe('AssignmentStudio Component', () => {
       expect(sentMessage).toBe('Draft multi-line message');
       expect(screen.getByText(/Understood, expanding ablation studies/i)).toBeInTheDocument();
     });
+  });
+
+  it('auto-renders Jupyter Notebook cell view with Download .ipynb when draft contains Python code cells', async () => {
+    const notebookDraft = [
+      '# Assignment 7: Bias-Variance Tradeoff',
+      '',
+      'We use an 80/20 train-test split to evaluate polynomial regression.',
+      '',
+      '```python',
+      'from sklearn.model_selection import train_test_split',
+      'X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)',
+      '```',
+      '',
+      '## Discussion',
+      'Higher degree polynomials reduce bias while increasing variance.'
+    ].join('\n');
+
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url.includes('/api/llm/available-models')) {
+        return { ok: true, json: async () => mockModelsData };
+      }
+      if (url.includes('/assignments/studio/asgn_studio_nb')) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            session_id: 'asgn_studio_nb',
+            title: 'Assignment_7_26mda017',
+            selected_model: 'gemini-3.8-flash',
+            problem_statement: 'Produce a Jupyter Notebook with 80/20 split.',
+            chat_history: [],
+            draft_markdown: notebookDraft,
+            citations: [],
+            studio_status: 'drafting'
+          })
+        };
+      }
+      return { ok: true, json: async () => ({ status: 'success' }) };
+    });
+
+    render(
+      <AssignmentStudio
+        courseName="Data Science Lab"
+        initialSessionId="asgn_studio_nb"
+        onClose={vi.fn()}
+        currentTheme={mockTheme}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Rendered Jupyter Notebook \(\.ipynb\)/i)).toBeInTheDocument();
+      expect(screen.getByTestId('jupyter-notebook-preview')).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByTestId('notebook-markdown-cell').length).toBe(2);
+    expect(screen.getAllByTestId('notebook-code-cell').length).toBe(1);
+    expect(screen.getByText(/In \[1\]:/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Download Jupyter Notebook/i })).toBeInTheDocument();
+
+    const cells = parseDraftToNotebookCells(notebookDraft);
+    expect(cells.map((c) => c.cell_type)).toEqual(['markdown', 'code', 'markdown']);
+    const nb = buildIpynbObject(notebookDraft);
+    expect(nb.nbformat).toBe(4);
+    expect(nb.cells).toHaveLength(3);
+    expect(nb.cells[1].cell_type).toBe('code');
   });
 });

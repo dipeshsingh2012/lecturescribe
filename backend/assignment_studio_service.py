@@ -434,6 +434,31 @@ def is_draft_generation_intent(message: str) -> bool:
     return any(t in lowered for t in triggers)
 
 
+def _is_jupyter_notebook_request(
+    problem_statement: str = "",
+    chat_history: Optional[List[Dict[str, Any]]] = None,
+    title: str = ""
+) -> bool:
+    """Detect whether the assignment instructions or scoping discussion request a Jupyter Notebook."""
+    combined_parts = [title or "", problem_statement or ""]
+    if chat_history:
+        for m in chat_history[-14:]:
+            combined_parts.append(str(m.get("content") or ""))
+    combined = " ".join(combined_parts).lower()
+    notebook_markers = (
+        "jupyter notebook",
+        "jupyter",
+        ".ipynb",
+        "ipynb",
+        "colab notebook",
+        "google colab",
+        "executable code cells",
+        "markdown explanations and executable code cells",
+        "code cells",
+    )
+    return any(marker in combined for marker in notebook_markers)
+
+
 def generate_first_draft(
     course_name: str,
     title: str,
@@ -442,28 +467,48 @@ def generate_first_draft(
     course_context: str,
     model_name: Optional[str] = None
 ) -> str:
-    """Synthesize a complete, rigorous, course-grounded academic first draft in Markdown + KaTeX."""
-    system_prompt = (
-        f"You are the Lead Academic Writer and Researcher for {course_name}. "
-        "Your task is to write a comprehensive, rigorous, publication-grade academic document/solution draft "
-        "based on the problem statement and discussion.\n\n"
-        "STRICT GROUNDING & FORMATTING GUIDELINES:\n"
-        "1. STRICT USER FORMAT & CONSTRAINT PRECEDENCE: Always honor the exact deliverable format, layout, methodology, and preferences locked in during the discussion (for example, if the student requested a Jupyter Notebook layout with Markdown explanation cells and executable Python code cells, a specific train-test split, or specific analyses, produce the complete formatted notebook solution with clearly separated Markdown sections and runnable ```python code blocks rather than forcing a generic academic paper template).\n"
-        "2. Default Academic Structure (when no custom layout is requested): Use Markdown headings (# Title, ## Section, ### Subsection). Include an Abstract / Overview, Theoretical Formulation, Detailed Exposition / Derivations, Practical Analysis / Examples, Conclusion, and conclude with an authoritative '## References' section.\n"
-        "3. Mathematical Rigor: Format all formulas using standard LaTeX math ($...$ inline, $$...$$ display equations). Show step-by-step mathematical logic and deductions.\n"
-        "4. Scholarly Literature & External Citations: All citations in the document and any '## References' section MUST cite authentic, peer-reviewed scientific literature (journal articles, conference proceedings, seminal papers e.g., IEEE, ACM, JAMA, Nature, NeurIPS, Science, Lancet). NEVER cite internal course lecture video titles or timestamps (e.g. do NOT write '[Live session -3, 1:23:13]' or '[Lecture 4, 18:30]'). Course concepts should inspire the problem formulation and technical methodology, while all citations must point to formal academic publications.\n"
-        "5. Tables & Code: If comparing methods, architectures, or complexities, provide structured Markdown tables. If code or a Jupyter Notebook is requested, provide complete, clean, executable Python code cells. If the student specifies no code, exclude all code.\n"
-        "6. Tone: Scholarly, authentic, objective, publication-grade. Output ONLY the complete document/solution content in markdown—never output a conversational confirmation or ask the user to say 'Generate First Draft'."
-    )
+    """Synthesize a complete, rigorous, course-grounded first draft (Jupyter Notebook or Academic Document)."""
+    is_notebook = _is_jupyter_notebook_request(problem_statement, chat_history, title)
+
+    if is_notebook:
+        system_prompt = (
+            f"You are an expert Data Science & Machine Learning Lab Instructor and Student Co-Pilot for {course_name}. "
+            "The assignment requires a complete, authentic, executable **Jupyter Notebook (.ipynb)** solution—NOT an academic research paper.\n\n"
+            "STRICT JUPYTER NOTEBOOK FORMATTING GUIDELINES:\n"
+            "1. NOTEBOOK CELL STRUCTURE: Output a clean, alternating sequence of Markdown cells (explanations, headings, equations, analysis) and executable Python code cells fenced with ```python ... ```.\n"
+            "2. NO ACADEMIC PAPER BOILERPLATE: Do NOT wrap the solution in a journal paper format (no 'Abstract', no 'Literature Review', no fabricated '## References' journal bibliography unless explicitly requested).\n"
+            "3. COMPLETE, RUNNABLE PYTHON CODE: Every ```python block must be clean, self-contained, and executable in Jupyter/Google Colab (proper imports, data loading/generation, train-test split, model training, evaluation metrics, visualizations with matplotlib/seaborn, and clear print outputs).\n"
+            "4. HONOR ALL LOCKED-IN PREFERENCES: Strictly follow every requirement agreed in the problem statement and discussion (e.g., exact train/test split ratio, models, evaluation metrics, bias-variance discussion, lab tasks).\n"
+            "5. MATHEMATICAL CLARITY: Use LaTeX math ($...$ inline, $$...$$ display) inside Markdown explanation cells where helpful, and connect interpretations to the underlying course concepts without citing internal lecture video timestamps.\n"
+            "6. DIRECT OUTPUT ONLY: Output ONLY the notebook Markdown and ```python code cells—never output a conversational confirmation or ask the user to say 'Generate First Draft'."
+        )
+    else:
+        system_prompt = (
+            f"You are the Lead Academic Writer and Researcher for {course_name}. "
+            "Your task is to write a comprehensive, rigorous, publication-grade academic document/solution draft "
+            "based on the problem statement and discussion.\n\n"
+            "STRICT GROUNDING & FORMATTING GUIDELINES:\n"
+            "1. STRICT USER FORMAT & CONSTRAINT PRECEDENCE: Always honor the exact deliverable format, layout, methodology, and preferences locked in during the discussion.\n"
+            "2. Default Academic Structure (when no custom layout is requested): Use Markdown headings (# Title, ## Section, ### Subsection). Include an Abstract / Overview, Theoretical Formulation, Detailed Exposition / Derivations, Practical Analysis / Examples, Conclusion, and conclude with an authoritative '## References' section.\n"
+            "3. Mathematical Rigor: Format all formulas using standard LaTeX math ($...$ inline, $$...$$ display equations). Show step-by-step mathematical logic and deductions.\n"
+            "4. Scholarly Literature & External Citations: All citations in the document and any '## References' section MUST cite authentic, peer-reviewed scientific literature (journal articles, conference proceedings, seminal papers e.g., IEEE, ACM, JAMA, Nature, NeurIPS, Science, Lancet). NEVER cite internal course lecture video titles or timestamps (e.g. do NOT write '[Live session -3, 1:23:13]' or '[Lecture 4, 18:30]'). Course concepts should inspire the problem formulation and technical methodology, while all citations must point to formal academic publications.\n"
+            "5. Tables & Code: If comparing methods, architectures, or complexities, provide structured Markdown tables. If code is requested, provide clean, executable Python code blocks. If the student specifies no code, exclude all code.\n"
+            "6. Tone: Scholarly, authentic, objective, publication-grade. Output ONLY the complete document/solution content in markdown—never output a conversational confirmation or ask the user to say 'Generate First Draft'."
+        )
 
     discussion_summary = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in chat_history[-14:]])
+    format_instruction = (
+        "Generate the complete, executable Jupyter Notebook solution as alternating Markdown cells and ```python code cells."
+        if is_notebook
+        else "Generate the complete, exhaustive first draft in Markdown with LaTeX math."
+    )
     user_prompt = (
         f"Document Title: {title}\n"
         f"Course: {course_name}\n"
         f"Original Problem Statement:\n{problem_statement}\n\n"
         f"Discussion & Outline History:\n{discussion_summary}\n\n"
         f"Course Knowledge Base:\n{course_context}\n\n"
-        "Generate the complete, exhaustive first draft in Markdown with LaTeX math."
+        f"{format_instruction}"
     )
 
     draft = _call_studio_llm(

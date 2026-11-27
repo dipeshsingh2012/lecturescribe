@@ -35,7 +35,17 @@ def mock_llm_responses(monkeypatch):
                 '  "updated_draft": "# Convexity Analysis\\n\\n## Step 1: Hessian Derivation\\n$$\\\\nabla^2 L(w) \\\\succeq 0$$\\nThe Hessian is positive semi-definite."\n'
                 '}'
             )
-        # If drafting
+        # If drafting a Jupyter Notebook
+        if "Jupyter Notebook (.ipynb)" in system_prompt:
+            return (
+                "# Assignment 7: Bias-Variance Tradeoff\n\n"
+                "We perform an 80/20 train-test split and evaluate model complexity.\n\n"
+                "```python\n"
+                "from sklearn.model_selection import train_test_split\n"
+                "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\n"
+                "```\n"
+            )
+        # If drafting academic paper
         if "Lead Academic Writer" in system_prompt:
             return (
                 "# Comparative Analysis of Attention Mechanisms\n\n"
@@ -412,7 +422,7 @@ def test_scoping_placeholder_draft_self_heals_on_generate_first_draft(mock_llm_r
 
     turn = studio_chat_turn(sid, "Data Science Lab", "Generate First Draft")
     assert turn["status"] == "success"
-    assert "Comparative Analysis" in turn["draft_markdown"]
+    assert "```python" in turn["draft_markdown"]
     assert "Whenever you are ready, simply say 'Generate First Draft'" not in turn["draft_markdown"]
 
 
@@ -435,6 +445,36 @@ def test_algolia_search_truncates_query_under_512_bytes():
     assert len(sent_query.encode("utf-8")) < 512
     assert len(sent_query.encode("utf-8")) <= 480
     assert sent_query.startswith("bias-variance tradeoff")
+
+
+def test_generate_first_draft_uses_jupyter_notebook_prompt_when_requested(monkeypatch):
+    from backend.assignment_studio_service import generate_first_draft, _is_jupyter_notebook_request
+
+    captured = {}
+
+    def fake_llm(system_prompt, user_prompt, **kwargs):
+        captured["system_prompt"] = system_prompt
+        captured["user_prompt"] = user_prompt
+        return "# Assignment 7\n\n```python\nimport numpy as np\nprint('ok')\n```"
+
+    monkeypatch.setattr("backend.assignment_studio_service._call_studio_llm", fake_llm)
+
+    chat_history = [
+        {"role": "assistant", "content": "We locked in an 80/20 train-test split and a Jupyter Notebook layout with executable code cells."}
+    ]
+    assert _is_jupyter_notebook_request("Build a model", chat_history, "Assignment_7_26mda017") is True
+
+    draft = generate_first_draft(
+        course_name="Data Science Lab",
+        title="Assignment_7_26mda017",
+        problem_statement="Submit a Jupyter Notebook implementing 80/20 split and bias-variance analysis.",
+        chat_history=chat_history,
+        course_context="Error metrics and model complexity."
+    )
+    assert "```python" in draft
+    assert "Jupyter Notebook (.ipynb)" in captured["system_prompt"]
+    assert "NO ACADEMIC PAPER BOILERPLATE" in captured["system_prompt"]
+    assert "alternating Markdown cells and ```python code cells" in captured["user_prompt"]
 
 
 def test_studio_chat_refinement_preserves_dialogue_context(monkeypatch):

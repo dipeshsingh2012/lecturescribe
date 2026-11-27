@@ -367,15 +367,15 @@ def test_draft_generation_intent_matching_and_action(mock_llm_responses):
     )
     sid = init_res["session_id"]
 
-    # Trigger draft via the exact phrase clicked in right pane button
-    # Uses the last complete co-pilot response without retriggering LLM calls
+    # Trigger draft via conversational intent -> must invoke generate_first_draft (NOT adopt scoping outline)
     turn = studio_chat_turn(sid, "Deep Learning Systems", "Looks good, please generate the first draft!")
     assert turn["status"] == "success"
     assert turn["draft_markdown"] != ""
-    assert "Attention Mechanisms" in turn["draft_markdown"]
+    assert "Comparative Analysis" in turn["draft_markdown"]
+    assert "Say 'Generate First Draft' when ready!" not in turn["draft_markdown"]
     assert turn["studio_status"] == "drafting"
 
-    # Repeated draft trigger does not re-trigger LLM calls and keeps the draft
+    # Repeated draft trigger does not re-trigger LLM calls and keeps the synthesized draft
     turn_repeat = studio_chat_turn(sid, "Deep Learning Systems", "Generate First Draft")
     assert turn_repeat["status"] == "success"
     assert turn_repeat["draft_markdown"] == turn["draft_markdown"]
@@ -384,6 +384,57 @@ def test_draft_generation_intent_matching_and_action(mock_llm_responses):
     turn_regen = studio_chat_turn(sid, "Deep Learning Systems", "Please regenerate from scratch")
     assert turn_regen["status"] == "success"
     assert "Comparative Analysis" in turn_regen["draft_markdown"]
+
+
+def test_scoping_placeholder_draft_self_heals_on_generate_first_draft(mock_llm_responses):
+    from backend.database import db_manager
+
+    init_res = start_studio_session(
+        course_name="Data Science Lab",
+        user_email="student@iiitdwd.ac.in",
+        role="student",
+        prompt="Assignment_7_26mda017: 80/20 train-test split in Jupyter Notebook"
+    )
+    sid = init_res["session_id"]
+
+    # Simulate legacy broken session where scoping confirmation was saved into draft_markdown
+    broken_scoping_msg = (
+        "Fantastic! We have locked in your preferences: an 80/20 train-test split, a Jupyter Notebook layout.\n\n"
+        "Whenever you are ready, simply say 'Generate First Draft', and I will produce the complete, "
+        "formatted Jupyter Notebook solution for your assignment!"
+    )
+    db_manager.update_studio_session(
+        assignment_id=sid,
+        chat_history=init_res["chat_history"] + [{"role": "assistant", "content": broken_scoping_msg}],
+        draft_markdown=broken_scoping_msg,
+        status="drafting",
+    )
+
+    turn = studio_chat_turn(sid, "Data Science Lab", "Generate First Draft")
+    assert turn["status"] == "success"
+    assert "Comparative Analysis" in turn["draft_markdown"]
+    assert "Whenever you are ready, simply say 'Generate First Draft'" not in turn["draft_markdown"]
+
+
+def test_algolia_search_truncates_query_under_512_bytes():
+    from unittest.mock import MagicMock
+    from backend.algolia_service import AlgoliaSearchService
+
+    svc = object.__new__(AlgoliaSearchService)
+    svc.index_name = "test_index"
+    svc.client = MagicMock()
+    svc.client.search_single_index.return_value = MagicMock(hits=[])
+
+    long_query = ("bias-variance tradeoff 80/20 train-test split Jupyter Notebook — " * 25).strip()
+    assert len(long_query.encode("utf-8")) > 512
+
+    svc.search(long_query, limit=5)
+
+    called_params = svc.client.search_single_index.call_args.kwargs["search_params"]
+    sent_query = called_params["query"]
+    assert len(sent_query.encode("utf-8")) < 512
+    assert len(sent_query.encode("utf-8")) <= 480
+    assert sent_query.startswith("bias-variance tradeoff")
 
 
 def test_studio_chat_refinement_preserves_dialogue_context(monkeypatch):

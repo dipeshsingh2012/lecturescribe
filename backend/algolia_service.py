@@ -327,16 +327,33 @@ class AlgoliaSearchService:
         return self.ingest_cues(video_id, video_title, cues, window_seconds=window_seconds)
 
 
+    @staticmethod
+    def _truncate_query_bytes(query: str, max_bytes: int = 480) -> str:
+        """Truncate search query cleanly at a word boundary so UTF-8 byte length stays strictly below Algolia's 512-byte limit."""
+        normalized = " ".join((query or "").split())
+        if not normalized:
+            return ""
+        encoded = normalized.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return normalized
+        truncated = encoded[:max_bytes].decode("utf-8", errors="ignore").rstrip()
+        if " " in truncated:
+            candidate = truncated.rsplit(" ", 1)[0].strip()
+            if candidate:
+                return candidate
+        return truncated
+
     def search(self, query: str, video_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
         """Perform instant keyword search across transcript cues strictly via Algolia Cloud."""
-        if not query.strip():
+        safe_query = self._truncate_query_bytes(query, max_bytes=480)
+        if not safe_query:
             return []
 
         if not self.client:
             raise RuntimeError("Algolia search service is uninitialized or API credentials are not configured.")
 
         search_params = {
-            "query": query,
+            "query": safe_query,
             "hitsPerPage": limit,
             "attributesToHighlight": ["text"],
             "highlightPreTag": "<mark class='algolia-highlight'>",

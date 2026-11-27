@@ -448,11 +448,12 @@ def generate_first_draft(
         "Your task is to write a comprehensive, rigorous, publication-grade academic document/solution draft "
         "based on the problem statement and discussion.\n\n"
         "STRICT GROUNDING & FORMATTING GUIDELINES:\n"
-        "1. Academic Document Structure: Use Markdown headings (# Title, ## Section, ### Subsection). Include an Abstract / Overview, Theoretical Formulation, Detailed Exposition / Derivations, Practical Analysis / Examples, Conclusion, and conclude with an authoritative '## References' section.\n"
-        "2. Mathematical Rigor: Format all formulas using standard LaTeX math ($...$ inline, $$...$$ display equations). Show step-by-step mathematical logic and deductions.\n"
-        "3. Scholarly Literature & External Citations: All citations in the document and the final '## References' section MUST cite authentic, peer-reviewed scientific literature (journal articles, conference proceedings, seminal papers e.g., IEEE, ACM, JAMA, Nature, NeurIPS, Science, Lancet). NEVER cite internal course lecture video titles or timestamps (e.g. do NOT write '[Live session -3, 1:23:13]' or '[Lecture 4, 18:30]'). Course concepts should inspire the problem formulation and technical methodology, while all citations must point to formal academic publications.\n"
-        "4. Tables & Code: If comparing methods, architectures, or complexities, provide structured Markdown tables. If code is requested, provide clean Python. If the student specifies no code, exclude all code.\n"
-        "5. Tone: Scholarly, authentic, objective, publication-grade. Output ONLY the document content in markdown."
+        "1. STRICT USER FORMAT & CONSTRAINT PRECEDENCE: Always honor the exact deliverable format, layout, methodology, and preferences locked in during the discussion (for example, if the student requested a Jupyter Notebook layout with Markdown explanation cells and executable Python code cells, a specific train-test split, or specific analyses, produce the complete formatted notebook solution with clearly separated Markdown sections and runnable ```python code blocks rather than forcing a generic academic paper template).\n"
+        "2. Default Academic Structure (when no custom layout is requested): Use Markdown headings (# Title, ## Section, ### Subsection). Include an Abstract / Overview, Theoretical Formulation, Detailed Exposition / Derivations, Practical Analysis / Examples, Conclusion, and conclude with an authoritative '## References' section.\n"
+        "3. Mathematical Rigor: Format all formulas using standard LaTeX math ($...$ inline, $$...$$ display equations). Show step-by-step mathematical logic and deductions.\n"
+        "4. Scholarly Literature & External Citations: All citations in the document and any '## References' section MUST cite authentic, peer-reviewed scientific literature (journal articles, conference proceedings, seminal papers e.g., IEEE, ACM, JAMA, Nature, NeurIPS, Science, Lancet). NEVER cite internal course lecture video titles or timestamps (e.g. do NOT write '[Live session -3, 1:23:13]' or '[Lecture 4, 18:30]'). Course concepts should inspire the problem formulation and technical methodology, while all citations must point to formal academic publications.\n"
+        "5. Tables & Code: If comparing methods, architectures, or complexities, provide structured Markdown tables. If code or a Jupyter Notebook is requested, provide complete, clean, executable Python code cells. If the student specifies no code, exclude all code.\n"
+        "6. Tone: Scholarly, authentic, objective, publication-grade. Output ONLY the complete document/solution content in markdown—never output a conversational confirmation or ask the user to say 'Generate First Draft'."
     )
 
     discussion_summary = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in chat_history[-14:]])
@@ -590,6 +591,22 @@ def refine_existing_draft(
         return current_draft, f"I encountered an issue revising the draft ({str(e)[:100]}). Please try again."
 
 
+def _is_scoping_placeholder_draft(draft_text: str) -> bool:
+    """Detect conversational scoping replies mistakenly saved as a draft by earlier builds."""
+    text = (draft_text or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    has_draft_prompt = (
+        "say 'generate first draft'" in lowered
+        or 'say "generate first draft"' in lowered
+        or "say **'generate first draft'**" in lowered
+        or ("whenever you are ready" in lowered and "generate first draft" in lowered)
+    )
+    has_markdown_heading = bool(re.search(r"^#{1,3}\s+\S", text, flags=re.MULTILINE))
+    return has_draft_prompt and not has_markdown_heading
+
+
 def studio_chat_turn(
     session_id: str,
     course_name: str,
@@ -637,19 +654,10 @@ def studio_chat_turn(
     is_explicit_regenerate = bool(
         re.search(r"\b(re-?generate|start over|from scratch|brand new draft)\b", clean_msg.lower())
     )
-    has_existing_draft = bool(current_draft and current_draft.strip())
-
-    # Find the last complete assistant message in prior chat history (excluding the user msg just appended)
-    last_complete_assistant_msg = None
-    for msg in reversed(chat_history[:-1]):
-        if msg.get("role") == "assistant":
-            c = (msg.get("content") or "").strip()
-            if c and not c.startswith("I encountered a temporary issue") and len(c) > 40:
-                last_complete_assistant_msg = c
-                break
+    has_existing_draft = bool(current_draft and current_draft.strip()) and not _is_scoping_placeholder_draft(current_draft)
 
     will_call_llm = True
-    if is_draft_request and not is_explicit_regenerate and (has_existing_draft or last_complete_assistant_msg):
+    if is_draft_request and not is_explicit_regenerate and has_existing_draft:
         will_call_llm = False
 
     # Persist user message immediately so in-flight progress is never lost across tab switches
@@ -669,15 +677,6 @@ def studio_chat_turn(
                 logger.info(f"[Studio Chat] Reusing existing draft for {session_id} without re-triggering LLM")
                 ai_reply = (
                     f"I have displayed your draft in the **Preview Pane** on the right.\n\n"
-                    f"You can review the rendered document, make direct edits in 'Edit Raw' mode, or tell me what you'd like to refine "
-                    f"(e.g., expand proofs, add diagrams, adjust tone, or include more examples), or click **'Compile to PDF'** when ready!"
-                )
-                current_status = "drafting"
-            elif not is_explicit_regenerate and last_complete_assistant_msg:
-                logger.info(f"[Studio Chat] Adopting last complete co-pilot response as draft for {session_id} without re-triggering LLM")
-                current_draft = last_complete_assistant_msg
-                ai_reply = (
-                    f"I have loaded the complete co-pilot synthesis into your **First Draft** preview on the right pane.\n\n"
                     f"You can review the rendered document, make direct edits in 'Edit Raw' mode, or tell me what you'd like to refine "
                     f"(e.g., expand proofs, add diagrams, adjust tone, or include more examples), or click **'Compile to PDF'** when ready!"
                 )

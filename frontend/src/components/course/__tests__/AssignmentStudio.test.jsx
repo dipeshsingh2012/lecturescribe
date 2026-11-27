@@ -317,21 +317,35 @@ describe('AssignmentStudio Component', () => {
     });
   });
 
-  it('clicking preview button uses last complete assistant response and avoids retriggering LLM chat calls', async () => {
-    let chatEndpointCalled = false;
-    let putDraftPayload = null;
+  it('clicking preview button triggers generate_draft chat action instead of copying scoping message', async () => {
+    let chatRequestPayload = null;
+    let putDraftCalled = false;
 
     global.fetch = vi.fn().mockImplementation(async (url, opts) => {
       if (url.includes('/api/llm/available-models')) {
         return { ok: true, json: async () => mockModelsData };
       }
       if (url.includes('/assignments/studio/asgn_studio_preview_reuse/draft')) {
-        putDraftPayload = JSON.parse(opts.body);
+        putDraftCalled = true;
         return { ok: true, json: async () => ({ status: 'success' }) };
       }
       if (url.includes('/assignments/studio/asgn_studio_preview_reuse/chat')) {
-        chatEndpointCalled = true;
-        return { ok: true, json: async () => ({ status: 'success' }) };
+        chatRequestPayload = JSON.parse(opts.body);
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            reply: 'I have synthesized the First Draft of your document.',
+            draft_markdown: '# Multi-Head Attention Notebook\n\nComplete generated draft solution.',
+            studio_status: 'drafting',
+            chat_history: [
+              { role: 'user', content: 'Design an attention layer.', timestamp: '2026-10-31T06:00:00Z' },
+              { role: 'assistant', content: 'Fantastic! Whenever you are ready, simply say Generate First Draft.', timestamp: '2026-10-31T06:00:01Z' },
+              { role: 'user', content: 'Generate First Draft', timestamp: '2026-10-31T06:00:02Z' },
+              { role: 'assistant', content: 'I have synthesized the First Draft of your document.', timestamp: '2026-10-31T06:00:03Z' }
+            ]
+          })
+        };
       }
       if (url.includes('/assignments/studio/asgn_studio_preview_reuse')) {
         return {
@@ -344,7 +358,7 @@ describe('AssignmentStudio Component', () => {
             problem_statement: 'Design an attention layer.',
             chat_history: [
               { role: 'user', content: 'Design an attention layer.', timestamp: '2026-10-31T06:00:00Z' },
-              { role: 'assistant', content: '# Multi-Head Attention Architecture\n\nComplete response outline.', timestamp: '2026-10-31T06:00:01Z' }
+              { role: 'assistant', content: 'Fantastic! Whenever you are ready, simply say Generate First Draft.', timestamp: '2026-10-31T06:00:01Z' }
             ],
             draft_markdown: '',
             citations: [],
@@ -374,16 +388,15 @@ describe('AssignmentStudio Component', () => {
     const previewBtns = screen.getAllByRole('button', { name: /^Preview$/i });
     fireEvent.click(previewBtns[previewBtns.length - 1]);
 
-    // Verify that the assistant response was rendered in the preview pane
+    // Verify backend generate_draft was called and synthesized draft is rendered
     await waitFor(() => {
-      expect(screen.getAllByText(/Multi-Head Attention Architecture/i).length).toBeGreaterThanOrEqual(2);
-      expect(screen.getAllByText(/Complete response outline/i).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText(/Multi-Head Attention Notebook/i)).toBeInTheDocument();
+      expect(screen.getByText(/Complete generated draft solution/i)).toBeInTheDocument();
     });
 
-    // Verify draft was flushed to backend draft endpoint without triggering an LLM chat turn
-    expect(putDraftPayload).not.toBeNull();
-    expect(putDraftPayload.draft_markdown).toContain('Multi-Head Attention Architecture');
-    expect(chatEndpointCalled).toBe(false);
+    expect(chatRequestPayload).not.toBeNull();
+    expect(chatRequestPayload.action).toBe('generate_draft');
+    expect(putDraftCalled).toBe(false);
   });
 
   it('toggles to split mode and tightly couples live markdown edits to rendered preview side-by-side', async () => {

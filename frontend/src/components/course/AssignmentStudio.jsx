@@ -530,37 +530,15 @@ export default function AssignmentStudio({
     if (onClose) onClose();
   };
 
-  // Trigger preview of the document (extracts available outline/draft or requests full generation)
+  // Trigger preview of the document (shows existing draft or requests full first-draft generation)
   const handleTriggerPreview = async () => {
-    // 1. If draft already exists, switch directly to preview without re-triggering LLM
+    // 1. If a real draft already exists, switch directly to preview without re-triggering LLM
     if (draftMarkdown && draftMarkdown.trim()) {
       handleToggleEditorMode('preview');
       return;
     }
 
-    // 2. If chat history has a complete assistant response, adopt it immediately
-    const lastAssistantMsg = [...chatHistory].reverse().find(
-      (m) => m.role === 'assistant' && m.content && !m.content.startsWith('I encountered a temporary issue')
-    );
-    if (lastAssistantMsg?.content) {
-      const initialText = lastAssistantMsg.content;
-      setDraftMarkdown(initialText);
-      latestDraftRef.current = initialText;
-      handleToggleEditorMode('preview');
-      if (draftStorageKey) {
-        try {
-          localStorage.setItem(draftStorageKey, JSON.stringify({
-            content: initialText,
-            timestamp: Date.now()
-          }));
-        } catch (e) {}
-      }
-      // Save draft immediately to backend without re-invoking LLM
-      await flushDraftSave(initialText);
-      return;
-    }
-
-    // 3. Fallback: only if no draft and no prior assistant response exist
+    // 2. Otherwise synthesize the actual First Draft via the backend Co-Pilot
     await handleSendMessage('Generate First Draft', 'generate_draft');
   };
 
